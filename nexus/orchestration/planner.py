@@ -83,9 +83,16 @@ def _research_only_plan(goal_input: dict) -> list[PlanStep]:
     ]
 
 
+def _discover_plan(goal_input: dict) -> list[PlanStep]:
+    """A single read-only discovery step. ICP/target/max_candidates ride on run.goal_input,
+    which the DiscoveryTool reads directly — so the step itself needs no inputs."""
+    return [PlanStep(idx=0, tool="discovery", depends_on=[], requires_approval=False)]
+
+
 _RECIPES = {
     "research_account": _research_account_plan,
     "research_only": _research_only_plan,
+    "discover": _discover_plan,
 }
 
 

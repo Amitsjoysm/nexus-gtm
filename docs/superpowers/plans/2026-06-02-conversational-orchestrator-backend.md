@@ -1443,13 +1443,15 @@ def _icp_to_scoring(icp: dict) -> dict:
 
 
 def _passes_hard_filters(account: Account, scoring_icp: dict) -> bool:
-    """Drop accounts that explicitly contradict the ICP; keep unknowns (None) as candidates."""
-    inds = [i.lower() for i in scoring_icp.get("industries", [])]
-    if inds and account.industry and account.industry.lower() not in inds:
-        return False
-    geos = [c.lower() for c in scoring_icp.get("countries", [])]
-    if geos and account.country and account.country.lower() not in geos:
-        return False
+    """Hard-exclude only on the explicit numeric size band the user stated.
+
+    Size is a precise, user-asserted bound, so an account whose known headcount falls
+    outside it is a definitive non-match and is dropped. Industry and geo are deliberately
+    *not* hard filters: CRM industry/country labels are inconsistent ("Financial Services"
+    vs "Fintech", "US" vs "United States"), so exact-string exclusion would hide good but
+    mislabeled accounts. They instead drive the ICP-fit ranking — near-matches still surface,
+    ranked lower, where the rep can see and refine them. Unknown headcount (None) is kept.
+    """
     lo, hi = scoring_icp.get("employee_min"), scoring_icp.get("employee_max")
     if account.employee_count is not None:
         if lo is not None and account.employee_count < lo:

@@ -158,6 +158,30 @@ class SendMessageTool(Tool):
         return {"ok": res.ok, "platform": res.platform, "sequence": sequence, "email": email}
 
 
+class DiscoveryTool(_AgentTool):
+    name = "discovery"
+    description = "Surface companies/contacts matching the conversation's ICP (read-only)."
+    agent_name = "discovery"
+    requires_approval = False
+
+    async def run(self, tc: ToolContext) -> dict:
+        gi = tc.run.goal_input or {}
+        result = await tc.runtime.run(
+            self.agent_name,
+            tc.ts,
+            account_id=None,
+            target=gi.get("target", "companies"),
+            icp=gi.get("icp") or {},
+            max_candidates=gi.get("max_candidates"),
+        )
+        if result.status != "completed":
+            raise ToolError(result.error or "discovery failed")
+        if isinstance(result.output, dict) and result.output.get("error"):
+            raise ToolError(str(result.output["error"]))
+        tc.blackboard["discovery"] = result.output
+        return result.output
+
+
 # Registry ---------------------------------------------------------------------------
 
 _REGISTRY: dict[str, Tool] = {}
@@ -175,5 +199,5 @@ def available_tools() -> list[str]:
     return sorted(_REGISTRY)
 
 
-for _t in (ResearchTool(), ScoringTool(), ComposeMessageTool(), SendMessageTool()):
+for _t in (ResearchTool(), ScoringTool(), ComposeMessageTool(), SendMessageTool(), DiscoveryTool()):
     register_tool(_t)

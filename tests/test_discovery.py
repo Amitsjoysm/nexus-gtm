@@ -89,3 +89,35 @@ async def test_discovery_dedupes_web_hit_against_existing_domain():
         assert out["counts"]["new"] == 0
         domains = [c["domain"] for c in out["candidates"]]
         assert domains.count("finone.com") == 1
+
+
+@pytest.mark.asyncio
+async def test_discover_goal_runs_inline_and_writes_blackboard():
+    from nexus.orchestration.engine import get_orchestration_engine
+    from nexus.models.orchestration import RUN_COMPLETED
+
+    tid = await make_tenant("t-disc-goal")
+    icp = {"industries": ["Fintech"], "geo": ["United States"],
+           "company_size": {"min": 200, "max": 5000}}
+    async with tenant_session(tid) as ts:
+        await _seed_accounts(ts, tid)
+        engine = get_orchestration_engine()
+        run = await engine.create_run(
+            ts, "discover",
+            goal_input={"target": "companies", "icp": icp, "max_candidates": 10},
+        )
+        await engine.execute_run(ts, run)
+        assert run.status == RUN_COMPLETED
+        disc = run.blackboard["discovery"]
+        assert disc["counts"]["own"] == 2  # FinOne + HealthCo survive (FinTwo too small)
+        assert any(c["source"] == "own" for c in disc["candidates"])
+
+
+def test_discover_goal_is_available_and_read_only():
+    from nexus.orchestration.planner import available_goals, get_planner
+
+    assert "discover" in available_goals()
+    plan = get_planner().plan("discover", {"target": "companies", "icp": {}})
+    assert len(plan) == 1
+    assert plan[0]["tool"] == "discovery"
+    assert plan[0]["requires_approval"] is False
