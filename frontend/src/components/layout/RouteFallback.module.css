@@ -1,0 +1,22 @@
+.root {
+  display: grid;
+  place-items: center;
+  min-height: 40vh;
+  /* Hold the spinner hidden for fast chunk loads; reveal only if the wait is
+     long enough to notice. Avoids a distracting flash on warm-cache nav. */
+  animation: appear 0s linear 160ms forwards;
+  opacity: 0;
+}
+
+@keyframes appear {
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root {
+    animation: none;
+    opacity: 1;
+  }
+}

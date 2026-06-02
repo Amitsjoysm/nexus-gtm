@@ -1,0 +1,308 @@
+import { useCallback, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { StatCard } from "@/components/StatCard";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  Icons,
+  Skeleton,
+  useToast,
+} from "@/components/ui";
+import { DataState } from "@/components/DataState";
+import { useApi } from "@/hooks/useApi";
+import { useApiClient } from "@/app/AuthContext";
+import { ApiError } from "@/lib/api";
+import { formatNumber, humanize, timeAgo } from "@/lib/format";
+import { priorityTone, severityTone, strengthMeta } from "@/lib/display";
+import type { AnalyticsOverview, Alert, InboxTask, SignalEvent } from "@/lib/types";
+import styles from "./DashboardPage.module.css";
+
+/** Pick a representative icon for a metric key. */
+function statIcon(key: string) {
+  const k = key.toLowerCase();
+  if (k.includes("account")) return <Icons.BuildingIcon />;
+  if (k.includes("signal")) return <Icons.SignalIcon />;
+  if (k.includes("alert")) return <Icons.BellIcon />;
+  if (k.includes("task") || k.includes("inbox")) return <Icons.InboxIcon />;
+  if (k.includes("member") || k.includes("user")) return <Icons.UsersIcon />;
+  if (k.includes("contact")) return <Icons.UsersIcon />;
+  return <Icons.TrendUpIcon />;
+}
+
+const SAMPLE_ACCOUNT = {
+  name: "Northwind Logistics",
+  domain: "northwind.example",
+  industry: "Supply Chain",
+  employee_count: 540,
+  country: "United States",
+  tech_stack: ["Snowflake", "Segment", "Salesforce"],
+};
+
+export function DashboardPage() {
+  const api = useApiClient();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [seeding, setSeeding] = useState(false);
+
+  const overview = useApi<AnalyticsOverview>((signal) => api.analyticsOverview(signal), []);
+  const inbox = useApi<InboxTask[]>((signal) => api.listInbox(signal), []);
+  const alerts = useApi<Alert[]>((signal) => api.listAlerts("open", signal), []);
+  const signals = useApi<SignalEvent[]>((signal) => api.listSignals({ limit: 6 }, signal), []);
+
+  const refreshAll = useCallback(() => {
+    overview.refetch();
+    inbox.refetch();
+    alerts.refetch();
+    signals.refetch();
+  }, [overview, inbox, alerts, signals]);
+
+  const seedDemo = useCallback(async () => {
+    setSeeding(true);
+    try {
+      const account = await api.createAccount(SAMPLE_ACCOUNT);
+      await api.runPipeline(account.id);
+      toast.success("Demo account seeded", `${account.name} enriched and scored.`);
+      refreshAll();
+    } catch (err) {
+      toast.error(
+        "Couldn't seed demo data",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setSeeding(false);
+    }
+  }, [api, toast, refreshAll]);
+
+  return (
+    <div>
+      <PageHeader
+        title="Dashboard"
+        description="Your go-to-market intelligence at a glance."
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              iconLeft={<Icons.RefreshIcon />}
+              onClick={refreshAll}
+            >
+              Refresh
+            </Button>
+            <Button
+              iconLeft={<Icons.SparklesIcon />}
+              loading={seeding}
+              onClick={seedDemo}
+            >
+              Seed demo account
+            </Button>
+          </>
+        }
+      />
+
+      <DataState
+        state={overview}
+        skeleton={
+          <div className={styles.statSkeleton}>
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Card key={i} padding="md">
+                <Skeleton width="50%" height={12} />
+                <div style={{ height: 12 }} />
+                <Skeleton width="40%" height={26} />
+              </Card>
+            ))}
+          </div>
+        }
+        isEmpty={(data) => Object.keys(data).length === 0}
+        empty={
+          <EmptyState
+            icon={<Icons.TrendUpIcon />}
+            title="No analytics yet"
+            description="Seed a demo account to populate your workspace metrics."
+            action={
+              <Button iconLeft={<Icons.SparklesIcon />} loading={seeding} onClick={seedDemo}>
+                Seed demo account
+              </Button>
+            }
+          />
+        }
+      >
+        {(data) => (
+          <div className={styles.stats}>
+            {Object.entries(data)
+              .slice(0, 8)
+              .map(([key, value]) => (
+                <StatCard
+                  key={key}
+                  label={humanize(key)}
+                  value={formatNumber(value)}
+                  icon={statIcon(key)}
+                />
+              ))}
+          </div>
+        )}
+      </DataState>
+
+      <div className={styles.columns}>
+        <div className={styles.col}>
+          <Card padding="md">
+            <CardHeader
+              title="Top inbox tasks"
+              subtitle="Prioritized actions for your accounts"
+              actions={
+                <Button variant="ghost" size="sm" onClick={() => navigate("/inbox")}>
+                  View all
+                </Button>
+              }
+            />
+            <DataState
+              state={inbox}
+              skeleton={<RowsSkeleton />}
+              isEmpty={(rows) => rows.length === 0}
+              empty={
+                <EmptyState
+                  compact
+                  icon={<Icons.InboxIcon />}
+                  title="Inbox zero"
+                  description="No pending tasks. New work appears here automatically."
+                />
+              }
+            >
+              {(rows) => (
+                <div className={styles.list}>
+                  {rows.slice(0, 5).map((task) => (
+                    <div key={task.id} className={styles.item}>
+                      <Badge
+                        className={styles.itemAccent}
+                        tone={priorityTone(task.priority)}
+                        dot
+                      >
+                        P{task.priority}
+                      </Badge>
+                      <div className={styles.itemBody}>
+                        <div className={styles.itemTitle}>{task.title}</div>
+                        <div className={styles.itemMeta}>{task.reason}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </DataState>
+          </Card>
+        </div>
+
+        <div className={styles.col}>
+          <Card padding="md">
+            <CardHeader
+              title="Open alerts"
+              actions={
+                <Button variant="ghost" size="sm" onClick={() => navigate("/alerts")}>
+                  View all
+                </Button>
+              }
+            />
+            <DataState
+              state={alerts}
+              skeleton={<RowsSkeleton rows={3} />}
+              isEmpty={(rows) => rows.length === 0}
+              empty={
+                <EmptyState
+                  compact
+                  icon={<Icons.BellIcon />}
+                  title="No open alerts"
+                  description="You're all caught up."
+                />
+              }
+            >
+              {(rows) => (
+                <div className={styles.list}>
+                  {rows.slice(0, 4).map((alert) => (
+                    <div key={alert.id} className={styles.item}>
+                      <Badge
+                        className={styles.itemAccent}
+                        tone={severityTone(alert.severity)}
+                        dot
+                      >
+                        {alert.severity}
+                      </Badge>
+                      <div className={styles.itemBody}>
+                        <div className={styles.itemTitle}>{alert.title}</div>
+                        <div className={styles.itemMeta}>{alert.body}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </DataState>
+          </Card>
+
+          <Card padding="md">
+            <CardHeader
+              title="Recent signals"
+              actions={
+                <Button variant="ghost" size="sm" onClick={() => navigate("/signals")}>
+                  View all
+                </Button>
+              }
+            />
+            <DataState
+              state={signals}
+              skeleton={<RowsSkeleton rows={3} />}
+              isEmpty={(rows) => rows.length === 0}
+              empty={
+                <EmptyState
+                  compact
+                  icon={<Icons.SignalIcon />}
+                  title="No signals yet"
+                  description="Buying signals will surface here as they're detected."
+                />
+              }
+            >
+              {(rows) => (
+                <div className={styles.list}>
+                  {rows.slice(0, 5).map((sig) => {
+                    const meta = strengthMeta(sig.strength);
+                    return (
+                      <div key={sig.id} className={styles.item}>
+                        <Badge className={styles.itemAccent} tone={meta.tone} dot>
+                          {meta.label}
+                        </Badge>
+                        <div className={styles.itemBody}>
+                          <div className={styles.itemTitle}>{sig.title}</div>
+                          <div className={styles.itemMeta}>
+                            <span>{humanize(sig.kind)}</span>
+                            <span>·</span>
+                            <span>{timeAgo(sig.occurred_at)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </DataState>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RowsSkeleton({ rows = 5 }: { rows?: number }) {
+  return (
+    <div className={styles.list}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className={styles.item}>
+          <Skeleton width={44} height={20} radius={999} />
+          <div className={styles.itemBody}>
+            <Skeleton width="70%" height={12} />
+            <div style={{ height: 6 }} />
+            <Skeleton width="45%" height={10} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

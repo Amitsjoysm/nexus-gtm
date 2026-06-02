@@ -1,0 +1,103 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { ReactNode } from "react";
+import { ApiClient } from "@/lib/api";
+import type { LoginRequest, Role, SignupRequest } from "@/lib/types";
+
+interface Session {
+  token: string;
+  role: Role;
+  tenantId: string;
+}
+
+interface AuthApi {
+  /** Configured API client (auth header kept in sync with the session). */
+  api: ApiClient;
+  session: Session | null;
+  isAuthed: boolean;
+  login: (body: LoginRequest) => Promise<void>;
+  signup: (body: SignupRequest) => Promise<void>;
+  logout: () => void;
+}
+
+const STORAGE_KEY = "nexus_session";
+const AuthContext = createContext<AuthApi | null>(null);
+
+export function useAuth(): AuthApi {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within <AuthProvider>");
+  return ctx;
+}
+
+/** Convenience accessor for the API client. */
+export function useApiClient(): ApiClient {
+  return useAuth().api;
+}
+
+function loadSession(): Session | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Session;
+    return parsed.token ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [session, setSession] = useState<Session | null>(loadSession);
+  // Ref so the client's 401 handler always sees the latest setter without re-creating the client.
+  const setSessionRef = useRef(setSession);
+  setSessionRef.current = setSession;
+
+  const api = useMemo(() => {
+    const client = new ApiClient("/api", () => {
+      // Token rejected/expired: clear session so the app routes back to login.
+      localStorage.removeItem(STORAGE_KEY);
+      setSessionRef.current(null);
+    });
+    return client;
+  }, []);
+
+  // Keep the Authorization header in sync with the session.
+  useEffect(() => {
+    api.setToken(session?.token ?? null);
+    if (session) localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+  }, [api, session]);
+
+  const login = useCallback(
+    async (body: LoginRequest) => {
+      const res = await api.login(body);
+      setSession({ token: res.access_token, role: res.role, tenantId: res.tenant_id });
+    },
+    [api],
+  );
+
+  const signup = useCallback(
+    async (body: SignupRequest) => {
+      const res = await api.signup(body);
+      setSession({ token: res.access_token, role: res.role, tenantId: res.tenant_id });
+    },
+    [api],
+  );
+
+  const logout = useCallback(() => {
+    localStorage.removeItem(STORAGE_KEY);
+    setSession(null);
+  }, []);
+
+  const value = useMemo<AuthApi>(
+    () => ({ api, session, isAuthed: !!session, login, signup, logout }),
+    [api, session, login, signup, logout],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}

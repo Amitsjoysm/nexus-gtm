@@ -1,0 +1,74 @@
+"""Integration endpoints: CRM sync (Salesforce/HubSpot) and SEP push (Outreach/Salesloft).
+
+CRM connectors pull 1st-party accounts and upsert them by ``(tenant, crm_source, crm_id)``. The
+endpoint accepts the records inline so the integration is exercisable offline and in tests; real
+deployments swap the stub's fetch for an authenticated API call without changing this surface.
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from nexus.api.deps import Principal, get_tenant_session, require
+from nexus.api.schemas import (
+    CRMSyncRequest,
+    CRMSyncResponse,
+    SEPPushRequest,
+    SEPPushResponse,
+)
+from nexus.core.rbac import Permission
+from nexus.core.tenancy import TenantSession
+from nexus.ingestion.crm import (
+    CRMAccount,
+    HubSpotConnector,
+    SalesforceConnector,
+)
+from nexus.integrations.sep import get_sep_connector
+from nexus.models.account import Contact
+
+router = APIRouter(prefix="/integrations", tags=["integrations"])
+
+_CRM_CONNECTORS = {"salesforce": SalesforceConnector, "hubspot": HubSpotConnector}
+
+
+@router.post("/crm/sync", response_model=CRMSyncResponse)
+async def crm_sync(
+    body: CRMSyncRequest,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> CRMSyncResponse:
+    sample = [
+        CRMAccount(
+            external_id=a.external_id,
+            name=a.name,
+            domain=a.domain,
+            industry=a.industry,
+            employee_count=a.employee_count,
+            country=a.country,
+        )
+        for a in body.accounts
+    ]
+    connector = _CRM_CONNECTORS[body.source](sample=sample)
+    accounts = await connector.sync_accounts(ts)
+    return CRMSyncResponse(
+        source=body.source,
+        synced=len(accounts),
+        account_ids=[a.id for a in accounts],
+    )
+
+
+@router.post("/sep/push", response_model=SEPPushResponse)
+async def sep_push(
+    body: SEPPushRequest,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> SEPPushResponse:
+    email = body.email
+    if body.contact_id:
+        contact = await ts.get(Contact, body.contact_id)
+        if contact is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+        email = email or contact.email
+    result = await get_sep_connector().push_contact(
+        sequence=body.sequence, email=email, payload=body.payload
+    )
+    return SEPPushResponse(ok=result.ok, platform=result.platform, detail=result.detail)

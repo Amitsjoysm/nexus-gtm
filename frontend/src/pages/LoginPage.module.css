@@ -1,0 +1,161 @@
+.page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+}
+
+/* ---- left marketing panel ---- */
+.aside {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-8);
+  padding: var(--space-12);
+  color: #fff;
+  background:
+    radial-gradient(120% 120% at 0% 0%, #1b2a55 0%, transparent 55%),
+    radial-gradient(120% 120% at 100% 100%, #143b32 0%, transparent 55%),
+    linear-gradient(160deg, #0c1326, #0b0e14);
+  overflow: hidden;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  background: var(--accent);
+}
+.logo :global(svg) {
+  width: 24px;
+  height: 24px;
+}
+.brandText {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-wide);
+}
+.headline {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  line-height: 1.25;
+  max-width: 18ch;
+}
+.highlights {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.highlight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-md);
+  color: rgba(255, 255, 255, 0.86);
+}
+.hIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.08);
+  color: #cdd8ff;
+  flex-shrink: 0;
+}
+.hIcon :global(svg) {
+  width: 19px;
+  height: 19px;
+}
+
+/* ---- right form panel ---- */
+.formCol {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: var(--bg);
+}
+.formCard {
+  width: 100%;
+  max-width: 400px;
+}
+.mobileBrand {
+  display: none;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--weight-bold);
+  margin-bottom: var(--space-6);
+}
+.logoSm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.logoSm :global(svg) {
+  width: 18px;
+  height: 18px;
+}
+
+.title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.02em;
+}
+.subtitle {
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+}
+.error {
+  font-size: var(--text-sm);
+  color: var(--danger);
+  background: var(--danger-quiet);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.switch {
+  margin-top: var(--space-5);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.switchBtn {
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+.switchBtn:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 880px) {
+  .page {
+    grid-template-columns: 1fr;
+  }
+  .aside {
+    display: none;
+  }
+  .mobileBrand {
+    display: flex;
+  }
+}

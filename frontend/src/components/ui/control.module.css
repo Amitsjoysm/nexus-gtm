@@ -1,0 +1,89 @@
+/* Shared styles for Input / Textarea / Select. */
+.control {
+  width: 100%;
+  font-size: var(--text-base);
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-3);
+  height: 40px;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.control::placeholder {
+  color: var(--text-subtle);
+}
+
+.control:hover:not(:disabled):not(:focus) {
+  border-color: var(--accent);
+}
+
+.control:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-quiet);
+}
+
+.control:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.control.invalid {
+  border-color: var(--danger);
+}
+.control.invalid:focus {
+  box-shadow: 0 0 0 3px var(--danger-quiet);
+}
+
+.textarea {
+  height: auto;
+  padding: var(--space-3);
+  resize: vertical;
+  line-height: var(--leading);
+  min-height: 88px;
+}
+
+/* ---- input with leading icon ---- */
+.wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.leadIcon {
+  position: absolute;
+  left: var(--space-3);
+  display: inline-flex;
+  color: var(--text-subtle);
+  pointer-events: none;
+}
+.leadIcon :global(svg) {
+  width: 16px;
+  height: 16px;
+}
+.hasIcon {
+  padding-left: calc(var(--space-3) + 22px);
+}
+
+/* ---- select ---- */
+.selectWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.select {
+  appearance: none;
+  padding-right: calc(var(--space-3) + 18px);
+  cursor: pointer;
+}
+.caret {
+  position: absolute;
+  right: var(--space-3);
+  font-size: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}

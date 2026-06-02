@@ -1,0 +1,49 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.btn:hover:not(:disabled) {
+  color: var(--text);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.icon {
+  display: inline-flex;
+}
+.icon :global(svg) {
+  width: 1.15em;
+  height: 1.15em;
+}
+
+.sm {
+  width: 32px;
+  height: 32px;
+  font-size: var(--text-base);
+}
+.md {
+  width: 40px;
+  height: 40px;
+  font-size: var(--text-md);
+}
+
+.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.secondary {
+  background: var(--surface-3);
+  border-color: var(--border);
+}
+.secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+}

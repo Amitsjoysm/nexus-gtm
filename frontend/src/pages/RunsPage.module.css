@@ -1,0 +1,103 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---- run row ---- */
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+/* Full-card click target laid over the card; the heading text stays selectable
+   above it via z-index on .rowMain. */
+.rowLink {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: 0;
+}
+.rowMain {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+.rowTop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.goal {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+/* Dot separators between meta items. */
+.meta > span:not(:first-child)::before {
+  content: "";
+  width: 3px;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--text-subtle);
+  margin-right: var(--space-2);
+}
+.chevron {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  color: var(--text-subtle);
+  transition: transform var(--dur) var(--ease-out), color var(--dur) var(--ease-out);
+  pointer-events: none;
+}
+.row:hover .chevron {
+  transform: translateX(2px);
+  color: var(--text-muted);
+}
+
+/* ---- modal form ---- */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.goalHint {
+  margin: calc(var(--space-2) * -1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: var(--leading);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+  .row:hover .chevron {
+    transform: none;
+  }
+}

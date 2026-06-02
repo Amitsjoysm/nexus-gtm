@@ -1,0 +1,112 @@
+"""Shared test fixtures. Everything runs offline: SQLite + stub LLM + demo signals."""
+from __future__ import annotations
+
+import os
+import tempfile
+
+import pytest
+import pytest_asyncio
+
+# Point the DB at a temp file and force test env BEFORE importing app config (lru_cache).
+_TMPDIR = tempfile.mkdtemp(prefix="nexus_test_")
+os.environ["NEXUS_DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMPDIR}/test.db"
+os.environ["NEXUS_ENV"] = "test"
+os.environ["NEXUS_LLM_PROVIDER"] = "stub"
+
+from nexus.core.db import Base, get_engine  # noqa: E402
+from nexus.core.tenancy import TenantSession  # noqa: E402
+import nexus.models  # noqa: E402,F401  (register mappers)
+from nexus.workers.tasks import tenant_session  # noqa: E402
+
+
+class FakeBrowser:
+    """A deterministic browser provider so enrichment/ingestion never hit the network."""
+
+    def __init__(self, results: list[dict] | None = None):
+        self.results = results or []
+
+    async def search(self, query: str, *, limit: int = 5) -> list[dict]:
+        return self.results[:limit]
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def fresh_db():
+    """Recreate all tables before each test for isolation."""
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def offline_services():
+    """Demo-only ingestion + reset the agent runtime so the stub LLM is used."""
+    from nexus.ingestion.service import IngestionService, set_ingestion_service
+    from nexus.ingestion.sources import DemoSignalSource
+    from nexus.agents.runtime import reset_agent_runtime
+
+    set_ingestion_service(IngestionService(sources=[DemoSignalSource()]))
+    reset_agent_runtime()
+    yield
+    set_ingestion_service(IngestionService(sources=[DemoSignalSource()]))
+    reset_agent_runtime()
+
+
+async def make_tenant(slug: str = "t1", name: str = "Tenant One") -> str:
+    """Create a tenant via a raw session and return its id."""
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.identity import Tenant
+
+    async with get_sessionmaker()() as s:
+        t = Tenant(name=name, slug=slug)
+        s.add(t)
+        await s.commit()
+        return t.id
+
+
+@pytest_asyncio.fixture
+async def client():
+    """An ASGI httpx client bound to a fresh app (offline)."""
+    import httpx
+
+    from nexus.main import create_app
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+async def signup(client, *, slug="acme", email="rep@acme.com", company="Acme") -> str:
+    """Provision a tenant + owner and return the access token."""
+    r = await client.post(
+        "/api/auth/signup",
+        json={
+            "company_name": company,
+            "company_slug": slug,
+            "full_name": "Rep",
+            "email": email,
+            "password": "password123",
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["access_token"]
+
+
+def auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+__all__ = [
+    "FakeBrowser",
+    "make_tenant",
+    "tenant_session",
+    "TenantSession",
+    "client",
+    "signup",
+    "auth",
+]

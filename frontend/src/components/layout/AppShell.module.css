@@ -1,0 +1,41 @@
+.shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main {
+  flex: 1;
+  outline: none;
+}
+
+.container {
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5) var(--space-12);
+}
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-drawer) - 1);
+  background: var(--overlay);
+  border: none;
+  cursor: pointer;
+  display: none;
+}
+
+@media (max-width: 1024px) {
+  .scrim {
+    display: block;
+  }
+  .container {
+    padding: var(--space-5) var(--space-4) var(--space-10);
+  }
+}

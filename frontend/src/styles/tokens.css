@@ -1,0 +1,164 @@
+/*
+ * NEXUS GTM — Design Tokens (single source of truth)
+ * Consume via var(--token). Never hard-code colors/spacing in components.
+ * Theming: default is dark; [data-theme="light"] overrides surfaces/text.
+ */
+
+:root {
+  /* ---- Typography ---- */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  --font-mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", "Cascadia Code",
+    Menlo, Consolas, monospace;
+
+  --text-xs: 0.75rem;   /* 12 */
+  --text-sm: 0.8125rem; /* 13 */
+  --text-base: 0.875rem;/* 14 */
+  --text-md: 1rem;      /* 16 */
+  --text-lg: 1.25rem;   /* 20 */
+  --text-xl: 1.5rem;    /* 24 */
+  --text-2xl: 1.875rem; /* 30 */
+  --text-3xl: 2.25rem;  /* 36 */
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --leading-tight: 1.2;
+  --leading: 1.5;
+  --tracking-wide: 0.04em;
+  --tracking-wider: 0.08em;
+
+  /* ---- Spacing (4px base) ---- */
+  --space-0: 0;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* ---- Radii ---- */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 999px;
+
+  /* ---- Layout ---- */
+  --container: 1200px;
+  --sidebar-w: 248px;
+  --topbar-h: 60px;
+
+  /* ---- Motion ---- */
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 260ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* ---- Brand (theme-independent hues) ---- */
+  --accent: #5b8cff;
+  --accent-hover: #6f9bff;
+  --accent-contrast: #ffffff;
+
+  /* ---- Z-index ---- */
+  --z-sticky: 100;
+  --z-drawer: 200;
+  --z-modal: 300;
+  --z-toast: 400;
+}
+
+/* ================= DARK (default) ================= */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0b0e14;
+  --surface: #121722;
+  --surface-2: #161c29;
+  --surface-3: #1d2533;
+  --overlay: rgba(6, 9, 14, 0.66);
+
+  --border: #232a3b;
+  --border-strong: #313a50;
+
+  --text: #e8ebf2;
+  --text-muted: #9aa3b7;
+  --text-subtle: #6b7488;
+  --text-inverse: #0b0e14;
+
+  --accent-quiet: rgba(91, 140, 255, 0.14);
+
+  --success: #36c98c;
+  --success-quiet: rgba(54, 201, 140, 0.14);
+  --warning: #f0b429;
+  --warning-quiet: rgba(240, 180, 41, 0.15);
+  --danger: #ff6b6b;
+  --danger-quiet: rgba(255, 107, 107, 0.14);
+  --info: #5b8cff;
+  --info-quiet: rgba(91, 140, 255, 0.14);
+
+  --ring: #87a9ff;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.55);
+
+  --skeleton: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 37%,
+    var(--surface-2) 63%
+  );
+}
+
+/* ================= LIGHT ================= */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --surface-2: #f3f5fa;
+  --surface-3: #e9edf5;
+  --overlay: rgba(17, 24, 39, 0.4);
+
+  --border: #e1e6ef;
+  --border-strong: #cbd3e1;
+
+  --text: #131722;
+  --text-muted: #5a6478;
+  --text-subtle: #8b94a7;
+  --text-inverse: #ffffff;
+
+  --accent: #3563e9;
+  --accent-hover: #2a52cc;
+  --accent-quiet: rgba(53, 99, 233, 0.1);
+
+  --success: #0f9d6b;
+  --success-quiet: rgba(15, 157, 107, 0.12);
+  --warning: #b9770a;
+  --warning-quiet: rgba(185, 119, 10, 0.12);
+  --danger: #d83a3a;
+  --danger-quiet: rgba(216, 58, 58, 0.1);
+  --info: #3563e9;
+  --info-quiet: rgba(53, 99, 233, 0.1);
+
+  --ring: #2a52cc;
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow: 0 8px 24px rgba(16, 24, 40, 0.1);
+  --shadow-lg: 0 20px 48px rgba(16, 24, 40, 0.16);
+
+  --skeleton: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 37%,
+    var(--surface-2) 63%
+  );
+}
