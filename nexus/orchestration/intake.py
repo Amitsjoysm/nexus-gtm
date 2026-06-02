@@ -193,3 +193,193 @@ def merge_icp(icp_state: dict, delta: dict) -> dict:
         else:
             out[k] = v
     return out
+
+
+# -- Token-frugal context envelope -----------------------------------------------------
+def _approx_tokens(text: str) -> int:
+    """Cheap, monotonic token estimate (~4 chars/token). Good enough for a budget guard."""
+    return max(1, (len(text) + 3) // 4)
+
+
+@dataclass(slots=True)
+class ContextEnvelope:
+    icp_state: dict
+    target: str
+    account_id: str | None
+    missing_slots: list[str]
+    context_summary: str
+    recent_messages: list[dict]
+    token_estimate: int = 0
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        icp_state: dict,
+        target: str | None,
+        account_id: str | None,
+        missing_slots: list[str],
+        context_summary: str,
+        recent_messages: list[dict],
+        budget: int,
+        recency_window: int,
+        summary_token_cap: int,
+    ) -> "ContextEnvelope":
+        """Assemble the per-turn payload and enforce the budget.
+
+        Structured state is authoritative and always kept (it is tiny). The summary is capped at
+        ``summary_token_cap``. On overflow we **trim the recency window first** (oldest dropped),
+        then truncate the summary — matching §4.3.
+        """
+        structured = json.dumps(
+            {"icp_state": icp_state, "target": _norm_target(target),
+             "account_id": account_id, "missing_slots": missing_slots},
+            separators=(",", ":"),
+        )
+        # Pre-cap the summary to its own ceiling.
+        summary = context_summary or ""
+        if _approx_tokens(summary) > summary_token_cap:
+            summary = summary[: summary_token_cap * 4]
+        recent = list(recent_messages or [])[-recency_window:]
+
+        base = _approx_tokens(structured)
+
+        def total(rs: list[dict], summ: str) -> int:
+            return base + _approx_tokens(summ) + sum(_approx_tokens(m.get("content", "")) for m in rs)
+
+        # 1) Trim recency window (oldest first).
+        while recent and total(recent, summary) > budget:
+            recent = recent[1:]
+        # 2) Truncate the summary if still over.
+        if total(recent, summary) > budget:
+            room = max(0, budget - base - sum(_approx_tokens(m.get("content", "")) for m in recent))
+            summary = summary[: room * 4]
+        return cls(
+            icp_state=icp_state, target=_norm_target(target), account_id=account_id,
+            missing_slots=missing_slots, context_summary=summary, recent_messages=recent,
+            token_estimate=total(recent, summary),
+        )
+
+
+# -- Controller ------------------------------------------------------------------------
+_SUGGESTIONS = {
+    "industries": ["SaaS", "Fintech", "Healthcare", "E-commerce", "Manufacturing"],
+    "geo": ["United States", "Canada", "United Kingdom", "Germany", "Australia"],
+    "company_size": ["1–50", "51–200", "201–1000", "1001–5000", "5000+"],
+    "titles": ["VP Sales", "CRO", "Head of RevOps", "CMO"],
+}
+_AFFIRMATIVE_PREFIXES = ("go", "yes", "yep", "yeah", "launch", "start", "run", "find",
+                         "sure", "ok", "okay", "proceed", "do it")
+
+
+def _is_affirmative(text: str) -> bool:
+    t = text.strip().lower()
+    return any(t == p or t.startswith(p + " ") for p in _AFFIRMATIVE_PREFIXES)
+
+
+def infer_target(text: str, current: str | None) -> str:
+    if current in (TARGET_COMPANIES, TARGET_CONTACTS):
+        return current
+    low = text.lower()
+    if any(w in low for w in ("contact", "people", "persona", "title", "decision maker")):
+        return TARGET_CONTACTS
+    return TARGET_COMPANIES
+
+
+def _icp_phrase(icp_state: dict, target: str) -> str:
+    bits = []
+    if icp_state.get("industries"):
+        bits.append(", ".join(map(str, icp_state["industries"])))
+    elif icp_state.get("icp_description"):
+        bits.append(str(icp_state["icp_description"]))
+    if icp_state.get("geo"):
+        bits.append("in " + ", ".join(map(str, icp_state["geo"])))
+    size = icp_state.get("company_size") or {}
+    if size.get("min") or size.get("max"):
+        bits.append(f"{size.get('min', 0)}–{size.get('max', '∞')} employees")
+    return " ".join(bits) or "your ICP"
+
+
+@dataclass(slots=True)
+class IntakeDecision:
+    icp_state: dict
+    missing_slots: list[str]
+    target: str
+    action: str           # "clarify" | "ready" | "launch"
+    assistant_kind: str   # KIND_* string
+    assistant_text: str
+    data: dict = field(default_factory=dict)
+    summary: str = ""
+
+
+class IntakeController:
+    """The brain. Pure-Python decisioning over structured state; LLM only phrases + summarizes."""
+
+    def __init__(self, llm: LLMProvider | None = None) -> None:
+        self.llm = llm or get_llm_provider()
+
+    async def advance(
+        self,
+        *,
+        icp_state: dict,
+        target: str | None,
+        missing_slots: list[str],
+        context_summary: str,
+        user_text: str,
+        is_first_turn: bool,
+    ) -> IntakeDecision:
+        target = infer_target(user_text, target)
+        pending = missing_slots[0] if missing_slots else None
+        new_state = merge_icp(icp_state, extract_slots(user_text, icp_state, pending))
+        missing = missing_required(new_state, target)
+
+        if missing:
+            slot = missing[0]
+            question = await self._phrase(slot, new_state)
+            summary = await self._summarize(context_summary, new_state, target)
+            return IntakeDecision(
+                icp_state=new_state, missing_slots=missing, target=target,
+                action="clarify", assistant_kind="clarifying_question",
+                assistant_text=question,
+                data={"slot": slot, "suggestions": _SUGGESTIONS.get(slot, [])},
+                summary=summary,
+            )
+
+        summary = await self._summarize(context_summary, new_state, target)
+        if is_first_turn or _is_affirmative(user_text):
+            return IntakeDecision(
+                icp_state=new_state, missing_slots=[], target=target,
+                action="launch", assistant_kind="run_launched",
+                assistant_text=f"Finding {target} matching {_icp_phrase(new_state, target)}…",
+                data={}, summary=summary,
+            )
+        return IntakeDecision(
+            icp_state=new_state, missing_slots=[], target=target,
+            action="ready", assistant_kind="text",
+            assistant_text=(
+                f"I can find {target} matching {_icp_phrase(new_state, target)}. "
+                "Reply 'go' to start, or refine the criteria."
+            ),
+            data={}, summary=summary,
+        )
+
+    async def _phrase(self, slot: str, icp_state: dict) -> str:
+        resp = await self.llm.complete(
+            [LLMMessage(role="user", content=f"Ask for the {slot} slot.")],
+            purpose="clarify_question",
+            variables={"slot": slot, "icp_state": icp_state},
+            max_tokens=80,
+        )
+        return resp.text.strip()
+
+    async def _summarize(self, prior: str, icp_state: dict, target: str) -> str:
+        s = get_settings()
+        resp = await self.llm.complete(
+            [LLMMessage(role="user", content="Fold the ICP into a compact summary.")],
+            purpose="chat_summary",
+            variables={"prior": prior, "icp_state": icp_state, "target": target},
+            max_tokens=s.orch_chat_summary_token_cap,
+        )
+        text = resp.text.strip()
+        cap = s.orch_chat_summary_token_cap * 4
+        return text[:cap]
