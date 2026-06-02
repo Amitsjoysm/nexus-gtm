@@ -26,6 +26,17 @@ class TokenResponse(BaseModel):
     role: str
 
 
+class TenantOut(BaseModel):
+    tenant_id: str
+    name: str
+    slug: str
+    role: str
+
+
+class SwitchTenantRequest(BaseModel):
+    tenant_id: str
+
+
 # ---- relevance ----
 class RelevanceProfileIn(BaseModel):
     icp: dict = Field(default_factory=dict)
