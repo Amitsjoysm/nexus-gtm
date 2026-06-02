@@ -1,6 +1,7 @@
 """ORM models. Importing this package registers all mappers."""
 from nexus.models.account import Account, Contact
 from nexus.models.alerts import Alert
+from nexus.models.chat import ChatMessage, ChatSession, CustomFieldDef
 from nexus.models.identity import Membership, Tenant, User, Workspace
 from nexus.models.intelligence import AccountScore, AgentRun
 from nexus.models.orchestration import Approval, OrchestrationRun, RunEvent, RunStep
@@ -29,4 +30,7 @@ __all__ = [
     "RunStep",
     "RunEvent",
     "Approval",
+    "ChatSession",
+    "ChatMessage",
+    "CustomFieldDef",
 ]

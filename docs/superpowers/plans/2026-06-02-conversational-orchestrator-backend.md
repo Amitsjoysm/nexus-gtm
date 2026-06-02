@@ -87,9 +87,12 @@ async def test_chat_message_seq_unique_per_session():
         await ts.flush()
         ts.add(ChatMessage(tenant_id=tid, session_id=session.id, seq=1, role="user", content="a"))
         await ts.flush()
-        ts.add(ChatMessage(tenant_id=tid, session_id=session.id, seq=1, role="user", content="b"))
+        # Contain the deliberate IntegrityError in a savepoint so the outer transaction
+        # (which tenant_session commits on exit) stays usable.
         with pytest.raises(Exception):
-            await ts.flush()
+            async with ts.session.begin_nested():
+                ts.add(ChatMessage(tenant_id=tid, session_id=session.id, seq=1, role="user", content="b"))
+                await ts.session.flush()
 
 
 async def test_custom_field_def_unique_key():
@@ -97,9 +100,10 @@ async def test_custom_field_def_unique_key():
     async with tenant_session(tid) as ts:
         ts.add(CustomFieldDef(tenant_id=tid, entity="account", key="arr", label="ARR", kind="number"))
         await ts.flush()
-        ts.add(CustomFieldDef(tenant_id=tid, entity="account", key="arr", label="ARR2", kind="number"))
         with pytest.raises(Exception):
-            await ts.flush()
+            async with ts.session.begin_nested():
+                ts.add(CustomFieldDef(tenant_id=tid, entity="account", key="arr", label="ARR2", kind="number"))
+                await ts.session.flush()
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
