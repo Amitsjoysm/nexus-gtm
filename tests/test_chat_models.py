@@ -52,3 +52,29 @@ async def test_custom_field_def_unique_key():
             async with ts.session.begin_nested():
                 ts.add(CustomFieldDef(tenant_id=tid, entity="account", key="arr", label="ARR2", kind="number"))
                 await ts.session.flush()
+
+
+async def test_account_contact_custom_fields_default_empty():
+    from nexus.models.account import Account, Contact
+    tid = await make_tenant("t-custom")
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.co")
+        ts.add(acc)
+        await ts.flush()
+        c = Contact(tenant_id=tid, account_id=acc.id, full_name="Jo")
+        ts.add(c)
+        await ts.flush()
+        assert acc.custom_fields == {}
+        assert c.custom_fields == {}
+        assert acc.source is None
+        acc.custom_fields = {"arr": 120000}
+        acc.source = "discovery"
+        await ts.flush()
+        again = await ts.get(Account, acc.id)
+        assert again.custom_fields["arr"] == 120000
+        assert again.source == "discovery"
+
+
+async def test_run_has_chat_session_id_column():
+    from nexus.models.orchestration import OrchestrationRun
+    assert hasattr(OrchestrationRun, "chat_session_id")

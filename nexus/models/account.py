@@ -20,6 +20,10 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     tech_stack: Mapped[list] = mapped_column(JSON, default=list)
     crm_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     crm_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Proprietary per-tenant columns (CustomFieldDef metadata gives them labels/kinds).
+    custom_fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Provenance: "discovery" for web-sourced rows so results can filter own vs discovered.
+    source: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
     contacts: Mapped[list["Contact"]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
@@ -39,5 +43,7 @@ class Contact(IdMixin, TimestampMixin, TenantScoped, Base):
     email_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     phone_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     enrichment_source: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    # Proprietary per-tenant columns (see CustomFieldDef).
+    custom_fields: Mapped[dict] = mapped_column(JSON, default=dict)
 
     account: Mapped[Account] = relationship(back_populates="contacts")

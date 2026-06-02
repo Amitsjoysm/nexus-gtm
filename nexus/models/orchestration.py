@@ -74,6 +74,10 @@ class OrchestrationRun(IdMixin, TimestampMixin, TenantScoped, Base):
         ForeignKey("accounts.id"), nullable=True, index=True
     )
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # Links a run back to the chat conversation that launched it (discovery runs).
+    chat_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("chat_sessions.id"), nullable=True, index=True
+    )
     idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
