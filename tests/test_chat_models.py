@@ -78,3 +78,12 @@ async def test_account_contact_custom_fields_default_empty():
 async def test_run_has_chat_session_id_column():
     from nexus.models.orchestration import OrchestrationRun
     assert hasattr(OrchestrationRun, "chat_session_id")
+
+
+def test_chat_settings_defaults():
+    from nexus.core.config import Settings
+    s = Settings()
+    assert s.orch_chat_token_budget == 1200
+    assert s.orch_chat_recency_window == 4
+    assert s.orch_chat_summary_token_cap == 150
+    assert s.discovery_max_candidates == 25
