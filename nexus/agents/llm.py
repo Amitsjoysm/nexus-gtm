@@ -95,6 +95,36 @@ class StubLLMProvider(LLMProvider):
                 "and has active signals worth pursuing."
             )
             return f"Answer about {account}: {v.get('answer', default_answer)}"
+        if purpose == "clarify_question":
+            slot = v.get("slot", "")
+            prompts = {
+                "industries": "Which industries should I focus on? "
+                "(e.g. SaaS, Fintech, Healthcare)",
+                "geo": "Which countries or regions are you targeting? "
+                "(e.g. United States, United Kingdom)",
+                "company_size": "What company size range should I target? "
+                "(e.g. 200–5000 employees)",
+                "titles": "Which job titles or personas should I look for? "
+                "(e.g. VP Sales, CRO)",
+            }
+            return prompts.get(slot, f"Could you tell me more about {slot or 'your ICP'}?")
+        if purpose == "chat_summary":
+            icp = v.get("icp_state", {}) or {}
+            cap_chars = max(40, get_settings().orch_chat_summary_token_cap * 4)
+            parts: list[str] = []
+            if icp.get("industries"):
+                parts.append("industries: " + ", ".join(map(str, icp["industries"])))
+            if icp.get("icp_description"):
+                parts.append("desc: " + str(icp["icp_description"]))
+            if icp.get("geo"):
+                parts.append("geo: " + ", ".join(map(str, icp["geo"])))
+            size = icp.get("company_size") or {}
+            if size.get("min") or size.get("max"):
+                parts.append(f"size: {size.get('min', 0)}–{size.get('max', '∞')}")
+            if icp.get("titles"):
+                parts.append("titles: " + ", ".join(map(str, icp["titles"])))
+            body = "; ".join(parts) if parts else "no ICP details captured yet"
+            return (f"Target {v.get('target', 'companies')}; {body}.")[:cap_chars]
         # Fallback: echo the last user message compactly.
         last = next((m.content for m in reversed(messages) if m.role == "user"), "")
         return f"[stub] {last[:280]}"

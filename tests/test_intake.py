@@ -76,3 +76,35 @@ def test_merge_unions_lists_and_overrides_size():
     # Case-insensitive dedupe, order preserved, new value appended.
     assert out["industries"] == ["Fintech", "SaaS"]
     assert out["company_size"] == {"min": 200, "max": 5000}
+
+
+import pytest
+
+from nexus.agents.llm import LLMMessage, StubLLMProvider
+
+
+@pytest.mark.asyncio
+async def test_stub_clarify_question_per_slot():
+    stub = StubLLMProvider()
+    r = await stub.complete(
+        [LLMMessage(role="user", content="x")],
+        purpose="clarify_question",
+        variables={"slot": "geo", "icp_state": {"industries": ["Fintech"]}},
+    )
+    assert "countr" in r.text.lower() or "region" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_stub_chat_summary_is_capped_and_structured():
+    stub = StubLLMProvider()
+    r = await stub.complete(
+        [LLMMessage(role="user", content="x")],
+        purpose="chat_summary",
+        variables={
+            "prior": "",
+            "target": "companies",
+            "icp_state": {"industries": ["Fintech"], "geo": ["United States"]},
+        },
+    )
+    assert "Fintech" in r.text
+    assert len(r.text) <= 600  # ~150-token cap * 4 chars
