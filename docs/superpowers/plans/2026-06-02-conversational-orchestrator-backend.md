@@ -640,9 +640,10 @@ def extract_slots(text: str, icp_state: dict, pending_slot: str | None) -> dict:
     """Pure-Python slot extraction. Returns a *delta* (only slots it learned).
 
     Two passes: (1) keyword/regex detection that fires anywhere in the message, so one rich
-    sentence fills many slots; (2) coercion — if the controller asked about ``pending_slot`` and
-    pass (1) found nothing for it, interpret the whole answer as that slot. Never raises: an
-    unparseable message yields an empty delta.
+    sentence fills many slots; (2) coercion — the user is answering ``pending_slot``, so for
+    open-vocabulary slots (``industries``/``titles``) the full answer phrases win over an
+    incidental keyword hit, and ``geo`` is coerced only when alias detection missed it. Never
+    raises: an unparseable message yields an empty delta.
     """
     delta: dict = {}
     low = text.lower()
@@ -665,21 +666,18 @@ def extract_slots(text: str, icp_state: dict, pending_slot: str | None) -> dict:
     if titles:
         delta["titles"] = list(dict.fromkeys(titles))
 
-    # (2) Coercion on the pending slot when global detection missed it.
-    if pending_slot == "industries" and "industries" not in delta:
+    # (2) Coercion on the pending slot. For open-vocabulary slots the full answer wins
+    # unconditionally (the user is explicitly answering that question); for geo we keep the
+    # normalized alias hit when we have one and only coerce phrases when detection missed.
+    if pending_slot in ("industries", "titles"):
         phrases = [_title_case_phrase(p) for p in _split_phrases(text)]
         if phrases:
-            delta["industries"] = phrases
+            delta[pending_slot] = phrases
     elif pending_slot == "geo" and "geo" not in delta:
         phrases = [_title_case_phrase(p) for p in _split_phrases(text)]
         if phrases:
             delta["geo"] = phrases
-    elif pending_slot == "company_size" and "company_size" not in delta:
-        pass  # nothing parseable; leave missing so we re-ask
-    elif pending_slot == "titles" and "titles" not in delta:
-        phrases = [_title_case_phrase(p) for p in _split_phrases(text)]
-        if phrases:
-            delta["titles"] = phrases
+    # company_size: only the regex/named-band parser fills it; leave missing to re-ask.
     return delta
 
 
