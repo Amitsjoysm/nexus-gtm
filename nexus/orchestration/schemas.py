@@ -102,3 +102,22 @@ class ApprovalDecisionRequest(BaseModel):
     decision: Literal["approve", "reject"]
     # Optional reviewer edits applied to the draft before it goes out (subject/body).
     edits: dict = Field(default_factory=dict)
+
+
+class ResultColumn(BaseModel):
+    key: str
+    label: str
+    kind: str
+
+
+class ResultsResponse(BaseModel):
+    """Server-side-filtered discovery results plus the dynamic custom-field columns the
+    table should render. ``candidates`` stay as plain dicts — they are already a flat,
+    frontend-ready projection written by the discovery agent."""
+
+    run_id: str
+    target: str | None = None
+    total: int
+    counts: dict = Field(default_factory=dict)
+    columns: list[ResultColumn] = Field(default_factory=list)
+    candidates: list[dict] = Field(default_factory=list)
