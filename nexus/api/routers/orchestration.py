@@ -22,9 +22,12 @@ from nexus.orchestration.planner import PlanError
 from nexus.orchestration.schemas import (
     ApprovalDecisionRequest,
     ApprovalOut,
+    ResultColumn,
+    ResultsResponse,
     RunCreateRequest,
     RunOut,
 )
+from nexus.models.chat import CustomFieldDef
 from nexus.models.orchestration import (
     Approval,
     OrchestrationRun,
@@ -88,6 +91,72 @@ async def get_run(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
     steps = await _load_steps(ts, run.id)
     return RunOut.from_model(run, steps)
+
+
+@router.get("/runs/{run_id}/results", response_model=ResultsResponse)
+async def get_run_results(
+    run_id: str,
+    request: Request,
+    source: str | None = None,
+    min_fit: int | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.run_orchestration)),
+) -> ResultsResponse:
+    run = await ts.get(OrchestrationRun, run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    discovery = (run.blackboard or {}).get("discovery") or {}
+    candidates: list[dict] = list(discovery.get("candidates") or [])
+    entity = "contact" if discovery.get("target") == "contacts" else "account"
+
+    # Arbitrary cf_<key>=<value> filters come straight off the raw query string so the
+    # table can filter on any custom field without a fixed schema. Empty values are ignored.
+    cf_filters = {
+        k[3:]: v
+        for k, v in request.query_params.items()
+        if k.startswith("cf_") and v != ""
+    }
+
+    def _matches(c: dict) -> bool:
+        if source and c.get("source") != source:
+            return False
+        if min_fit is not None and (c.get("fit_score") or 0) < min_fit:
+            return False
+        if q:
+            needle = q.lower()
+            hay = " ".join(
+                str(c.get(f) or "") for f in ("name", "domain", "industry", "title")
+            ).lower()
+            if needle not in hay:
+                return False
+        for key, want in cf_filters.items():
+            have = (c.get("custom_fields") or {}).get(key)
+            if have is None or want.lower() not in str(have).lower():
+                return False
+        return True
+
+    filtered = [c for c in candidates if _matches(c)]
+    total = len(filtered)
+    page = filtered[offset : offset + limit] if limit > 0 else filtered[offset:]
+
+    stmt = ts.select(CustomFieldDef, CustomFieldDef.entity == entity).order_by(
+        CustomFieldDef.label
+    )
+    columns = [
+        ResultColumn(key=d.key, label=d.label, kind=d.kind)
+        for d in (await ts.session.scalars(stmt)).all()
+    ]
+    return ResultsResponse(
+        run_id=run.id,
+        target=discovery.get("target"),
+        total=total,
+        counts=discovery.get("counts") or {},
+        columns=columns,
+        candidates=page,
+    )
 
 
 @router.post("/runs/{run_id}/cancel", response_model=RunOut)

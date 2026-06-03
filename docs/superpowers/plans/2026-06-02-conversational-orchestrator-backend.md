@@ -87,9 +87,12 @@ async def test_chat_message_seq_unique_per_session():
         await ts.flush()
         ts.add(ChatMessage(tenant_id=tid, session_id=session.id, seq=1, role="user", content="a"))
         await ts.flush()
-        ts.add(ChatMessage(tenant_id=tid, session_id=session.id, seq=1, role="user", content="b"))
+        # Contain the deliberate IntegrityError in a savepoint so the outer transaction
+        # (which tenant_session commits on exit) stays usable.
         with pytest.raises(Exception):
-            await ts.flush()
+            async with ts.session.begin_nested():
+                ts.add(ChatMessage(tenant_id=tid, session_id=session.id, seq=1, role="user", content="b"))
+                await ts.session.flush()
 
 
 async def test_custom_field_def_unique_key():
@@ -97,9 +100,10 @@ async def test_custom_field_def_unique_key():
     async with tenant_session(tid) as ts:
         ts.add(CustomFieldDef(tenant_id=tid, entity="account", key="arr", label="ARR", kind="number"))
         await ts.flush()
-        ts.add(CustomFieldDef(tenant_id=tid, entity="account", key="arr", label="ARR2", kind="number"))
         with pytest.raises(Exception):
-            await ts.flush()
+            async with ts.session.begin_nested():
+                ts.add(CustomFieldDef(tenant_id=tid, entity="account", key="arr", label="ARR2", kind="number"))
+                await ts.session.flush()
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -636,9 +640,10 @@ def extract_slots(text: str, icp_state: dict, pending_slot: str | None) -> dict:
     """Pure-Python slot extraction. Returns a *delta* (only slots it learned).
 
     Two passes: (1) keyword/regex detection that fires anywhere in the message, so one rich
-    sentence fills many slots; (2) coercion — if the controller asked about ``pending_slot`` and
-    pass (1) found nothing for it, interpret the whole answer as that slot. Never raises: an
-    unparseable message yields an empty delta.
+    sentence fills many slots; (2) coercion — the user is answering ``pending_slot``, so for
+    open-vocabulary slots (``industries``/``titles``) the full answer phrases win over an
+    incidental keyword hit, and ``geo`` is coerced only when alias detection missed it. Never
+    raises: an unparseable message yields an empty delta.
     """
     delta: dict = {}
     low = text.lower()
@@ -661,21 +666,18 @@ def extract_slots(text: str, icp_state: dict, pending_slot: str | None) -> dict:
     if titles:
         delta["titles"] = list(dict.fromkeys(titles))
 
-    # (2) Coercion on the pending slot when global detection missed it.
-    if pending_slot == "industries" and "industries" not in delta:
+    # (2) Coercion on the pending slot. For open-vocabulary slots the full answer wins
+    # unconditionally (the user is explicitly answering that question); for geo we keep the
+    # normalized alias hit when we have one and only coerce phrases when detection missed.
+    if pending_slot in ("industries", "titles"):
         phrases = [_title_case_phrase(p) for p in _split_phrases(text)]
         if phrases:
-            delta["industries"] = phrases
+            delta[pending_slot] = phrases
     elif pending_slot == "geo" and "geo" not in delta:
         phrases = [_title_case_phrase(p) for p in _split_phrases(text)]
         if phrases:
             delta["geo"] = phrases
-    elif pending_slot == "company_size" and "company_size" not in delta:
-        pass  # nothing parseable; leave missing so we re-ask
-    elif pending_slot == "titles" and "titles" not in delta:
-        phrases = [_title_case_phrase(p) for p in _split_phrases(text)]
-        if phrases:
-            delta["titles"] = phrases
+    # company_size: only the regex/named-band parser fills it; leave missing to re-ask.
     return delta
 
 
@@ -1441,13 +1443,15 @@ def _icp_to_scoring(icp: dict) -> dict:
 
 
 def _passes_hard_filters(account: Account, scoring_icp: dict) -> bool:
-    """Drop accounts that explicitly contradict the ICP; keep unknowns (None) as candidates."""
-    inds = [i.lower() for i in scoring_icp.get("industries", [])]
-    if inds and account.industry and account.industry.lower() not in inds:
-        return False
-    geos = [c.lower() for c in scoring_icp.get("countries", [])]
-    if geos and account.country and account.country.lower() not in geos:
-        return False
+    """Hard-exclude only on the explicit numeric size band the user stated.
+
+    Size is a precise, user-asserted bound, so an account whose known headcount falls
+    outside it is a definitive non-match and is dropped. Industry and geo are deliberately
+    *not* hard filters: CRM industry/country labels are inconsistent ("Financial Services"
+    vs "Fintech", "US" vs "United States"), so exact-string exclusion would hide good but
+    mislabeled accounts. They instead drive the ICP-fit ranking — near-matches still surface,
+    ranked lower, where the rep can see and refine them. Unknown headcount (None) is kept.
+    """
     lo, hi = scoring_icp.get("employee_min"), scoring_icp.get("employee_max")
     if account.employee_count is not None:
         if lo is not None and account.employee_count < lo:

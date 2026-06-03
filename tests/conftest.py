@@ -101,6 +101,19 @@ def auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def principal_from_token(token: str):
+    """Decode a JWT into a Principal exactly as ``get_principal`` does (claims sub/tid/role)."""
+    from nexus.api.deps import Principal
+    from nexus.core.security import decode_access_token
+
+    payload = decode_access_token(token) or {}
+    return Principal(
+        user_id=payload["sub"],
+        tenant_id=payload["tid"],
+        role=payload.get("role", "rep"),
+    )
+
+
 __all__ = [
     "FakeBrowser",
     "make_tenant",
@@ -109,4 +122,5 @@ __all__ = [
     "client",
     "signup",
     "auth",
+    "principal_from_token",
 ]

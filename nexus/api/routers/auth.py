@@ -5,8 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexus.api.deps import get_db_session
-from nexus.api.schemas import LoginRequest, SignupRequest, TokenResponse
+from nexus.api.deps import Principal, get_db_session, get_principal
+from nexus.api.schemas import (
+    LoginRequest,
+    SignupRequest,
+    SwitchTenantRequest,
+    TenantOut,
+    TokenResponse,
+)
 from nexus.core.security import create_access_token, hash_password, verify_password
 from nexus.models.identity import Membership, Tenant, User, Workspace
 
@@ -78,3 +84,47 @@ async def _resolve_membership(
         if m.tenant_id == tenant.id:
             return m
     raise HTTPException(status.HTTP_403_FORBIDDEN, "No membership in the requested tenant")
+
+
+@router.get("/tenants", response_model=list[TenantOut])
+async def list_tenants(
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_db_session),
+) -> list[TenantOut]:
+    """Tenants the authenticated user is a member of (for the workspace switcher)."""
+    rows = (
+        await db.execute(
+            select(Tenant, Membership.role)
+            .join(Membership, Membership.tenant_id == Tenant.id)
+            .where(Membership.user_id == principal.user_id)
+            .order_by(Tenant.name)
+        )
+    ).all()
+    return [
+        TenantOut(tenant_id=t.id, name=t.name, slug=t.slug, role=role) for (t, role) in rows
+    ]
+
+
+@router.post("/switch", response_model=TokenResponse)
+async def switch_tenant(
+    req: SwitchTenantRequest,
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_db_session),
+) -> TokenResponse:
+    """Re-verify membership server-side and re-issue a JWT pinned to the requested tenant."""
+    membership = (
+        await db.scalars(
+            select(Membership).where(
+                Membership.user_id == principal.user_id,
+                Membership.tenant_id == req.tenant_id,
+            )
+        )
+    ).first()
+    if membership is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "No membership in the requested tenant")
+    token = create_access_token(
+        user_id=principal.user_id, tenant_id=membership.tenant_id, role=membership.role
+    )
+    return TokenResponse(
+        access_token=token, tenant_id=membership.tenant_id, role=membership.role
+    )

@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     orch_max_steps: int = 200           # hard cap on plan size (runaway / cost guard)
     orch_autonomy: Literal["gated", "auto"] = "gated"  # "gated" = outbound needs approval
 
+    # Conversational orchestrator (chat) — token-frugal context envelope.
+    orch_chat_token_budget: int = 1200       # hard cap on the per-turn LLM payload
+    orch_chat_recency_window: int = 4         # last K raw messages kept verbatim
+    orch_chat_summary_token_cap: int = 150    # rolling summary ceiling (approx tokens)
+    discovery_max_candidates: int = 25        # cap on discovery result list size
+
     @property
     def is_postgres(self) -> bool:
         return self.database_url.startswith("postgresql")
