@@ -5,6 +5,7 @@ from nexus.api.routers import (
     alerts,
     auth,
     chat,
+    custom_fields,
     integrations,
     orchestration,
     relevance,
@@ -25,6 +26,7 @@ all_routers = [
     signals.router,
     orchestration.router,
     chat.router,
+    custom_fields.router,
 ]
 
 __all__ = ["all_routers"]
