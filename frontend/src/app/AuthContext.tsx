@@ -25,6 +25,10 @@ interface AuthApi {
   login: (body: LoginRequest) => Promise<void>;
   signup: (body: SignupRequest) => Promise<void>;
   logout: () => void;
+  /** Re-issue a JWT for another tenant the user belongs to, then swap + refetch. */
+  switchTenant: (tenantId: string) => Promise<void>;
+  /** Increments on every tenant switch so screens can key off it to remount/refetch. */
+  tenantEpoch: number;
 }
 
 const STORAGE_KEY = "nexus_session";
@@ -54,6 +58,7 @@ function loadSession(): Session | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(loadSession);
+  const [tenantEpoch, setTenantEpoch] = useState(0);
   // Ref so the client's 401 handler always sees the latest setter without re-creating the client.
   const setSessionRef = useRef(setSession);
   setSessionRef.current = setSession;
@@ -94,9 +99,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(null);
   }, []);
 
+  const switchTenant = useCallback(
+    async (tenantId: string) => {
+      const res = await api.switchTenant(tenantId);
+      setSession({ token: res.access_token, role: res.role, tenantId: res.tenant_id });
+      setTenantEpoch((n) => n + 1);
+    },
+    [api],
+  );
+
   const value = useMemo<AuthApi>(
-    () => ({ api, session, isAuthed: !!session, login, signup, logout }),
-    [api, session, login, signup, logout],
+    () => ({ api, session, isAuthed: !!session, login, signup, logout, switchTenant, tenantEpoch }),
+    [api, session, login, signup, logout, switchTenant, tenantEpoch],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
