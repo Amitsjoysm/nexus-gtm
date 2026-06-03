@@ -277,6 +277,7 @@ export interface Run {
   created_at: string;
   steps: RunStep[];
   blackboard: RunBlackboard;
+  chat_session_id?: string | null;
 }
 
 export interface RunCreateRequest {
@@ -306,4 +307,136 @@ export interface RunStreamEvent {
   seq: number;
   type: string;
   data: Record<string, unknown>;
+}
+
+// ---- conversational orchestrator: chat ----
+export type ChatMessageKind =
+  | "user"
+  | "assistant"
+  | "clarifying_question"
+  | "confirmation"
+  | "run_launched";
+
+export interface ChatMessage {
+  id: string;
+  seq: number;
+  role: "user" | "assistant";
+  kind: ChatMessageKind | string;
+  content: string;
+  data: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  status: string;
+  target: string | null;
+  account_id: string | null;
+  icp_state: Record<string, unknown>;
+  missing_slots: string[];
+  context_summary: string;
+  created_at: string;
+}
+
+export interface ChatTurnResponse {
+  session: ChatSession;
+  messages: ChatMessage[];
+}
+
+export interface CreateSessionRequest {
+  account_id?: string | null;
+  parent_session_id?: string | null;
+  message?: string | null;
+}
+
+export interface SaveIcpResponse {
+  ok: boolean;
+  icp: Record<string, unknown>;
+}
+
+/** One frame from a chat session's SSE stream (mirrors RunStreamEvent). */
+export interface ChatStreamEvent {
+  seq: number;
+  kind: string;
+  data: { id?: string; role?: string; kind?: string; content?: string; data?: Record<string, unknown> };
+}
+
+// ---- conversational orchestrator: discovery results ----
+export interface DiscoveryCandidate {
+  entity: "account" | "contact";
+  id: string;
+  name: string;
+  domain?: string | null;
+  email?: string | null;
+  title?: string | null;
+  industry?: string | null;
+  fit_score: number;
+  fit_reasons: string[];
+  source: "own" | "discovery";
+  is_new: boolean;
+  custom_fields: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface ResultColumn {
+  key: string;
+  label: string;
+  kind: string;
+}
+
+export interface DiscoveryResult {
+  run_id: string;
+  target: string | null;
+  total: number;
+  counts: Record<string, number>;
+  columns: ResultColumn[];
+  candidates: DiscoveryCandidate[];
+}
+
+export interface ResultsQuery {
+  source?: string;
+  min_fit?: number;
+  q?: string;
+  limit?: number;
+  offset?: number;
+  /** Arbitrary cf_<key> filters. */
+  [cf: string]: string | number | undefined;
+}
+
+// ---- proprietary data: custom fields ----
+export type CustomFieldEntity = "account" | "contact";
+
+export interface CustomFieldDef {
+  id: string;
+  entity: CustomFieldEntity | string;
+  key: string;
+  label: string;
+  kind: string;
+}
+
+export interface CreateCustomFieldRequest {
+  entity: CustomFieldEntity;
+  label: string;
+  key?: string | null;
+  kind?: string;
+}
+
+export interface CsvImportResult {
+  matched: number;
+  updated: number;
+  created_fields: string[];
+  skipped: number;
+}
+
+// ---- cross-workspace switch ----
+export interface TenantSummary {
+  tenant_id: string;
+  name: string;
+  slug: string;
+  role: Role;
+}
+
+export interface SwitchTenantRequest {
+  tenant_id: string;
 }

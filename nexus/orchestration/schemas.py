@@ -55,6 +55,7 @@ class RunOut(BaseModel):
     goal: str
     status: str
     account_id: str | None = None
+    chat_session_id: str | None = None
     error: str | None = None
     created_at: datetime
     steps: list[RunStepOut] = Field(default_factory=list)
@@ -69,6 +70,7 @@ class RunOut(BaseModel):
             goal=run.goal,
             status=run.status,
             account_id=run.account_id,
+            chat_session_id=run.chat_session_id,
             error=run.error,
             created_at=run.created_at,
             steps=[RunStepOut.from_model(s) for s in (steps or [])],
