@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
@@ -18,14 +18,16 @@ import {
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
-import { useApiClient } from "@/app/AuthContext";
+import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
 import { strengthMeta } from "@/lib/display";
-import type { AgentRunResponse, Account, Contact, SignalEvent } from "@/lib/types";
+import type { AgentRunResponse, Account, Contact, Role, SignalEvent } from "@/lib/types";
 import styles from "./AccountDetailPage.module.css";
 
 type Tab = "overview" | "contacts" | "signals" | "actions";
+
+const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
 
 interface AgentState {
   loading: boolean;
@@ -37,10 +39,15 @@ export function AccountDetailPage() {
   const { id = "" } = useParams();
   const api = useApiClient();
   const toast = useToast();
+  const navigate = useNavigate();
+  const { session } = useAuth();
   const [tab, setTab] = useState<Tab>("overview");
   const [running, setRunning] = useState(false);
+  const [launching, setLaunching] = useState(false);
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
   const [question, setQuestion] = useState("");
+
+  const canOrchestrate = session ? ROLE_RANK[session.role] >= ROLE_RANK.manager : false;
 
   const account = useApi<Account>((signal) => api.getAccount(id, signal), [id]);
   const contacts = useApi<Contact[]>((signal) => api.listContacts(id, signal), [id]);
@@ -72,6 +79,20 @@ export function AccountDetailPage() {
     const q = question.trim();
     if (!q) return;
     runAgent("qa", { question: q });
+  }
+
+  async function askOrchestrator(acc: Account) {
+    setLaunching(true);
+    try {
+      const { session: chat } = await api.createChatSession({ account_id: acc.id });
+      navigate(`/orchestrator/${chat.id}`);
+    } catch (err) {
+      toast.error(
+        "Couldn't start the conversation",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+      setLaunching(false);
+    }
   }
 
   async function runPipeline() {
@@ -115,13 +136,26 @@ export function AccountDetailPage() {
             title={acc.name}
             description={acc.domain ?? undefined}
             actions={
-              <Button
-                iconLeft={<Icons.SparklesIcon />}
-                loading={running}
-                onClick={runPipeline}
-              >
-                Run pipeline
-              </Button>
+              <>
+                {canOrchestrate && (
+                  <Button
+                    variant="secondary"
+                    iconLeft={<Icons.MessageIcon />}
+                    loading={launching}
+                    onClick={() => askOrchestrator(acc)}
+                    aria-label={`Ask the orchestrator about ${acc.name}`}
+                  >
+                    Ask the orchestrator
+                  </Button>
+                )}
+                <Button
+                  iconLeft={<Icons.SparklesIcon />}
+                  loading={running}
+                  onClick={runPipeline}
+                >
+                  Run pipeline
+                </Button>
+              </>
             }
           />
         )}
