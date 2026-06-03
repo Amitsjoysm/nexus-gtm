@@ -17,9 +17,17 @@ import type {
   Approval,
   ApprovalDecisionRequest,
   ApprovalStatus,
+  ChatSession,
+  ChatStreamEvent,
+  ChatTurnResponse,
   Contact,
+  CreateCustomFieldRequest,
+  CreateSessionRequest,
   CRMSyncRequest,
   CRMSyncResponse,
+  CsvImportResult,
+  CustomFieldDef,
+  DiscoveryResult,
   InboxTask,
   ListBuildResult,
   ListFilter,
@@ -29,14 +37,17 @@ import type {
   PlayInput,
   RelevanceProfile,
   RelevanceProfileInput,
+  ResultsQuery,
   Role,
   Run,
   RunCreateRequest,
   RunStreamEvent,
+  SaveIcpResponse,
   SEPPushRequest,
   SEPPushResponse,
   SignalEvent,
   SignupRequest,
+  TenantSummary,
   TokenResponse,
   Workspace,
 } from "./types";
@@ -106,6 +117,30 @@ export class ApiClient {
     const text = await res.text();
     const data = text ? safeJsonParse(text) : null;
 
+    if (!res.ok) {
+      const detail =
+        (data && typeof data === "object" && "detail" in data
+          ? String((data as { detail: unknown }).detail)
+          : null) || res.statusText || "Request failed";
+      throw new ApiError(res.status, detail);
+    }
+    return data as T;
+  }
+
+  /** Multipart POST (FormData). Mirrors `request` for auth + error handling, no JSON body. */
+  private async requestForm<T>(path: string, form: FormData, signal?: AbortSignal): Promise<T> {
+    const headers: Record<string, string> = {};
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    let res: Response;
+    try {
+      res = await fetch(this.buildUrl(path), { method: "POST", headers, body: form, signal });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") throw err;
+      throw new ApiError(0, "Network error — couldn't reach the server.");
+    }
+    if (res.status === 401) this.onUnauthorized?.();
+    const text = await res.text();
+    const data = text ? safeJsonParse(text) : null;
     if (!res.ok) {
       const detail =
         (data && typeof data === "object" && "detail" in data
@@ -290,6 +325,108 @@ export class ApiClient {
       method: "POST",
       body,
       signal,
+    });
+  }
+
+  // ---- orchestrator chat ----
+  createChatSession(body: CreateSessionRequest, signal?: AbortSignal) {
+    return this.request<ChatTurnResponse>("/orchestration/chat/sessions", {
+      method: "POST", body, signal,
+    });
+  }
+  listChatSessions(params: { account_id?: string; status_filter?: string } = {}, signal?: AbortSignal) {
+    return this.request<ChatSession[]>("/orchestration/chat/sessions", { query: params, signal });
+  }
+  getChatSession(id: string, signal?: AbortSignal) {
+    return this.request<ChatTurnResponse>(`/orchestration/chat/sessions/${id}`, { signal });
+  }
+  postChatMessage(id: string, content: string, signal?: AbortSignal) {
+    return this.request<ChatTurnResponse>(`/orchestration/chat/sessions/${id}/messages`, {
+      method: "POST", body: { content }, signal,
+    });
+  }
+  saveChatIcp(id: string, signal?: AbortSignal) {
+    return this.request<SaveIcpResponse>(`/orchestration/chat/sessions/${id}/save-icp`, {
+      method: "POST", signal,
+    });
+  }
+
+  /**
+   * Stream a chat session's new messages over SSE. Same hand-rolled fetch+reader as
+   * `streamRunEvents` (EventSource can't send Authorization). Resumable via `lastEventId`
+   * (highest `seq`). Resolves when the server closes (idle or ceiling); the caller reconnects.
+   */
+  async streamChatEvents(
+    sessionId: string,
+    opts: { onEvent: (event: ChatStreamEvent) => void; lastEventId?: number },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const headers: Record<string, string> = { Accept: "text/event-stream" };
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    if (opts.lastEventId) headers["Last-Event-ID"] = String(opts.lastEventId);
+    const res = await fetch(this.buildUrl(`/orchestration/chat/sessions/${sessionId}/stream`), {
+      headers, signal,
+    });
+    if (res.status === 401) this.onUnauthorized?.();
+    if (!res.ok || !res.body) {
+      throw new ApiError(res.status, res.statusText || "Couldn't open the chat stream");
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const ev = parseSseFrame(frame);
+          if (ev) opts.onEvent({ seq: ev.seq, kind: ev.type, data: ev.data as ChatStreamEvent["data"] });
+        }
+      }
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+  }
+
+  // ---- discovery results ----
+  getRunResults(runId: string, query: ResultsQuery = {}, signal?: AbortSignal) {
+    return this.request<DiscoveryResult>(`/orchestration/runs/${runId}/results`, {
+      query: query as Record<string, string | number | undefined>, signal,
+    });
+  }
+
+  // ---- proprietary data: custom fields ----
+  listCustomFields(entity?: string, signal?: AbortSignal) {
+    return this.request<CustomFieldDef[]>("/custom-fields", { query: { entity }, signal });
+  }
+  createCustomField(body: CreateCustomFieldRequest, signal?: AbortSignal) {
+    return this.request<CustomFieldDef>("/custom-fields", { method: "POST", body, signal });
+  }
+  deleteCustomField(id: string, signal?: AbortSignal) {
+    return this.request<null>(`/custom-fields/${id}`, { method: "DELETE", signal });
+  }
+  importCustomFieldsCsv(
+    args: { entity: string; matchColumn: string; mapping: Record<string, string>; file: File },
+    signal?: AbortSignal,
+  ) {
+    const form = new FormData();
+    form.set("entity", args.entity);
+    form.set("match_column", args.matchColumn);
+    form.set("mapping", JSON.stringify(args.mapping));
+    form.set("file", args.file);
+    return this.requestForm<CsvImportResult>("/custom-fields/import", form, signal);
+  }
+
+  // ---- cross-workspace switch ----
+  listTenants(signal?: AbortSignal) {
+    return this.request<TenantSummary[]>("/auth/tenants", { signal });
+  }
+  switchTenant(tenantId: string, signal?: AbortSignal) {
+    return this.request<TokenResponse>("/auth/switch", {
+      method: "POST", body: { tenant_id: tenantId }, signal,
     });
   }
 
