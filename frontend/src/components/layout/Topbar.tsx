@@ -3,6 +3,7 @@ import { LogOutIcon, MenuIcon, MoonIcon, SunIcon } from "@/components/ui/icons";
 import { useTheme } from "@/app/ThemeContext";
 import { useAuth } from "@/app/AuthContext";
 import { Avatar } from "@/components/ui";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import styles from "./Topbar.module.css";
 
 export interface TopbarProps {
@@ -21,6 +22,7 @@ export function Topbar({ title, onMenuClick }: TopbarProps) {
           <IconButton label="Open menu" icon={<MenuIcon />} onClick={onMenuClick} />
         </span>
         <h1 className={styles.title}>{title}</h1>
+        <WorkspaceSwitcher />
       </div>
 
       <div className={styles.right}>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
+import { useAuth } from "@/app/AuthContext";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import styles from "./AppShell.module.css";
@@ -21,6 +22,7 @@ function titleFor(pathname: string): string {
 /** Authenticated app layout: sidebar + topbar + routed content, responsive drawer. */
 export function AppShell() {
   const location = useLocation();
+  const { tenantEpoch } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const title = titleFor(location.pathname);
 
@@ -49,7 +51,7 @@ export function AppShell() {
       <div className={styles.body}>
         <Topbar title={title} onMenuClick={() => setDrawerOpen(true)} />
         <main id="main" className={styles.main} tabIndex={-1}>
-          <div className={styles.container}>
+          <div className={styles.container} key={tenantEpoch}>
             <Outlet />
           </div>
         </main>
