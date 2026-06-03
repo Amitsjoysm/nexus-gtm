@@ -33,4 +33,6 @@ export { Tabs, TabPanel } from "./Tabs";
 export type { TabsProps, TabItem } from "./Tabs";
 export { DataTable } from "./DataTable";
 export type { DataTableProps, Column } from "./DataTable";
+export { ScoreMeter } from "./ScoreMeter";
+export type { ScoreMeterProps } from "./ScoreMeter";
 export * as Icons from "./icons";

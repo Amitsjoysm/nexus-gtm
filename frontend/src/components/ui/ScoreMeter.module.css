@@ -1,0 +1,30 @@
+.meter {
+  flex: 1;
+  min-width: 56px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--info);
+  transition: width var(--dur-slow) var(--ease-out);
+}
+.meter[data-tone="success"] .fill {
+  background: var(--success);
+}
+.meter[data-tone="warning"] .fill {
+  background: var(--warning);
+}
+.meter[data-tone="danger"] .fill {
+  background: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill {
+    transition: none;
+  }
+}

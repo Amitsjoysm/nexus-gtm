@@ -9,6 +9,7 @@ import {
   Field,
   Icons,
   Input,
+  ScoreMeter,
   Skeleton,
   Spinner,
   Textarea,
@@ -299,23 +300,6 @@ function Intelligence({ run }: { run: Run }) {
           <pre className={styles.body}>{draft.body || draft.message}</pre>
         </Card>
       )}
-    </div>
-  );
-}
-
-function ScoreMeter({ value }: { value: number }) {
-  const pct = Math.max(0, Math.min(100, value));
-  const tone: BadgeTone = pct >= 70 ? "success" : pct >= 40 ? "warning" : "danger";
-  return (
-    <div
-      className={styles.meter}
-      role="meter"
-      aria-valuenow={Math.round(pct)}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      data-tone={tone}
-    >
-      <span className={styles.meterFill} style={{ width: `${pct}%` }} />
     </div>
   );
 }

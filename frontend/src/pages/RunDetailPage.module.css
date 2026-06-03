@@ -199,29 +199,6 @@
   color: var(--text);
   line-height: 1;
 }
-.meter {
-  flex: 1;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: var(--surface-3);
-  overflow: hidden;
-}
-.meterFill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--info);
-  transition: width var(--dur-slow) var(--ease-out);
-}
-.meter[data-tone="success"] .meterFill {
-  background: var(--success);
-}
-.meter[data-tone="warning"] .meterFill {
-  background: var(--warning);
-}
-.meter[data-tone="danger"] .meterFill {
-  background: var(--danger);
-}
 .brief {
   margin: 0 0 var(--space-3);
   font-size: var(--text-sm);
@@ -423,8 +400,5 @@
 @media (prefers-reduced-motion: reduce) {
   .feedStatus[data-on="true"] .pulse {
     animation: none;
-  }
-  .meterFill {
-    transition: none;
   }
 }
