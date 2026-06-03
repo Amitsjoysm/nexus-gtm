@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
   Button,
   Card,
+  ErrorState,
   Field,
   Icons,
   Input,
@@ -15,6 +16,8 @@ import {
   Textarea,
   useToast,
 } from "@/components/ui";
+import { ChatComposer, ChatThread, useChatSession } from "@/components/chat";
+import { ResultsPanel } from "@/components/discovery";
 import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
@@ -87,7 +90,10 @@ function RunConsole({
   const api = useApiClient();
   const toast = useToast();
   const [cancelling, setCancelling] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const active = isRunActive(run.status);
+  const isDiscovery = run.goal === "discover" || !!run.blackboard.discovery;
+  const chatSessionId = run.chat_session_id ?? null;
 
   // The live activity feed reads the same append-only log the backend persists. When the
   // stream closes (run reached a terminal state or parked at the gate) we pull a fresh
@@ -150,39 +156,166 @@ function RunConsole({
         }
       />
 
-      {run.error && (
-        <div className={styles.banner} role="alert">
-          <Icons.AlertTriangleIcon />
-          <span>{run.error}</span>
+      {chatSessionId && (
+        <button
+          type="button"
+          className={styles.dockToggle}
+          aria-expanded={chatOpen}
+          aria-controls="run-chat-dock"
+          onClick={() => setChatOpen((open) => !open)}
+        >
+          <Icons.MessageIcon />
+          Conversation
+        </button>
+      )}
+
+      <div className={styles.body}>
+        <div className={styles.main}>
+          {run.error && (
+            <div className={styles.banner} role="alert">
+              <Icons.AlertTriangleIcon />
+              <span>{run.error}</span>
+            </div>
+          )}
+
+          {gateStep && (
+            <ApprovalGate
+              approvalId={gateStep.approval_id as string}
+              draft={run.blackboard.draft}
+              onDecided={afterDecision}
+            />
+          )}
+
+          {isDiscovery && (
+            <section className={styles.col}>
+              <h2 className={styles.colTitle}>Matches</h2>
+              <ResultsPanel runId={run.id} />
+            </section>
+          )}
+
+          <div className={styles.grid}>
+            <section className={styles.col}>
+              <h2 className={styles.colTitle}>Steps</h2>
+              <StepTimeline steps={run.steps} />
+            </section>
+
+            <section className={styles.col}>
+              {!isDiscovery && (
+                <>
+                  <h2 className={styles.colTitle}>Intelligence</h2>
+                  <Intelligence run={run} />
+                </>
+              )}
+              <ActivityFeed
+                events={events}
+                connected={connected}
+                active={active}
+                paused={!!gateStep}
+              />
+            </section>
+          </div>
         </div>
-      )}
 
-      {gateStep && (
-        <ApprovalGate
-          approvalId={gateStep.approval_id as string}
-          draft={run.blackboard.draft}
-          onDecided={afterDecision}
-        />
-      )}
-
-      <div className={styles.grid}>
-        <section className={styles.col}>
-          <h2 className={styles.colTitle}>Steps</h2>
-          <StepTimeline steps={run.steps} />
-        </section>
-
-        <section className={styles.col}>
-          <h2 className={styles.colTitle}>Intelligence</h2>
-          <Intelligence run={run} />
-          <ActivityFeed
-            events={events}
-            connected={connected}
-            active={active}
-            paused={!!gateStep}
-          />
-        </section>
+        {chatSessionId && (
+          <aside
+            id="run-chat-dock"
+            className={styles.dock}
+            data-open={chatOpen}
+            aria-label="Run conversation"
+          >
+            <RunMiniChat sessionId={chatSessionId} />
+          </aside>
+        )}
       </div>
     </>
+  );
+}
+
+/* ------------------------------- mini-chat ------------------------------- */
+
+/**
+ * Docked orchestrator conversation for a run. Shares ChatThread/ChatComposer/useChatSession
+ * with the full ChatPage, so the run console and `/orchestrator` never drift apart.
+ */
+function RunMiniChat({ sessionId }: { sessionId: string }) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { messages, loading, error, sending, streaming, send, reload } =
+    useChatSession(sessionId);
+  const [draft, setDraft] = useState("");
+
+  async function handleSend(text: string) {
+    try {
+      await send(text);
+    } catch (err) {
+      toast.error(
+        "Couldn't send your message",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className={styles.miniChat}>
+        <div className={styles.miniHead}>
+          <span className={styles.miniTitle}>Conversation</span>
+        </div>
+        <div className={styles.miniSkeleton}>
+          <Skeleton width="60%" height={40} />
+          <Skeleton width="75%" height={56} />
+          <Skeleton width="50%" height={40} />
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className={styles.miniChat}>
+        <div className={styles.miniHead}>
+          <span className={styles.miniTitle}>Conversation</span>
+        </div>
+        <div className={styles.miniSkeleton}>
+          <ErrorState
+            compact
+            title="Couldn't load the conversation"
+            message={error.detail}
+            onRetry={reload}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.miniChat}>
+      <div className={styles.miniHead}>
+        <span className={styles.miniTitle}>Conversation</span>
+        {streaming && (
+          <span className={styles.miniLive} aria-label="Live updates connected">
+            <span className={styles.miniLiveDot} aria-hidden="true" />
+            Live
+          </span>
+        )}
+        <Link to={`/orchestrator/${sessionId}`} className={styles.miniExpand}>
+          Open full view
+        </Link>
+      </div>
+      <ChatThread
+        messages={messages}
+        onChip={(text) => setDraft(text)}
+        onOpenRun={(runId) => navigate(`/runs/${runId}`)}
+      />
+      <div className={styles.miniComposer}>
+        <ChatComposer
+          value={draft}
+          onValueChange={setDraft}
+          onSend={handleSend}
+          busy={sending}
+        />
+      </div>
+    </div>
   );
 }
 
