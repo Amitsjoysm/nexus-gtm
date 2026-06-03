@@ -9,6 +9,7 @@ const TITLES: Record<string, string> = {
   dashboard: "Dashboard",
   inbox: "Inbox",
   accounts: "Accounts",
+  orchestrator: "Orchestrator",
   signals: "Signals",
   alerts: "Alerts",
   members: "Members",

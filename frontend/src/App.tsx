@@ -36,6 +36,7 @@ const MembersPage = lazyPage(() => import("@/pages/MembersPage"), "MembersPage")
 const RunsPage = lazyPage(() => import("@/pages/RunsPage"), "RunsPage");
 const RunDetailPage = lazyPage(() => import("@/pages/RunDetailPage"), "RunDetailPage");
 const ApprovalsPage = lazyPage(() => import("@/pages/ApprovalsPage"), "ApprovalsPage");
+const ChatPage = lazyPage(() => import("@/pages/ChatPage"), "ChatPage");
 
 const ROLE_RANK: Record<Role, number> = { owner: 3, admin: 2, manager: 1, rep: 0 };
 
@@ -85,6 +86,22 @@ export function App() {
                 <Route path="/accounts" element={<AccountsPage />} />
                 <Route path="/accounts/:id" element={<AccountDetailPage />} />
                 <Route path="/lists" element={<ListsPage />} />
+                <Route
+                  path="/orchestrator"
+                  element={
+                    <RequireRole minRole="manager">
+                      <ChatPage />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/orchestrator/:sessionId"
+                  element={
+                    <RequireRole minRole="manager">
+                      <ChatPage />
+                    </RequireRole>
+                  }
+                />
                 <Route path="/signals" element={<SignalsPage />} />
                 <Route path="/alerts" element={<AlertsPage />} />
                 <Route
