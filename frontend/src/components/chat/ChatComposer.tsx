@@ -9,6 +9,13 @@ export interface ChatComposerProps {
   /** A send is in flight: disables the control and shows a busy affordance. */
   busy?: boolean;
   placeholder?: string;
+  /**
+   * Controlled value. Pair with `onValueChange` to let a parent own the text — used by
+   * ChatPage so suggestion chips can prefill the box for editing. Omit both for the default
+   * uncontrolled behavior (the run-console mini-chat uses it that way).
+   */
+  value?: string;
+  onValueChange?: (value: string) => void;
 }
 
 const MAX_ROWS = 6;
@@ -22,9 +29,21 @@ export function ChatComposer({
   disabled = false,
   busy = false,
   placeholder = "Message the orchestrator…",
+  value: controlledValue,
+  onValueChange,
 }: ChatComposerProps) {
-  const [value, setValue] = useState("");
+  const [internalValue, setInternalValue] = useState("");
+  const isControlled = controlledValue !== undefined;
+  const value = isControlled ? controlledValue : internalValue;
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  const setValue = useCallback(
+    (next: string) => {
+      if (isControlled) onValueChange?.(next);
+      else setInternalValue(next);
+    },
+    [isControlled, onValueChange],
+  );
 
   // Auto-grow: reset to content height, capped at MAX_ROWS via max-height in CSS.
   useLayoutEffect(() => {
@@ -41,7 +60,7 @@ export function ChatComposer({
     if (text === "" || disabled || busy) return;
     onSend(text);
     setValue("");
-  }, [value, disabled, busy, onSend]);
+  }, [value, disabled, busy, onSend, setValue]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
