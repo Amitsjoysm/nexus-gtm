@@ -4,6 +4,7 @@ from nexus.api.routers import (
     agents,
     alerts,
     auth,
+    chat,
     integrations,
     orchestration,
     relevance,
@@ -23,6 +24,7 @@ all_routers = [
     workspace.router,
     signals.router,
     orchestration.router,
+    chat.router,
 ]
 
 __all__ = ["all_routers"]

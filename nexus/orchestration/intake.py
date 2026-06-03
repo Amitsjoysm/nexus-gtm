@@ -329,7 +329,10 @@ class IntakeController:
         is_first_turn: bool,
     ) -> IntakeDecision:
         target = infer_target(user_text, target)
-        pending = missing_slots[0] if missing_slots else None
+        # ``pending`` is the slot we last *asked* about — only then does the user's reply get
+        # coerced into it. On the first turn nothing has been asked, so the opening message is
+        # parsed by global detection alone (no coercion clobbering a clean multi-slot sentence).
+        pending = None if is_first_turn else (missing_slots[0] if missing_slots else None)
         new_state = merge_icp(icp_state, extract_slots(user_text, icp_state, pending))
         missing = missing_required(new_state, target)
 
