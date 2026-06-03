@@ -21,7 +21,14 @@ import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { humanize } from "@/lib/format";
-import type { DiscoveryCandidate, DiscoveryResult, ResultsQuery, Role } from "@/lib/types";
+import type {
+  CustomFieldEntity,
+  DiscoveryCandidate,
+  DiscoveryResult,
+  ResultsQuery,
+  Role,
+} from "@/lib/types";
+import { ImportCsvModal } from "./ImportCsvModal";
 import styles from "./ResultsPanel.module.css";
 
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
@@ -31,21 +38,22 @@ type SourceFilter = "all" | "own" | "new";
 
 export interface ResultsPanelProps {
   runId: string;
-  /** When provided, an "Import data" button appears in the toolbar (wired by the run console). */
-  onImport?: () => void;
 }
 
 /**
  * Discovery results table for a run: server-side filtered/paginated candidates with a fit meter,
- * dynamic per-tenant custom-field columns, a per-row Research action, and multi-select → save
- * the matching accounts as a Relevance list. Reads `GET /orchestration/runs/{id}/results`.
+ * dynamic per-tenant custom-field columns, a per-row Research action, multi-select → save the
+ * matching accounts as a Relevance list, and (admin+) a CSV import of proprietary data.
+ * Reads `GET /orchestration/runs/{id}/results`.
  */
-export function ResultsPanel({ runId, onImport }: ResultsPanelProps) {
+export function ResultsPanel({ runId }: ResultsPanelProps) {
   const api = useApiClient();
   const toast = useToast();
   const navigate = useNavigate();
   const { session } = useAuth();
   const canRun = session ? ROLE_RANK[session.role] >= ROLE_RANK.manager : false;
+  const canImport = session ? ROLE_RANK[session.role] >= ROLE_RANK.admin : false;
+  const [importOpen, setImportOpen] = useState(false);
 
   // Filters. Selects apply immediately; free-text is debounced so typing doesn't thrash the server.
   const [source, setSource] = useState<SourceFilter>("all");
@@ -86,6 +94,12 @@ export function ResultsPanel({ runId, onImport }: ResultsPanelProps) {
 
   const candidates = data?.candidates ?? [];
   const dynamicColumns = data?.columns ?? [];
+
+  // Custom fields attach to the entity these results describe — accounts unless the run targets
+  // people. Prefer the candidates' own entity; fall back to the run's target label.
+  const importEntity: CustomFieldEntity =
+    candidates[0]?.entity ??
+    (/contact|people|person|lead/i.test(data?.target ?? "") ? "contact" : "account");
 
   async function research(candidate: DiscoveryCandidate) {
     setResearchingId(candidate.id);
@@ -314,8 +328,13 @@ export function ResultsPanel({ runId, onImport }: ResultsPanelProps) {
               Field filters
             </Button>
           )}
-          {onImport && (
-            <Button size="sm" variant="secondary" iconLeft={<Icons.PlusIcon />} onClick={onImport}>
+          {canImport && (
+            <Button
+              size="sm"
+              variant="secondary"
+              iconLeft={<Icons.PlusIcon />}
+              onClick={() => setImportOpen(true)}
+            >
               Import data
             </Button>
           )}
@@ -428,6 +447,26 @@ export function ResultsPanel({ runId, onImport }: ResultsPanelProps) {
           setSelected(new Set());
         }}
       />
+
+      {canImport && (
+        <ImportCsvModal
+          open={importOpen}
+          entity={importEntity}
+          onClose={() => setImportOpen(false)}
+          onImported={(res) => {
+            toast.success(
+              "Import complete",
+              `${res.updated} record${res.updated === 1 ? "" : "s"} updated` +
+                (res.created_fields.length > 0
+                  ? `, ${res.created_fields.length} new column${
+                      res.created_fields.length === 1 ? "" : "s"
+                    }.`
+                  : "."),
+            );
+            void results.refetch();
+          }}
+        />
+      )}
     </section>
   );
 }
