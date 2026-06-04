@@ -55,6 +55,42 @@ export interface LookalikeResponse {
   lookalikes: Lookalike[];
 }
 
+// ---- outcome-feedback loop ----
+export type OutcomeStage = "sent" | "replied" | "meeting" | "won" | "lost";
+
+export interface Outcome {
+  id: string;
+  stage: OutcomeStage | string;
+  account_id: string | null;
+  contact_id: string | null;
+  industry: string | null;
+  employee_count: number | null;
+  country: string | null;
+  tech_count: number;
+  created_at: string;
+}
+
+export interface OutcomeInput {
+  stage: OutcomeStage;
+  account_id?: string | null;
+  contact_id?: string | null;
+  meta?: Record<string, unknown>;
+}
+
+/** Per-tenant relevance weights, learned from outcomes or the static defaults. */
+export interface LearnedWeights {
+  weights: Record<string, number>;
+  learned: boolean;
+  sample_size: number;
+  defaults: Record<string, number>;
+}
+
+export interface OutcomeSummary {
+  total: number;
+  by_stage: Record<string, number>;
+  positive: number;
+}
+
 export interface Contact {
   id: string;
   account_id: string;

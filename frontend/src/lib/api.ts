@@ -31,10 +31,14 @@ import type {
   CustomFieldDef,
   DiscoveryResult,
   InboxTask,
+  LearnedWeights,
   ListBuildResult,
   ListFilter,
   LoginRequest,
   Member,
+  Outcome,
+  OutcomeInput,
+  OutcomeSummary,
   Play,
   PlayInput,
   RelevanceProfile,
@@ -286,6 +290,20 @@ export class ApiClient {
   // ---- analytics ----
   analyticsOverview(signal?: AbortSignal) {
     return this.request<AnalyticsOverview>("/analytics/overview", { signal });
+  }
+
+  // ---- outcome-feedback loop ----
+  recordOutcome(body: OutcomeInput, signal?: AbortSignal) {
+    return this.request<Outcome>("/outcomes", { method: "POST", body, signal });
+  }
+  listOutcomes(limit = 50, signal?: AbortSignal) {
+    return this.request<Outcome[]>("/outcomes", { query: { limit }, signal });
+  }
+  getLearnedWeights(signal?: AbortSignal) {
+    return this.request<LearnedWeights>("/outcomes/weights", { signal });
+  }
+  getOutcomeSummary(signal?: AbortSignal) {
+    return this.request<OutcomeSummary>("/outcomes/summary", { signal });
   }
 
   // ---- workspace / members ----

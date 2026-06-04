@@ -96,6 +96,39 @@ class LookalikeResponse(BaseModel):
     lookalikes: list[LookalikeOut] = Field(default_factory=list)
 
 
+# ---- outcomes (feedback loop) ----
+class OutcomeIn(BaseModel):
+    stage: str  # one of nexus.outcomes.service.STAGES
+    account_id: str | None = None
+    contact_id: str | None = None
+    meta: dict = Field(default_factory=dict)
+
+
+class OutcomeOut(BaseModel):
+    id: str
+    stage: str
+    account_id: str | None = None
+    contact_id: str | None = None
+    industry: str | None = None
+    employee_count: int | None = None
+    country: str | None = None
+    tech_count: int = 0
+    created_at: str
+
+
+class LearnedWeightsOut(BaseModel):
+    weights: dict[str, float]
+    learned: bool
+    sample_size: int
+    defaults: dict[str, float]
+
+
+class OutcomeSummaryOut(BaseModel):
+    total: int
+    by_stage: dict[str, int]
+    positive: int
+
+
 # ---- agents ----
 class AgentRunRequest(BaseModel):
     account_id: str | None = None

@@ -17,6 +17,7 @@ from nexus.core.tenancy import TenantSession
 from nexus.integrations.company_search import domain_from_url
 from nexus.integrations.registry import get_registry
 from nexus.models.account import Account
+from nexus.outcomes.service import get_outcome_service
 from nexus.relevance.engine import get_profile, get_relevance_engine
 
 
@@ -75,6 +76,8 @@ class LookalikeService:
         }
         profile = await get_profile(ts)
         engine = get_relevance_engine()
+        # Lean candidate scoring toward whatever firmographics this tenant's wins share.
+        learned = (await get_outcome_service().learned_weights(ts)).weights
 
         seen: set[str] = set()
         out: list[Lookalike] = []
@@ -87,7 +90,7 @@ class LookalikeService:
             # Transient (un-persisted) account so the relevance engine can score the candidate
             # from whatever firmographics we have; never added to the session.
             candidate = Account(tenant_id=ts.tenant_id, name=title, domain=domain)
-            fit = engine.score_icp_fit(profile, candidate)
+            fit = engine.score_icp_fit(profile, candidate, learned_weights=learned)
             out.append(
                 Lookalike(
                     name=title,
