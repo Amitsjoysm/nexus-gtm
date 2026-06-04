@@ -55,9 +55,16 @@ class Settings(BaseSettings):
     company_search_sources: str = "search"     # ordered: e.g. "infojoy,search,apify"
     enrich_sources: str = "stub"               # ordered enrichment providers
     signal_sources: str = "demo"               # ordered signal sources
-    search_provider: str = "duckduckgo"        # web-search backend (wraps browser_provider)
+    search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend
     email_verify_provider: str = "stub"        # email-deliverability backend
+
+    # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
+    # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
+    # A selected engine with no key degrades to keyless DuckDuckGo so search keeps working.
+    exa_api_key: str = ""
+    brave_api_key: str = ""
+    serper_api_key: str = ""
 
     # Orchestration engine
     orch_max_attempts: int = 2          # per-step retries before a step is marked failed

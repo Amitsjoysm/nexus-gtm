@@ -93,12 +93,22 @@ _search: SearchProvider | None = None
 
 
 def build_search_provider(name: str, *, browser=None) -> SearchProvider:
-    """Resolve a single search provider by settings token."""
+    """Resolve a single search provider by settings token.
+
+    ``stub``/``duckduckgo`` are keyless and built here. The hosted engines
+    (``exa``/``brave``/``serper``) are delegated to :mod:`engines`, which reads their API key
+    from settings and degrades a keyless selection to DuckDuckGo.
+    """
     key = (name or "").strip().lower()
     if key in ("stub", "", "none"):
         return StubSearchProvider()
     if key in ("duckduckgo", "ddg"):
         return DuckDuckGoSearchProvider(browser=browser)
+    if key in ("exa", "brave", "serper"):
+        from nexus.core.config import get_settings
+        from nexus.integrations.search.engines import build_engine
+
+        return build_engine(key, get_settings(), browser=browser)
     # Unknown token: fail safe to the offline stub rather than crashing startup.
     logger.warning("unknown search provider %r; using stub", name)
     return StubSearchProvider()

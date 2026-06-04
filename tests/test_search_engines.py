@@ -1,0 +1,114 @@
+# tests/test_search_engines.py
+"""Hosted search engines (Exa / Brave / Serper): parsing, key-gating, routing.
+
+Zero-network: response parsing is tested against captured sample payloads via the pure ``_parse``
+helpers, and the key-gated ``search`` path short-circuits to ``[]`` before any HTTP call. No test
+here makes a live request, so the suite stays offline and deterministic.
+"""
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from nexus.integrations.search import (
+    BraveSearchProvider,
+    DuckDuckGoSearchProvider,
+    ExaSearchProvider,
+    SerperSearchProvider,
+    StubSearchProvider,
+    build_search_provider,
+)
+from nexus.integrations.search.engines import build_engine
+
+
+# --------------------------------------------------------------- parsing (pure)
+
+
+def test_exa_parse_maps_results_and_text_snippet():
+    data = {
+        "results": [
+            {"title": "Acme Inc", "url": "https://acme.com", "text": "Acme builds widgets."},
+            {"title": "Beta", "url": "https://beta.io", "highlights": ["fast", "cheap"]},
+        ]
+    }
+    hits = ExaSearchProvider("k")._parse(data, limit=10)
+    assert [h.url for h in hits] == ["https://acme.com", "https://beta.io"]
+    assert hits[0].snippet == "Acme builds widgets."
+    assert hits[1].snippet == "fast cheap"          # falls back to highlights
+    assert all(h.source == "exa" for h in hits)
+
+
+def test_brave_parse_reads_web_results_and_strips_tags():
+    data = {
+        "web": {
+            "results": [
+                {"title": "<strong>Acme</strong> Inc", "url": "https://acme.com",
+                 "description": "A <strong>widget</strong> maker"},
+            ]
+        }
+    }
+    hits = BraveSearchProvider("k")._parse(data, limit=10)
+    assert hits[0].title == "Acme Inc"              # markup stripped
+    assert hits[0].snippet == "A widget maker"
+    assert hits[0].source == "brave"
+
+
+def test_brave_parse_handles_missing_web_key():
+    assert BraveSearchProvider("k")._parse({}, limit=5) == []
+
+
+def test_serper_parse_maps_organic_link_to_url():
+    data = {"organic": [{"title": "Acme", "link": "https://acme.com", "snippet": "widgets"}]}
+    hits = SerperSearchProvider("k")._parse(data, limit=10)
+    assert hits[0].url == "https://acme.com"
+    assert hits[0].snippet == "widgets"
+    assert hits[0].source == "serper"
+
+
+def test_parse_respects_limit():
+    data = {"results": [{"title": str(i), "url": f"https://{i}.com"} for i in range(10)]}
+    assert len(ExaSearchProvider("k")._parse(data, limit=3)) == 3
+
+
+# --------------------------------------------------------- key-gating (offline)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [ExaSearchProvider(""), BraveSearchProvider(""),
+                                      SerperSearchProvider("")])
+async def test_missing_key_returns_empty_without_network(provider):
+    # No key -> short-circuit to [] before any httpx call, so this never touches the network.
+    assert await provider.search("anything", limit=5) == []
+
+
+# ----------------------------------------------------------------- routing
+
+
+def _settings(**keys):
+    base = {"exa_api_key": "", "brave_api_key": "", "serper_api_key": ""}
+    base.update(keys)
+    return SimpleNamespace(**base)
+
+
+def test_build_engine_returns_keyed_provider():
+    p = build_engine("exa", _settings(exa_api_key="secret"))
+    assert isinstance(p, ExaSearchProvider) and p.api_key == "secret"
+    assert isinstance(build_engine("brave", _settings(brave_api_key="b")), BraveSearchProvider)
+    assert isinstance(build_engine("serper", _settings(serper_api_key="s")), SerperSearchProvider)
+
+
+def test_build_engine_falls_back_to_duckduckgo_without_key():
+    # A selected engine with no key degrades to keyless DuckDuckGo, not a dark/empty provider.
+    assert isinstance(build_engine("exa", _settings()), DuckDuckGoSearchProvider)
+
+
+def test_build_engine_unknown_token_is_stub():
+    assert isinstance(build_engine("nope", _settings()), StubSearchProvider)
+
+
+def test_build_search_provider_routes_known_tokens():
+    assert isinstance(build_search_provider("duckduckgo"), DuckDuckGoSearchProvider)
+    assert isinstance(build_search_provider("stub"), StubSearchProvider)
+    # exa with no configured key (test env) -> DuckDuckGo fallback.
+    assert isinstance(build_search_provider("exa"), DuckDuckGoSearchProvider)

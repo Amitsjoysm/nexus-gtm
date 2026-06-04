@@ -12,6 +12,16 @@ _TMPDIR = tempfile.mkdtemp(prefix="nexus_test_")
 os.environ["NEXUS_DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMPDIR}/test.db"
 os.environ["NEXUS_ENV"] = "test"
 os.environ["NEXUS_LLM_PROVIDER"] = "stub"
+# Hermetic offline guarantee: pin the web-search backend to keyless DuckDuckGo (which, in tests,
+# wraps the injected FakeBrowser) so a developer's local .env — e.g. NEXUS_SEARCH_PROVIDER=exa
+# with a real key — can never make the suite reach the network. Env vars outrank the .env file.
+os.environ["NEXUS_SEARCH_PROVIDER"] = "duckduckgo"
+# Same reasoning for the hosted-engine API keys: blank them so a real key in a developer's local
+# .env can never be picked up by ``get_settings()`` and turn a "keyless -> DuckDuckGo fallback"
+# assertion into a live ExaSearchProvider. An empty env var outranks the .env value.
+os.environ["NEXUS_EXA_API_KEY"] = ""
+os.environ["NEXUS_BRAVE_API_KEY"] = ""
+os.environ["NEXUS_SERPER_API_KEY"] = ""
 
 from nexus.core.db import Base, get_engine  # noqa: E402
 from nexus.core.tenancy import TenantSession  # noqa: E402
