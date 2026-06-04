@@ -54,3 +54,21 @@ Grounding docs for the design skills:
 
 When you touch UI, invoke `impeccable` (and `ui-ux-pro-max` for visual/UX decisions,
 `framer-motion` for animation) before writing code, and follow `DESIGN.md`.
+
+## Code navigation — use code-review-graph to save tokens
+
+This repo is indexed by **code-review-graph** (a Tree-sitter knowledge graph stored in the
+gitignored `.code-review-graph/`). It is registered as an MCP server for this project. Prefer
+its tools over reading whole files when you need to understand impact, find callers, or get
+review context — they return scoped slices instead of full files, cutting token use by ~90%.
+
+- **Before reviewing a change:** call the `get_review_context_tool` / `detect_changes_tool`
+  MCP tools (or run `code-review-graph detect-changes --brief`) to get only the affected
+  symbols and their blast radius, rather than re-reading the touched files end-to-end.
+- **To trace impact / callers:** use `get_impact_radius_tool` and the graph's semantic search
+  instead of grepping the whole tree.
+- **Keep the graph fresh:** after pulling or making structural changes, run
+  `code-review-graph update` (incremental) or `code-review-graph build` (full re-index).
+  The index lives in `.code-review-graph/` and must never be committed (already gitignored).
+- If the MCP tools aren't visible, the AI tool needs a restart to load the server; fall back to
+  normal reads until then.
