@@ -27,6 +27,12 @@ export interface DataTableProps<T> {
   onRowClick?: (row: T) => void;
   caption?: string;
   className?: string;
+  /**
+   * Intrinsic minimum width for the table. Below this the wrapper scrolls horizontally instead of
+   * crushing columns — so the table keeps its shape when a side panel narrows the container.
+   * Accepts any CSS length (e.g. 840 → "840px", "60rem").
+   */
+  minWidth?: number | string;
 }
 
 /**
@@ -43,12 +49,15 @@ export function DataTable<T>({
   onRowClick,
   caption,
   className,
+  minWidth,
 }: DataTableProps<T>) {
   const showEmpty = !loading && rows.length === 0;
+  const tableMinWidth =
+    typeof minWidth === "number" ? `${minWidth}px` : minWidth;
 
   return (
     <div className={cn(styles.scroll, className)}>
-      <table className={styles.table}>
+      <table className={styles.table} style={tableMinWidth ? { minWidth: tableMinWidth } : undefined}>
         {caption && <caption className="sr-only">{caption}</caption>}
         <thead>
           <tr>

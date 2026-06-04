@@ -405,6 +405,9 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
           loading={results.loading && !data}
           skeletonRows={6}
           caption="Discovery results"
+          // Hold the table's shape when the chat dock narrows the console; scroll instead of crush.
+          // Base columns need ~720px; each dynamic custom-field column adds ~150px.
+          minWidth={720 + dynamicColumns.length * 150}
           empty={
             <EmptyState
               compact

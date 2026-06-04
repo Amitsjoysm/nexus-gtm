@@ -82,11 +82,18 @@
   gap: var(--space-5);
 }
 
+/* The conversation dock is opt-in at every breakpoint: closed by default so the results table
+   gets the full console width, and removed from layout (not just hidden) when closed so `.main`
+   reflows. Opening it reveals the 360px sticky sidebar. */
 .dock {
   flex: none;
   width: 360px;
   position: sticky;
   top: calc(var(--topbar-h) + var(--space-4));
+  display: none;
+}
+.dock[data-open="true"] {
+  display: block;
 }
 .miniChat {
   display: flex;
@@ -162,7 +169,7 @@
 }
 
 .dockToggle {
-  display: none;
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   margin-bottom: var(--space-4);
@@ -174,10 +181,19 @@
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   cursor: pointer;
+  transition: border-color var(--dur) var(--ease-out), background var(--dur) var(--ease-out);
 }
 .dockToggle svg {
   width: 18px;
   height: 18px;
+}
+.dockToggle:hover {
+  border-color: var(--border-strong);
+}
+/* Active state mirrors aria-expanded so the control reads as a toggle, not a one-shot button. */
+.dockToggle[data-open="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .dockToggle:focus-visible {
   outline: 2px solid var(--ring);
@@ -191,17 +207,16 @@
   .dock {
     width: 100%;
     position: static;
-    display: none;
-  }
-  .dock[data-open="true"] {
-    display: block;
-  }
-  .dockToggle {
-    display: inline-flex;
   }
   .miniChat {
     height: auto;
     max-height: 70vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dockToggle {
+    transition: none;
   }
 }
 

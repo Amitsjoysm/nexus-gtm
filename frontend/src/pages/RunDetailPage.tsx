@@ -160,12 +160,13 @@ function RunConsole({
         <button
           type="button"
           className={styles.dockToggle}
+          data-open={chatOpen}
           aria-expanded={chatOpen}
           aria-controls="run-chat-dock"
           onClick={() => setChatOpen((open) => !open)}
         >
           <Icons.MessageIcon />
-          Conversation
+          {chatOpen ? "Hide conversation" : "Conversation"}
         </button>
       )}
 
