@@ -24,10 +24,12 @@ import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { humanize, timeAgo } from "@/lib/format";
 import {
+  EMAIL_STATUS_META,
   RUN_STATUS_LABEL,
   RUN_STATUS_TONE,
   STEP_STATUS_LABEL,
   STEP_STATUS_TONE,
+  asEmailStatus,
   goalLabel,
   isRunActive,
   toolLabel,
@@ -419,22 +421,45 @@ function Intelligence({ run }: { run: Run }) {
         </Card>
       )}
 
-      {hasDraft && draft && (
-        <Card padding="lg">
-          <div className={styles.draftHead}>
-            <div className={styles.panelLabel}>Drafted message</div>
-            {draft.grounded && <Badge tone="success">Grounded</Badge>}
-          </div>
-          {draft.subject && (
-            <div className={styles.subject}>
-              <span className={styles.subjectLabel}>Subject</span>
-              {draft.subject}
-            </div>
-          )}
-          <pre className={styles.body}>{draft.body || draft.message}</pre>
-        </Card>
-      )}
+      {hasDraft && draft && <DraftPanel draft={draft} />}
     </div>
+  );
+}
+
+function DraftPanel({ draft }: { draft: NonNullable<Run["blackboard"]["draft"]> }) {
+  const groundingFacts = (draft.grounding?.facts ?? []).filter((f) => f.trim());
+  const emailStatus = asEmailStatus(draft.email_status);
+  const emailMeta = emailStatus ? EMAIL_STATUS_META[emailStatus] : null;
+
+  return (
+    <Card padding="lg">
+      <div className={styles.draftHead}>
+        <div className={styles.panelLabel}>Drafted message</div>
+        <div className={styles.draftSignals}>
+          <Badge tone={draft.grounded ? "success" : "danger"}>
+            {draft.grounded ? "Grounded" : "Ungrounded"}
+          </Badge>
+          {emailMeta && <Badge tone={emailMeta.tone}>{emailMeta.label}</Badge>}
+        </div>
+      </div>
+      {draft.subject && (
+        <div className={styles.subject}>
+          <span className={styles.subjectLabel}>Subject</span>
+          {draft.subject}
+        </div>
+      )}
+      <pre className={styles.body}>{draft.body || draft.message}</pre>
+      {groundingFacts.length > 0 && (
+        <div className={styles.groundedIn}>
+          <span className={styles.panelLabel}>Grounded in</span>
+          <ul className={styles.facts}>
+            {groundingFacts.map((fact, i) => (
+              <li key={i}>{fact}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -478,6 +503,12 @@ function ApprovalGate({
   const [body, setBody] = useState(draft?.body ?? draft?.message ?? "");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+
+  // The backend gate refuses an ungrounded or undeliverable send regardless of the
+  // reviewer's decision — surface it here so approving is never a surprise.
+  const ungrounded = draft?.grounded === false;
+  const undeliverable = asEmailStatus(draft?.email_status) === "invalid";
+  const willBeBlocked = ungrounded || undeliverable;
 
   async function decide(decision: "approve" | "reject") {
     setBusy(decision);
@@ -541,6 +572,17 @@ function ApprovalGate({
         )}
       </div>
 
+      {willBeBlocked && (
+        <div className={styles.gateWarning} role="alert">
+          <Icons.AlertTriangleIcon />
+          <span>
+            {ungrounded
+              ? "This draft isn't grounded in research facts, so the send will be refused. Re-run research or reject it."
+              : "The recipient address is undeliverable, so the send will be refused. Fix the contact or reject it."}
+          </span>
+        </div>
+      )}
+
       <div className={styles.gateActions}>
         <Button
           variant="ghost"
@@ -563,7 +605,10 @@ function ApprovalGate({
           <Button
             iconLeft={<Icons.SendIcon />}
             loading={busy === "approve"}
-            disabled={busy === "reject"}
+            disabled={busy === "reject" || willBeBlocked}
+            title={
+              willBeBlocked ? "Blocked by the grounded + verified send gate" : undefined
+            }
             onClick={() => decide("approve")}
           >
             Approve &amp; send

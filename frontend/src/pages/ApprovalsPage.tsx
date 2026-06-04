@@ -19,8 +19,8 @@ import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
-import { APPROVAL_STATUS_TONE } from "@/lib/runStatus";
-import type { Approval, ApprovalStatus } from "@/lib/types";
+import { APPROVAL_STATUS_TONE, EMAIL_STATUS_META, asEmailStatus } from "@/lib/runStatus";
+import type { Approval, ApprovalPayload, ApprovalStatus } from "@/lib/types";
 import styles from "./ApprovalsPage.module.css";
 
 const TABS: { value: ApprovalStatus; label: string }[] = [
@@ -116,9 +116,16 @@ function ApprovalCard({
   const toast = useToast();
   const pending = approval.status === "pending";
 
-  const draftSubject = str(approval.payload.subject);
-  const draftBody = str(approval.payload.body) || str(approval.payload.message);
-  const grounded = approval.payload.grounded === true;
+  const payload = approval.payload as ApprovalPayload;
+  const draftSubject = str(payload.subject);
+  const draftBody = str(payload.body) || str(payload.message);
+  const grounded = payload.grounded === true;
+  const facts = (payload.grounding?.facts ?? []).filter((f) => f.trim());
+  const emailStatus = asEmailStatus(payload.email_status);
+  const emailMeta = emailStatus ? EMAIL_STATUS_META[emailStatus] : null;
+  // The backend gate refuses an ungrounded or undeliverable send regardless of
+  // the reviewer's decision — surface that here so approving isn't a surprise.
+  const willBeBlocked = pending && (!grounded || emailStatus === "invalid");
 
   const [subject, setSubject] = useState(draftSubject);
   const [body, setBody] = useState(draftBody);
@@ -181,12 +188,38 @@ function ApprovalCard({
                   {subject || draftSubject}
                 </div>
               )}
-              {grounded && <Badge tone="success">Grounded</Badge>}
+              <div className={styles.signals}>
+                <Badge tone={grounded ? "success" : "danger"}>
+                  {grounded ? "Grounded" : "Ungrounded"}
+                </Badge>
+                {emailMeta && <Badge tone={emailMeta.tone}>{emailMeta.label}</Badge>}
+              </div>
             </div>
             <pre className={styles.body}>{body || draftBody || "No message content."}</pre>
+            {facts.length > 0 && (
+              <div className={styles.facts}>
+                <span className={styles.factsLabel}>Grounded in</span>
+                <ul className={styles.factList}>
+                  {facts.map((fact, i) => (
+                    <li key={i}>{fact}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </>
         )}
       </div>
+
+      {willBeBlocked && (
+        <div className={styles.warning} role="alert">
+          <Icons.AlertTriangleIcon />
+          <span>
+            {!grounded
+              ? "This draft isn't grounded in research facts, so the send will be refused. Re-run research or reject it."
+              : "The recipient address is undeliverable, so the send will be refused. Fix the contact or reject it."}
+          </span>
+        </div>
+      )}
 
       {pending ? (
         <div className={styles.actions}>
@@ -211,7 +244,12 @@ function ApprovalCard({
             <Button
               iconLeft={<Icons.SendIcon />}
               loading={busy === "approve"}
-              disabled={busy === "reject"}
+              disabled={busy === "reject" || willBeBlocked}
+              title={
+                willBeBlocked
+                  ? "Blocked by the grounded + verified send gate"
+                  : undefined
+              }
               onClick={() => decide("approve")}
             >
               Approve &amp; send

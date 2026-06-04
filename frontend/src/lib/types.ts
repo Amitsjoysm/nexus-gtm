@@ -253,20 +253,46 @@ export interface RunStep {
   error: string | null;
 }
 
+/** Deliverability verdict from the email-verification provider. */
+export type EmailStatus = "valid" | "invalid" | "unknown";
+
+/** Citations + provenance attached to a grounded draft. */
+export interface DraftGrounding {
+  facts?: string[];
+  sources?: { title?: string; url?: string }[];
+}
+
+/**
+ * The composed outreach draft staged for the approval gate. Carries the
+ * grounded-send signals (was it grounded in retrieved facts, and is the
+ * recipient deliverable) so the reviewer sees credibility before deciding.
+ */
+export interface OutreachDraft {
+  contact_id?: string | null;
+  subject?: string;
+  body?: string;
+  message?: string;
+  grounded?: boolean;
+  grounding?: DraftGrounding;
+  email_status?: EmailStatus | null;
+  email_confidence?: number | null;
+}
+
 /** Shared inter-agent context written as the run progresses. */
 export interface RunBlackboard {
   account_id?: string;
   research?: { brief?: string; facts?: unknown[]; sources?: unknown[] };
   composite?: number | null;
-  draft?: {
-    contact_id?: string | null;
-    subject?: string;
-    body?: string;
-    message?: string;
-    grounded?: boolean;
-  };
+  draft?: OutreachDraft;
   [key: string]: unknown;
 }
+
+/**
+ * An approval's payload is a snapshot of the staged draft (the engine copies
+ * the blackboard draft into the approval), so it carries the same grounded-send
+ * signals the reviewer needs.
+ */
+export type ApprovalPayload = OutreachDraft & Record<string, unknown>;
 
 export interface Run {
   id: string;
