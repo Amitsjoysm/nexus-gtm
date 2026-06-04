@@ -127,6 +127,9 @@ class ComposeMessageTool(_AgentTool):
                 verdict = await tc.runtime.registry.verify_email(contact.email)
                 email_status = verdict.status
                 email_confidence = verdict.confidence
+                # Persist the verdict so the inbox can show deliverability without
+                # re-verifying (and so a verdict survives beyond this run).
+                contact.email_status = verdict.status
 
         tc.blackboard["draft"] = {
             "contact_id": contact_id,
@@ -183,6 +186,8 @@ class SendMessageTool(Tool):
         if email:
             verdict = await tc.runtime.registry.verify_email(email)
             email_status = verdict.status
+            if contact is not None:
+                contact.email_status = verdict.status
             if verdict.status == STATUS_INVALID:
                 raise ToolError(f"refusing to send to an undeliverable address ({email})")
 

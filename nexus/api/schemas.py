@@ -96,6 +96,17 @@ class AgentRunResponse(BaseModel):
 
 
 # ---- inbox ----
+class TriageOut(BaseModel):
+    """Glanceable triage cues for an inbox row: intent recency, reachability, grounding."""
+
+    signal_kind: str | None = None
+    signal_strength: float | None = None
+    signal_age_hours: float | None = None
+    deliverability: str | None = None
+    email_confidence: float | None = None
+    research_ready: bool = False
+
+
 class InboxTaskOut(BaseModel):
     id: str
     title: str
@@ -104,6 +115,7 @@ class InboxTaskOut(BaseModel):
     status: str
     account_id: str | None = None
     suggested_action: dict
+    triage: TriageOut | None = None
 
 
 # ---- lists ----

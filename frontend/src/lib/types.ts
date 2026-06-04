@@ -52,6 +52,15 @@ export interface Contact {
   enrichment_source: string | null;
 }
 
+export interface TriageSummary {
+  signal_kind: string | null;
+  signal_strength: number | null;
+  signal_age_hours: number | null;
+  deliverability: EmailStatus | string | null;
+  email_confidence: number | null;
+  research_ready: boolean;
+}
+
 export interface InboxTask {
   id: string;
   title: string;
@@ -60,6 +69,7 @@ export interface InboxTask {
   status: string;
   account_id: string | null;
   suggested_action: Record<string, unknown>;
+  triage?: TriageSummary | null;
 }
 
 export interface SignalEvent {

@@ -41,6 +41,9 @@ class Contact(IdMixin, TimestampMixin, TenantScoped, Base):
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    # Last email-verification verdict ("valid"|"unknown"|"invalid"), stamped whenever the
+    # orchestrator verifies this contact. ``None`` = never verified. Drives inbox triage.
+    email_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     phone_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     enrichment_source: Mapped[str | None] = mapped_column(String(60), nullable=True)
     # Proprietary per-tenant columns (see CustomFieldDef).
