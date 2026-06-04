@@ -48,6 +48,7 @@ def _strip_tags(text: str) -> str:
 class ExaSearchProvider(SearchProvider):
     name = "exa"
     ENDPOINT = "https://api.exa.ai/search"
+    ENDPOINT_SIMILAR = "https://api.exa.ai/findSimilar"
 
     def __init__(self, api_key: str, *, timeout: float = _TIMEOUT):
         self.api_key = (api_key or "").strip()
@@ -62,17 +63,35 @@ class ExaSearchProvider(SearchProvider):
             # Ask for a short text excerpt so hits carry a usable snippet.
             "contents": {"text": {"maxCharacters": _SNIPPET_CAP}},
         }
+        return await self._post(self.ENDPOINT, payload, limit)
+
+    async def find_similar(self, url: str, *, limit: int = 10) -> list[SearchHit]:
+        """Exa ``/findSimilar``: pages similar to a seed URL — the lookalike seam.
+
+        Same response shape as ``/search`` (``results[]`` of title/url/text), so it reuses
+        :meth:`_parse`. Key-gated and non-raising like every adapter here.
+        """
+        if not self.api_key or not url:
+            return []
+        payload = {
+            "url": url,
+            "numResults": limit,
+            "contents": {"text": {"maxCharacters": _SNIPPET_CAP}},
+        }
+        return await self._post(self.ENDPOINT_SIMILAR, payload, limit)
+
+    async def _post(self, endpoint: str, payload: dict, limit: int) -> list[SearchHit]:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(
-                    self.ENDPOINT,
+                    endpoint,
                     json=payload,
                     headers={"x-api-key": self.api_key, "Content-Type": "application/json"},
                 )
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:  # network / anti-bot / HTTP — degrade gracefully
-            logger.warning("Exa search failed: %r", exc)
+            logger.warning("Exa request to %s failed: %r", endpoint, exc)
             return []
         return self._parse(data, limit)
 

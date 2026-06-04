@@ -155,6 +155,21 @@ class DataSourceRegistry:
             self._cache[key] = list(hits)
         return hits
 
+    async def find_similar(self, url: str, *, limit: int = 10) -> list[SearchHit]:
+        """Pages similar to a seed URL (lookalike discovery). Empty when unsupported."""
+        if not url:
+            return []
+        key = _norm_key("find_similar", self.search_provider.name, url, limit)
+        if self._cache_enabled and key in self._cache:
+            return list(self._cache[key])  # type: ignore[arg-type]
+        hits = await self._policy.call(
+            self.search_provider.name,
+            lambda: self.search_provider.find_similar(url, limit=limit),
+        ) or []
+        if self._cache_enabled:
+            self._cache[key] = list(hits)
+        return hits
+
     # ---------------------------------------------------------- company_search
     async def company_search(self, icp: dict, *, limit: int = 25) -> list[CompanyCandidate]:
         """Waterfall every company source in priority order, merging by normalized domain."""

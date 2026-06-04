@@ -40,6 +40,15 @@ class SearchProvider(abc.ABC):
     @abc.abstractmethod
     async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]: ...
 
+    async def find_similar(self, url: str, *, limit: int = 10) -> list[SearchHit]:
+        """Find pages similar to ``url`` (powers the find-lookalike play).
+
+        Optional capability: the default returns ``[]`` so providers that can't do
+        similarity search (DuckDuckGo, stub) degrade quietly and offline/CI stays
+        deterministic. Adapters that can (Exa) override this.
+        """
+        return []
+
 
 class StubSearchProvider(SearchProvider):
     """Deterministic offline default: no network, no results."""

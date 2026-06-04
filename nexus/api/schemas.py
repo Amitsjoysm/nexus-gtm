@@ -79,6 +79,23 @@ class ContactOut(ContactIn):
     enrichment_source: str | None = None
 
 
+class LookalikeOut(BaseModel):
+    name: str
+    domain: str
+    url: str | None = None
+    snippet: str = ""
+    score: int
+    reasons: list[str] = Field(default_factory=list)
+    source: str = ""
+    already_tracked: bool = False
+
+
+class LookalikeResponse(BaseModel):
+    seed_account_id: str
+    seed_domain: str | None = None
+    lookalikes: list[LookalikeOut] = Field(default_factory=list)
+
+
 # ---- agents ----
 class AgentRunRequest(BaseModel):
     account_id: str | None = None

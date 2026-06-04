@@ -22,10 +22,23 @@ import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
 import { strengthMeta } from "@/lib/display";
-import type { AgentRunResponse, Account, Contact, Role, SignalEvent } from "@/lib/types";
+import type {
+  AgentRunResponse,
+  Account,
+  Contact,
+  Lookalike,
+  Role,
+  SignalEvent,
+} from "@/lib/types";
 import styles from "./AccountDetailPage.module.css";
 
-type Tab = "overview" | "contacts" | "signals" | "actions";
+type Tab = "overview" | "contacts" | "signals" | "lookalikes" | "actions";
+
+interface LookalikeState {
+  loading: boolean;
+  data: Lookalike[] | null;
+  error: string | null;
+}
 
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
 
@@ -47,6 +60,11 @@ export function AccountDetailPage() {
   const [syncing, setSyncing] = useState(false);
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
   const [question, setQuestion] = useState("");
+  const [lookalikes, setLookalikes] = useState<LookalikeState>({
+    loading: false,
+    data: null,
+    error: null,
+  });
 
   const canOrchestrate = session ? ROLE_RANK[session.role] >= ROLE_RANK.manager : false;
 
@@ -111,6 +129,18 @@ export function AccountDetailPage() {
       );
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function runLookalikes() {
+    setLookalikes({ loading: true, data: null, error: null });
+    try {
+      const res = await api.findLookalikes(id, 10);
+      setLookalikes({ loading: false, data: res.lookalikes, error: null });
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.detail : "Please try again.";
+      setLookalikes({ loading: false, data: null, error: msg });
+      toast.error("Couldn't find lookalikes", msg);
     }
   }
 
@@ -197,6 +227,7 @@ export function AccountDetailPage() {
           { value: "overview", label: "Overview" },
           { value: "contacts", label: "Contacts", count: contacts.data?.length },
           { value: "signals", label: "Signals", count: signals.data?.length },
+          { value: "lookalikes", label: "Lookalikes" },
           { value: "actions", label: "AI Actions" },
         ]}
       />
@@ -348,6 +379,35 @@ export function AccountDetailPage() {
                 })
               }
             </DataState>
+          </Card>
+        </div>
+      </TabPanel>
+
+      <TabPanel id="panel-lookalikes" active={tab === "lookalikes"}>
+        <div className={styles.panel}>
+          <Card padding="lg">
+            <div className={styles.actionHead}>
+              <span className={styles.actionIcon} aria-hidden="true">
+                <Icons.TargetIcon />
+              </span>
+              <div>
+                <h3 className={styles.actionTitle}>Find similar companies</h3>
+                <p className={styles.actionDesc}>
+                  Seed from this account's domain to surface lookalikes, ranked by ICP fit.
+                </p>
+              </div>
+            </div>
+            <div>
+              <Button
+                variant={lookalikes.data ? "secondary" : "primary"}
+                iconLeft={lookalikes.data ? <Icons.RefreshIcon /> : <Icons.TargetIcon />}
+                loading={lookalikes.loading}
+                onClick={runLookalikes}
+              >
+                {lookalikes.data ? "Refresh" : "Find lookalikes"}
+              </Button>
+            </div>
+            <LookalikeResult state={lookalikes} />
           </Card>
         </div>
       </TabPanel>
@@ -516,6 +576,65 @@ function AgentResult({
   }
   if (!state.result) return null;
   return <div className={styles.agentOutput}>{children(state.result.output)}</div>;
+}
+
+/** Loading / error / empty / list states for a lookalike search. */
+function LookalikeResult({ state }: { state: LookalikeState }) {
+  if (state.loading) {
+    return (
+      <div className={styles.agentLoading}>
+        <Spinner size={16} /> Searching for similar companies…
+      </div>
+    );
+  }
+  if (state.error) {
+    return (
+      <div className={styles.agentError} role="alert">
+        {state.error}
+      </div>
+    );
+  }
+  if (state.data === null) return null;
+  if (state.data.length === 0) {
+    return (
+      <p className={styles.agentNote}>
+        No lookalikes found. Similarity search needs a configured provider (Exa); offline this
+        stays empty.
+      </p>
+    );
+  }
+  return (
+    <ul className={styles.recList}>
+      {state.data.map((lk) => {
+        const meta = strengthMeta(lk.score / 100);
+        return (
+          <li key={lk.domain} className={styles.rec}>
+            <div className={styles.recTop}>
+              <div>
+                <span className={styles.recName}>{lk.name}</span>
+                <span className={styles.recTitle}>
+                  {lk.url ? (
+                    <a className={styles.link} href={lk.url} target="_blank" rel="noreferrer">
+                      {lk.domain}
+                    </a>
+                  ) : (
+                    lk.domain
+                  )}
+                </span>
+              </div>
+              <div className={styles.recBadges}>
+                {lk.already_tracked ? <Badge tone="neutral">Tracked</Badge> : null}
+                <Badge tone={meta.tone} dot>
+                  Fit {lk.score}
+                </Badge>
+              </div>
+            </div>
+            {lk.snippet && <p className={styles.recWhy}>{lk.snippet}</p>}
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 function ResearchResult({ output }: { output: Record<string, unknown> }) {

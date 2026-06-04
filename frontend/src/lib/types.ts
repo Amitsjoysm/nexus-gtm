@@ -38,6 +38,23 @@ export interface Account {
 
 export type AccountInput = Omit<Account, "id">;
 
+export interface Lookalike {
+  name: string;
+  domain: string;
+  url: string | null;
+  snippet: string;
+  score: number;
+  reasons: string[];
+  source: string;
+  already_tracked: boolean;
+}
+
+export interface LookalikeResponse {
+  seed_account_id: string;
+  seed_domain: string | null;
+  lookalikes: Lookalike[];
+}
+
 export interface Contact {
   id: string;
   account_id: string;

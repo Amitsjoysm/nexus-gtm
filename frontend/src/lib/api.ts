@@ -23,6 +23,7 @@ import type {
   Contact,
   CreateCustomFieldRequest,
   CreateSessionRequest,
+  LookalikeResponse,
   CRMPushResponse,
   CRMSyncRequest,
   CRMSyncResponse,
@@ -172,6 +173,12 @@ export class ApiClient {
   }
   listContacts(accountId: string, signal?: AbortSignal) {
     return this.request<Contact[]>(`/accounts/${accountId}/contacts`, { signal });
+  }
+  findLookalikes(accountId: string, limit = 10, signal?: AbortSignal) {
+    return this.request<LookalikeResponse>(
+      `/accounts/${accountId}/lookalikes?limit=${limit}`,
+      { method: "POST", signal },
+    );
   }
 
   // ---- agents ----
