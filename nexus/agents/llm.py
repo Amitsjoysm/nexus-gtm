@@ -125,6 +125,10 @@ class StubLLMProvider(LLMProvider):
                 parts.append("titles: " + ", ".join(map(str, icp["titles"])))
             body = "; ".join(parts) if parts else "no ICP details captured yet"
             return (f"Target {v.get('target', 'companies')}; {body}.")[:cap_chars]
+        if purpose == "intake_understanding":
+            # Deterministic stub: no opinion. Returning empty JSON makes the LLM understanding pass a
+            # guaranteed no-op offline, so the regex/keyword intake layer is fully authoritative in CI.
+            return "{}"
         # Fallback: echo the last user message compactly.
         last = next((m.content for m in reversed(messages) if m.role == "user"), "")
         return f"[stub] {last[:280]}"

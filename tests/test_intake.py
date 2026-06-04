@@ -182,3 +182,86 @@ async def test_controller_confirms_then_launches_on_go():
     go = await ctrl.advance(icp_state=complete, target="companies", missing_slots=[],
                             context_summary="", user_text="go", is_first_turn=False)
     assert go.action == "launch"
+
+
+# -- Bug fixes: re-targeting, URL/geo/free-text-ICP capture, LLM no-op on stub ---------
+from nexus.orchestration.intake import infer_target
+
+
+def test_infer_target_retargets_away_from_companies():
+    # The reported bug: once "companies" was set, "I want prospects not companies" never took.
+    assert infer_target("I don't want companies, I want prospects", "companies") == "contacts"
+    assert infer_target("actually I want prospects not companies", "companies") == "contacts"
+    assert infer_target("show me the VP Sales decision makers", "companies") == "contacts"
+
+
+def test_infer_target_negation_picks_opposite():
+    assert infer_target("I want leads, not companies", "companies") == "contacts"
+    assert infer_target("give me accounts, not individual people", "contacts") == "companies"
+
+
+def test_infer_target_keeps_current_when_silent():
+    # No company/contact signal on this turn → keep what we had.
+    assert infer_target("200 to 5000", "contacts") == "contacts"
+    assert infer_target("200 to 5000", "companies") == "companies"
+    # Cold start with no signal defaults to companies.
+    assert infer_target("hello", None) == "companies"
+
+
+def test_extract_captures_seed_url():
+    assert extract_slots("here's our site acme.com", {}, None)["seed_url"] == "https://acme.com"
+    assert (
+        extract_slots("check https://www.acme.io/about", {}, None)["seed_url"]
+        == "https://www.acme.io/about"
+    )
+    # Abbreviations with short trailing segments are not URLs.
+    assert "seed_url" not in extract_slots("e.g. mid-market saas", {}, None)
+
+
+def test_extract_captures_freetext_geo_via_cue():
+    # A city the alias gazetteer doesn't list is still captured after an explicit cue.
+    assert extract_slots("companies based in Austin", {}, None)["geo"] == ["Austin"]
+    # Industry/size words after a cue are filtered out, not mistaken for a place.
+    assert "geo" not in extract_slots("targeting Fintech", {}, None)
+
+
+def test_extract_captures_freetext_icp_description():
+    # Explicit ICP cue.
+    d1 = extract_slots("We sell observability tooling to engineering orgs", {}, None)
+    assert d1["icp_description"] == "We sell observability tooling to engineering orgs"
+    # No keyword, but clearly descriptive (>=6 words + qualifier).
+    d2 = extract_slots("teams that manage large fleets of delivery vehicles", {}, None)
+    assert "icp_description" in d2
+
+
+def test_extract_icp_description_not_triggered_on_short_message():
+    # Must not hijack the canonical "ask for industries" flow.
+    assert "icp_description" not in extract_slots("find me some companies", {}, None)
+    # And not while the user is answering a pending open-vocabulary slot.
+    assert "icp_description" not in extract_slots("logistics tech", {}, "industries")
+
+
+@pytest.mark.asyncio
+async def test_controller_retargets_then_asks_titles():
+    ctrl = IntakeController()
+    complete = {"industries": ["Fintech"], "geo": ["United States"],
+                "company_size": {"min": 200, "max": 5000}}
+    d = await ctrl.advance(icp_state=complete, target="companies", missing_slots=[],
+                           context_summary="", user_text="actually I want prospects not companies",
+                           is_first_turn=False)
+    assert d.target == "contacts"
+    assert d.action == "clarify"
+    assert d.data["slot"] == "titles"
+
+
+@pytest.mark.asyncio
+async def test_stub_intake_understanding_is_empty_noop():
+    # The stub must return empty JSON so the LLM understanding pass never perturbs the
+    # deterministic offline path.
+    stub = StubLLMProvider()
+    r = await stub.complete(
+        [LLMMessage(role="user", content="anything")],
+        purpose="intake_understanding",
+        variables={"summary": "", "icp_state": {}, "target": "companies"},
+    )
+    assert r.text.strip() == "{}"
