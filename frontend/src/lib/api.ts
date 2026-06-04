@@ -23,6 +23,7 @@ import type {
   Contact,
   CreateCustomFieldRequest,
   CreateSessionRequest,
+  CRMPushResponse,
   CRMSyncRequest,
   CRMSyncResponse,
   CsvImportResult,
@@ -236,6 +237,12 @@ export class ApiClient {
       body,
       signal,
     });
+  }
+  crmPush(accountId: string, signal?: AbortSignal) {
+    return this.request<CRMPushResponse>(
+      `/integrations/crm/push/${accountId}`,
+      { method: "POST", signal },
+    );
   }
   sepPush(body: SEPPushRequest, signal?: AbortSignal) {
     return this.request<SEPPushResponse>("/integrations/sep/push", {

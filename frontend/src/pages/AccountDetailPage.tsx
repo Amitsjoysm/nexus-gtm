@@ -44,6 +44,7 @@ export function AccountDetailPage() {
   const [tab, setTab] = useState<Tab>("overview");
   const [running, setRunning] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
   const [question, setQuestion] = useState("");
 
@@ -92,6 +93,24 @@ export function AccountDetailPage() {
         err instanceof ApiError ? err.detail : "Please try again.",
       );
       setLaunching(false);
+    }
+  }
+
+  async function syncToCrm(acc: Account) {
+    setSyncing(true);
+    try {
+      const res = await api.crmPush(acc.id);
+      toast.success(
+        "Synced to CRM",
+        `${acc.name} and ${res.contacts} contact${res.contacts === 1 ? "" : "s"} written back.`,
+      );
+    } catch (err) {
+      toast.error(
+        "Couldn't sync to CRM",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -148,6 +167,15 @@ export function AccountDetailPage() {
                     Ask the orchestrator
                   </Button>
                 )}
+                <Button
+                  variant="secondary"
+                  iconLeft={<Icons.PlugIcon />}
+                  loading={syncing}
+                  onClick={() => syncToCrm(acc)}
+                  aria-label={`Sync ${acc.name} to the CRM`}
+                >
+                  Sync to CRM
+                </Button>
                 <Button
                   iconLeft={<Icons.SparklesIcon />}
                   loading={running}

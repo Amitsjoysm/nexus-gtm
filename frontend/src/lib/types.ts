@@ -216,6 +216,13 @@ export interface CRMSyncResponse {
   account_ids: string[];
 }
 
+export interface CRMPushResponse {
+  ok: boolean;
+  source: string;
+  external_id?: string | null;
+  contacts: number;
+}
+
 export interface SEPPushRequest {
   sequence: string;
   contact_id?: string | null;

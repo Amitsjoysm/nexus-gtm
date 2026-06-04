@@ -194,6 +194,15 @@ class CRMSyncResponse(BaseModel):
     account_ids: list[str]
 
 
+class CRMPushResponse(BaseModel):
+    """Result of writing a NEXUS-enriched account (+ contacts) back to the CRM."""
+
+    ok: bool
+    source: str
+    external_id: str | None = None
+    contacts: int = 0
+
+
 # ---- integrations: SEP ----
 class SEPPushRequest(BaseModel):
     sequence: str = "default"

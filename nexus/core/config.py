@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend
     email_verify_provider: str = "stub"        # email-deliverability backend
+    crm_provider: str = "stub"                 # outbound CRM connector: stub|salesforce|hubspot
 
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.

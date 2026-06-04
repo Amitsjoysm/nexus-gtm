@@ -2,13 +2,15 @@
 
 A Play has a declarative trigger and a list of actions. When a signal arrives (with the account's
 current composite score), every enabled play whose trigger matches fires its actions:
-``create_task`` (inbox), ``alert`` (notification), ``sep_push`` (Outreach/Salesloft).
+``create_task`` (inbox), ``alert`` (notification), ``sep_push`` (Outreach/Salesloft),
+``crm_push`` (write the enriched account + contacts back to the CRM).
 """
 from __future__ import annotations
 
 from nexus.alerts.service import get_alert_service
 from nexus.core.tenancy import TenantSession
 from nexus.inbox.service import get_inbox_service
+from nexus.ingestion.crm import get_crm_connector
 from nexus.integrations.sep import get_sep_connector
 from nexus.models.account import Account, Contact
 from nexus.models.signal import SignalEvent
@@ -97,6 +99,18 @@ class PlaysEngine:
                     payload={"account": account.name, "signal": signal.title},
                 )
                 outcomes.append({"type": "sep_push", "ok": res.ok, "platform": res.platform})
+            elif atype == "crm_push":
+                contacts = await ts.list(Contact, Contact.account_id == account.id)
+                res = await get_crm_connector().push_account(account, contacts=contacts)
+                outcomes.append(
+                    {"type": "crm_push", "ok": res.ok, "source": res.source}
+                )
+                if action.get("log_activity", True):
+                    await get_crm_connector().push_activity(
+                        account_id=account.crm_id or account.id,
+                        kind="signal",
+                        detail={"signal": signal.title, "play": play.name},
+                    )
         return {"play": play.name, "actions": outcomes}
 
 
