@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     browser_provider: Literal["auto", "scrapling", "duckduckgo", "cloak"] = "auto"
     cloak_cdp_url: str = "http://localhost:8080"
 
+    # Multi-source data substrate (DataSourceRegistry). Ordered, comma-separated source lists
+    # form the priority waterfall (InfoJoy -> web search -> Apify). Defaults preserve today's
+    # behavior — web-backed company discovery on, everything else an offline stub — so CI stays
+    # zero-network and no shipped behavior silently regresses.
+    company_search_sources: str = "search"     # ordered: e.g. "infojoy,search,apify"
+    enrich_sources: str = "stub"               # ordered enrichment providers
+    signal_sources: str = "demo"               # ordered signal sources
+    search_provider: str = "duckduckgo"        # web-search backend (wraps browser_provider)
+    research_provider: str = "stub"            # account-research backend
+    email_verify_provider: str = "stub"        # email-deliverability backend
+
     # Orchestration engine
     orch_max_attempts: int = 2          # per-step retries before a step is marked failed
     orch_max_steps: int = 200           # hard cap on plan size (runaway / cost guard)
@@ -66,6 +77,22 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @staticmethod
+    def _csv_list(value: str) -> list[str]:
+        return [item.strip() for item in value.split(",") if item.strip()]
+
+    @property
+    def company_search_source_list(self) -> list[str]:
+        return self._csv_list(self.company_search_sources)
+
+    @property
+    def enrich_source_list(self) -> list[str]:
+        return self._csv_list(self.enrich_sources)
+
+    @property
+    def signal_source_list(self) -> list[str]:
+        return self._csv_list(self.signal_sources)
 
     @model_validator(mode="after")
     def _reject_insecure_prod(self) -> "Settings":

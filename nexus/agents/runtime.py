@@ -20,6 +20,7 @@ class AgentContext:
     llm: LLMProvider
     relevance: RelevanceEngine
     browser: object | None
+    registry: object | None
     account: Account | None
     contacts: list[Contact]
     signals: list[SignalEvent]
@@ -85,10 +86,22 @@ class AgentRuntime:
         llm: LLMProvider,
         relevance: RelevanceEngine,
         browser: object | None = None,
+        registry: object | None = None,
     ):
         self.llm = llm
         self.relevance = relevance
         self.browser = browser
+        self._registry = registry
+
+    @property
+    def registry(self):
+        """Lazily build the DataSourceRegistry from settings, threading in this runtime's
+        browser so injected (test) browsers reach the web-search-backed sources."""
+        if self._registry is None:
+            from nexus.integrations.registry import build_registry_from_settings
+
+            self._registry = build_registry_from_settings(browser=self.browser)
+        return self._registry
 
     async def _load_context(
         self, ts: TenantSession, account_id: str | None, inputs: dict
@@ -111,6 +124,7 @@ class AgentRuntime:
             llm=self.llm,
             relevance=self.relevance,
             browser=self.browser,
+            registry=self.registry,
             account=account,
             contacts=contacts,
             signals=signals,

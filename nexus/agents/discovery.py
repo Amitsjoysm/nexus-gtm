@@ -9,8 +9,6 @@ and the browser returns no hits in tests, making counts and ordering reproducibl
 """
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 from nexus.core.config import get_settings
 from nexus.models.account import Account, Contact
@@ -48,13 +46,6 @@ def _passes_hard_filters(account: Account, scoring_icp: dict) -> bool:
     return True
 
 
-def _domain_of(hit: dict) -> str | None:
-    domain = (hit.get("domain") or "").strip().lower()
-    if not domain and hit.get("url"):
-        domain = (urlparse(hit["url"]).netloc or "").lower()
-    return domain[4:] if domain.startswith("www.") else (domain or None)
-
-
 class DiscoveryAgent(BaseAgent):
     name = "discovery"
 
@@ -88,12 +79,13 @@ class DiscoveryAgent(BaseAgent):
         seen_domains = {a.domain for (_, a) in own if a.domain}
 
         new_count = 0
-        if len(candidates) < max_candidates and hasattr(ctx.browser, "search"):
+        if len(candidates) < max_candidates and ctx.registry is not None:
             need = max_candidates - len(candidates)
-            query = self._web_query(icp)
-            hits = await ctx.browser.search(query, limit=need)
-            for hit in hits:
-                domain = _domain_of(hit)
+            # The registry runs the company-search waterfall (InfoJoy -> web -> Apify) and
+            # returns net-new candidates deduped/merged by domain with per-field provenance.
+            found = await ctx.registry.company_search(icp, limit=need)
+            for cand in found:
+                domain = (cand.domain or "").strip().lower()
                 if not domain or domain in seen_domains:
                     continue
                 existing = await ctx.ts.first(Account, Account.domain == domain)
@@ -101,10 +93,11 @@ class DiscoveryAgent(BaseAgent):
                     continue
                 acc = Account(
                     tenant_id=ctx.ts.tenant_id,
-                    name=(hit.get("title") or domain).strip(),
+                    name=(cand.name or domain).strip(),
                     domain=domain,
-                    industry=(icp.get("industries") or [None])[0],
-                    country=(icp.get("geo") or [None])[0],
+                    industry=cand.industry or (icp.get("industries") or [None])[0],
+                    country=cand.country or (icp.get("geo") or [None])[0],
+                    employee_count=cand.employee_count,
                     source="discovery",
                 )
                 ctx.ts.add(acc)
@@ -161,18 +154,6 @@ class DiscoveryAgent(BaseAgent):
             "is_new": is_new,
             "custom_fields": account.custom_fields or {},
         }
-
-    @staticmethod
-    def _web_query(icp: dict) -> str:
-        parts = []
-        if icp.get("industries"):
-            parts.append(" ".join(map(str, icp["industries"])))
-        parts.append("companies")
-        if icp.get("geo"):
-            parts.append("in " + " ".join(map(str, icp["geo"])))
-        if icp.get("intent_signals"):
-            parts.append(" ".join(map(str, icp["intent_signals"])))
-        return " ".join(parts)
 
 
 register_agent(DiscoveryAgent())
