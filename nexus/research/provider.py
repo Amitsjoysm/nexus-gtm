@@ -44,13 +44,32 @@ class ResearchProvider(abc.ABC):
 
 
 class StubResearchProvider(ResearchProvider):
-    """Deterministic offline default: no network, empty profile."""
+    """Deterministic offline default: zero-network, but **not** empty.
+
+    The stub returns *templated* facts (analogous to how :class:`StubLLMProvider` returns
+    deterministic text) so the grounding pipeline is genuinely exercisable offline: a draft
+    composed in tests is "grounded" and the grounded-send gate has something to assert against.
+    The facts are obviously synthetic and carry ``source="stub"`` so nothing downstream mistakes
+    them for real intelligence. ``profile_from_url`` stays empty — URL seeding is a real-data
+    capability with no sensible deterministic fixture.
+    """
 
     name = "stub"
 
     async def research(self, *, company: str | None = None,
                        domain: str | None = None) -> ResearchProfile:
-        return ResearchProfile(source=self.name)
+        label = (company or domain or "this company").strip() or "this company"
+        sources = [f"https://{domain}"] if domain else []
+        return ResearchProfile(
+            found=True,
+            summary=f"{label} is an active company evaluating tooling in its category.",
+            highlights=[
+                f"{label} has been investing in go-to-market initiatives.",
+                f"Recent hiring and activity suggest {label} is in a buying window.",
+            ],
+            sources=sources,
+            source=self.name,
+        )
 
     async def profile_from_url(self, url: str) -> ResearchProfile:
         return ResearchProfile(source=self.name)
