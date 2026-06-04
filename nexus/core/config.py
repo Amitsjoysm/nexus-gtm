@@ -28,8 +28,12 @@ class Settings(BaseSettings):
     # Per-source timeout (seconds) so a slow signal source can't hang a request.
     source_timeout_s: float = 8.0
 
-    # Alerts — optional outbound webhook for "webhook"-channel alerts. Empty = log only.
+    # Alerts — optional delivery endpoints. Empty = the channel is a no-op (alert still persists
+    # in-app). ``alert_slack_webhook_url`` is a Slack Incoming Webhook; ``alert_email_sender`` is
+    # the (everifier-validated, in prod) From address the email channel sends as.
     alert_webhook_url: str = ""
+    alert_slack_webhook_url: str = ""
+    alert_email_sender: str = ""
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./nexus.db"
