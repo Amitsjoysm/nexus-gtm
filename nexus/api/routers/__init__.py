@@ -8,6 +8,7 @@ from nexus.api.routers import (
     custom_fields,
     integrations,
     orchestration,
+    outcomes,
     relevance,
     signals,
     workflow,
@@ -27,6 +28,7 @@ all_routers = [
     orchestration.router,
     chat.router,
     custom_fields.router,
+    outcomes.router,
 ]
 
 __all__ = ["all_routers"]

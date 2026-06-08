@@ -30,6 +30,18 @@ export function timeAgo(input: string | Date | null | undefined): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
+/** Relative time from an age in hours, e.g. 5 → "5h ago", 50 → "2d ago". */
+export function formatAgeHours(hours: number | null | undefined): string {
+  if (hours == null || Number.isNaN(hours)) return "—";
+  if (hours < 1) return "just now";
+  if (hours < 24) return `${Math.round(hours)}h ago`;
+  const day = Math.round(hours / 24);
+  if (day < 30) return `${day}d ago`;
+  const mo = Math.round(day / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.round(mo / 12)}y ago`;
+}
+
 export function formatDate(input: string | Date | null | undefined): string {
   if (!input) return "—";
   const date = typeof input === "string" ? new Date(input) : input;

@@ -28,8 +28,12 @@ class Settings(BaseSettings):
     # Per-source timeout (seconds) so a slow signal source can't hang a request.
     source_timeout_s: float = 8.0
 
-    # Alerts — optional outbound webhook for "webhook"-channel alerts. Empty = log only.
+    # Alerts — optional delivery endpoints. Empty = the channel is a no-op (alert still persists
+    # in-app). ``alert_slack_webhook_url`` is a Slack Incoming Webhook; ``alert_email_sender`` is
+    # the (everifier-validated, in prod) From address the email channel sends as.
     alert_webhook_url: str = ""
+    alert_slack_webhook_url: str = ""
+    alert_email_sender: str = ""
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./nexus.db"
@@ -58,6 +62,7 @@ class Settings(BaseSettings):
     search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend
     email_verify_provider: str = "stub"        # email-deliverability backend
+    crm_provider: str = "stub"                 # outbound CRM connector: stub|salesforce|hubspot
 
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.

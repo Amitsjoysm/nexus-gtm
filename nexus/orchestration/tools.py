@@ -19,6 +19,7 @@ from nexus.core.tenancy import TenantSession
 from nexus.integrations.sep import get_sep_connector
 from nexus.models.account import Contact
 from nexus.models.orchestration import OrchestrationRun
+from nexus.verification import STATUS_INVALID
 
 
 class ToolError(Exception):
@@ -110,14 +111,39 @@ class ComposeMessageTool(_AgentTool):
         out = await super().run(tc)
         # Stage the draft for the approval gate. We record whether it is grounded in
         # retrieved facts; an ungrounded draft is allowed to exist but is flagged so the
-        # reviewer (and any auto-send policy) can treat it with suspicion.
-        grounded = bool(tc.blackboard.get("research", {}).get("facts"))
+        # reviewer (and the grounded-send gate) can refuse it.
+        research = tc.blackboard.get("research", {}) or {}
+        facts = research.get("facts", []) or []
+        grounded = bool(facts)
+
+        # Verify the recipient *now*, so the approval UI can show deliverability before a
+        # human decides — not only at send time. The verdict travels on the draft.
+        email_status: str | None = None
+        email_confidence: float | None = None
+        contact_id = out.get("contact_id")
+        if contact_id:
+            contact = await tc.ts.get(Contact, contact_id)
+            if contact is not None and contact.email:
+                verdict = await tc.runtime.registry.verify_email(contact.email)
+                email_status = verdict.status
+                email_confidence = verdict.confidence
+                # Persist the verdict so the inbox can show deliverability without
+                # re-verifying (and so a verdict survives beyond this run).
+                contact.email_status = verdict.status
+
         tc.blackboard["draft"] = {
-            "contact_id": out.get("contact_id"),
+            "contact_id": contact_id,
             "subject": out.get("subject", ""),
             "body": out.get("body", ""),
             "message": out.get("message", ""),
             "grounded": grounded,
+            # Surfaced to the reviewer at the approval gate (the gate copies the draft).
+            "grounding": {
+                "facts": list(facts)[:6],
+                "sources": research.get("sources", []),
+            },
+            "email_status": email_status,
+            "email_confidence": email_confidence,
         }
         return out
 
@@ -139,11 +165,31 @@ class SendMessageTool(Tool):
         if not draft or not (draft.get("subject") or draft.get("body")):
             raise ToolError("no approved draft to send")
 
+        # Grounded-send gate (Tier-1 credibility): never push an outbound message that wasn't
+        # grounded in retrieved facts. A reviewer approving at the gate cannot override this —
+        # an ungrounded cold email is exactly the kind of generic spam this product exists to
+        # avoid sending.
+        if not draft.get("grounded"):
+            raise ToolError("refusing to send an ungrounded draft (no research facts)")
+
         email = None
+        email_status = None
         contact_id = draft.get("contact_id")
         if contact_id:
             contact = await tc.ts.get(Contact, contact_id)
             email = contact.email if contact else None
+
+        # Verified-send gate: a hard-invalid address never gets a send. We re-verify here
+        # (cheap: the registry caches by email) so the decision is enforced at the boundary,
+        # not just shown in the UI. Unknown/valid pass — a real everifier returns invalid for
+        # the addresses we must never touch; the offline stub only rejects malformed syntax.
+        if email:
+            verdict = await tc.runtime.registry.verify_email(email)
+            email_status = verdict.status
+            if contact is not None:
+                contact.email_status = verdict.status
+            if verdict.status == STATUS_INVALID:
+                raise ToolError(f"refusing to send to an undeliverable address ({email})")
 
         sequence = tc.inputs.get("sequence") or "ai-orchestrated-outbound"
         res = await get_sep_connector().push_contact(
@@ -155,7 +201,8 @@ class SendMessageTool(Tool):
                 "run_id": tc.run.id,
             },
         )
-        return {"ok": res.ok, "platform": res.platform, "sequence": sequence, "email": email}
+        return {"ok": res.ok, "platform": res.platform, "sequence": sequence,
+                "email": email, "email_status": email_status}
 
 
 class DiscoveryTool(_AgentTool):

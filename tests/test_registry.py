@@ -218,7 +218,10 @@ async def test_search_backed_company_search_derives_domains():
 async def test_stubs_are_zero_network_noops():
     assert await StubSearchProvider().search("x") == []
     assert await StubCompanySearchProvider().search({}) == []
-    assert (await StubResearchProvider().research(company="Acme")).found is False
+    # Research stub is deterministic-but-grounded: it returns templated facts (zero-network)
+    # so the grounding pipeline is exercisable offline. The facts carry source="stub".
+    prof = await StubResearchProvider().research(company="Acme")
+    assert prof.found is True and prof.highlights and prof.source == "stub"
     valid = await StubEmailVerificationProvider().verify_one("a@b.com")
     assert valid.status == STATUS_UNKNOWN
     bad = await StubEmailVerificationProvider().verify_one("not-an-email")

@@ -4,7 +4,7 @@
  * same everywhere. Color is always paired with a label (and Badge dot), never the sole cue.
  */
 import type { BadgeTone } from "@/components/ui";
-import type { ApprovalStatus, RunStatus, StepStatus } from "./types";
+import type { ApprovalStatus, EmailStatus, RunStatus, StepStatus } from "./types";
 
 export const RUN_STATUS_TONE: Record<RunStatus, BadgeTone> = {
   planning: "neutral",
@@ -49,6 +49,23 @@ export const APPROVAL_STATUS_TONE: Record<ApprovalStatus, BadgeTone> = {
   approved: "success",
   rejected: "danger",
 };
+
+/**
+ * How an email-deliverability verdict reads to a reviewer at the send gate.
+ * "unknown" is a warning, not a failure — the offline stub returns it for any
+ * well-formed address, and a real everifier only returns "invalid" for the
+ * addresses we must never touch.
+ */
+export const EMAIL_STATUS_META: Record<EmailStatus, { tone: BadgeTone; label: string }> = {
+  valid: { tone: "success", label: "Deliverable" },
+  unknown: { tone: "warning", label: "Unverified" },
+  invalid: { tone: "danger", label: "Undeliverable" },
+};
+
+/** Narrow an unknown payload value to a known EmailStatus, or null. */
+export function asEmailStatus(value: unknown): EmailStatus | null {
+  return value === "valid" || value === "invalid" || value === "unknown" ? value : null;
+}
 
 /** Friendly names for the tools a step can invoke. */
 export const TOOL_LABEL: Record<string, string> = {

@@ -252,3 +252,11 @@ export const ShieldCheckIcon = (props: SVGProps<SVGSVGElement>) => (
     <path d="m9 12 2 2 4-4" />
   </Svg>
 );
+
+export const TrophyIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <path d="M7 4h10v4a5 5 0 0 1-10 0V4Z" />
+    <path d="M17 5h2.5a1.5 1.5 0 0 1 0 5H17M7 5H4.5a1.5 1.5 0 0 0 0 5H7" />
+    <path d="M12 13v3M9 20h6M10 16h4l.5 4h-5l.5-4Z" />
+  </Svg>
+);

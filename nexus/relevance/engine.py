@@ -68,12 +68,24 @@ def _band_score(value: int | None, lo: int | None, hi: int | None) -> float:
 
 
 class RelevanceEngine:
-    def score_icp_fit(self, profile: RelevanceProfile | None, account: Account) -> IcpFit:
+    def score_icp_fit(
+        self,
+        profile: RelevanceProfile | None,
+        account: Account,
+        *,
+        learned_weights: dict[str, float] | None = None,
+    ) -> IcpFit:
+        """Score an account against the ICP.
+
+        Weight precedence (low → high): static :data:`DEFAULT_WEIGHTS` < per-tenant
+        ``learned_weights`` (from the outcome-feedback loop) < explicit ``icp["weights"]`` set by
+        the user. So learning nudges the defaults but never overrides a deliberate human choice.
+        """
         if profile is None or not profile.icp:
             return IcpFit(score=50, reasons=["No ICP defined; neutral fit"], breakdown={})
 
         icp = profile.icp
-        weights = {**DEFAULT_WEIGHTS, **(icp.get("weights") or {})}
+        weights = {**DEFAULT_WEIGHTS, **(learned_weights or {}), **(icp.get("weights") or {})}
         reasons: list[str] = []
         sub: dict[str, float] = {}
 

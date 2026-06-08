@@ -10,10 +10,13 @@ import {
   Field,
   Icons,
   Input,
+  Modal,
+  Select,
   Skeleton,
   Spinner,
   Tabs,
   TabPanel,
+  Textarea,
   useToast,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
@@ -22,12 +25,39 @@ import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
 import { strengthMeta } from "@/lib/display";
-import type { AgentRunResponse, Account, Contact, Role, SignalEvent } from "@/lib/types";
+import type {
+  AgentRunResponse,
+  Account,
+  Contact,
+  Lookalike,
+  OutcomeStage,
+  Role,
+  SignalEvent,
+} from "@/lib/types";
 import styles from "./AccountDetailPage.module.css";
 
-type Tab = "overview" | "contacts" | "signals" | "actions";
+type Tab = "overview" | "contacts" | "signals" | "lookalikes" | "actions";
+
+interface LookalikeState {
+  loading: boolean;
+  data: Lookalike[] | null;
+  error: string | null;
+}
 
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
+
+/** Sales-progression stages a rep can log against an account, ordered by depth. */
+const OUTCOME_LABELS: Record<OutcomeStage, string> = {
+  sent: "Outreach sent",
+  replied: "Got a reply",
+  meeting: "Booked a meeting",
+  won: "Closed won",
+  lost: "Closed lost",
+};
+const OUTCOME_OPTIONS = (Object.keys(OUTCOME_LABELS) as OutcomeStage[]).map((value) => ({
+  value,
+  label: OUTCOME_LABELS[value],
+}));
 
 interface AgentState {
   loading: boolean;
@@ -44,8 +74,18 @@ export function AccountDetailPage() {
   const [tab, setTab] = useState<Tab>("overview");
   const [running, setRunning] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
   const [question, setQuestion] = useState("");
+  const [lookalikes, setLookalikes] = useState<LookalikeState>({
+    loading: false,
+    data: null,
+    error: null,
+  });
+  const [outcomeOpen, setOutcomeOpen] = useState(false);
+  const [outcomeStage, setOutcomeStage] = useState<OutcomeStage>("won");
+  const [outcomeNote, setOutcomeNote] = useState("");
+  const [recording, setRecording] = useState(false);
 
   const canOrchestrate = session ? ROLE_RANK[session.role] >= ROLE_RANK.manager : false;
 
@@ -95,6 +135,36 @@ export function AccountDetailPage() {
     }
   }
 
+  async function syncToCrm(acc: Account) {
+    setSyncing(true);
+    try {
+      const res = await api.crmPush(acc.id);
+      toast.success(
+        "Synced to CRM",
+        `${acc.name} and ${res.contacts} contact${res.contacts === 1 ? "" : "s"} written back.`,
+      );
+    } catch (err) {
+      toast.error(
+        "Couldn't sync to CRM",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function runLookalikes() {
+    setLookalikes({ loading: true, data: null, error: null });
+    try {
+      const res = await api.findLookalikes(id, 10);
+      setLookalikes({ loading: false, data: res.lookalikes, error: null });
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.detail : "Please try again.";
+      setLookalikes({ loading: false, data: null, error: msg });
+      toast.error("Couldn't find lookalikes", msg);
+    }
+  }
+
   async function runPipeline() {
     setRunning(true);
     try {
@@ -110,6 +180,33 @@ export function AccountDetailPage() {
       );
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function recordOutcome(e: FormEvent) {
+    e.preventDefault();
+    setRecording(true);
+    try {
+      const note = outcomeNote.trim();
+      await api.recordOutcome({
+        stage: outcomeStage,
+        account_id: id,
+        meta: note ? { note } : undefined,
+      });
+      toast.success(
+        "Outcome logged",
+        `Recorded "${OUTCOME_LABELS[outcomeStage]}". Wins tune your fit scoring over time.`,
+      );
+      setOutcomeOpen(false);
+      setOutcomeNote("");
+      setOutcomeStage("won");
+    } catch (err) {
+      toast.error(
+        "Couldn't log outcome",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setRecording(false);
     }
   }
 
@@ -149,6 +246,23 @@ export function AccountDetailPage() {
                   </Button>
                 )}
                 <Button
+                  variant="secondary"
+                  iconLeft={<Icons.TrophyIcon />}
+                  onClick={() => setOutcomeOpen(true)}
+                  aria-label={`Log a deal outcome for ${acc.name}`}
+                >
+                  Log outcome
+                </Button>
+                <Button
+                  variant="secondary"
+                  iconLeft={<Icons.PlugIcon />}
+                  loading={syncing}
+                  onClick={() => syncToCrm(acc)}
+                  aria-label={`Sync ${acc.name} to the CRM`}
+                >
+                  Sync to CRM
+                </Button>
+                <Button
                   iconLeft={<Icons.SparklesIcon />}
                   loading={running}
                   onClick={runPipeline}
@@ -169,6 +283,7 @@ export function AccountDetailPage() {
           { value: "overview", label: "Overview" },
           { value: "contacts", label: "Contacts", count: contacts.data?.length },
           { value: "signals", label: "Signals", count: signals.data?.length },
+          { value: "lookalikes", label: "Lookalikes" },
           { value: "actions", label: "AI Actions" },
         ]}
       />
@@ -324,6 +439,35 @@ export function AccountDetailPage() {
         </div>
       </TabPanel>
 
+      <TabPanel id="panel-lookalikes" active={tab === "lookalikes"}>
+        <div className={styles.panel}>
+          <Card padding="lg">
+            <div className={styles.actionHead}>
+              <span className={styles.actionIcon} aria-hidden="true">
+                <Icons.TargetIcon />
+              </span>
+              <div>
+                <h3 className={styles.actionTitle}>Find similar companies</h3>
+                <p className={styles.actionDesc}>
+                  Seed from this account's domain to surface lookalikes, ranked by ICP fit.
+                </p>
+              </div>
+            </div>
+            <div>
+              <Button
+                variant={lookalikes.data ? "secondary" : "primary"}
+                iconLeft={lookalikes.data ? <Icons.RefreshIcon /> : <Icons.TargetIcon />}
+                loading={lookalikes.loading}
+                onClick={runLookalikes}
+              >
+                {lookalikes.data ? "Refresh" : "Find lookalikes"}
+              </Button>
+            </div>
+            <LookalikeResult state={lookalikes} />
+          </Card>
+        </div>
+      </TabPanel>
+
       <TabPanel id="panel-actions" active={tab === "actions"}>
         <div className={styles.panel}>
           <div className={styles.actionsGrid}>
@@ -396,6 +540,47 @@ export function AccountDetailPage() {
           </div>
         </div>
       </TabPanel>
+
+      <Modal
+        open={outcomeOpen}
+        onClose={() => setOutcomeOpen(false)}
+        title="Log a deal outcome"
+        description="Record what happened with this account. Wins feed back into your relevance weights, sharpening fit scoring across the workspace."
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setOutcomeOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="outcome-form"
+              iconLeft={<Icons.CheckIcon />}
+              loading={recording}
+            >
+              Save outcome
+            </Button>
+          </>
+        }
+      >
+        <form id="outcome-form" className={styles.outcomeForm} onSubmit={recordOutcome}>
+          <Field label="Outcome">
+            <Select
+              options={OUTCOME_OPTIONS}
+              value={outcomeStage}
+              onChange={(e) => setOutcomeStage(e.target.value as OutcomeStage)}
+            />
+          </Field>
+          <Field label="Note" hint="Optional. Context for your team — what closed or stalled the deal.">
+            <Textarea
+              rows={3}
+              value={outcomeNote}
+              onChange={(e) => setOutcomeNote(e.target.value)}
+              placeholder="e.g. Won on the analytics use case; champion was the VP of RevOps."
+            />
+          </Field>
+        </form>
+      </Modal>
     </div>
   );
 }
@@ -488,6 +673,65 @@ function AgentResult({
   }
   if (!state.result) return null;
   return <div className={styles.agentOutput}>{children(state.result.output)}</div>;
+}
+
+/** Loading / error / empty / list states for a lookalike search. */
+function LookalikeResult({ state }: { state: LookalikeState }) {
+  if (state.loading) {
+    return (
+      <div className={styles.agentLoading}>
+        <Spinner size={16} /> Searching for similar companies…
+      </div>
+    );
+  }
+  if (state.error) {
+    return (
+      <div className={styles.agentError} role="alert">
+        {state.error}
+      </div>
+    );
+  }
+  if (state.data === null) return null;
+  if (state.data.length === 0) {
+    return (
+      <p className={styles.agentNote}>
+        No lookalikes found. Similarity search needs a configured provider (Exa); offline this
+        stays empty.
+      </p>
+    );
+  }
+  return (
+    <ul className={styles.recList}>
+      {state.data.map((lk) => {
+        const meta = strengthMeta(lk.score / 100);
+        return (
+          <li key={lk.domain} className={styles.rec}>
+            <div className={styles.recTop}>
+              <div>
+                <span className={styles.recName}>{lk.name}</span>
+                <span className={styles.recTitle}>
+                  {lk.url ? (
+                    <a className={styles.link} href={lk.url} target="_blank" rel="noreferrer">
+                      {lk.domain}
+                    </a>
+                  ) : (
+                    lk.domain
+                  )}
+                </span>
+              </div>
+              <div className={styles.recBadges}>
+                {lk.already_tracked ? <Badge tone="neutral">Tracked</Badge> : null}
+                <Badge tone={meta.tone} dot>
+                  Fit {lk.score}
+                </Badge>
+              </div>
+            </div>
+            {lk.snippet && <p className={styles.recWhy}>{lk.snippet}</p>}
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 function ResearchResult({ output }: { output: Record<string, unknown> }) {

@@ -79,6 +79,56 @@ class ContactOut(ContactIn):
     enrichment_source: str | None = None
 
 
+class LookalikeOut(BaseModel):
+    name: str
+    domain: str
+    url: str | None = None
+    snippet: str = ""
+    score: int
+    reasons: list[str] = Field(default_factory=list)
+    source: str = ""
+    already_tracked: bool = False
+
+
+class LookalikeResponse(BaseModel):
+    seed_account_id: str
+    seed_domain: str | None = None
+    lookalikes: list[LookalikeOut] = Field(default_factory=list)
+
+
+# ---- outcomes (feedback loop) ----
+class OutcomeIn(BaseModel):
+    stage: str  # one of nexus.outcomes.service.STAGES
+    account_id: str | None = None
+    contact_id: str | None = None
+    meta: dict = Field(default_factory=dict)
+
+
+class OutcomeOut(BaseModel):
+    id: str
+    stage: str
+    account_id: str | None = None
+    contact_id: str | None = None
+    industry: str | None = None
+    employee_count: int | None = None
+    country: str | None = None
+    tech_count: int = 0
+    created_at: str
+
+
+class LearnedWeightsOut(BaseModel):
+    weights: dict[str, float]
+    learned: bool
+    sample_size: int
+    defaults: dict[str, float]
+
+
+class OutcomeSummaryOut(BaseModel):
+    total: int
+    by_stage: dict[str, int]
+    positive: int
+
+
 # ---- agents ----
 class AgentRunRequest(BaseModel):
     account_id: str | None = None
@@ -96,6 +146,17 @@ class AgentRunResponse(BaseModel):
 
 
 # ---- inbox ----
+class TriageOut(BaseModel):
+    """Glanceable triage cues for an inbox row: intent recency, reachability, grounding."""
+
+    signal_kind: str | None = None
+    signal_strength: float | None = None
+    signal_age_hours: float | None = None
+    deliverability: str | None = None
+    email_confidence: float | None = None
+    research_ready: bool = False
+
+
 class InboxTaskOut(BaseModel):
     id: str
     title: str
@@ -104,6 +165,7 @@ class InboxTaskOut(BaseModel):
     status: str
     account_id: str | None = None
     suggested_action: dict
+    triage: TriageOut | None = None
 
 
 # ---- lists ----
@@ -180,6 +242,15 @@ class CRMSyncResponse(BaseModel):
     source: str
     synced: int
     account_ids: list[str]
+
+
+class CRMPushResponse(BaseModel):
+    """Result of writing a NEXUS-enriched account (+ contacts) back to the CRM."""
+
+    ok: bool
+    source: str
+    external_id: str | None = None
+    contacts: int = 0
 
 
 # ---- integrations: SEP ----

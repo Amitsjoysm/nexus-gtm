@@ -4,10 +4,19 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from nexus.api.deps import Principal, get_tenant_session, require
-from nexus.api.schemas import AccountIn, AccountOut, ContactIn, ContactOut
+from nexus.api.schemas import (
+    AccountIn,
+    AccountOut,
+    ContactIn,
+    ContactOut,
+    LookalikeOut,
+    LookalikeResponse,
+)
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.enrichment.waterfall import get_enricher
+from nexus.integrations.company_search import domain_from_url
+from nexus.lookalike import get_lookalike_service
 from nexus.models.account import Account, Contact
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
@@ -118,6 +127,29 @@ async def list_contacts(
 ) -> list[ContactOut]:
     contacts = await ts.list(Contact, Contact.account_id == account_id)
     return [_contact_out(c) for c in contacts]
+
+
+@router.post("/{account_id}/lookalikes", response_model=LookalikeResponse)
+async def find_lookalikes(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+    limit: int = 10,
+) -> LookalikeResponse:
+    """Find companies similar to this account, scored against the tenant's ICP.
+
+    Offline (stub search) this returns an empty list; a keyed Exa provider lights it up.
+    """
+    account = await ts.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    limit = max(1, min(limit, 50))
+    found = await get_lookalike_service().find(ts, account, limit=limit)
+    return LookalikeResponse(
+        seed_account_id=account.id,
+        seed_domain=domain_from_url(account.domain),
+        lookalikes=[LookalikeOut(**lk.as_dict()) for lk in found],
+    )
 
 
 @router.post("/contacts/{contact_id}/enrich", response_model=ContactOut)

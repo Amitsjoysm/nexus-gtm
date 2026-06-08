@@ -38,6 +38,59 @@ export interface Account {
 
 export type AccountInput = Omit<Account, "id">;
 
+export interface Lookalike {
+  name: string;
+  domain: string;
+  url: string | null;
+  snippet: string;
+  score: number;
+  reasons: string[];
+  source: string;
+  already_tracked: boolean;
+}
+
+export interface LookalikeResponse {
+  seed_account_id: string;
+  seed_domain: string | null;
+  lookalikes: Lookalike[];
+}
+
+// ---- outcome-feedback loop ----
+export type OutcomeStage = "sent" | "replied" | "meeting" | "won" | "lost";
+
+export interface Outcome {
+  id: string;
+  stage: OutcomeStage | string;
+  account_id: string | null;
+  contact_id: string | null;
+  industry: string | null;
+  employee_count: number | null;
+  country: string | null;
+  tech_count: number;
+  created_at: string;
+}
+
+export interface OutcomeInput {
+  stage: OutcomeStage;
+  account_id?: string | null;
+  contact_id?: string | null;
+  meta?: Record<string, unknown>;
+}
+
+/** Per-tenant relevance weights, learned from outcomes or the static defaults. */
+export interface LearnedWeights {
+  weights: Record<string, number>;
+  learned: boolean;
+  sample_size: number;
+  defaults: Record<string, number>;
+}
+
+export interface OutcomeSummary {
+  total: number;
+  by_stage: Record<string, number>;
+  positive: number;
+}
+
 export interface Contact {
   id: string;
   account_id: string;
@@ -52,6 +105,15 @@ export interface Contact {
   enrichment_source: string | null;
 }
 
+export interface TriageSummary {
+  signal_kind: string | null;
+  signal_strength: number | null;
+  signal_age_hours: number | null;
+  deliverability: EmailStatus | string | null;
+  email_confidence: number | null;
+  research_ready: boolean;
+}
+
 export interface InboxTask {
   id: string;
   title: string;
@@ -60,6 +122,7 @@ export interface InboxTask {
   status: string;
   account_id: string | null;
   suggested_action: Record<string, unknown>;
+  triage?: TriageSummary | null;
 }
 
 export interface SignalEvent {
@@ -206,6 +269,13 @@ export interface CRMSyncResponse {
   account_ids: string[];
 }
 
+export interface CRMPushResponse {
+  ok: boolean;
+  source: string;
+  external_id?: string | null;
+  contacts: number;
+}
+
 export interface SEPPushRequest {
   sequence: string;
   contact_id?: string | null;
@@ -253,20 +323,46 @@ export interface RunStep {
   error: string | null;
 }
 
+/** Deliverability verdict from the email-verification provider. */
+export type EmailStatus = "valid" | "invalid" | "unknown";
+
+/** Citations + provenance attached to a grounded draft. */
+export interface DraftGrounding {
+  facts?: string[];
+  sources?: { title?: string; url?: string }[];
+}
+
+/**
+ * The composed outreach draft staged for the approval gate. Carries the
+ * grounded-send signals (was it grounded in retrieved facts, and is the
+ * recipient deliverable) so the reviewer sees credibility before deciding.
+ */
+export interface OutreachDraft {
+  contact_id?: string | null;
+  subject?: string;
+  body?: string;
+  message?: string;
+  grounded?: boolean;
+  grounding?: DraftGrounding;
+  email_status?: EmailStatus | null;
+  email_confidence?: number | null;
+}
+
 /** Shared inter-agent context written as the run progresses. */
 export interface RunBlackboard {
   account_id?: string;
   research?: { brief?: string; facts?: unknown[]; sources?: unknown[] };
   composite?: number | null;
-  draft?: {
-    contact_id?: string | null;
-    subject?: string;
-    body?: string;
-    message?: string;
-    grounded?: boolean;
-  };
+  draft?: OutreachDraft;
   [key: string]: unknown;
 }
+
+/**
+ * An approval's payload is a snapshot of the staged draft (the engine copies
+ * the blackboard draft into the approval), so it carries the same grounded-send
+ * signals the reviewer needs.
+ */
+export type ApprovalPayload = OutreachDraft & Record<string, unknown>;
 
 export interface Run {
   id: string;

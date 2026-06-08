@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
+  Badge,
   Button,
   Card,
   Field,
@@ -18,6 +19,7 @@ import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import type {
   IcpDefinition,
+  LearnedWeights,
   RelevanceProfile,
   RelevanceProfileInput,
   Role,
@@ -343,7 +345,112 @@ export function RelevancePage() {
           ) : null
         }
       </DataState>
+
+      <div style={{ height: "var(--space-4)" }} />
+      <LearnedWeightsCard />
     </div>
+  );
+}
+
+const WEIGHT_ORDER = ["industry", "size", "geo", "tech"] as const;
+const WEIGHT_LABELS: Record<string, string> = {
+  industry: "Industry",
+  size: "Company size",
+  geo: "Geography",
+  tech: "Tech stack",
+};
+
+function LearnedWeightsCard() {
+  const api = useApiClient();
+  const weights = useApi<LearnedWeights>((signal) => api.getLearnedWeights(signal), []);
+
+  return (
+    <Card padding="lg">
+      <SectionHead
+        title="How fit is weighted"
+        description="The relevance score blends four firmographic signals. As you log won deals, NEXUS leans these weights toward the traits your wins share."
+        action={
+          weights.data ? (
+            weights.data.learned ? (
+              <Badge tone="success" dot>
+                Learned from {weights.data.sample_size}{" "}
+                {weights.data.sample_size === 1 ? "win" : "wins"}
+              </Badge>
+            ) : (
+              <Badge tone="neutral" dot>
+                Static defaults
+              </Badge>
+            )
+          ) : undefined
+        }
+      />
+      <DataState
+        state={weights}
+        errorTitle="Couldn't load scoring weights"
+        skeleton={
+          <div className={styles.weights}>
+            {WEIGHT_ORDER.map((k) => (
+              <div key={k} className={styles.weightRow}>
+                <Skeleton width="80%" height={14} />
+                <Skeleton width="100%" height={8} />
+                <Skeleton width="60%" height={14} />
+              </div>
+            ))}
+          </div>
+        }
+      >
+        {(data) => {
+          const learned = data.learned;
+          return (
+            <>
+              <div className={styles.weights}>
+                {WEIGHT_ORDER.map((key) => {
+                  const value = data.weights[key] ?? 0;
+                  const base = data.defaults[key] ?? 0;
+                  const delta = value - base;
+                  const pct = Math.round(value * 100);
+                  const showDelta = learned && Math.abs(delta) >= 0.005;
+                  const dir = delta >= 0 ? "up" : "down";
+                  return (
+                    <div key={key} className={styles.weightRow}>
+                      <span className={styles.weightLabel}>{WEIGHT_LABELS[key] ?? key}</span>
+                      <div
+                        className={styles.weightTrack}
+                        role="meter"
+                        aria-valuenow={pct}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-label={`${WEIGHT_LABELS[key] ?? key} weight ${pct}%`}
+                      >
+                        <span
+                          className={styles.weightFill}
+                          data-static={!learned}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className={styles.weightMeta}>
+                        <span className={styles.weightValue}>{pct}%</span>
+                        {showDelta && (
+                          <span className={styles.weightDelta} data-dir={dir}>
+                            {delta > 0 ? "+" : "−"}
+                            {Math.abs(Math.round(delta * 100))}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className={styles.weightsNote}>
+                {learned
+                  ? "These weights are tuned from your recorded outcomes and override the defaults. Explicit weights you set in the profile still take priority."
+                  : "Scoring is on the neutral defaults. Log a few won deals to start tuning the weights to your motion."}
+              </p>
+            </>
+          );
+        }}
+      </DataState>
+    </Card>
   );
 }
 

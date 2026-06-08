@@ -23,16 +23,22 @@ import type {
   Contact,
   CreateCustomFieldRequest,
   CreateSessionRequest,
+  LookalikeResponse,
+  CRMPushResponse,
   CRMSyncRequest,
   CRMSyncResponse,
   CsvImportResult,
   CustomFieldDef,
   DiscoveryResult,
   InboxTask,
+  LearnedWeights,
   ListBuildResult,
   ListFilter,
   LoginRequest,
   Member,
+  Outcome,
+  OutcomeInput,
+  OutcomeSummary,
   Play,
   PlayInput,
   RelevanceProfile,
@@ -172,6 +178,12 @@ export class ApiClient {
   listContacts(accountId: string, signal?: AbortSignal) {
     return this.request<Contact[]>(`/accounts/${accountId}/contacts`, { signal });
   }
+  findLookalikes(accountId: string, limit = 10, signal?: AbortSignal) {
+    return this.request<LookalikeResponse>(
+      `/accounts/${accountId}/lookalikes?limit=${limit}`,
+      { method: "POST", signal },
+    );
+  }
 
   // ---- agents ----
   listAgents(signal?: AbortSignal) {
@@ -237,6 +249,12 @@ export class ApiClient {
       signal,
     });
   }
+  crmPush(accountId: string, signal?: AbortSignal) {
+    return this.request<CRMPushResponse>(
+      `/integrations/crm/push/${accountId}`,
+      { method: "POST", signal },
+    );
+  }
   sepPush(body: SEPPushRequest, signal?: AbortSignal) {
     return this.request<SEPPushResponse>("/integrations/sep/push", {
       method: "POST",
@@ -272,6 +290,20 @@ export class ApiClient {
   // ---- analytics ----
   analyticsOverview(signal?: AbortSignal) {
     return this.request<AnalyticsOverview>("/analytics/overview", { signal });
+  }
+
+  // ---- outcome-feedback loop ----
+  recordOutcome(body: OutcomeInput, signal?: AbortSignal) {
+    return this.request<Outcome>("/outcomes", { method: "POST", body, signal });
+  }
+  listOutcomes(limit = 50, signal?: AbortSignal) {
+    return this.request<Outcome[]>("/outcomes", { query: { limit }, signal });
+  }
+  getLearnedWeights(signal?: AbortSignal) {
+    return this.request<LearnedWeights>("/outcomes/weights", { signal });
+  }
+  getOutcomeSummary(signal?: AbortSignal) {
+    return this.request<OutcomeSummary>("/outcomes/summary", { signal });
   }
 
   // ---- workspace / members ----

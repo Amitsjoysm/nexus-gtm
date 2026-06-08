@@ -10,6 +10,7 @@ from nexus.api.schemas import (
     ListBuildRequest,
     PlayIn,
     PlayOut,
+    TriageOut,
 )
 from nexus.analytics.service import get_analytics_service
 from nexus.core.rbac import Permission
@@ -32,7 +33,9 @@ async def list_inbox(
     limit: int = 50,
 ) -> list[InboxTaskOut]:
     owner = principal.user_id if mine else None
-    tasks = await get_inbox_service().list_open(ts, owner_user_id=owner, limit=limit)
+    svc = get_inbox_service()
+    tasks = await svc.list_open(ts, owner_user_id=owner, limit=limit)
+    triage = await svc.triage(ts, tasks)
     return [
         InboxTaskOut(
             id=t.id,
@@ -42,6 +45,7 @@ async def list_inbox(
             status=t.status,
             account_id=t.account_id,
             suggested_action=t.suggested_action or {},
+            triage=TriageOut(**triage[t.id].as_dict()) if t.id in triage else None,
         )
         for t in tasks
     ]
