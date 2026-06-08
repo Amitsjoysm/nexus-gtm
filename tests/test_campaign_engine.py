@@ -52,3 +52,17 @@ def test_manage_campaigns_permission_is_manager_plus():
     assert has_permission(Role.admin, Permission.manage_campaigns) is True
     assert has_permission(Role.owner, Permission.manage_campaigns) is True
     assert has_permission(Role.rep, Permission.manage_campaigns) is False
+
+
+# -- planner recipe -------------------------------------------------------------------
+
+from nexus.orchestration.planner import available_goals, get_planner
+
+
+def test_research_compose_recipe_has_no_send_step():
+    assert "research_compose" in available_goals()
+    plan = get_planner().plan("research_compose", {"account_id": "a1"})
+    tools = [s["tool"] for s in plan]
+    assert tools == ["research", "scoring", "compose_message"]
+    # No step requires approval — the draft phase is fully autonomous.
+    assert all(s["requires_approval"] is False for s in plan)
