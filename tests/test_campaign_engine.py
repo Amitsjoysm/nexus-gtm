@@ -260,3 +260,34 @@ async def test_send_phase_gates_refuse_per_account(ts):
     assert campaign.report["sent"] == 1
     assert campaign.report["skips"][SKIP_UNGROUNDED] == 1
     assert campaign.report["skips"][SKIP_UNDELIVERABLE] == 1
+
+
+# -- cancel + idempotent re-approve ---------------------------------------------------
+
+
+async def test_cancel_before_send_marks_cancelled(ts):
+    from nexus.models.campaign import CAMP_CANCELLED
+
+    list_id = await _make_list_with_accounts(ts, [{"name": "Acme", "email": "lead@acme.com"}])
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts, name="Q3", list_id=list_id, icp={}, sequence="seq", created_by_user_id="u1",
+    )
+    await svc.run_draft_phase(ts, campaign)
+    await svc.cancel(ts, campaign)
+    assert campaign.status == CAMP_CANCELLED
+
+
+async def test_double_approve_does_not_resend(ts):
+    list_id = await _make_list_with_accounts(ts, [{"name": "Acme", "email": "lead@acme.com"}])
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts, name="Q3", list_id=list_id, icp={}, sequence="seq", created_by_user_id="u1",
+    )
+    await svc.run_draft_phase(ts, campaign)
+    await svc.approve_and_send(ts, campaign, decided_by="u1")
+    first_sent = campaign.report["sent"]
+    # Re-approving a completed campaign raises rather than re-sending.
+    with pytest.raises(Exception):
+        await svc.approve_and_send(ts, campaign, decided_by="u1")
+    assert campaign.report["sent"] == first_sent

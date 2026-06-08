@@ -19,9 +19,11 @@ from nexus.models.campaign import (
     CampaignTarget,
     CAMP_APPROVED,
     CAMP_AWAITING_APPROVAL,
+    CAMP_CANCELLED,
     CAMP_COMPLETED,
     CAMP_DRAFTING,
     CAMP_SENDING,
+    CAMP_TERMINAL,
     TARGET_APPROVED,
     TARGET_DRAFTED,
     TARGET_DRAFTING,
@@ -118,6 +120,16 @@ class CampaignService:
         campaign.status = CAMP_APPROVED
         await ts.flush()
         return await self.run_send_phase(ts, campaign)
+
+    async def cancel(self, ts: TenantSession, campaign: Campaign) -> Campaign:
+        """Cancel a campaign that has not finished. Pending/drafting/drafted targets that
+        have not been sent are left as-is in the report; the campaign stops here."""
+        if campaign.status in CAMP_TERMINAL:
+            return campaign
+        campaign.status = CAMP_CANCELLED
+        campaign.report = await self._build_report(ts, campaign)
+        await ts.flush()
+        return campaign
 
     async def run_send_phase(self, ts: TenantSession, campaign: Campaign) -> Campaign:
         campaign.status = CAMP_SENDING
