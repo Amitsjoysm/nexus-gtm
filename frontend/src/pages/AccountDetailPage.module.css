@@ -153,6 +153,11 @@
   color: var(--text-muted);
   line-height: var(--leading);
 }
+.outcomeForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
 .askForm {
   display: flex;
   align-items: flex-start;

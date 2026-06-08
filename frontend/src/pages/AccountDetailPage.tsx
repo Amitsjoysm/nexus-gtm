@@ -10,10 +10,13 @@ import {
   Field,
   Icons,
   Input,
+  Modal,
+  Select,
   Skeleton,
   Spinner,
   Tabs,
   TabPanel,
+  Textarea,
   useToast,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
@@ -27,6 +30,7 @@ import type {
   Account,
   Contact,
   Lookalike,
+  OutcomeStage,
   Role,
   SignalEvent,
 } from "@/lib/types";
@@ -41,6 +45,19 @@ interface LookalikeState {
 }
 
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
+
+/** Sales-progression stages a rep can log against an account, ordered by depth. */
+const OUTCOME_LABELS: Record<OutcomeStage, string> = {
+  sent: "Outreach sent",
+  replied: "Got a reply",
+  meeting: "Booked a meeting",
+  won: "Closed won",
+  lost: "Closed lost",
+};
+const OUTCOME_OPTIONS = (Object.keys(OUTCOME_LABELS) as OutcomeStage[]).map((value) => ({
+  value,
+  label: OUTCOME_LABELS[value],
+}));
 
 interface AgentState {
   loading: boolean;
@@ -65,6 +82,10 @@ export function AccountDetailPage() {
     data: null,
     error: null,
   });
+  const [outcomeOpen, setOutcomeOpen] = useState(false);
+  const [outcomeStage, setOutcomeStage] = useState<OutcomeStage>("won");
+  const [outcomeNote, setOutcomeNote] = useState("");
+  const [recording, setRecording] = useState(false);
 
   const canOrchestrate = session ? ROLE_RANK[session.role] >= ROLE_RANK.manager : false;
 
@@ -162,6 +183,33 @@ export function AccountDetailPage() {
     }
   }
 
+  async function recordOutcome(e: FormEvent) {
+    e.preventDefault();
+    setRecording(true);
+    try {
+      const note = outcomeNote.trim();
+      await api.recordOutcome({
+        stage: outcomeStage,
+        account_id: id,
+        meta: note ? { note } : undefined,
+      });
+      toast.success(
+        "Outcome logged",
+        `Recorded "${OUTCOME_LABELS[outcomeStage]}". Wins tune your fit scoring over time.`,
+      );
+      setOutcomeOpen(false);
+      setOutcomeNote("");
+      setOutcomeStage("won");
+    } catch (err) {
+      toast.error(
+        "Couldn't log outcome",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setRecording(false);
+    }
+  }
+
   return (
     <div>
       <DataState
@@ -197,6 +245,14 @@ export function AccountDetailPage() {
                     Ask the orchestrator
                   </Button>
                 )}
+                <Button
+                  variant="secondary"
+                  iconLeft={<Icons.TrophyIcon />}
+                  onClick={() => setOutcomeOpen(true)}
+                  aria-label={`Log a deal outcome for ${acc.name}`}
+                >
+                  Log outcome
+                </Button>
                 <Button
                   variant="secondary"
                   iconLeft={<Icons.PlugIcon />}
@@ -484,6 +540,47 @@ export function AccountDetailPage() {
           </div>
         </div>
       </TabPanel>
+
+      <Modal
+        open={outcomeOpen}
+        onClose={() => setOutcomeOpen(false)}
+        title="Log a deal outcome"
+        description="Record what happened with this account. Wins feed back into your relevance weights, sharpening fit scoring across the workspace."
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setOutcomeOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="outcome-form"
+              iconLeft={<Icons.CheckIcon />}
+              loading={recording}
+            >
+              Save outcome
+            </Button>
+          </>
+        }
+      >
+        <form id="outcome-form" className={styles.outcomeForm} onSubmit={recordOutcome}>
+          <Field label="Outcome">
+            <Select
+              options={OUTCOME_OPTIONS}
+              value={outcomeStage}
+              onChange={(e) => setOutcomeStage(e.target.value as OutcomeStage)}
+            />
+          </Field>
+          <Field label="Note" hint="Optional. Context for your team — what closed or stalled the deal.">
+            <Textarea
+              rows={3}
+              value={outcomeNote}
+              onChange={(e) => setOutcomeNote(e.target.value)}
+              placeholder="e.g. Won on the analytics use case; champion was the VP of RevOps."
+            />
+          </Field>
+        </form>
+      </Modal>
     </div>
   );
 }

@@ -8,6 +8,89 @@
   grid-template-columns: repeat(4, 1fr);
   gap: var(--space-4);
 }
+.attribution {
+  margin-top: var(--space-6);
+}
+.attrStats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+}
+.metricLabel {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.metricValue {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.metricValue[data-tone="success"] {
+  color: var(--success);
+}
+.metricHint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.funnelRow {
+  display: grid;
+  grid-template-columns: 64px 1fr 40px;
+  align-items: center;
+  gap: var(--space-3);
+}
+.funnelLabel {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+.funnelTrack {
+  position: relative;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.funnelFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+.funnelFill[data-stage="won"] {
+  background: var(--success);
+}
+.funnelFill[data-stage="lost"] {
+  background: var(--text-subtle, var(--text-muted));
+}
+.funnelCount {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .funnelFill {
+    transition: width 360ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
 .columns {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
@@ -58,7 +141,8 @@
 
 @media (max-width: 1024px) {
   .stats,
-  .statSkeleton {
+  .statSkeleton,
+  .attrStats {
     grid-template-columns: repeat(2, 1fr);
   }
   .columns {

@@ -14,12 +14,31 @@ import {
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
-import { useApiClient } from "@/app/AuthContext";
+import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import { formatNumber, humanize, timeAgo } from "@/lib/format";
+import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
 import { priorityTone, severityTone, strengthMeta } from "@/lib/display";
-import type { AnalyticsOverview, Alert, InboxTask, SignalEvent } from "@/lib/types";
+import type {
+  AnalyticsOverview,
+  Alert,
+  InboxTask,
+  OutcomeStage,
+  OutcomeSummary,
+  Role,
+  SignalEvent,
+} from "@/lib/types";
 import styles from "./DashboardPage.module.css";
+
+const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
+
+/** The funnel managers read top-down: outreach → reply → meeting → won, plus lost. */
+const FUNNEL: { key: OutcomeStage; label: string }[] = [
+  { key: "sent", label: "Sent" },
+  { key: "replied", label: "Replied" },
+  { key: "meeting", label: "Meeting" },
+  { key: "won", label: "Won" },
+  { key: "lost", label: "Lost" },
+];
 
 /** Pick a representative icon for a metric key. */
 function statIcon(key: string) {
@@ -46,6 +65,8 @@ export function DashboardPage() {
   const api = useApiClient();
   const navigate = useNavigate();
   const toast = useToast();
+  const { session } = useAuth();
+  const canViewAttribution = session ? ROLE_RANK[session.role] >= ROLE_RANK.manager : false;
   const [seeding, setSeeding] = useState(false);
 
   const overview = useApi<AnalyticsOverview>((signal) => api.analyticsOverview(signal), []);
@@ -144,6 +165,8 @@ export function DashboardPage() {
           </div>
         )}
       </DataState>
+
+      {canViewAttribution && <OutcomeAttribution onTune={() => navigate("/relevance")} />}
 
       <div className={styles.columns}>
         <div className={styles.col}>
@@ -303,6 +326,120 @@ function RowsSkeleton({ rows = 5 }: { rows?: number }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Manager-only attribution: ties logged deal outcomes back to scored accounts and
+ * shows the funnel that the relevance weights learn from. Visible to manager+ only.
+ */
+function OutcomeAttribution({ onTune }: { onTune: () => void }) {
+  const api = useApiClient();
+  const summary = useApi<OutcomeSummary>((signal) => api.getOutcomeSummary(signal), []);
+
+  return (
+    <Card padding="md" className={styles.attribution}>
+      <CardHeader
+        title="Outcome attribution"
+        subtitle="How logged deals trace back to scored accounts"
+        actions={
+          <Button
+            variant="ghost"
+            size="sm"
+            iconLeft={<Icons.TrendUpIcon />}
+            onClick={onTune}
+          >
+            Tune weights
+          </Button>
+        }
+      />
+      <DataState
+        state={summary}
+        skeleton={
+          <div className={styles.attrStats}>
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className={styles.metric}>
+                <Skeleton width="60%" height={12} />
+                <div style={{ height: 8 }} />
+                <Skeleton width="40%" height={22} />
+              </div>
+            ))}
+          </div>
+        }
+        isEmpty={(data) => data.total === 0}
+        empty={
+          <EmptyState
+            compact
+            icon={<Icons.TrophyIcon />}
+            title="No outcomes logged yet"
+            description="Log a win or loss from any account to start attributing results back to fit scoring."
+          />
+        }
+      >
+        {(data) => {
+          const won = data.by_stage.won ?? 0;
+          const lost = data.by_stage.lost ?? 0;
+          const decided = won + lost;
+          const winRate = decided > 0 ? won / decided : null;
+          const max = Math.max(1, ...FUNNEL.map((s) => data.by_stage[s.key] ?? 0));
+          return (
+            <>
+              <div className={styles.attrStats}>
+                <Metric label="Outcomes logged" value={formatNumber(data.total)} />
+                <Metric label="Positive signals" value={formatNumber(data.positive)} />
+                <Metric label="Closed won" value={formatNumber(won)} tone="success" />
+                <Metric
+                  label="Win rate"
+                  value={winRate == null ? "—" : formatPercent(winRate)}
+                  hint={decided > 0 ? `${won}/${decided} decided` : "No closed deals yet"}
+                />
+              </div>
+              <div className={styles.funnel}>
+                {FUNNEL.map((stage) => {
+                  const count = data.by_stage[stage.key] ?? 0;
+                  const pct = Math.round((count / max) * 100);
+                  return (
+                    <div key={stage.key} className={styles.funnelRow}>
+                      <span className={styles.funnelLabel}>{stage.label}</span>
+                      <div className={styles.funnelTrack}>
+                        <span
+                          className={styles.funnelFill}
+                          data-stage={stage.key}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className={styles.funnelCount}>{formatNumber(count)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          );
+        }}
+      </DataState>
+    </Card>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "success";
+}) {
+  return (
+    <div className={styles.metric}>
+      <span className={styles.metricLabel}>{label}</span>
+      <span className={styles.metricValue} data-tone={tone}>
+        {value}
+      </span>
+      {hint && <span className={styles.metricHint}>{hint}</span>}
     </div>
   );
 }
