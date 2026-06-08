@@ -23,9 +23,10 @@ from nexus.models.campaign import (
     SKIP_UNGROUNDED,
 )
 from nexus.models.workflow import ListItem, ProspectList
+from nexus.core.security import decode_access_token
 from nexus.orchestration.planner import available_goals, get_planner
 from nexus.verification import STATUS_INVALID
-from tests.conftest import make_tenant, tenant_session
+from tests.conftest import auth, make_tenant, signup, tenant_session
 
 
 @pytest_asyncio.fixture
@@ -333,3 +334,32 @@ async def test_campaign_out_projection(ts):
     tout = CampaignTargetOut.from_model(targets[0])
     assert tout.account_id == targets[0].account_id
     assert tout.status == targets[0].status
+
+
+# -- REST API -------------------------------------------------------------------------
+
+
+async def test_campaign_api_create_and_approve(client):
+    token = await signup(client, slug="campco", email="owner@campco.com", company="CampCo")
+    tid = decode_access_token(token)["tid"]
+    async with tenant_session(tid) as ts:
+        list_id = await _make_list_with_accounts(ts, [{"name": "Acme", "email": "lead@acme.com"}])
+    # tenant_session committed the List on block exit; now drive the API.
+
+    resp = await client.post(
+        "/api/campaigns",
+        json={"name": "Q3", "list_id": list_id, "icp": {}, "sequence": "seq"},
+        headers=auth(token),
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    cid = body["id"]
+    assert body["status"] == "awaiting_approval"  # created + driven to draft inline
+
+    preview = await client.get(f"/api/campaigns/{cid}/preview", headers=auth(token))
+    assert preview.status_code == 200
+    assert "sample" in preview.json()
+
+    approve = await client.post(f"/api/campaigns/{cid}/approve", headers=auth(token))
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "completed"
