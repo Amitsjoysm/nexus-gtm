@@ -40,3 +40,15 @@ async def test_campaign_target_defaults():
         assert t.status == TARGET_PENDING
         assert t.skip_reason is None
         assert t.draft == {}
+
+
+# -- RBAC -----------------------------------------------------------------------------
+
+from nexus.core.rbac import Permission, Role, has_permission
+
+
+def test_manage_campaigns_permission_is_manager_plus():
+    assert has_permission(Role.manager, Permission.manage_campaigns) is True
+    assert has_permission(Role.admin, Permission.manage_campaigns) is True
+    assert has_permission(Role.owner, Permission.manage_campaigns) is True
+    assert has_permission(Role.rep, Permission.manage_campaigns) is False

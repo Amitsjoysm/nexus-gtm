@@ -24,6 +24,7 @@ class Permission(str, enum.Enum):
     view_analytics = "view_analytics"          # manager+
     run_orchestration = "run_orchestration"    # manager+ (authors multi-agent runs)
     approve_outreach = "approve_outreach"      # manager+ (decides the outbound gate)
+    manage_campaigns = "manage_campaigns"      # manager+ (launches segment campaigns)
 
 
 _MIN_ROLE: dict[Permission, Role] = {
@@ -35,6 +36,7 @@ _MIN_ROLE: dict[Permission, Role] = {
     Permission.manage_accounts: Role.rep,
     Permission.run_orchestration: Role.manager,
     Permission.approve_outreach: Role.manager,
+    Permission.manage_campaigns: Role.manager,
 }
 
 
