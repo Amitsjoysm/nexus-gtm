@@ -26,36 +26,39 @@ interface ActivationChecklistProps {
   seeding: boolean;
 }
 
+function dismissStorageKey(tenantId: string): string {
+  return `nexus.onboarding.dismissed.${tenantId}`;
+}
+
+function readDismissed(tenantId: string): boolean {
+  if (!tenantId) return false;
+  try {
+    return localStorage.getItem(dismissStorageKey(tenantId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
 /**
- * First-run activation checklist. Derives each step's completion from live workspace
- * data (analytics overview + relevance profile) rather than client-side flags, so it
- * stays honest across devices and reloads. Hides itself once the workspace is activated
- * or the user dismisses it (persisted per tenant).
+ * First-run activation checklist. Gates whether the (data-fetching) body mounts at all,
+ * so established or dismissed workspaces never pay for the extra relevance fetch.
  */
 export function ActivationChecklist({ overview, onSeed, seeding }: ActivationChecklistProps) {
-  const api = useApiClient();
-  const navigate = useNavigate();
   const { session } = useAuth();
-  const relevance = useApi<RelevanceProfile>((signal) => api.getRelevanceProfile(signal), []);
+  const tenantId = session?.tenantId ?? "";
+  const [dismissed, setDismissed] = useState(() => readDismissed(tenantId));
 
-  const dismissKey = session ? `nexus.onboarding.dismissed.${session.tenantId}` : "";
-  const [dismissed, setDismissed] = useState(false);
+  // Re-evaluate when the active tenant changes (dismissal is per tenant).
   useEffect(() => {
-    if (!dismissKey) {
-      setDismissed(false);
-      return;
-    }
-    try {
-      setDismissed(localStorage.getItem(dismissKey) === "1");
-    } catch {
-      setDismissed(false);
-    }
-  }, [dismissKey]);
+    setDismissed(readDismissed(tenantId));
+  }, [tenantId]);
+
+  if (!overview || dismissed) return null;
 
   function dismiss() {
-    if (dismissKey) {
+    if (tenantId) {
       try {
-        localStorage.setItem(dismissKey, "1");
+        localStorage.setItem(dismissStorageKey(tenantId), "1");
       } catch {
         /* private mode / storage disabled — dismiss for this view only */
       }
@@ -63,8 +66,30 @@ export function ActivationChecklist({ overview, onSeed, seeding }: ActivationChe
     setDismissed(true);
   }
 
-  // Wait until both data sources have settled so step states are correct on first paint.
-  if (!overview || relevance.loading || dismissed) return null;
+  return (
+    <ChecklistBody overview={overview} onSeed={onSeed} seeding={seeding} onDismiss={dismiss} />
+  );
+}
+
+interface ChecklistBodyProps {
+  overview: AnalyticsOverview;
+  onSeed: () => void;
+  seeding: boolean;
+  onDismiss: () => void;
+}
+
+/**
+ * Renders the checklist itself. Derives each step's completion from live workspace data
+ * (analytics overview + relevance profile) rather than client-side flags, so it stays
+ * honest across devices and reloads. Hides once the workspace is fully activated.
+ */
+function ChecklistBody({ overview, onSeed, seeding, onDismiss }: ChecklistBodyProps) {
+  const api = useApiClient();
+  const navigate = useNavigate();
+  const relevance = useApi<RelevanceProfile>((signal) => api.getRelevanceProfile(signal), []);
+
+  // Wait until the relevance profile settles so the ICP step is correct on first paint.
+  if (relevance.loading) return null;
 
   const accounts = overview.accounts ?? 0;
   const avgScore = overview.avg_composite_score ?? 0;
@@ -131,7 +156,7 @@ export function ActivationChecklist({ overview, onSeed, seeding }: ActivationChe
           <IconButton
             label="Dismiss setup checklist"
             icon={<Icons.XIcon />}
-            onClick={dismiss}
+            onClick={onDismiss}
           />
         </div>
 
