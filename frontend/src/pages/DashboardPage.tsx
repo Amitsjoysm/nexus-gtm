@@ -13,6 +13,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
+import { ActivationChecklist } from "@/components/Onboarding";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -122,6 +123,8 @@ export function DashboardPage() {
           </>
         }
       />
+
+      <ActivationChecklist overview={overview.data} onSeed={seedDemo} seeding={seeding} />
 
       <DataState
         state={overview}
