@@ -5,6 +5,7 @@ from nexus.models.chat import ChatMessage, ChatSession, CustomFieldDef
 from nexus.models.identity import Membership, Tenant, User, Workspace
 from nexus.models.intelligence import AccountScore, AgentRun
 from nexus.models.orchestration import Approval, OrchestrationRun, RunEvent, RunStep
+from nexus.models.campaign import Campaign, CampaignTarget
 from nexus.models.outcome import Outcome
 from nexus.models.relevance import RelevanceProfile
 from nexus.models.signal import SignalEvent
@@ -35,4 +36,6 @@ __all__ = [
     "ChatMessage",
     "CustomFieldDef",
     "Outcome",
+    "Campaign",
+    "CampaignTarget",
 ]
