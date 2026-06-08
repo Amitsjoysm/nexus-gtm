@@ -291,3 +291,22 @@ async def test_double_approve_does_not_resend(ts):
     with pytest.raises(Exception):
         await svc.approve_and_send(ts, campaign, decided_by="u1")
     assert campaign.report["sent"] == first_sent
+
+
+# -- worker handler -------------------------------------------------------------------
+
+
+async def test_worker_run_campaign_draft_phase(ts):
+    from nexus.workers.tasks import handle_run_campaign
+
+    list_id = await _make_list_with_accounts(ts, [{"name": "Acme", "email": "lead@acme.com"}])
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts, name="Q3", list_id=list_id, icp={}, sequence="seq", created_by_user_id="u1",
+    )
+    await ts.session.commit()  # the worker opens its own session; persist first
+    result = await handle_run_campaign(
+        {"tenant_id": ts.tenant_id, "campaign_id": campaign.id, "phase": "draft"}
+    )
+    assert result["campaign_id"] == campaign.id
+    assert result["status"] == CAMP_AWAITING_APPROVAL

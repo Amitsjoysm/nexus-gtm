@@ -65,9 +65,33 @@ async def handle_run_orchestration(payload: dict) -> dict:
         return {"run_id": run.id, "status": run.status}
 
 
+async def handle_run_campaign(payload: dict) -> dict:
+    """Off-request campaign driver. ``phase`` selects the work:
+    ``"draft"`` runs the draft phase; ``"send"`` runs the send phase. Idempotent — a
+    campaign already past the requested phase is a no-op returning its current status."""
+    tenant_id = payload["tenant_id"]
+    campaign_id = payload["campaign_id"]
+    phase = payload.get("phase", "draft")
+    from nexus.models.campaign import Campaign, CAMP_AWAITING_APPROVAL, CAMP_TERMINAL
+    from nexus.campaigns.service import get_campaign_service
+
+    async with tenant_session(tenant_id) as ts:
+        campaign = await ts.get(Campaign, campaign_id)
+        if campaign is None:
+            return {"error": "campaign_not_found", "campaign_id": campaign_id}
+        svc = get_campaign_service()
+        if phase == "draft" and campaign.status not in CAMP_TERMINAL \
+                and campaign.status != CAMP_AWAITING_APPROVAL:
+            await svc.run_draft_phase(ts, campaign)
+        elif phase == "send" and campaign.status == "approved":
+            await svc.run_send_phase(ts, campaign)
+        return {"campaign_id": campaign.id, "status": campaign.status}
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
+    "run_campaign": handle_run_campaign,
 }
 
 
@@ -86,6 +110,18 @@ async def enqueue_run_orchestration(
     queue = queue or get_task_queue()
     await queue.enqueue(
         Job(name="run_orchestration", payload={"tenant_id": tenant_id, "run_id": run_id})
+    )
+
+
+async def enqueue_run_campaign(
+    tenant_id: str, campaign_id: str, *, phase: str = "draft", queue: TaskQueue | None = None
+) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(
+        Job(
+            name="run_campaign",
+            payload={"tenant_id": tenant_id, "campaign_id": campaign_id, "phase": phase},
+        )
     )
 
 
