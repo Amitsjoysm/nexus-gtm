@@ -56,13 +56,6 @@ class Campaign(IdMixin, TimestampMixin, TenantScoped, Base):
         ForeignKey("users.id"), nullable=True
     )
 
-    def __init__(self, **kw: object) -> None:
-        kw.setdefault("status", CAMP_DRAFT_PENDING)
-        kw.setdefault("report", {})
-        kw.setdefault("icp", {})
-        kw.setdefault("sequence", "ai-orchestrated-outbound")
-        super().__init__(**kw)
-
 
 class CampaignTarget(IdMixin, TimestampMixin, TenantScoped, Base):
     __tablename__ = "campaign_targets"
@@ -77,8 +70,3 @@ class CampaignTarget(IdMixin, TimestampMixin, TenantScoped, Base):
     # Snapshot copied off the run blackboard so approval UI + report survive the run.
     draft: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    def __init__(self, **kw: object) -> None:
-        kw.setdefault("status", TARGET_PENDING)
-        kw.setdefault("draft", {})
-        super().__init__(**kw)
