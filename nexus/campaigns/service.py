@@ -17,8 +17,12 @@ from nexus.core.tenancy import TenantSession
 from nexus.models.campaign import (
     Campaign,
     CampaignTarget,
+    CAMP_APPROVED,
     CAMP_AWAITING_APPROVAL,
+    CAMP_COMPLETED,
     CAMP_DRAFTING,
+    CAMP_SENDING,
+    TARGET_APPROVED,
     TARGET_DRAFTED,
     TARGET_DRAFTING,
     TARGET_FAILED,
@@ -30,10 +34,15 @@ from nexus.models.campaign import (
     SKIP_UNDELIVERABLE,
     SKIP_UNGROUNDED,
 )
-from nexus.models.orchestration import RUN_COMPLETED
+from nexus.models.orchestration import OrchestrationRun, RUN_COMPLETED
 from nexus.models.workflow import ListItem
 from nexus.orchestration.engine import get_orchestration_engine
+from nexus.orchestration.tools import SendMessageTool, ToolContext, ToolError
 from nexus.verification import STATUS_INVALID
+
+
+class CampaignError(Exception):
+    """Raised for an invalid campaign state transition (e.g. approving too early)."""
 
 
 class CampaignService:
@@ -97,6 +106,72 @@ class CampaignService:
         campaign.status = CAMP_AWAITING_APPROVAL
         await ts.flush()
         return campaign
+
+    async def approve_and_send(
+        self, ts: TenantSession, campaign: Campaign, *, decided_by: str | None
+    ) -> Campaign:
+        """Campaign-level approval: one human decision, then send every DRAFTED target."""
+        if campaign.status != CAMP_AWAITING_APPROVAL:
+            raise CampaignError(
+                f"campaign must be awaiting_approval to approve, is '{campaign.status}'"
+            )
+        campaign.status = CAMP_APPROVED
+        await ts.flush()
+        return await self.run_send_phase(ts, campaign)
+
+    async def run_send_phase(self, ts: TenantSession, campaign: Campaign) -> Campaign:
+        campaign.status = CAMP_SENDING
+        await ts.flush()
+
+        targets = await self.list_targets(ts, campaign.id)
+        tool = SendMessageTool()
+        runtime = get_agent_runtime()
+        for target in targets:
+            if target.status != TARGET_DRAFTED:
+                continue
+            await self._send_one(ts, campaign, target, tool=tool, runtime=runtime)
+
+        campaign.report = await self._build_report(ts, campaign)
+        campaign.status = CAMP_COMPLETED
+        await ts.flush()
+        return campaign
+
+    async def _send_one(self, ts, campaign, target, *, tool, runtime) -> None:
+        target.status = TARGET_APPROVED
+        await ts.flush()
+        # Reuse the target's research_compose run as the ToolContext carrier; its blackboard
+        # already holds the draft. Reassert the draft snapshot in case it was edited/rebuilt.
+        run = await ts.get(OrchestrationRun, target.run_id) if target.run_id else None
+        if run is None:
+            target.status = TARGET_FAILED
+            target.error = "missing draft run for send"
+            await ts.flush()
+            return
+        run.blackboard = dict(run.blackboard or {})
+        run.blackboard["draft"] = dict(target.draft or {})
+        tc = ToolContext(
+            ts=ts, runtime=runtime, run=run, inputs={"sequence": campaign.sequence}
+        )
+        try:
+            await tool.run(tc)
+            target.status = TARGET_SENT
+            await ts.flush()
+        except ToolError as exc:
+            # A gate refused at the boundary. Classify into the report's skip reasons.
+            msg = str(exc).lower()
+            target.status = TARGET_SKIPPED
+            if "ungrounded" in msg:
+                target.skip_reason = SKIP_UNGROUNDED
+            elif "undeliverable" in msg or "invalid" in msg:
+                target.skip_reason = SKIP_UNDELIVERABLE
+            else:
+                target.skip_reason = SKIP_NO_CONTACT
+            target.error = str(exc)
+            await ts.flush()
+        except Exception as exc:  # isolation: one bad send never blocks the rest
+            target.status = TARGET_FAILED
+            target.error = f"{type(exc).__name__}: {exc}"
+            await ts.flush()
 
     async def _draft_one(self, ts, campaign, target, *, engine, runtime) -> None:
         target.status = TARGET_DRAFTING

@@ -12,9 +12,11 @@ from nexus.models.campaign import (
     Campaign,
     CampaignTarget,
     CAMP_AWAITING_APPROVAL,
+    CAMP_COMPLETED,
     CAMP_DRAFT_PENDING,
     TARGET_DRAFTED,
     TARGET_PENDING,
+    TARGET_SENT,
     TARGET_SKIPPED,
     SKIP_NO_CONTACT,
     SKIP_UNDELIVERABLE,
@@ -172,3 +174,89 @@ def test_classify_skip_reasons():
     assert classify({"grounded": True, "contact_id": "c1", "email_status": STATUS_INVALID}) == SKIP_UNDELIVERABLE
     # Grounded, deliverable (unknown/valid) → sendable.
     assert classify({"grounded": True, "contact_id": "c1", "email_status": "unknown"}) is None
+
+
+# -- send phase -----------------------------------------------------------------------
+
+
+async def test_send_phase_sends_drafted_targets(ts):
+    list_id = await _make_list_with_accounts(ts, [{"name": "Acme", "email": "lead@acme.com"}])
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts, name="Q3", list_id=list_id, icp={"industries": ["SaaS"]},
+        sequence="ai-orchestrated-outbound", created_by_user_id="u1",
+    )
+    await svc.run_draft_phase(ts, campaign)
+    assert campaign.status == CAMP_AWAITING_APPROVAL
+
+    await svc.approve_and_send(ts, campaign, decided_by="u1")
+
+    assert campaign.status == CAMP_COMPLETED
+    targets = await svc.list_targets(ts, campaign.id)
+    assert all(t.status == TARGET_SENT for t in targets if t.draft)
+    assert campaign.report["sent"] >= 1
+
+
+async def test_approve_requires_awaiting_state(ts):
+    list_id = await _make_list_with_accounts(ts, [{"name": "Acme", "email": "lead@acme.com"}])
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts, name="Q3", list_id=list_id, icp={}, sequence="seq", created_by_user_id="u1",
+    )
+    # Not yet drafted → cannot approve.
+    with pytest.raises(Exception):
+        await svc.approve_and_send(ts, campaign, decided_by="u1")
+
+
+async def test_send_phase_gates_refuse_per_account(ts):
+    """Campaign approval is ONE human decision, but it cannot override the per-send hard
+    gates. A draft that lost grounding (e.g. an edit) or carries an invalid address is
+    refused at the send boundary and lands in the report; the grounded survivor still sends.
+
+    This deliberately mutates target draft snapshots to reach the send-phase gates, because
+    the draft phase's own ``_classify`` would otherwise have filtered these cases out before
+    they were ever marked DRAFTED — proving the gates are a genuine second line of defense.
+    (``Account`` and ``Contact`` are imported at the top of this test module.)
+    """
+    list_id = await _make_list_with_accounts(
+        ts,
+        [
+            {"name": "Acme", "email": "lead@acme.com"},      # stays grounded+deliverable → SENT
+            {"name": "Globex", "email": "lead@globex.com"},  # grounding stripped → refused
+            {"name": "Initech", "email": "lead@initech.com"},  # address forced invalid → refused
+        ],
+    )
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts, name="Q3", list_id=list_id, icp={}, sequence="seq", created_by_user_id="u1",
+    )
+    await svc.run_draft_phase(ts, campaign)
+    assert campaign.status == CAMP_AWAITING_APPROVAL
+
+    accounts = {a.name: a for a in await ts.list(Account)}
+    targets = {t.account_id: t for t in await svc.list_targets(ts, campaign.id)}
+    # All three drafted under the always-grounding stub.
+    assert all(targets[a.id].status == TARGET_DRAFTED for a in accounts.values())
+
+    # Strip grounding off Globex's snapshot; ``_send_one`` reasserts ``target.draft`` onto
+    # the run blackboard, so the grounded-send gate reads grounded=False and refuses.
+    g = targets[accounts["Globex"].id]
+    g.draft = {**g.draft, "grounded": False}
+    # The verified-send gate re-verifies the LIVE contact address (not the snapshot's cached
+    # status), so an invalid verdict must come from the contact record. Break Initech's address.
+    initech_contact = await ts.first(Contact, Contact.account_id == accounts["Initech"].id)
+    initech_contact.email = "not-an-email"
+    await ts.flush()
+
+    await svc.approve_and_send(ts, campaign, decided_by="u1")
+
+    assert campaign.status == CAMP_COMPLETED
+    targets = {t.account_id: t for t in await svc.list_targets(ts, campaign.id)}
+    assert targets[accounts["Acme"].id].status == TARGET_SENT
+    assert targets[accounts["Globex"].id].status == TARGET_SKIPPED
+    assert targets[accounts["Globex"].id].skip_reason == SKIP_UNGROUNDED
+    assert targets[accounts["Initech"].id].status == TARGET_SKIPPED
+    assert targets[accounts["Initech"].id].skip_reason == SKIP_UNDELIVERABLE
+    assert campaign.report["sent"] == 1
+    assert campaign.report["skips"][SKIP_UNGROUNDED] == 1
+    assert campaign.report["skips"][SKIP_UNDELIVERABLE] == 1
