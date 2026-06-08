@@ -66,3 +66,12 @@ def test_research_compose_recipe_has_no_send_step():
     assert tools == ["research", "scoring", "compose_message"]
     # No step requires approval — the draft phase is fully autonomous.
     assert all(s["requires_approval"] is False for s in plan)
+
+
+# -- config ---------------------------------------------------------------------------
+
+from nexus.core.config import get_settings
+
+
+def test_campaign_preview_sample_default():
+    assert get_settings().campaign_preview_sample == 3
