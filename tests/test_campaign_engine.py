@@ -310,3 +310,26 @@ async def test_worker_run_campaign_draft_phase(ts):
     )
     assert result["campaign_id"] == campaign.id
     assert result["status"] == CAMP_AWAITING_APPROVAL
+
+
+# -- wire schemas ---------------------------------------------------------------------
+
+
+async def test_campaign_out_projection(ts):
+    from nexus.campaigns.schemas import CampaignOut, CampaignTargetOut
+
+    list_id = await _make_list_with_accounts(ts, [{"name": "Acme", "email": "lead@acme.com"}])
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts, name="Q3", list_id=list_id, icp={"x": 1}, sequence="seq", created_by_user_id="u1",
+    )
+    out = CampaignOut.from_model(campaign)
+    assert out.id == campaign.id
+    assert out.name == "Q3"
+    assert out.status == campaign.status
+    assert out.list_id == list_id
+
+    targets = await svc.list_targets(ts, campaign.id)
+    tout = CampaignTargetOut.from_model(targets[0])
+    assert tout.account_id == targets[0].account_id
+    assert tout.status == targets[0].status
