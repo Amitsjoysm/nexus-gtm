@@ -384,3 +384,19 @@ async def test_campaign_events_stream_smoke(client):
         async for chunk in s.aiter_bytes():
             body += chunk
         assert b"awaiting_approval" in body or b"progress" in body
+
+
+# -- multi-tenant isolation -----------------------------------------------------------
+
+
+async def test_campaign_invisible_across_tenants(ts, other_ts):
+    """A campaign in tenant A must not be visible from tenant B's session."""
+    list_id = await _make_list_with_accounts(ts, [{"name": "Acme", "email": "lead@acme.com"}])
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts, name="Q3", list_id=list_id, icp={}, sequence="seq", created_by_user_id="u1",
+    )
+    await ts.session.commit()
+    # other_ts is bound to a different tenant_id.
+    found = await other_ts.get(Campaign, campaign.id)
+    assert found is None
