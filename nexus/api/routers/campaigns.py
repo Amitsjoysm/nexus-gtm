@@ -3,9 +3,14 @@ sample, approve once, and send. Create drives the draft phase inline to ``awaiti
 for snappy feedback (the same inline pattern as orchestration run creation)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import asyncio
+import json
+from typing import AsyncIterator
 
-from nexus.api.deps import Principal, get_tenant_session, require
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
+
+from nexus.api.deps import Principal, get_principal, get_tenant_session, require
 from nexus.campaigns.schemas import (
     CampaignIn,
     CampaignOut,
@@ -15,10 +20,17 @@ from nexus.campaigns.schemas import (
 )
 from nexus.campaigns.service import CampaignError, get_campaign_service
 from nexus.core.config import get_settings
-from nexus.core.rbac import Permission
+from nexus.core.rbac import Permission, has_permission
 from nexus.core.tenancy import TenantSession
-from nexus.models.campaign import Campaign, TARGET_DRAFTED
+from nexus.models.campaign import (
+    Campaign,
+    CampaignTarget,
+    CAMP_AWAITING_APPROVAL,
+    CAMP_TERMINAL,
+    TARGET_DRAFTED,
+)
 from nexus.models.workflow import ProspectList
+from nexus.workers.tasks import tenant_session
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -117,3 +129,61 @@ async def cancel_campaign(
     campaign = await _get_campaign(ts, campaign_id)
     await get_campaign_service().cancel(ts, campaign)
     return CampaignOut.from_model(campaign)
+
+
+def _format_sse(seq: int, type_: str, data: dict) -> str:
+    return f"id: {seq}\nevent: {type_}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _counts(ts: TenantSession, campaign_id: str) -> dict[str, int]:
+    targets = await ts.list(CampaignTarget, CampaignTarget.campaign_id == campaign_id)
+    counts: dict[str, int] = {}
+    for t in targets:
+        counts[t.status] = counts.get(t.status, 0) + 1
+    return counts
+
+
+async def _campaign_stream(
+    tenant_id: str, campaign_id: str, request: Request
+) -> AsyncIterator[str]:
+    seq = 0
+    last_snapshot: tuple | None = None
+    for _ in range(600):  # ~5 min ceiling
+        if await request.is_disconnected():
+            return
+        async with tenant_session(tenant_id) as ts:
+            campaign = await ts.get(Campaign, campaign_id)
+            if campaign is None:
+                yield _format_sse(seq, "error", {"detail": "campaign not found"})
+                return
+            counts = await _counts(ts, campaign_id)
+            campaign_status = campaign.status
+            report = campaign.report or {}
+        snapshot = (campaign_status, tuple(sorted(counts.items())))
+        if snapshot != last_snapshot:
+            seq += 1
+            yield _format_sse(
+                seq, "progress",
+                {"status": campaign_status, "counts": counts, "report": report},
+            )
+            last_snapshot = snapshot
+        if campaign_status in CAMP_TERMINAL or campaign_status == CAMP_AWAITING_APPROVAL:
+            return
+        await asyncio.sleep(0.5)
+
+
+@router.get("/{campaign_id}/events")
+async def stream_campaign_events(
+    campaign_id: str,
+    request: Request,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    principal: Principal = Depends(get_principal),
+) -> StreamingResponse:
+    # EventSource can't set Authorization headers, so gate explicitly (mirrors runs SSE).
+    if not has_permission(principal.role, Permission.manage_campaigns):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "lacks manage_campaigns")
+    return StreamingResponse(
+        _campaign_stream(principal.tenant_id, campaign_id, request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

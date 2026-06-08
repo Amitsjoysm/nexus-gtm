@@ -363,3 +363,24 @@ async def test_campaign_api_create_and_approve(client):
     approve = await client.post(f"/api/campaigns/{cid}/approve", headers=auth(token))
     assert approve.status_code == 200
     assert approve.json()["status"] == "completed"
+
+
+async def test_campaign_events_stream_smoke(client):
+    token = await signup(client, slug="campsse", email="owner@campsse.com", company="CampSSE")
+    tid = decode_access_token(token)["tid"]
+    async with tenant_session(tid) as ts:
+        list_id = await _make_list_with_accounts(ts, [{"name": "Acme", "email": "lead@acme.com"}])
+    resp = await client.post(
+        "/api/campaigns",
+        json={"name": "Q3", "list_id": list_id, "icp": {}, "sequence": "seq"},
+        headers=auth(token),
+    )
+    cid = resp.json()["id"]
+    # The campaign is already awaiting_approval, so the stream replays a snapshot and closes.
+    async with client.stream("GET", f"/api/campaigns/{cid}/events", headers=auth(token)) as s:
+        assert s.status_code == 200
+        assert "text/event-stream" in s.headers["content-type"]
+        body = b""
+        async for chunk in s.aiter_bytes():
+            body += chunk
+        assert b"awaiting_approval" in body or b"progress" in body
