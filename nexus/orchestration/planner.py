@@ -83,6 +83,17 @@ def _research_only_plan(goal_input: dict) -> list[PlanStep]:
     ]
 
 
+def _research_compose_plan(goal_input: dict) -> list[PlanStep]:
+    """Draft-phase goal for the Segment Campaign Engine: research, score, and compose a
+    grounded draft — but NO send and NO approval gate. The send happens later, once, in
+    the campaign send phase, so the outbound gates stay in exactly one place."""
+    return [
+        PlanStep(idx=0, tool="research", depends_on=[]),
+        PlanStep(idx=1, tool="scoring", depends_on=[0]),
+        PlanStep(idx=2, tool="compose_message", depends_on=[1]),
+    ]
+
+
 def _discover_plan(goal_input: dict) -> list[PlanStep]:
     """A single read-only discovery step. ICP/target/max_candidates ride on run.goal_input,
     which the DiscoveryTool reads directly — so the step itself needs no inputs."""
@@ -92,6 +103,7 @@ def _discover_plan(goal_input: dict) -> list[PlanStep]:
 _RECIPES = {
     "research_account": _research_account_plan,
     "research_only": _research_only_plan,
+    "research_compose": _research_compose_plan,
     "discover": _discover_plan,
 }
 
