@@ -152,3 +152,17 @@ async def test_posts_to_email_field():
     v = _verifier(handler)
     await v.verify_one("jane@acme.com")
     assert seen == {"to_email": "jane@acme.com"}
+
+
+def test_contact_sourcing_settings_defaults():
+    from nexus.core.config import Settings
+
+    s = Settings()
+    assert s.email_verify_provider == "stub"
+    assert s.email_verify_url == "http://158.69.113.127:8080/v0/check_email"
+    assert s.email_verify_timeout_s == 20.0
+    assert s.email_finder_max_candidates == 5
+    assert s.contact_search_sources == "stub"
+    assert s.campaign_sourcing_enabled is True
+    assert s.campaign_sourced_min_send_confidence == 0.5
+    assert s.contact_search_source_list == ["stub"]

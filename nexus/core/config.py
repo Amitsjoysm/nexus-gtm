@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     email_verify_provider: str = "stub"        # email-deliverability backend
     email_verify_url: str = "http://158.69.113.127:8080/v0/check_email"
     email_verify_timeout_s: float = 20.0
+    # Contact sourcing (sub-project B): net-new contact providers + the verifying email
+    # finder. Defaults stay offline (stub) so CI is zero-network; activation is one env line.
+    email_finder_max_candidates: int = 5        # permutation cap per contact
+    contact_search_sources: str = "stub"        # ordered net-new contact providers
+    campaign_sourcing_enabled: bool = True       # inline auto-retry on SKIP_NO_CONTACT
+    campaign_sourced_min_send_confidence: float = 0.5  # bar a sourced address must clear to send
     crm_provider: str = "stub"                 # outbound CRM connector: stub|salesforce|hubspot
 
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
@@ -108,6 +114,10 @@ class Settings(BaseSettings):
     @property
     def signal_source_list(self) -> list[str]:
         return self._csv_list(self.signal_sources)
+
+    @property
+    def contact_search_source_list(self) -> list[str]:
+        return self._csv_list(self.contact_search_sources)
 
     @model_validator(mode="after")
     def _reject_insecure_prod(self) -> "Settings":
