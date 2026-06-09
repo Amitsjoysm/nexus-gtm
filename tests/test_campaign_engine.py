@@ -132,7 +132,13 @@ def test_campaign_preview_sample_default():
 # -- draft phase ----------------------------------------------------------------------
 
 
-async def test_draft_phase_drafts_and_reports_skips(ts):
+async def test_draft_phase_drafts_and_reports_skips(ts, monkeypatch):
+    # Sub-project B adds inline contact sourcing that, when enabled (the default), would
+    # source a synthetic persona for ``NoContactCo`` and draft it instead of skipping.
+    # This test pins the no-sourcing contract: with sourcing disabled, a genuinely
+    # contactless target is reported as SKIP_NO_CONTACT. (The source-then-draft-then-hold
+    # path is covered in tests/test_campaign_sourcing.py.)
+    monkeypatch.setattr(get_settings(), "campaign_sourcing_enabled", False)
     list_id = await _make_list_with_accounts(
         ts,
         [
