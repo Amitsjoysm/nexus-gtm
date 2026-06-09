@@ -85,12 +85,18 @@ def _research_only_plan(goal_input: dict) -> list[PlanStep]:
 
 def _research_compose_plan(goal_input: dict) -> list[PlanStep]:
     """Draft-phase goal for the Segment Campaign Engine: research, score, and compose a
-    grounded draft — but NO send and NO approval gate. The send happens later, once, in
-    the campaign send phase, so the outbound gates stay in exactly one place."""
+    grounded draft — but NO send and NO approval gate. When the caller supplies a
+    ``contact_id`` (a sourced/targeted person), thread it into the compose step so the
+    messaging agent drafts to exactly that contact instead of defaulting to ``contacts[0]``.
+    The send happens later, once, in the campaign send phase, so the outbound gates stay in
+    exactly one place."""
+    compose_inputs: dict = {}
+    if goal_input.get("contact_id"):
+        compose_inputs["contact_id"] = goal_input["contact_id"]
     return [
         PlanStep(idx=0, tool="research", depends_on=[]),
         PlanStep(idx=1, tool="scoring", depends_on=[0]),
-        PlanStep(idx=2, tool="compose_message", depends_on=[1]),
+        PlanStep(idx=2, tool="compose_message", inputs=compose_inputs, depends_on=[1]),
     ]
 
 

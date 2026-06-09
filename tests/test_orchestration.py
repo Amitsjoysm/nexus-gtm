@@ -203,3 +203,21 @@ async def test_event_log_is_monotonic():
         assert seqs == list(range(1, len(seqs) + 1))
         assert events[0].type == "run.created"
         assert any(e.type == "approval.requested" for e in events)
+
+
+def test_research_compose_threads_contact_id_into_compose_step():
+    from nexus.orchestration.planner import get_planner
+
+    plan = get_planner().plan("research_compose", {"contact_id": "c123"})
+    compose = next(s for s in plan if s["tool"] == "compose_message")
+    assert compose["inputs"].get("contact_id") == "c123"
+    # No send step in the draft-phase recipe.
+    assert all(s["tool"] != "send_message" for s in plan)
+
+
+def test_research_compose_omits_contact_id_when_absent():
+    from nexus.orchestration.planner import get_planner
+
+    plan = get_planner().plan("research_compose", {})
+    compose = next(s for s in plan if s["tool"] == "compose_message")
+    assert "contact_id" not in compose["inputs"]

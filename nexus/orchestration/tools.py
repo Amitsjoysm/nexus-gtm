@@ -120,6 +120,8 @@ class ComposeMessageTool(_AgentTool):
         # human decides — not only at send time. The verdict travels on the draft.
         email_status: str | None = None
         email_confidence: float | None = None
+        provider_type: str | None = None
+        email_signals: dict = {}
         contact_id = out.get("contact_id")
         if contact_id:
             contact = await tc.ts.get(Contact, contact_id)
@@ -127,6 +129,8 @@ class ComposeMessageTool(_AgentTool):
                 verdict = await tc.runtime.registry.verify_email(contact.email)
                 email_status = verdict.status
                 email_confidence = verdict.confidence
+                provider_type = verdict.provider_type
+                email_signals = dict(verdict.signals)
                 # Persist the verdict so the inbox can show deliverability without
                 # re-verifying (and so a verdict survives beyond this run).
                 contact.email_status = verdict.status
@@ -144,6 +148,8 @@ class ComposeMessageTool(_AgentTool):
             },
             "email_status": email_status,
             "email_confidence": email_confidence,
+            "provider_type": provider_type,
+            "email_signals": email_signals,
         }
         return out
 
