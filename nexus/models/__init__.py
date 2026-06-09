@@ -6,6 +6,12 @@ from nexus.models.identity import Membership, Tenant, User, Workspace
 from nexus.models.intelligence import AccountScore, AgentRun
 from nexus.models.orchestration import Approval, OrchestrationRun, RunEvent, RunStep
 from nexus.models.campaign import Campaign, CampaignTarget
+from nexus.models.cadence import (
+    Cadence,
+    CadenceStep,
+    CadenceEnrollment,
+    CadenceTouch,
+)
 from nexus.models.outcome import Outcome
 from nexus.models.relevance import RelevanceProfile
 from nexus.models.signal import SignalEvent
@@ -38,4 +44,8 @@ __all__ = [
     "Outcome",
     "Campaign",
     "CampaignTarget",
+    "Cadence",
+    "CadenceStep",
+    "CadenceEnrollment",
+    "CadenceTouch",
 ]
