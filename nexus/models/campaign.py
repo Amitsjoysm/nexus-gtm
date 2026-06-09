@@ -56,6 +56,14 @@ class Campaign(IdMixin, TimestampMixin, TenantScoped, Base):
     report: Mapped[dict] = mapped_column(JSON, default=dict)
     # Per-campaign opt-in: send to addresses graded "risky" by the verifier (held by default).
     send_risky: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Channel & Cadence (sub-project C). NULL cadence_id = the existing single-touch send
+    # path (fully backward-compatible). review_each_touch opts into a per-touch manual gate.
+    cadence_id: Mapped[str | None] = mapped_column(
+        ForeignKey("cadences.id"), nullable=True
+    )
+    review_each_touch: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     created_by_user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
     )

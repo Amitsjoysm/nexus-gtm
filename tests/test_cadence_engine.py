@@ -58,3 +58,16 @@ def test_enroll_terminal_set():
     assert STOP_REPLIED == "replied"
     assert TOUCH_SENT == "sent"
     assert TOUCH_AWAITING_APPROVAL == "awaiting_approval"
+
+
+from nexus.models.campaign import Campaign
+
+
+async def test_campaign_cadence_columns_default():
+    tid = await make_tenant(slug="cad-camp", name="Cad Camp")
+    async with tenant_session(tid) as ts:
+        c = Campaign(tenant_id=tid, name="cad", list_id="l1")
+        ts.add(c)
+        await ts.flush()
+        assert c.cadence_id is None          # NULL = backward-compatible single-touch path
+        assert c.review_each_touch is False
