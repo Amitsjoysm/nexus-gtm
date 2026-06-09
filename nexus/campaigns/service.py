@@ -13,7 +13,10 @@ the caller (API or worker) owns the commit.
 from __future__ import annotations
 
 from nexus.agents.runtime import get_agent_runtime
+from nexus.campaigns.sourcing import get_contact_sourcing_service
+from nexus.core.config import get_settings
 from nexus.core.tenancy import TenantSession
+from nexus.models.account import Account
 from nexus.models.campaign import (
     Campaign,
     CampaignTarget,
@@ -33,14 +36,16 @@ from nexus.models.campaign import (
     TARGET_SKIPPED,
     SKIP_NO_CONTACT,
     SKIP_RESEARCH_FAILED,
+    SKIP_RISKY,
     SKIP_UNDELIVERABLE,
     SKIP_UNGROUNDED,
+    SKIP_UNVERIFIED,
 )
 from nexus.models.orchestration import OrchestrationRun, RUN_COMPLETED
 from nexus.models.workflow import ListItem
 from nexus.orchestration.engine import get_orchestration_engine
 from nexus.orchestration.tools import SendMessageTool, ToolContext, ToolError
-from nexus.verification import STATUS_INVALID
+from nexus.verification import STATUS_INVALID, STATUS_RISKY, STATUS_UNKNOWN
 
 
 class CampaignError(Exception):
@@ -151,10 +156,19 @@ class CampaignService:
         return campaign
 
     async def _send_one(self, ts, campaign, target, *, tool, runtime) -> None:
+        # Pre-send deliverability policy on the snapshot draft. Decide BEFORE invoking the
+        # send tool so sourced/risky/unverified addresses become reportable skips, never
+        # silent sends. The universal SendMessageTool gates still fire underneath.
+        draft = dict(target.draft or {})
+        skip = self._send_policy(draft, campaign)
+        if skip is not None:
+            target.status = TARGET_SKIPPED
+            target.skip_reason = skip
+            await ts.flush()
+            return
+
         target.status = TARGET_APPROVED
         await ts.flush()
-        # Reuse the target's research_compose run as the ToolContext carrier; its blackboard
-        # already holds the draft. Reassert the draft snapshot in case it was edited/rebuilt.
         run = await ts.get(OrchestrationRun, target.run_id) if target.run_id else None
         if run is None:
             target.status = TARGET_FAILED
@@ -171,7 +185,6 @@ class CampaignService:
             target.status = TARGET_SENT
             await ts.flush()
         except ToolError as exc:
-            # A gate refused at the boundary. Classify into the report's skip reasons.
             msg = str(exc).lower()
             target.status = TARGET_SKIPPED
             if "ungrounded" in msg:
@@ -186,6 +199,28 @@ class CampaignService:
             target.status = TARGET_FAILED
             target.error = f"{type(exc).__name__}: {exc}"
             await ts.flush()
+
+    @staticmethod
+    def _send_policy(draft: dict, campaign) -> str | None:
+        """Return a skip reason to hold this draft from sending, or None to proceed.
+
+        valid            -> send
+        invalid          -> SKIP_UNDELIVERABLE (also hard-blocked by SendMessageTool)
+        risky            -> send iff campaign.send_risky else SKIP_RISKY
+        unknown & sourced & confidence < bar -> SKIP_UNVERIFIED
+        unknown & real (non-sourced) contact -> send (no regression vs. today)
+        """
+        status = draft.get("email_status")
+        if status == STATUS_INVALID:
+            return SKIP_UNDELIVERABLE
+        if status == STATUS_RISKY:
+            return None if campaign.send_risky else SKIP_RISKY
+        if status == STATUS_UNKNOWN or status is None:
+            if draft.get("sourced"):
+                bar = get_settings().campaign_sourced_min_send_confidence
+                if (draft.get("email_confidence") or 0.0) < bar:
+                    return SKIP_UNVERIFIED
+        return None
 
     async def _draft_one(self, ts, campaign, target, *, engine, runtime) -> None:
         target.status = TARGET_DRAFTING
@@ -210,6 +245,16 @@ class CampaignService:
             draft = dict((run.blackboard or {}).get("draft") or {})
             target.draft = draft
             reason = self._classify(draft)
+
+            # Self-healing: a NO_CONTACT target can have a contact sourced + re-drafted once.
+            if reason == SKIP_NO_CONTACT and get_settings().campaign_sourcing_enabled:
+                draft = await self._source_and_redraft(
+                    ts, campaign, target, engine=engine, runtime=runtime
+                )
+                if draft is not None:
+                    target.draft = draft
+                    reason = self._classify(draft)
+
             if reason is None:
                 target.status = TARGET_DRAFTED
             else:
@@ -220,6 +265,31 @@ class CampaignService:
             target.status = TARGET_FAILED
             target.error = f"{type(exc).__name__}: {exc}"
             await ts.flush()
+
+    async def _source_and_redraft(self, ts, campaign, target, *, engine, runtime) -> dict | None:
+        """Source a contact and re-run research_compose ONCE targeting it. Bounded; never loops.
+        Returns the new draft (marked ``sourced``) or None if nothing usable was sourced."""
+        account = await ts.get(Account, target.account_id)
+        if account is None:
+            return None
+        outcome = await get_contact_sourcing_service().ensure_contact(
+            ts, account, icp=campaign.icp or {}
+        )
+        if outcome.contact is None:
+            return None
+        run = await engine.create_run(
+            ts,
+            "research_compose",
+            {"account_id": target.account_id, "contact_id": outcome.contact.id},
+            account_id=target.account_id,
+        )
+        await engine.execute_run(ts, run, runtime=runtime)
+        target.run_id = run.id
+        if run.status != RUN_COMPLETED:
+            return None
+        draft = dict((run.blackboard or {}).get("draft") or {})
+        draft["sourced"] = True
+        return draft
 
     @staticmethod
     def _classify(draft: dict) -> str | None:

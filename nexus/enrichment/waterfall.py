@@ -13,6 +13,7 @@ from nexus.enrichment.providers import (
     EnrichmentResult,
     PatternEmailProvider,
     SearchEnrichmentProvider,
+    VerifyingPatternEmailProvider,
 )
 from nexus.models.account import Account, Contact
 
@@ -79,6 +80,7 @@ def get_enricher() -> WaterfallEnricher:
         _enricher = WaterfallEnricher(
             providers=[
                 SearchEnrichmentProvider(get_browser_provider()),
+                VerifyingPatternEmailProvider(),
                 PatternEmailProvider(),
             ]
         )
