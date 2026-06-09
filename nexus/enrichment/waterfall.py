@@ -45,6 +45,8 @@ class WaterfallEnricher:
             # Keep the highest-confidence value for each field.
             if r.email and r.email_confidence > merged.email_confidence:
                 merged.email, merged.email_confidence = r.email, r.email_confidence
+                merged.email_status = r.email_status
+                merged.provider_type = r.provider_type
                 merged.source = r.source
             if r.phone and r.phone_confidence > merged.phone_confidence:
                 merged.phone, merged.phone_confidence = r.phone, r.phone_confidence
