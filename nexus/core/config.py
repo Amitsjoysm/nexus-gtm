@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend
     email_verify_provider: str = "stub"        # email-deliverability backend
+    email_verify_url: str = "http://158.69.113.127:8080/v0/check_email"
+    email_verify_timeout_s: float = 20.0
     crm_provider: str = "stub"                 # outbound CRM connector: stub|salesforce|hubspot
 
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.

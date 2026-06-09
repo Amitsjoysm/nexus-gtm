@@ -73,7 +73,15 @@ def build_email_verifier(name: str) -> EmailVerificationProvider:
     key = (name or "").strip().lower()
     if key in ("stub", "", "none"):
         return StubEmailVerificationProvider()
-    # everifier (separate-host SMTP probe) lands here later; fail safe to the stub for now.
+    if key == "reacher":
+        from nexus.core.config import get_settings
+        from nexus.verification.reacher import ReacherEmailVerifier
+
+        s = get_settings()
+        return ReacherEmailVerifier(
+            url=s.email_verify_url, timeout=s.email_verify_timeout_s
+        )
+    # Unknown keys still fail safe to the offline stub.
     return StubEmailVerificationProvider()
 
 

@@ -10,6 +10,7 @@ from nexus.verification.provider import (
     get_email_verifier,
     set_email_verifier,
 )
+from nexus.verification.reacher import ReacherEmailVerifier
 
 __all__ = [
     "STATUS_INVALID",
@@ -22,4 +23,5 @@ __all__ = [
     "build_email_verifier",
     "get_email_verifier",
     "set_email_verifier",
+    "ReacherEmailVerifier",
 ]
