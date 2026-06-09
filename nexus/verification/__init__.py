@@ -1,5 +1,6 @@
 from nexus.verification.provider import (
     STATUS_INVALID,
+    STATUS_RISKY,
     STATUS_UNKNOWN,
     STATUS_VALID,
     EmailVerification,
@@ -12,6 +13,7 @@ from nexus.verification.provider import (
 
 __all__ = [
     "STATUS_INVALID",
+    "STATUS_RISKY",
     "STATUS_UNKNOWN",
     "STATUS_VALID",
     "EmailVerification",

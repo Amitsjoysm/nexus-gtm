@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import abc
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 
@@ -18,6 +18,7 @@ _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 STATUS_VALID = "valid"
 STATUS_INVALID = "invalid"
 STATUS_UNKNOWN = "unknown"
+STATUS_RISKY = "risky"
 
 
 @dataclass(slots=True)
@@ -26,6 +27,10 @@ class EmailVerification:
     status: str = STATUS_UNKNOWN
     confidence: float = 0.0
     source: str = ""
+    # Deliverability adapters (e.g. Reacher) enrich these; stub leaves them at defaults so
+    # nothing downstream that ignores them breaks.
+    provider_type: str | None = None
+    signals: dict = field(default_factory=dict)
 
     @property
     def is_deliverable(self) -> bool:
@@ -33,7 +38,8 @@ class EmailVerification:
 
     def as_dict(self) -> dict:
         return {"email": self.email, "status": self.status,
-                "confidence": self.confidence, "source": self.source}
+                "confidence": self.confidence, "source": self.source,
+                "provider_type": self.provider_type, "signals": dict(self.signals)}
 
 
 class EmailVerificationProvider(abc.ABC):
