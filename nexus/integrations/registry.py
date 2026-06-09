@@ -29,6 +29,11 @@ from nexus.integrations.company_search import (
     SearchBackedCompanySearchProvider,
     StubCompanySearchProvider,
 )
+from nexus.integrations.contact_search import (
+    ContactCandidate,
+    ContactSearchProvider,
+    StubContactSearchProvider,
+)
 from nexus.integrations.search import (
     SearchHit,
     SearchProvider,
@@ -129,6 +134,7 @@ class DataSourceRegistry:
         search: SearchProvider | None = None,
         research: ResearchProvider | None = None,
         email_verify: EmailVerificationProvider | None = None,
+        contact_search: list[ContactSearchProvider] | None = None,
         per_source_budget: int = 64,
         breaker_threshold: int = 3,
         cache_enabled: bool = True,
@@ -137,6 +143,7 @@ class DataSourceRegistry:
         self.search_provider = search or StubSearchProvider()
         self.research_provider = research
         self.email_verifier = email_verify
+        self.contact_search_providers = contact_search or [StubContactSearchProvider()]
         self._policy = _Policy(per_source_budget=per_source_budget,
                                breaker_threshold=breaker_threshold)
         self._cache_enabled = cache_enabled
@@ -235,6 +242,32 @@ class DataSourceRegistry:
             self._cache[key] = verdict
         return verdict
 
+    # ----------------------------------------------------------- contact_search
+    async def contact_search(
+        self, account, icp: dict, *, limit: int = 3
+    ) -> list[ContactCandidate]:
+        """Waterfall the configured contact providers, deduping by (full_name, title)."""
+        key = _norm_key("contact_search", account.id, icp, limit)
+        if self._cache_enabled and key in self._cache:
+            return list(self._cache[key])  # type: ignore[arg-type]
+
+        merged: dict[tuple, ContactCandidate] = {}
+        order: list[tuple] = []
+        for provider in self.contact_search_providers:
+            found = await self._policy.call(
+                provider.name,
+                lambda p=provider: p.search(account, icp, limit=limit),
+            )
+            for cand in found or []:
+                ck = ((cand.full_name or "").lower(), (cand.title or "").lower())
+                if ck not in merged:
+                    merged[ck] = cand
+                    order.append(ck)
+        result = [merged[k] for k in order][:limit]
+        if self._cache_enabled:
+            self._cache[key] = list(result)
+        return result
+
     # -------------------------------------------------------------- diagnostics
     def source_health(self) -> dict:
         """Budget / breaker state per source — surfaced for observability."""
@@ -261,6 +294,23 @@ def _build_company_search(sources: list[str], *, search: SearchProvider,
     return providers
 
 
+def _build_contact_search(sources: list[str]) -> list[ContactSearchProvider]:
+    providers: list[ContactSearchProvider] = []
+    for token in sources:
+        key = token.strip().lower()
+        if not key:
+            continue
+        if key == "stub":
+            providers.append(StubContactSearchProvider())
+        else:
+            # Apollo / InfoJoy / ZoomInfo adapters land here later; skip unknown tokens
+            # rather than silently substituting another source.
+            logger.warning("unknown contact_search source %r; skipping", token)
+    if not providers:
+        providers.append(StubContactSearchProvider())
+    return providers
+
+
 def build_registry_from_settings(browser=None) -> DataSourceRegistry:
     """Assemble a registry from ``NEXUS_*`` settings.
 
@@ -279,6 +329,7 @@ def build_registry_from_settings(browser=None) -> DataSourceRegistry:
         search=search,
         research=build_research_provider(s.research_provider),
         email_verify=build_email_verifier(s.email_verify_provider),
+        contact_search=_build_contact_search(s.contact_search_source_list),
     )
 
 
