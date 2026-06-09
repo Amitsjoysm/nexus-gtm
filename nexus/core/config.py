@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     campaign_sourcing_enabled: bool = True       # inline auto-retry on SKIP_NO_CONTACT
     campaign_sourced_min_send_confidence: float = 0.5  # bar a sourced address must clear to send
     crm_provider: str = "stub"                 # outbound CRM connector: stub|salesforce|hubspot
+    # Channel & Cadence (sub-project C): multi-touch email cadence engine. Disabled by
+    # default (safe opt-in, like campaign_sourcing) so the advance tick is a no-op until a
+    # deployment turns it on with one env line.
+    cadence_enabled: bool = False             # master switch for the advance tick
+    cadence_tick_interval_s: int = 60         # production due-scan cadence (seconds)
+    cadence_batch_size: int = 100             # max enrollments claimed per tick per worker
+    cadence_max_duration_days: int = 30       # duration-cap safety bound (mid-sequence stop)
 
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
