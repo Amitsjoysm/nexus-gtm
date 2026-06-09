@@ -7,7 +7,7 @@ tables are tenant-scoped — a campaign never reads or writes across tenant boun
 """
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Index, JSON, String, Text
+from sqlalchemy import Boolean, ForeignKey, Index, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nexus.core.db import Base, IdMixin, TimestampMixin
@@ -39,6 +39,8 @@ SKIP_NO_CONTACT = "no_deliverable_contact"
 SKIP_UNGROUNDED = "ungrounded_draft"
 SKIP_UNDELIVERABLE = "undeliverable_address"
 SKIP_RESEARCH_FAILED = "research_failed"
+SKIP_UNVERIFIED = "unverified_contact"   # sourced address below the send-confidence bar
+SKIP_RISKY = "risky_address"             # risky verdict, campaign did not opt into send_risky
 
 
 class Campaign(IdMixin, TimestampMixin, TenantScoped, Base):
@@ -52,6 +54,8 @@ class Campaign(IdMixin, TimestampMixin, TenantScoped, Base):
     status: Mapped[str] = mapped_column(String(24), default=CAMP_DRAFT_PENDING, index=True)
     # Rolled-up counts: {"total","drafted","skipped","sent","failed","skips":{reason:count}}.
     report: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Per-campaign opt-in: send to addresses graded "risky" by the verifier (held by default).
+    send_risky: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_by_user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
     )

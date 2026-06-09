@@ -57,6 +57,7 @@ class CampaignService:
         icp: dict,
         sequence: str,
         created_by_user_id: str | None,
+        send_risky: bool = False,
     ) -> Campaign:
         """Create the campaign and one PENDING target per account in the List."""
         campaign = Campaign(
@@ -65,6 +66,7 @@ class CampaignService:
             list_id=list_id,
             icp=icp or {},
             sequence=sequence or "ai-orchestrated-outbound",
+            send_risky=send_risky,
             created_by_user_id=created_by_user_id,
         )
         ts.add(campaign)

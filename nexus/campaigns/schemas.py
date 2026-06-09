@@ -13,6 +13,7 @@ class CampaignIn(BaseModel):
     list_id: str
     icp: dict = Field(default_factory=dict)
     sequence: str = Field(default="ai-orchestrated-outbound", max_length=120)
+    send_risky: bool = False
 
 
 class CampaignTargetOut(BaseModel):
@@ -43,6 +44,7 @@ class CampaignOut(BaseModel):
     sequence: str
     icp: dict = Field(default_factory=dict)
     report: dict = Field(default_factory=dict)
+    send_risky: bool = False
     created_at: datetime
 
     @classmethod
@@ -55,6 +57,7 @@ class CampaignOut(BaseModel):
             sequence=c.sequence,
             icp=c.icp or {},
             report=c.report or {},
+            send_risky=c.send_risky,
             created_at=c.created_at,
         )
 

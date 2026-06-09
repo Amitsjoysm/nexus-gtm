@@ -59,6 +59,7 @@ async def create_campaign(
         icp=body.icp,
         sequence=body.sequence,
         created_by_user_id=principal.user_id,
+        send_risky=body.send_risky,
     )
     # Drive the draft phase inline to the approval gate.
     await svc.run_draft_phase(ts, campaign)
