@@ -1,13 +1,13 @@
 """Offline tests for the Channel & Cadence engine (sub-project C). Zero-network."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone  # noqa: F401
+from datetime import datetime, timedelta, timezone
 
-import pytest  # noqa: F401
-import pytest_asyncio  # noqa: F401
+import pytest
+import pytest_asyncio
 
 from nexus.core.config import get_settings
-from tests.conftest import make_tenant, tenant_session  # noqa: F401
+from tests.conftest import make_tenant, tenant_session
 
 
 def test_cadence_config_defaults():
