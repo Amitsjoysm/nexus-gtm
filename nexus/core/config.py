@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     account_refresh_interval_s: int = 21600     # staleness threshold before re-processing (6h)
     account_refresh_batch_size: int = 100       # max accounts claimed per tick across tenants
 
+    # CRM Auto-Sync (sub-project E): continuously push account state to the configured CRM.
+    # OFF by default (safe opt-in, like automation_enabled) so the suite is deterministic and
+    # zero-network (tests use the recording stub connector). Change-aware via Account.crm_synced_at,
+    # so there is no interval knob — only stale/changed accounts are pushed.
+    crm_sync_enabled: bool = False        # global master switch for auto-sync
+    crm_sync_batch_size: int = 100        # max accounts claimed per heartbeat sweep
+
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
     # A selected engine with no key degrades to keyless DuckDuckGo so search keeps working.
