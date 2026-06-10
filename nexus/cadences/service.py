@@ -450,6 +450,66 @@ class CadenceService:
             await ts.flush()
         return e
 
+    # ----- Per-touch review ---------------------------------------------------------
+    async def _awaiting_touch(
+        self, ts: TenantSession, e: CadenceEnrollment, step_index: int
+    ) -> CadenceTouch:
+        touch = await ts.first(
+            CadenceTouch,
+            CadenceTouch.enrollment_id == e.id,
+            CadenceTouch.step_index == step_index,
+        )
+        if touch is None or touch.status != TOUCH_AWAITING_APPROVAL:
+            raise CadenceError("no touch awaiting approval at that step")
+        return touch
+
+    async def approve_touch(
+        self,
+        ts: TenantSession,
+        e: CadenceEnrollment,
+        step_index: int,
+        *,
+        now: datetime,
+        edited_body: str | None = None,
+    ) -> CadenceEnrollment:
+        """Approve a parked touch: send it (optionally with an edited body), then advance.
+        An undeliverable address surfaced at send time stops the enrollment instead."""
+        touch = await self._awaiting_touch(ts, e, step_index)
+        campaign = await ts.get(Campaign, e.campaign_id)
+        run = await ts.get(OrchestrationRun, touch.run_id) if touch.run_id else None
+        if campaign is None or run is None:
+            raise CadenceError("approval lost its campaign or compose run")
+        draft = dict(touch.draft or {})
+        if edited_body is not None:
+            draft["body"] = edited_body
+        _, undeliverable = await self._send(ts, e, campaign, run, draft, touch, now=now)
+        if undeliverable:
+            await self._stop(ts, e, STOP_UNDELIVERABLE, now=now)
+        else:
+            await self._advance(ts, e, now=now)
+        return e
+
+    async def reject_touch(
+        self,
+        ts: TenantSession,
+        e: CadenceEnrollment,
+        step_index: int,
+        *,
+        now: datetime,
+        stop: bool = False,
+    ) -> CadenceEnrollment:
+        """Reject a parked touch. By default the touch is skipped and the enrollment moves
+        to the next step; ``stop=True`` terminates the whole enrollment."""
+        touch = await self._awaiting_touch(ts, e, step_index)
+        touch.status = TOUCH_SKIPPED
+        touch.skip_reason = "rejected"
+        await ts.flush()
+        if stop:
+            await self._stop(ts, e, STOP_MANUAL, now=now)
+        else:
+            await self._advance(ts, e, now=now)
+        return e
+
 
 _service = CadenceService()
 

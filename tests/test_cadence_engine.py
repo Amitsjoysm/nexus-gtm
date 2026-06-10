@@ -347,3 +347,61 @@ async def test_manual_stop_is_terminal(ts):
     assert e.stop_reason == STOP_MANUAL
     # A stopped enrollment is never claimed again.
     assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 0
+
+
+async def test_review_each_touch_parks_then_approves(ts):
+    svc = get_cadence_service()
+    _, e, _, _ = await _enrollable(
+        ts, NOW, steps=[{"delay_days": 0, "angle": "intro"}], review_each_touch=True
+    )
+    # The tick parks the touch for review instead of sending.
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 1
+    await ts.refresh(e)
+    assert e.status == ENROLL_PAUSED
+    touches = await ts.list(CadenceTouch, CadenceTouch.enrollment_id == e.id)
+    assert [t.status for t in touches] == [TOUCH_AWAITING_APPROVAL]
+    assert await ts.list(Outcome, Outcome.stage == "sent") == []
+
+    # Approving sends the touch; with a single step the enrollment then completes.
+    await svc.approve_touch(ts, e, 0, now=NOW)
+    await ts.refresh(e)
+    assert e.status == ENROLL_COMPLETED
+    touches = await ts.list(CadenceTouch, CadenceTouch.enrollment_id == e.id)
+    assert [t.status for t in touches] == [TOUCH_SENT]
+    assert len(await ts.list(Outcome, Outcome.stage == "sent")) == 1
+
+
+async def test_review_reject_advances_to_next_step(ts):
+    svc = get_cadence_service()
+    _, e, _, _ = await _enrollable(
+        ts,
+        NOW,
+        steps=[{"delay_days": 0, "angle": "intro"}, {"delay_days": 2, "angle": "bump"}],
+        review_each_touch=True,
+    )
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 1
+    # Reject step 0 (no stop): the touch is skipped and the enrollment advances to step 1.
+    await svc.reject_touch(ts, e, 0, now=NOW)
+    await ts.refresh(e)
+    assert e.status == ENROLL_ACTIVE
+    assert e.current_step_index == 1
+    touch0 = await ts.first(
+        CadenceTouch, CadenceTouch.enrollment_id == e.id, CadenceTouch.step_index == 0
+    )
+    assert touch0.status == TOUCH_SKIPPED
+    assert touch0.skip_reason == "rejected"
+
+
+async def test_review_reject_with_stop_is_terminal(ts):
+    svc = get_cadence_service()
+    _, e, _, _ = await _enrollable(
+        ts,
+        NOW,
+        steps=[{"delay_days": 0, "angle": "intro"}, {"delay_days": 2, "angle": "bump"}],
+        review_each_touch=True,
+    )
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 1
+    await svc.reject_touch(ts, e, 0, now=NOW, stop=True)
+    await ts.refresh(e)
+    assert e.status == ENROLL_STOPPED
+    assert e.stop_reason == STOP_MANUAL
