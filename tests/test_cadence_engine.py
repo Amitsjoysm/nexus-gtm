@@ -88,3 +88,58 @@ def test_research_compose_without_angle_unchanged():
     plan = get_planner().plan("research_compose", {"account_id": "a1"})
     compose = next(s for s in plan if s["tool"] == "compose_message")
     assert "angle" not in compose["inputs"]
+
+
+from nexus.cadences.service import CadenceError, get_cadence_service
+from nexus.models.account import Account
+from nexus.models.campaign import Campaign, CampaignTarget, TARGET_DRAFTED
+
+
+async def _make_cadence(ts, steps):
+    return await get_cadence_service().create_cadence(
+        ts, name="seq", description=None, steps=steps, created_by_user_id=None
+    )
+
+
+async def test_create_cadence_validates_and_orders():
+    tid = await make_tenant(slug="cad-create", name="Cad Create")
+    async with tenant_session(tid) as ts:
+        cad = await _make_cadence(ts, [
+            {"delay_days": 0, "angle": "intro"},
+            {"delay_days": 3, "angle": "nudge"},
+        ])
+        steps = await get_cadence_service().list_steps(ts, cad.id)
+        assert [s.step_index for s in steps] == [0, 1]
+        assert steps[0].delay_days == 0 and steps[1].delay_days == 3
+
+        with pytest.raises(CadenceError):
+            await _make_cadence(ts, [])  # no steps
+        with pytest.raises(CadenceError):
+            await _make_cadence(ts, [{"delay_days": 0, "channel": "sms"}])  # v1 email-only
+        with pytest.raises(CadenceError):
+            await _make_cadence(ts, [{"delay_days": -1}])  # negative delay
+
+
+async def test_enroll_sets_first_due():
+    tid = await make_tenant(slug="cad-enroll", name="Cad Enroll")
+    async with tenant_session(tid) as ts:
+        cad = await _make_cadence(ts, [{"delay_days": 2, "angle": "intro"}])
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.com")
+        ts.add(acc)
+        await ts.flush()
+        camp = Campaign(tenant_id=tid, name="c", list_id="l1", cadence_id=cad.id)
+        ts.add(camp)
+        await ts.flush()
+        target = CampaignTarget(tenant_id=tid, campaign_id=camp.id, account_id=acc.id,
+                                status=TARGET_DRAFTED, draft={"contact_id": "ct1"})
+        ts.add(target)
+        await ts.flush()
+
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        e = await get_cadence_service().enroll(ts, camp, target, now=t0)
+        assert e.status == "active"
+        assert e.current_step_index == 0
+        assert e.account_id == acc.id
+        assert e.contact_id == "ct1"
+        assert e.started_at == t0
+        assert e.next_touch_at == t0 + timedelta(days=2)
