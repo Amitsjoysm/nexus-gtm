@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
@@ -11,6 +12,7 @@ from nexus.api.schemas import (
     ListBuildRequest,
     PlayIn,
     PlayOut,
+    ProspectListOut,
     TriageOut,
 )
 from nexus.analytics.service import get_analytics_service
@@ -20,7 +22,7 @@ from nexus.inbox.service import get_inbox_service
 from nexus.ingestion.service import get_ingestion_service
 from nexus.lists.builder import get_list_builder
 from nexus.models.account import Account
-from nexus.models.workflow import Play
+from nexus.models.workflow import ListItem, Play, ProspectList
 
 router = APIRouter(tags=["workflow"])
 
@@ -104,6 +106,34 @@ async def build_list(
         ts, name=body.name, flt=body.filter, owner_user_id=principal.user_id
     )
     return {"id": plist.id, "name": plist.name, "accounts": count}
+
+
+@router.get("/lists", response_model=list[ProspectListOut])
+async def list_saved_lists(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> list[ProspectListOut]:
+    """Saved segments with their current member counts — feeds the campaign list picker."""
+    lists = await ts.list(ProspectList)
+    counts = dict(
+        (
+            await ts.session.execute(
+                select(ListItem.list_id, func.count())
+                .where(ListItem.tenant_id == ts.tenant_id)
+                .group_by(ListItem.list_id)
+            )
+        ).all()
+    )
+    lists.sort(key=lambda pl: pl.created_at, reverse=True)
+    return [
+        ProspectListOut(
+            id=pl.id,
+            name=pl.name,
+            accounts=int(counts.get(pl.id, 0)),
+            created_at=pl.created_at,
+        )
+        for pl in lists
+    ]
 
 
 # ---- plays ----

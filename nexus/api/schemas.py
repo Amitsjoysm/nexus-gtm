@@ -1,6 +1,8 @@
 """Pydantic request/response schemas for the API."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -172,6 +174,15 @@ class InboxTaskOut(BaseModel):
 class ListBuildRequest(BaseModel):
     name: str
     filter: dict = Field(default_factory=dict)
+
+
+class ProspectListOut(BaseModel):
+    """A saved segment: its name and how many accounts it currently holds."""
+
+    id: str
+    name: str
+    accounts: int
+    created_at: datetime
 
 
 # ---- workspaces ----
