@@ -541,3 +541,75 @@ async def test_cadences_crud_http(client):
         "/api/cadences", headers=auth(token), json={"name": "empty", "steps": []}
     )
     assert r.status_code == 422
+
+
+async def test_advance_is_tenant_isolated():
+    """Advancing one tenant's due enrollments must never reach into another tenant's.
+
+    Two tenants each have one identical, immediately-due enrollment. We advance ONLY tenant
+    A inside its own session; tenant B's enrollment must remain untouched (still active, zero
+    touches). This is the per-tenant guarantee that ``handle_advance_cadences`` relies on when
+    it loops tenant-by-tenant."""
+    svc = get_cadence_service()
+    tid_a = await make_tenant(slug="cad-iso-a", name="Iso A")
+    tid_b = await make_tenant(slug="cad-iso-b", name="Iso B")
+
+    async with tenant_session(tid_a) as ts_a:
+        _, e_a, _, _ = await _enrollable(ts_a, NOW, steps=[{"delay_days": 0, "angle": "intro"}])
+    async with tenant_session(tid_b) as ts_b:
+        _, e_b, _, _ = await _enrollable(ts_b, NOW, steps=[{"delay_days": 0, "angle": "intro"}])
+
+    # Advance only tenant A.
+    async with tenant_session(tid_a) as ts_a:
+        assert await svc.advance_due_for_tenant(ts_a, now=NOW, limit=100) == 1
+
+    # Tenant A: the single touch sent and the enrollment completed.
+    async with tenant_session(tid_a) as ts_a:
+        ea = await ts_a.get(CadenceEnrollment, e_a.id)
+        assert ea.status == ENROLL_COMPLETED
+        touches_a = await ts_a.list(CadenceTouch, CadenceTouch.enrollment_id == e_a.id)
+        assert [t.status for t in touches_a] == [TOUCH_SENT]
+
+    # Tenant B: completely untouched — still active, no touches.
+    async with tenant_session(tid_b) as ts_b:
+        eb = await ts_b.get(CadenceEnrollment, e_b.id)
+        assert eb.status == ENROLL_ACTIVE
+        assert await ts_b.list(CadenceTouch, CadenceTouch.enrollment_id == e_b.id) == []
+
+
+async def test_null_cadence_campaign_uses_single_send_path(ts):
+    """Backward-compat: a campaign with no ``cadence_id`` still runs the original single-shot
+    send path and creates ZERO enrollments. The cadence engine is purely additive — the
+    pre-existing campaign behavior (and ``tests/test_campaign_engine.py``) is unaffected."""
+    from nexus.models.campaign import CAMP_COMPLETED, TARGET_SENT
+    from nexus.models.workflow import ListItem, ProspectList
+
+    plist = ProspectList(tenant_id=ts.tenant_id, name="seg", filter={})
+    ts.add(plist)
+    await ts.flush()
+    acc = Account(tenant_id=ts.tenant_id, name="Acme", domain="acme.com")
+    ts.add(acc)
+    await ts.flush()
+    ts.add(Contact(
+        tenant_id=ts.tenant_id, account_id=acc.id, full_name="Lead", email="lead@acme.com"
+    ))
+    ts.add(ListItem(tenant_id=ts.tenant_id, list_id=plist.id, account_id=acc.id))
+    await ts.flush()
+
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts, name="single", list_id=plist.id, icp={"industries": ["SaaS"]},
+        sequence="ai-orchestrated-outbound", created_by_user_id="u1",
+    )
+    assert campaign.cadence_id is None  # default — no cadence wired
+    await svc.run_draft_phase(ts, campaign)
+    await svc.approve_and_send(ts, campaign, decided_by="u1")
+
+    assert campaign.status == CAMP_COMPLETED
+    targets = await svc.list_targets(ts, campaign.id)
+    assert all(t.status == TARGET_SENT for t in targets if t.draft)
+    # The additive cadence engine stayed out of the way: no enrollments were created.
+    enrollments = await ts.list(
+        CadenceEnrollment, CadenceEnrollment.campaign_id == campaign.id
+    )
+    assert enrollments == []
