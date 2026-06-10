@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
     AccountOut,
+    ActivityItemOut,
     InboxTaskOut,
     ListBuildRequest,
     PlayIn,
@@ -159,3 +160,14 @@ async def analytics_overview(
     _: Principal = Depends(require(Permission.view_analytics)),
 ) -> dict:
     return await get_analytics_service().overview(ts)
+
+
+@router.get("/analytics/activity", response_model=list[ActivityItemOut])
+async def analytics_activity(
+    limit: int = 20,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.view_analytics)),
+) -> list[ActivityItemOut]:
+    """Unified newest-first feed of recent workspace activity — the dashboard's live pulse."""
+    items = await get_analytics_service().activity(ts, limit=limit)
+    return [ActivityItemOut(**i) for i in items]

@@ -306,3 +306,17 @@ class PlayIn(BaseModel):
 
 class PlayOut(PlayIn):
     id: str
+
+
+# ---- analytics: live activity feed ----
+class ActivityItemOut(BaseModel):
+    """One entry in the dashboard's unified live feed (signal / alert / score / agent run)."""
+
+    id: str
+    kind: str            # signal | alert | account_scored | agent_run
+    title: str
+    detail: str = ""
+    account_id: str | None = None
+    account_name: str | None = None
+    at: str              # ISO-8601 timestamp, newest-first in the response
+    tone: str = "neutral"  # neutral | info | success | warning | critical
