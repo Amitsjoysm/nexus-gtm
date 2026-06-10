@@ -10,6 +10,7 @@ import signal
 
 from nexus.core.db import dispose_db, init_db
 from nexus.workers.queue import get_task_queue
+from nexus.workers.scheduler import run_scheduler
 from nexus.workers.tasks import dispatch
 
 logger = logging.getLogger("nexus.workers.worker")
@@ -40,7 +41,10 @@ async def _main() -> None:
         except NotImplementedError:  # Windows: signal handlers unsupported in loop
             pass
     try:
-        await run_worker(stop=stop)
+        await asyncio.gather(
+            run_worker(stop=stop),
+            run_scheduler(stop=stop),
+        )
     finally:
         await dispose_db()
 

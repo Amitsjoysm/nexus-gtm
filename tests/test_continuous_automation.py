@@ -202,3 +202,23 @@ async def test_run_scheduler_stops_promptly_when_event_set(monkeypatch):
     q = InMemoryTaskQueue()
     await asyncio.wait_for(run_scheduler(stop=stop, queue=q), timeout=1.0)
     assert await _drain(q) == []
+
+
+from nexus.workers.worker import run_worker
+
+
+@pytest.mark.asyncio
+async def test_worker_and_scheduler_stop_on_shared_event(monkeypatch):
+    monkeypatch.setattr(get_settings(), "automation_enabled", False)
+    q = InMemoryTaskQueue()
+    set_task_queue(q)
+    stop = asyncio.Event()
+    stop.set()  # both coroutines should observe this and return
+    await asyncio.wait_for(
+        asyncio.gather(
+            run_worker(stop=stop, poll_timeout=0.1),
+            run_scheduler(stop=stop, queue=q),
+        ),
+        timeout=2.0,
+    )
+    set_task_queue(None)
