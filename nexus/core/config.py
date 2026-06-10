@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     cadence_batch_size: int = 100             # max enrollments claimed per tick per worker
     cadence_max_duration_days: int = 30       # duration-cap safety bound (mid-sequence stop)
 
+    # Continuous Automation (sub-project D): autonomous heartbeat that drives the recurring
+    # GTM loop (account refresh + cadence advance). OFF by default (safe opt-in, like
+    # cadence_enabled) so the test suite stays deterministic and zero-network.
+    automation_enabled: bool = False            # global master switch for the heartbeat
+    automation_tick_interval_s: int = 60        # heartbeat period (seconds)
+    account_refresh_interval_s: int = 21600     # staleness threshold before re-processing (6h)
+    account_refresh_batch_size: int = 100       # max accounts claimed per tick across tenants
+
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
     # A selected engine with no key degrades to keyless DuckDuckGo so search keeps working.
