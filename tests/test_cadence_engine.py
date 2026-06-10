@@ -405,3 +405,31 @@ async def test_review_reject_with_stop_is_terminal(ts):
     await ts.refresh(e)
     assert e.status == ENROLL_STOPPED
     assert e.stop_reason == STOP_MANUAL
+
+
+async def test_handle_advance_cadences_disabled_is_noop(monkeypatch):
+    from nexus.workers.tasks import handle_advance_cadences
+
+    monkeypatch.setattr(get_settings(), "cadence_enabled", False)
+    assert await handle_advance_cadences({}) == {"skipped": "cadence_disabled"}
+
+
+async def test_handle_advance_cadences_processes_due(ts, monkeypatch):
+    from nexus.core.db import utcnow
+    from nexus.workers.tasks import handle_advance_cadences
+
+    monkeypatch.setattr(get_settings(), "cadence_enabled", True)
+    # Enroll at the real clock so the wall-clock tick inside the handler finds it due
+    # (and well inside the duration cap).
+    now0 = utcnow()
+    _, e, _, _ = await _enrollable(ts, now0, steps=[{"delay_days": 0, "angle": "intro"}])
+    await ts.commit()  # the handler scans in its own sessions
+
+    result = await handle_advance_cadences({})
+    assert result["tenants"] >= 1
+    assert result["processed"] >= 1
+
+    # Confirm the touch sent, reading through a fresh tenant-bound session.
+    async with tenant_session(ts.tenant_id) as ts2:
+        touches = await ts2.list(CadenceTouch, CadenceTouch.enrollment_id == e.id)
+        assert [t.status for t in touches] == [TOUCH_SENT]

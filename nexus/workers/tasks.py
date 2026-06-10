@@ -88,10 +88,51 @@ async def handle_run_campaign(payload: dict) -> dict:
         return {"campaign_id": campaign.id, "status": campaign.status}
 
 
+async def handle_advance_cadences(payload: dict) -> dict:
+    """Periodic cadence driver. Scans globally for tenants with a due enrollment, then
+    advances each tenant's due enrollments inside its own tenant-bound session.
+
+    The scan uses a raw, tenant-agnostic session (it only reads tenant ids, never ORM
+    rows), keeping the per-tenant isolation guarantee for the actual work. Inert unless
+    ``cadence_enabled`` is set."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import distinct, select
+
+    from nexus.core.config import get_settings
+    from nexus.cadences.service import get_cadence_service
+    from nexus.models.cadence import CadenceEnrollment, ENROLL_ACTIVE
+
+    settings = get_settings()
+    if not settings.cadence_enabled:
+        return {"skipped": "cadence_disabled"}
+
+    now = datetime.now(timezone.utc)
+    batch = settings.cadence_batch_size
+
+    async with get_sessionmaker()() as session:
+        rows = await session.scalars(
+            select(distinct(CadenceEnrollment.tenant_id)).where(
+                CadenceEnrollment.status == ENROLL_ACTIVE,
+                CadenceEnrollment.next_touch_at <= now,
+            )
+        )
+        tenant_ids = list(rows.all())
+
+    processed = 0
+    for tid in tenant_ids:
+        async with tenant_session(tid) as ts:
+            processed += await get_cadence_service().advance_due_for_tenant(
+                ts, now=now, limit=batch
+            )
+    return {"tenants": len(tenant_ids), "processed": processed}
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
     "run_campaign": handle_run_campaign,
+    "advance_cadences": handle_advance_cadences,
 }
 
 
@@ -123,6 +164,11 @@ async def enqueue_run_campaign(
             payload={"tenant_id": tenant_id, "campaign_id": campaign_id, "phase": phase},
         )
     )
+
+
+async def enqueue_advance_cadences(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="advance_cadences", payload={}))
 
 
 async def dispatch(job: Job) -> dict:
