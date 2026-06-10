@@ -47,6 +47,9 @@ class SPAStaticFiles(StaticFiles):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    from nexus.ingestion.crm_sync import register_crm_sync_subscribers
+
+    register_crm_sync_subscribers()
     yield
     await dispose_db()
 

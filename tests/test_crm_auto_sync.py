@@ -350,3 +350,16 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
     jobs = await _drain(q)
     assert "sync_crm_due_accounts" not in {j.name for j in jobs}
     assert {j.name for j in jobs} == {"advance_cadences", "refresh_due_accounts"}
+
+
+@pytest.mark.asyncio
+async def test_app_lifespan_registers_account_scored_subscriber():
+    from nexus.core.events import get_event_bus
+    from nexus.main import create_app
+
+    bus = get_event_bus()
+    before = len(bus._handlers.get("account.scored", []))
+    app = create_app()
+    async with app.router.lifespan_context(app):
+        after = len(bus._handlers.get("account.scored", []))
+        assert after >= before + 1   # the CRM-sync subscriber is registered on startup
