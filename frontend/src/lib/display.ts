@@ -2,6 +2,22 @@
 import type { BadgeTone } from "@/components/ui";
 import type { AlertSeverity } from "./types";
 
+/** Activity-feed tone string → Badge tone ("critical" maps to the danger pill). */
+export function activityTone(tone: string): BadgeTone {
+  switch (tone) {
+    case "critical":
+      return "danger";
+    case "warning":
+      return "warning";
+    case "success":
+      return "success";
+    case "info":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
+
 export function severityTone(severity: AlertSeverity): BadgeTone {
   switch (severity) {
     case "critical":
