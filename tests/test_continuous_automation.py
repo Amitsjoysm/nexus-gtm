@@ -6,6 +6,7 @@ import pytest
 from nexus.core.config import get_settings
 from nexus.core.db import get_sessionmaker
 from nexus.models.identity import Tenant
+from nexus.models.account import Account
 
 
 def test_automation_config_defaults():
@@ -23,3 +24,15 @@ async def test_tenant_automation_flag_defaults_false():
         s.add(t)
         await s.flush()
         assert t.automation_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_account_last_refreshed_at_defaults_none():
+    async with get_sessionmaker()() as s:
+        t = Tenant(name="Acme3", slug="acme-auto3")
+        s.add(t)
+        await s.flush()
+        acct = Account(tenant_id=t.id, name="Beta Corp", domain="beta.example")
+        s.add(acct)
+        await s.flush()
+        assert acct.last_refreshed_at is None

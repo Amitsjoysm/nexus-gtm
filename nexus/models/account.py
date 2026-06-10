@@ -1,7 +1,9 @@
 """Accounts (companies) and contacts (people)."""
 from __future__ import annotations
 
-from sqlalchemy import JSON, Float, ForeignKey, Integer, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from nexus.core.db import Base, IdMixin, TimestampMixin
@@ -24,6 +26,11 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     custom_fields: Mapped[dict] = mapped_column(JSON, default=dict)
     # Provenance: "discovery" for web-sourced rows so results can filter own vs discovered.
     source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Continuous Automation: when the autonomous heartbeat last re-processed this account.
+    # NULL = never refreshed (always due). Stamped when the refresh driver claims the account.
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     contacts: Mapped[list["Contact"]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
