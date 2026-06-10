@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import pytest
 
+import importlib.util
+from pathlib import Path
+
 from nexus.core.config import get_settings
 from nexus.core.db import get_sessionmaker
 from nexus.models.identity import Tenant
@@ -36,3 +39,13 @@ async def test_account_last_refreshed_at_defaults_none():
         s.add(acct)
         await s.flush()
         assert acct.last_refreshed_at is None
+
+
+def test_migration_0008_chains_from_0007():
+    path = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "0008_continuous_automation.py"
+    spec = importlib.util.spec_from_file_location("mig_0008", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.revision == "0008_continuous_automation"
+    assert mod.down_revision == "0007_cadence"
+    assert hasattr(mod, "upgrade") and hasattr(mod, "downgrade")
