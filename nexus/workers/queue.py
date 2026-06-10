@@ -53,6 +53,13 @@ class InMemoryTaskQueue(TaskQueue):
     async def dequeue(self, *, timeout: float | None = None) -> Job | None:
         if timeout is None:
             return await self._q.get()
+        if timeout == 0:
+            # Non-blocking poll: return immediately without a wait_for (which always
+            # times out at timeout=0 in Python 3.10+ even when the queue is non-empty).
+            try:
+                return self._q.get_nowait()
+            except asyncio.QueueEmpty:
+                return None
         try:
             return await asyncio.wait_for(self._q.get(), timeout=timeout)
         except asyncio.TimeoutError:

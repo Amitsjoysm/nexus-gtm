@@ -128,11 +128,81 @@ async def handle_advance_cadences(payload: dict) -> dict:
     return {"tenants": len(tenant_ids), "processed": processed}
 
 
+async def handle_refresh_due_accounts(payload: dict) -> dict:
+    """Periodic account-refresh driver. Scans globally for accounts that are due for a
+    refresh (stale or never refreshed) and belong to a tenant that has opted in, stamps
+    each as claimed, and enqueues a ``process_account`` job per account.
+
+    ``process_account`` runs the full sense→act loop (ingest signals → score → inbox →
+    plays → alerts), so this one driver delivers ingestion refresh, rescoring, play
+    evaluation, and alerts. Inert unless the global ``automation_enabled`` switch is set.
+
+    The global scan uses a raw, tenant-agnostic session (it reads only ids), preserving
+    per-tenant isolation for the actual stamping work below. ``now`` is overridable via
+    ``payload['now_iso']`` for deterministic tests."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import or_, select
+
+    from nexus.core.config import get_settings
+    from nexus.models.account import Account
+    from nexus.models.identity import Tenant
+
+    settings = get_settings()
+    if not settings.automation_enabled:
+        return {"skipped": "automation_disabled"}
+
+    now = (
+        datetime.fromisoformat(payload["now_iso"])
+        if payload.get("now_iso")
+        else datetime.now(timezone.utc)
+    )
+    cutoff = now - timedelta(seconds=settings.account_refresh_interval_s)
+    batch = settings.account_refresh_batch_size
+
+    async with get_sessionmaker()() as session:
+        stmt = (
+            select(Account.tenant_id, Account.id)
+            .join(Tenant, Tenant.id == Account.tenant_id)
+            .where(
+                Tenant.automation_enabled == True,  # noqa: E712
+                or_(
+                    Account.last_refreshed_at.is_(None),
+                    Account.last_refreshed_at <= cutoff,
+                ),
+            )
+            .order_by(Account.last_refreshed_at.asc().nulls_first())
+            .limit(batch)
+        )
+        if settings.is_postgres:
+            stmt = stmt.with_for_update(skip_locked=True, of=Account)
+        rows = (await session.execute(stmt)).all()
+
+    # group selected account ids by tenant
+    by_tenant: dict[str, list[str]] = {}
+    for tenant_id, account_id in rows:
+        by_tenant.setdefault(tenant_id, []).append(account_id)
+
+    refreshed = 0
+    for tid, account_ids in by_tenant.items():
+        async with tenant_session(tid) as ts:
+            for aid in account_ids:
+                account = await ts.get(Account, aid)
+                if account is None:
+                    continue
+                account.last_refreshed_at = now  # claim — excludes it from the next tick
+                await enqueue_process_account(tid, aid)
+                refreshed += 1
+
+    return {"tenants": len(by_tenant), "accounts": refreshed}
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
     "run_campaign": handle_run_campaign,
     "advance_cadences": handle_advance_cadences,
+    "refresh_due_accounts": handle_refresh_due_accounts,
 }
 
 
@@ -169,6 +239,11 @@ async def enqueue_run_campaign(
 async def enqueue_advance_cadences(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="advance_cadences", payload={}))
+
+
+async def enqueue_refresh_due_accounts(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="refresh_due_accounts", payload={}))
 
 
 async def dispatch(job: Job) -> dict:

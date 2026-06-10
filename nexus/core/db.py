@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, String, func
+from sqlalchemy.types import TypeDecorator
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -42,6 +43,21 @@ def ensure_aware(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+class TZDateTime(TypeDecorator):
+    """A ``DateTime(timezone=True)`` that always returns tz-aware UTC datetimes.
+
+    SQLite stores datetimes as strings and does not preserve timezone info on read,
+    returning naive ``datetime`` objects. This decorator re-attaches UTC so that
+    code using the ORM never has to call ``ensure_aware`` manually.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_result_value(self, value: datetime | None, dialect) -> datetime | None:
+        return ensure_aware(value)
 
 
 class Base(DeclarativeBase):

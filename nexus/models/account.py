@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from nexus.core.db import Base, IdMixin, TimestampMixin
+from nexus.core.db import Base, IdMixin, TimestampMixin, TZDateTime
 from nexus.core.tenancy import TenantScoped
 
 
@@ -29,7 +29,7 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     # Continuous Automation: when the autonomous heartbeat last re-processed this account.
     # NULL = never refreshed (always due). Stamped when the refresh driver claims the account.
     last_refreshed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
+        TZDateTime(), nullable=True, index=True
     )
 
     contacts: Mapped[list["Contact"]] = relationship(
