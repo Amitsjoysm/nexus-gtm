@@ -34,14 +34,17 @@ class MessagingAgent(BaseAgent):
         vp = vps[0] if vps else {"name": "our platform", "pains_solved": []}
         pains = ", ".join(vp.get("pains_solved", [])) or "hit pipeline goals"
 
-        user = LLMMessage(
-            role="user",
-            content=(
-                f"Write a short, personalized cold email to "
-                f"{contact.full_name if contact else 'the buyer'} at {ctx.account.name}. "
-                f"Hook: {trigger}. Lead with value prop '{vp.get('name')}'."
-            ),
+        angle = (ctx.inputs.get("angle") or "").strip()
+        content = (
+            f"Write a short, personalized cold email to "
+            f"{contact.full_name if contact else 'the buyer'} at {ctx.account.name}. "
+            f"Hook: {trigger}. Lead with value prop '{vp.get('name')}'."
         )
+        if angle:
+            # Per-touch cadence angle: shape this specific touch (e.g. a follow-up nudge,
+            # a case-study share) so successive touches don't repeat the same message.
+            content += f" Angle for this touch: {angle}."
+        user = LLMMessage(role="user", content=content)
         message = await ctx.complete(
             [ctx.system_message(), user],
             purpose="outreach_message",

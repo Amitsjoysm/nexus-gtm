@@ -93,6 +93,10 @@ def _research_compose_plan(goal_input: dict) -> list[PlanStep]:
     compose_inputs: dict = {}
     if goal_input.get("contact_id"):
         compose_inputs["contact_id"] = goal_input["contact_id"]
+    # Channel & Cadence: thread the per-touch angle so each cadence step composes a
+    # distinct message. Same inputs-threading seam B used for contact_id.
+    if goal_input.get("angle"):
+        compose_inputs["angle"] = goal_input["angle"]
     return [
         PlanStep(idx=0, tool="research", depends_on=[]),
         PlanStep(idx=1, tool="scoring", depends_on=[0]),

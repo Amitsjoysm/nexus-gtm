@@ -71,3 +71,20 @@ async def test_campaign_cadence_columns_default():
         await ts.flush()
         assert c.cadence_id is None          # NULL = backward-compatible single-touch path
         assert c.review_each_touch is False
+
+
+from nexus.orchestration.planner import get_planner
+
+
+def test_research_compose_threads_angle():
+    plan = get_planner().plan(
+        "research_compose", {"account_id": "a1", "angle": "case study follow-up"}
+    )
+    compose = next(s for s in plan if s["tool"] == "compose_message")
+    assert compose["inputs"].get("angle") == "case study follow-up"
+
+
+def test_research_compose_without_angle_unchanged():
+    plan = get_planner().plan("research_compose", {"account_id": "a1"})
+    compose = next(s for s in plan if s["tool"] == "compose_message")
+    assert "angle" not in compose["inputs"]
