@@ -1,7 +1,7 @@
 """Identity & access: tenants, workspaces, users, memberships."""
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from nexus.core.db import Base, IdMixin, TimestampMixin
@@ -15,6 +15,9 @@ class Tenant(IdMixin, TimestampMixin, Base):
 
     name: Mapped[str] = mapped_column(String(200))
     slug: Mapped[str] = mapped_column(String(80), unique=True)
+    # Continuous Automation opt-in: when True (and the global automation_enabled master
+    # switch is on), this tenant's accounts/cadences are driven autonomously by the heartbeat.
+    automation_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class User(IdMixin, TimestampMixin, Base):
