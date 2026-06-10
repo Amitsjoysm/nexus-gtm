@@ -222,6 +222,14 @@ export interface ListBuildResult {
   accounts: number;
 }
 
+/** A saved segment as returned by GET /lists, with its current member count. */
+export interface ProspectList {
+  id: string;
+  name: string;
+  accounts: number;
+  created_at: string;
+}
+
 // ---- plays ----
 export interface PlayTrigger {
   signal_kinds?: string[];
@@ -535,4 +543,173 @@ export interface TenantSummary {
 
 export interface SwitchTenantRequest {
   tenant_id: string;
+}
+
+// ---- segment campaigns ----
+export type CampaignStatus =
+  | "draft_pending"
+  | "drafting"
+  | "awaiting_approval"
+  | "approved"
+  | "sending"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export type CampaignTargetStatus =
+  | "pending"
+  | "drafting"
+  | "drafted"
+  | "skipped"
+  | "approved"
+  | "sent"
+  | "failed";
+
+export interface CampaignTarget {
+  id: string;
+  account_id: string;
+  status: CampaignTargetStatus | string;
+  skip_reason: string | null;
+  draft: Record<string, unknown>;
+  error: string | null;
+}
+
+export interface Campaign {
+  id: string;
+  name: string;
+  list_id: string;
+  status: CampaignStatus | string;
+  sequence: string;
+  icp: Record<string, unknown>;
+  report: Record<string, number>;
+  send_risky: boolean;
+  cadence_id: string | null;
+  review_each_touch: boolean;
+  created_at: string;
+}
+
+export interface CampaignDetail extends Campaign {
+  targets: CampaignTarget[];
+}
+
+export interface CampaignPreview {
+  campaign_id: string;
+  status: CampaignStatus | string;
+  report: Record<string, number>;
+  sample: CampaignTarget[];
+}
+
+export interface CampaignInput {
+  name: string;
+  list_id: string;
+  icp?: Record<string, unknown>;
+  sequence?: string;
+  send_risky?: boolean;
+  cadence_id?: string | null;
+  review_each_touch?: boolean;
+}
+
+/** One frame from a campaign's SSE progress stream (status + per-status target counts). */
+export interface CampaignProgress {
+  status: CampaignStatus | string;
+  counts: Record<string, number>;
+  report: Record<string, number>;
+}
+
+// ---- cadences ----
+export type EnrollmentStatus = "active" | "paused" | "completed" | "stopped";
+export type TouchStatus = "sent" | "skipped" | "failed" | "awaiting_approval";
+
+export interface CadenceStep {
+  step_index: number;
+  delay_days: number;
+  angle: string;
+  channel: string;
+}
+
+export interface CadenceStepInput {
+  delay_days: number;
+  angle: string;
+  channel: string;
+}
+
+export interface Cadence {
+  id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  steps: CadenceStep[];
+}
+
+export interface CadenceInput {
+  name: string;
+  description?: string | null;
+  steps: CadenceStepInput[];
+}
+
+export interface CadenceEnrollment {
+  id: string;
+  campaign_id: string;
+  account_id: string;
+  contact_id: string | null;
+  cadence_id: string;
+  current_step_index: number;
+  status: EnrollmentStatus | string;
+  stop_reason: string | null;
+  next_touch_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface CadenceTouch {
+  id: string;
+  enrollment_id: string;
+  step_index: number;
+  status: TouchStatus | string;
+  skip_reason: string | null;
+  run_id: string | null;
+  sent_at: string | null;
+  error: string | null;
+}
+
+export interface EnrollmentDetail extends CadenceEnrollment {
+  touches: CadenceTouch[];
+}
+
+export interface CadenceReport {
+  campaign_id: string;
+  cadence_id: string | null;
+  total_enrollments: number;
+  by_status: Record<string, number>;
+  touches_sent: number;
+  touches_skipped: number;
+  stops: Record<string, number>;
+}
+
+// ---- automation + CRM sync (settings) ----
+export interface AutomationSettings {
+  automation_enabled: boolean;
+}
+
+export interface CRMSyncStatus {
+  enabled: boolean;
+  provider: string;
+  pending: number;
+  synced: number;
+}
+
+// ---- live dashboard activity feed ----
+export type ActivityKind = "signal" | "alert" | "account_scored" | "agent_run";
+export type ActivityTone = "neutral" | "info" | "success" | "warning" | "critical";
+
+export interface ActivityItem {
+  id: string;
+  kind: ActivityKind | string;
+  title: string;
+  detail: string;
+  account_id: string | null;
+  account_name: string | null;
+  at: string;
+  tone: ActivityTone | string;
 }
