@@ -30,3 +30,16 @@ async def test_account_crm_synced_at_defaults_none():
         s.add(acct)
         await s.flush()
         assert acct.crm_synced_at is None
+
+
+def test_migration_0009_chains_from_0008():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "migrations" / "versions" / "0009_crm_auto_sync.py"
+    )
+    spec = importlib.util.spec_from_file_location("mig_0009", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.revision == "0009_crm_auto_sync"
+    assert mod.down_revision == "0008_continuous_automation"
+    assert hasattr(mod, "upgrade") and hasattr(mod, "downgrade")
