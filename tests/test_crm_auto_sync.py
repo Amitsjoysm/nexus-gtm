@@ -86,6 +86,35 @@ async def test_sync_account_pushes_record_and_contacts_and_stamps():
 
 
 @pytest.mark.asyncio
+async def test_sync_does_not_leave_account_perpetually_due():
+    """Regression: stamping crm_synced_at is a row UPDATE, which must not let onupdate push
+    updated_at *past* it — otherwise the account stays due and re-syncs every sweep (a scale
+    bug at 1M accounts). After a sync, updated_at must be <= crm_synced_at."""
+    from nexus.core.db import ensure_aware
+    from nexus.ingestion.crm_sync import sync_account_to_crm
+
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+    async with get_sessionmaker()() as s:
+        t = Tenant(name="NotDue", slug="sync-not-due", automation_enabled=True)
+        s.add(t)
+        await s.flush()
+        # updated_at defaults to the real wall clock, which is well after the fixed `now`.
+        acct = Account(tenant_id=t.id, name="Acme", domain="acme.x", crm_synced_at=None)
+        s.add(acct)
+        await s.commit()
+        tid, aid = t.id, acct.id
+
+    conn = StubCRMConnector()
+    async with tenant_session(tid) as ts:
+        acct = await ts.get(Account, aid)
+        await sync_account_to_crm(ts, acct, connector=conn, now=now)
+
+    async with get_sessionmaker()() as s:
+        a = await s.get(Account, aid)
+        assert ensure_aware(a.updated_at) <= ensure_aware(a.crm_synced_at)
+
+
+@pytest.mark.asyncio
 async def test_sync_account_pushes_activity_for_signals_since_last_sync():
     from nexus.ingestion.crm_sync import sync_account_to_crm
 
