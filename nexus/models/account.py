@@ -31,6 +31,12 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     last_refreshed_at: Mapped[datetime | None] = mapped_column(
         TZDateTime(), nullable=True, index=True
     )
+    # CRM Auto-Sync: when this account's state was last pushed to the CRM. NULL = never synced
+    # (always due). Stamped on a successful push; the account is due again only when updated_at
+    # moves past it. Indexed for the NULLS-FIRST due-selection scan.
+    crm_synced_at: Mapped[datetime | None] = mapped_column(
+        TZDateTime(), nullable=True, index=True
+    )
 
     contacts: Mapped[list["Contact"]] = relationship(
         back_populates="account", cascade="all, delete-orphan"

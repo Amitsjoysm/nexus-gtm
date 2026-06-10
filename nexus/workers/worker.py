@@ -33,6 +33,9 @@ async def run_worker(*, stop: asyncio.Event | None = None, poll_timeout: float =
 async def _main() -> None:
     logging.basicConfig(level=logging.INFO)
     await init_db()
+    from nexus.ingestion.crm_sync import register_crm_sync_subscribers
+
+    register_crm_sync_subscribers()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
