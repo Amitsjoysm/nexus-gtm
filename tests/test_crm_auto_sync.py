@@ -120,3 +120,149 @@ async def test_sync_account_pushes_activity_for_signals_since_last_sync():
     act = conn.pushed_activities[0]
     assert act["kind"] == "signal"
     assert act["detail"]["signal"] == "Fresh news"
+
+
+from nexus.ingestion.crm import set_crm_connector
+from nexus.workers.queue import InMemoryTaskQueue, set_task_queue
+from nexus.workers.tasks import (
+    handle_sync_crm_account,
+    handle_sync_crm_due_accounts,
+)
+
+
+async def _drain(queue) -> list:
+    jobs = []
+    while True:
+        job = await queue.dequeue(timeout=0)
+        if job is None:
+            break
+        jobs.append(job)
+    return jobs
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_when_master_switch_off(monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", False)
+    res = await handle_sync_crm_due_accounts({})
+    assert res == {"skipped": "crm_sync_disabled"}
+
+
+@pytest.mark.asyncio
+async def test_sweep_selects_only_due_accounts_in_opted_in_tenants(monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+    t0 = now - timedelta(hours=3)
+    t1 = now - timedelta(hours=1)
+    conn = StubCRMConnector()
+    set_crm_connector(conn)
+    async with get_sessionmaker()() as s:
+        t = Tenant(name="Sweep", slug="sweep-due", automation_enabled=True)
+        s.add(t)
+        await s.flush()
+        never = Account(tenant_id=t.id, name="Never", domain="n.x", crm_synced_at=None)
+        changed = Account(tenant_id=t.id, name="Changed", domain="c.x",
+                          crm_synced_at=t0, updated_at=t1)        # updated after sync → due
+        fresh = Account(tenant_id=t.id, name="Fresh", domain="f.x",
+                        crm_synced_at=t1, updated_at=t0)          # synced after update → not due
+        s.add_all([never, changed, fresh])
+        await s.commit()
+        never_id, changed_id, fresh_id = never.id, changed.id, fresh.id
+
+    res = await handle_sync_crm_due_accounts({"now_iso": now.isoformat()})
+
+    assert res["accounts"] == 2
+    pushed_ids = {r["account_id"] for r in conn.pushed_accounts}
+    assert pushed_ids == {never_id, changed_id}      # fresh excluded
+    async with get_sessionmaker()() as s:
+        assert (await s.get(Account, never_id)).crm_synced_at == now
+        assert (await s.get(Account, changed_id)).crm_synced_at == now
+        assert (await s.get(Account, fresh_id)).crm_synced_at == t1   # untouched
+    set_crm_connector(None)
+
+
+@pytest.mark.asyncio
+async def test_sweep_is_idempotent(monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+    conn = StubCRMConnector()
+    set_crm_connector(conn)
+    async with get_sessionmaker()() as s:
+        t = Tenant(name="Idem", slug="sweep-idem", automation_enabled=True)
+        s.add(t)
+        await s.flush()
+        s.add(Account(tenant_id=t.id, name="A", domain="a.x", crm_synced_at=None))
+        await s.commit()
+
+    first = await handle_sync_crm_due_accounts({"now_iso": now.isoformat()})
+    assert first["accounts"] == 1
+    second = await handle_sync_crm_due_accounts({"now_iso": now.isoformat()})
+    assert second["accounts"] == 0                  # already stamped → no longer due
+    assert len(conn.pushed_accounts) == 1
+    set_crm_connector(None)
+
+
+@pytest.mark.asyncio
+async def test_sweep_is_tenant_isolated(monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+    conn = StubCRMConnector()
+    set_crm_connector(conn)
+    async with get_sessionmaker()() as s:
+        opted = Tenant(name="In", slug="sweep-in", automation_enabled=True)
+        out = Tenant(name="Out", slug="sweep-out", automation_enabled=False)
+        s.add_all([opted, out])
+        await s.flush()
+        a_in = Account(tenant_id=opted.id, name="In", domain="in.x", crm_synced_at=None)
+        a_out = Account(tenant_id=out.id, name="Out", domain="out.x", crm_synced_at=None)
+        s.add_all([a_in, a_out])
+        await s.commit()
+        in_id, out_id = a_in.id, a_out.id
+
+    res = await handle_sync_crm_due_accounts({"now_iso": now.isoformat()})
+    assert res["accounts"] == 1
+    assert {r["account_id"] for r in conn.pushed_accounts} == {in_id}
+    async with get_sessionmaker()() as s:
+        assert (await s.get(Account, out_id)).crm_synced_at is None  # untouched
+    set_crm_connector(None)
+
+
+@pytest.mark.asyncio
+async def test_single_account_handler_event_path(monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    conn = StubCRMConnector()
+    set_crm_connector(conn)
+    async with get_sessionmaker()() as s:
+        t = Tenant(name="One", slug="one-acct", automation_enabled=True)
+        s.add(t)
+        await s.flush()
+        acct = Account(tenant_id=t.id, name="Solo", domain="solo.x", crm_synced_at=None)
+        s.add(acct)
+        await s.commit()
+        tid, aid = t.id, acct.id
+
+    res = await handle_sync_crm_account({"tenant_id": tid, "account_id": aid})
+    assert res == {"account_id": aid, "ok": True}
+    assert {r["account_id"] for r in conn.pushed_accounts} == {aid}
+    async with get_sessionmaker()() as s:
+        assert (await s.get(Account, aid)).crm_synced_at is not None
+    set_crm_connector(None)
+
+
+@pytest.mark.asyncio
+async def test_single_account_handler_respects_tenant_opt_out(monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    conn = StubCRMConnector()
+    set_crm_connector(conn)
+    async with get_sessionmaker()() as s:
+        t = Tenant(name="OptOut", slug="opt-out", automation_enabled=False)
+        s.add(t)
+        await s.flush()
+        acct = Account(tenant_id=t.id, name="NoSync", domain="ns.x", crm_synced_at=None)
+        s.add(acct)
+        await s.commit()
+        tid, aid = t.id, acct.id
+
+    res = await handle_sync_crm_account({"tenant_id": tid, "account_id": aid})
+    assert res == {"skipped": "tenant_opted_out"}
+    assert conn.pushed_accounts == []
+    set_crm_connector(None)

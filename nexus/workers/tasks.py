@@ -197,12 +197,109 @@ async def handle_refresh_due_accounts(payload: dict) -> dict:
     return {"tenants": len(by_tenant), "accounts": refreshed}
 
 
+async def handle_sync_crm_due_accounts(payload: dict) -> dict:
+    """Heartbeat backstop: scan globally for accounts that are due for a CRM sync (never synced
+    or changed since last sync) in opted-in tenants, and push each to the configured CRM.
+
+    Mirrors handle_refresh_due_accounts: a raw, tenant-agnostic id-scan (reads only ids, so
+    per-tenant isolation is preserved by the RLS-scoped work below), then per-tenant sessions do
+    the actual push via the shared sync_account_to_crm. Inert unless the global crm_sync_enabled
+    switch is set. ``now`` is overridable via payload['now_iso'] for deterministic tests.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import or_, select
+
+    from nexus.core.config import get_settings
+    from nexus.ingestion.crm import get_crm_connector
+    from nexus.ingestion.crm_sync import sync_account_to_crm
+    from nexus.models.account import Account
+    from nexus.models.identity import Tenant
+
+    settings = get_settings()
+    if not settings.crm_sync_enabled:
+        return {"skipped": "crm_sync_disabled"}
+
+    now = (
+        datetime.fromisoformat(payload["now_iso"])
+        if payload.get("now_iso")
+        else datetime.now(timezone.utc)
+    )
+    batch = settings.crm_sync_batch_size
+
+    async with get_sessionmaker()() as session:
+        stmt = (
+            select(Account.tenant_id, Account.id)
+            .join(Tenant, Tenant.id == Account.tenant_id)
+            .where(
+                Tenant.automation_enabled == True,  # noqa: E712
+                or_(
+                    Account.crm_synced_at.is_(None),
+                    Account.updated_at > Account.crm_synced_at,
+                ),
+            )
+            .order_by(Account.crm_synced_at.asc().nulls_first())
+            .limit(batch)
+        )
+        if settings.is_postgres:
+            stmt = stmt.with_for_update(skip_locked=True, of=Account)
+        rows = (await session.execute(stmt)).all()
+
+    by_tenant: dict[str, list[str]] = {}
+    for tenant_id, account_id in rows:
+        by_tenant.setdefault(tenant_id, []).append(account_id)
+
+    connector = get_crm_connector()
+    synced = 0
+    for tid, account_ids in by_tenant.items():
+        async with tenant_session(tid) as ts:
+            for aid in account_ids:
+                account = await ts.get(Account, aid)
+                if account is None:
+                    continue
+                await sync_account_to_crm(ts, account, connector=connector, now=now)
+                synced += 1
+
+    return {"tenants": len(by_tenant), "accounts": synced}
+
+
+async def handle_sync_crm_account(payload: dict) -> dict:
+    """Event fast-path: sync a single account to the CRM. Gated by the global switch AND the
+    tenant's automation_enabled opt-in (the authoritative gate)."""
+    from datetime import datetime, timezone
+
+    from nexus.core.config import get_settings
+    from nexus.ingestion.crm import get_crm_connector
+    from nexus.ingestion.crm_sync import sync_account_to_crm
+    from nexus.models.account import Account
+    from nexus.models.identity import Tenant
+
+    if not get_settings().crm_sync_enabled:
+        return {"skipped": "crm_sync_disabled"}
+
+    tid = payload["tenant_id"]
+    aid = payload["account_id"]
+    async with tenant_session(tid) as ts:
+        tenant = await ts.session.get(Tenant, tid)
+        if tenant is None or not tenant.automation_enabled:
+            return {"skipped": "tenant_opted_out"}
+        account = await ts.get(Account, aid)
+        if account is None:
+            return {"skipped": "account_missing"}
+        res = await sync_account_to_crm(
+            ts, account, connector=get_crm_connector(), now=datetime.now(timezone.utc)
+        )
+    return {"account_id": aid, "ok": res.ok}
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
     "run_campaign": handle_run_campaign,
     "advance_cadences": handle_advance_cadences,
     "refresh_due_accounts": handle_refresh_due_accounts,
+    "sync_crm_account": handle_sync_crm_account,
+    "sync_crm_due_accounts": handle_sync_crm_due_accounts,
 }
 
 
@@ -244,6 +341,20 @@ async def enqueue_advance_cadences(*, queue: TaskQueue | None = None) -> None:
 async def enqueue_refresh_due_accounts(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="refresh_due_accounts", payload={}))
+
+
+async def enqueue_sync_crm_account(
+    tenant_id: str, account_id: str, *, queue: TaskQueue | None = None
+) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(
+        Job(name="sync_crm_account", payload={"tenant_id": tenant_id, "account_id": account_id})
+    )
+
+
+async def enqueue_sync_crm_due_accounts(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="sync_crm_due_accounts", payload={}))
 
 
 async def dispatch(job: Job) -> dict:
