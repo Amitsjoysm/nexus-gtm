@@ -261,6 +261,13 @@ class CRMPushResponse(BaseModel):
     contacts: int = 0
 
 
+class CRMSyncStatusOut(BaseModel):
+    enabled: bool      # crm_sync_enabled (global) AND this tenant's automation_enabled
+    provider: str      # configured crm_provider (stub|salesforce|hubspot)
+    pending: int       # accounts due for sync (never synced or changed since last sync)
+    synced: int        # accounts already up to date
+
+
 # ---- integrations: SEP ----
 class SEPPushRequest(BaseModel):
     sequence: str = "default"

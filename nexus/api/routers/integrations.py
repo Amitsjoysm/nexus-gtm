@@ -9,15 +9,18 @@ authenticated API call without changing either surface.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, or_, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
     CRMPushResponse,
     CRMSyncRequest,
     CRMSyncResponse,
+    CRMSyncStatusOut,
     SEPPushRequest,
     SEPPushResponse,
 )
+from nexus.core.config import get_settings
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.ingestion.crm import (
@@ -28,6 +31,7 @@ from nexus.ingestion.crm import (
 )
 from nexus.integrations.sep import get_sep_connector
 from nexus.models.account import Account, Contact
+from nexus.models.identity import Tenant
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
@@ -77,6 +81,39 @@ async def crm_push(
         source=result.source,
         external_id=result.external_id,
         contacts=len(contacts),
+    )
+
+
+@router.get("/crm/sync-status", response_model=CRMSyncStatusOut)
+async def crm_sync_status(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> CRMSyncStatusOut:
+    """Auto-sync state for the current tenant: whether it is active, the provider, and how many
+    accounts are pending vs. up to date. Counts are tenant-scoped (RLS) — never a global scan."""
+    settings = get_settings()
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    enabled = bool(settings.crm_sync_enabled and tenant and tenant.automation_enabled)
+
+    due_where = or_(
+        Account.crm_synced_at.is_(None),
+        Account.updated_at > Account.crm_synced_at,
+    )
+    total = await ts.session.scalar(
+        select(func.count()).select_from(Account).where(Account.tenant_id == ts.tenant_id)
+    )
+    pending = await ts.session.scalar(
+        select(func.count())
+        .select_from(Account)
+        .where(Account.tenant_id == ts.tenant_id, due_where)
+    )
+    total = total or 0
+    pending = pending or 0
+    return CRMSyncStatusOut(
+        enabled=enabled,
+        provider=(settings.crm_provider or "stub"),
+        pending=pending,
+        synced=total - pending,
     )
 
 

@@ -363,3 +363,54 @@ async def test_app_lifespan_registers_account_scored_subscriber():
     async with app.router.lifespan_context(app):
         after = len(bus._handlers.get("account.scored", []))
         assert after >= before + 1   # the CRM-sync subscriber is registered on startup
+
+
+from tests.conftest import auth, signup
+
+
+@pytest.mark.asyncio
+async def test_crm_sync_status_reports_flags_and_pending(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    token = await signup(client, slug="cs", email="owner@cs.x", company="CsCo")
+    # opt the tenant into automation so `enabled` composes True
+    await client.patch(
+        "/api/workspace/automation", headers=auth(token), json={"automation_enabled": True}
+    )
+    # create two accounts via inbound CRM sync (they land with crm_synced_at = NULL → pending)
+    r = await client.post(
+        "/api/integrations/crm/sync",
+        headers=auth(token),
+        json={
+            "source": "salesforce",
+            "accounts": [
+                {"external_id": "x1", "name": "One"},
+                {"external_id": "x2", "name": "Two"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get("/api/integrations/crm/sync-status", headers=auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["provider"] == "stub"
+    assert body["pending"] == 2
+    assert body["synced"] == 0
+
+
+@pytest.mark.asyncio
+async def test_crm_sync_status_forbidden_for_rep(client):
+    owner = await signup(client, slug="csr", email="owner@csr.x", company="CsrCo")
+    inv = await client.post(
+        "/api/workspace/members",
+        headers=auth(owner),
+        json={"email": "rep@csr.x", "full_name": "Rep", "password": "password123", "role": "rep"},
+    )
+    assert inv.status_code == 201, inv.text
+    login = await client.post(
+        "/api/auth/login", json={"email": "rep@csr.x", "password": "password123"}
+    )
+    rep_token = login.json()["access_token"]
+    r = await client.get("/api/integrations/crm/sync-status", headers=auth(rep_token))
+    assert r.status_code == 403, r.text
