@@ -7,7 +7,10 @@ import {
   DashboardIcon,
   InboxIcon,
   ListIcon,
+  MessageIcon,
   PlugIcon,
+  SendIcon,
+  SettingsIcon,
   ShieldCheckIcon,
   SignalIcon,
   SparklesIcon,
@@ -37,10 +40,13 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/orchestrator", label: "Orchestrator", icon: <SparklesIcon />, minRole: "manager" },
   { to: "/runs", label: "AI Runs", icon: <WorkflowIcon />, minRole: "manager" },
   { to: "/approvals", label: "Approvals", icon: <ShieldCheckIcon />, minRole: "manager" },
+  { to: "/campaigns", label: "Campaigns", icon: <SendIcon />, minRole: "manager" },
+  { to: "/cadences", label: "Cadences", icon: <MessageIcon />, minRole: "manager" },
   { to: "/plays", label: "Plays", icon: <BoltIcon />, minRole: "manager" },
   { to: "/relevance", label: "Relevance", icon: <TargetIcon />, minRole: "manager" },
   { to: "/members", label: "Members", icon: <UsersIcon />, minRole: "manager" },
   { to: "/integrations", label: "Integrations", icon: <PlugIcon />, minRole: "admin" },
+  { to: "/settings", label: "Settings", icon: <SettingsIcon />, minRole: "admin" },
 ];
 
 export function canSee(item: NavItem, role: Role | undefined): boolean {
