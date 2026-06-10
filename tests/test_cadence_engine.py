@@ -433,3 +433,19 @@ async def test_handle_advance_cadences_processes_due(ts, monkeypatch):
     async with tenant_session(ts.tenant_id) as ts2:
         touches = await ts2.list(CadenceTouch, CadenceTouch.enrollment_id == e.id)
         assert [t.status for t in touches] == [TOUCH_SENT]
+
+
+def test_cadence_in_step_defaults():
+    from nexus.cadences.schemas import CadenceIn
+
+    c = CadenceIn(
+        name="3-touch",
+        steps=[{"delay_days": 0}, {"delay_days": 3, "angle": "case study"}],
+    )
+    assert c.steps[0].channel == "email"
+    assert c.steps[0].angle == ""
+    assert c.steps[0].delay_days == 0
+    assert c.steps[1].angle == "case study"
+    # Wire model rejects an empty cadence (the service enforces the same rule).
+    with pytest.raises(Exception):
+        CadenceIn(name="empty", steps=[])
