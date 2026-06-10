@@ -146,6 +146,7 @@ async def test_enroll_sets_first_due():
 
 
 from nexus.campaigns.service import get_campaign_service
+from nexus.outcomes.service import get_outcome_service
 from nexus.models.account import Contact
 from nexus.models.cadence import (
     ENROLL_PAUSED,
@@ -278,3 +279,71 @@ async def test_cadence_touch_is_idempotent_on_reclaim(ts):
     # No second send happened: still zero Outcome("sent") rows (the existing touch was
     # pre-inserted directly, bypassing _send, so the count proves no re-send).
     assert await ts.list(Outcome, Outcome.stage == "sent") == []
+
+
+async def test_cadence_stops_on_reply(ts):
+    svc = get_cadence_service()
+    _, e, acc, contact = await _enrollable(ts, NOW, steps=[{"delay_days": 0, "angle": "intro"}])
+    # The prospect replied (a positive outcome). The next tick must stop, not send.
+    await get_outcome_service().record(
+        ts, stage="replied", account_id=acc.id, contact_id=contact.id
+    )
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 1
+    await ts.refresh(e)
+    assert e.status == ENROLL_STOPPED
+    assert e.stop_reason == STOP_REPLIED
+    assert await ts.list(CadenceTouch, CadenceTouch.enrollment_id == e.id) == []
+
+
+async def test_cadence_stops_on_undeliverable(ts):
+    svc = get_cadence_service()
+    # A malformed address verifies as invalid -> the send policy holds it as undeliverable,
+    # and because every future touch hits the same dead address, the enrollment stops.
+    _, e, _, _ = await _enrollable(
+        ts, NOW, steps=[{"delay_days": 0, "angle": "intro"}, {"delay_days": 2, "angle": "bump"}],
+        email="deadinbox",
+    )
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 1
+    await ts.refresh(e)
+    assert e.status == ENROLL_STOPPED
+    assert e.stop_reason == STOP_UNDELIVERABLE
+    touches = await ts.list(CadenceTouch, CadenceTouch.enrollment_id == e.id)
+    assert [t.status for t in touches] == [TOUCH_SKIPPED]
+
+
+async def test_cadence_pause_and_resume(ts):
+    svc = get_cadence_service()
+    _, e, _, _ = await _enrollable(ts, NOW, steps=[{"delay_days": 0, "angle": "intro"}])
+    await svc.pause(ts, e)
+    assert e.status == ENROLL_PAUSED
+    # Paused enrollments are not claimed.
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 0
+
+    later = NOW + timedelta(days=1)
+    await svc.resume(ts, e, now=later)
+    assert e.status == ENROLL_ACTIVE
+    assert await svc.advance_due_for_tenant(ts, now=later, limit=100) == 1
+    touches = await ts.list(CadenceTouch, CadenceTouch.enrollment_id == e.id)
+    assert [t.status for t in touches] == [TOUCH_SENT]
+
+
+async def test_cadence_stops_on_duration_cap(ts):
+    svc = get_cadence_service()
+    # Default cap is 30 days; a tick past it stops the enrollment before any further send.
+    _, e, _, _ = await _enrollable(ts, NOW, steps=[{"delay_days": 0, "angle": "intro"}])
+    past_cap = NOW + timedelta(days=31)
+    assert await svc.advance_due_for_tenant(ts, now=past_cap, limit=100) == 1
+    await ts.refresh(e)
+    assert e.status == ENROLL_STOPPED
+    assert e.stop_reason == STOP_MAX_TOUCHES
+    assert await ts.list(CadenceTouch, CadenceTouch.enrollment_id == e.id) == []
+
+
+async def test_manual_stop_is_terminal(ts):
+    svc = get_cadence_service()
+    _, e, _, _ = await _enrollable(ts, NOW, steps=[{"delay_days": 0, "angle": "intro"}])
+    await svc.stop(ts, e)
+    assert e.status == ENROLL_STOPPED
+    assert e.stop_reason == STOP_MANUAL
+    # A stopped enrollment is never claimed again.
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 0

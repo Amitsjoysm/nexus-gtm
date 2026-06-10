@@ -209,6 +209,13 @@ class CadenceService:
         if step is None:
             return ("complete",)
 
+        # Stop conditions, checked before composing so a terminated enrollment never wastes
+        # a compose or touches the prospect again.
+        if await self._has_reply(ts, e):
+            return ("stop", STOP_REPLIED)
+        if self._exceeded_duration(e, now):
+            return ("stop", STOP_MAX_TOUCHES)
+
         # Structural idempotency: one touch per (enrollment, step). A re-claimed enrollment
         # whose step already sent simply advances rather than sending twice.
         existing = await ts.first(
@@ -235,6 +242,9 @@ class CadenceService:
             touch.status = TOUCH_SKIPPED
             touch.skip_reason = skip
             await ts.flush()
+            # A dead address dooms every future touch to the same contact — stop here.
+            if skip == SKIP_UNDELIVERABLE:
+                return ("stop", STOP_UNDELIVERABLE)
             return ("advance",)
 
         # review_each_touch: park awaiting human approval instead of auto-sending (Task 9).
@@ -386,6 +396,59 @@ class CadenceService:
         e.stop_reason = reason
         e.completed_at = now
         await ts.flush()
+
+    # ----- Stop detection -----------------------------------------------------------
+    async def _has_reply(self, ts: TenantSession, e: CadenceEnrollment) -> bool:
+        """True if a positive outcome (replied/meeting/won) landed for this enrollment's
+        contact since it started. ``Outcome("sent")`` rows the cadence itself writes are
+        not positive, so they never self-trigger a stop."""
+        if e.contact_id is None:
+            return False
+        outcomes = await ts.list(
+            Outcome,
+            Outcome.contact_id == e.contact_id,
+            Outcome.stage.in_(("replied", "meeting", "won")),
+        )
+        started = ensure_aware(e.started_at)
+        for o in outcomes:
+            if started is None or ensure_aware(o.created_at) >= started:
+                return True
+        return False
+
+    def _exceeded_duration(self, e: CadenceEnrollment, now: datetime) -> bool:
+        """True once the enrollment has been running longer than the configured cap."""
+        started = ensure_aware(e.started_at)
+        if started is None:
+            return False
+        cap_days = get_settings().cadence_max_duration_days
+        return (now - started) > timedelta(days=cap_days)
+
+    # ----- Manual controls ----------------------------------------------------------
+    async def pause(self, ts: TenantSession, e: CadenceEnrollment) -> CadenceEnrollment:
+        """Pause an active enrollment so the tick stops claiming it."""
+        if e.status == ENROLL_ACTIVE:
+            e.status = ENROLL_PAUSED
+            await ts.flush()
+        return e
+
+    async def resume(
+        self, ts: TenantSession, e: CadenceEnrollment, *, now: datetime
+    ) -> CadenceEnrollment:
+        """Resume a paused enrollment, making its current step due immediately."""
+        if e.status == ENROLL_PAUSED:
+            e.status = ENROLL_ACTIVE
+            e.next_touch_at = now
+            await ts.flush()
+        return e
+
+    async def stop(self, ts: TenantSession, e: CadenceEnrollment) -> CadenceEnrollment:
+        """Manually and terminally stop an enrollment."""
+        if e.status not in ENROLL_TERMINAL:
+            e.status = ENROLL_STOPPED
+            e.stop_reason = STOP_MANUAL
+            e.completed_at = utcnow()
+            await ts.flush()
+        return e
 
 
 _service = CadenceService()
