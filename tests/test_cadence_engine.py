@@ -92,7 +92,15 @@ def test_research_compose_without_angle_unchanged():
 
 from nexus.cadences.service import CadenceError, get_cadence_service
 from nexus.models.account import Account
-from nexus.models.campaign import Campaign, CampaignTarget, TARGET_DRAFTED
+from nexus.models.campaign import (
+    Campaign,
+    CampaignTarget,
+    CAMP_AWAITING_APPROVAL,
+    CAMP_SENDING,
+    TARGET_APPROVED,
+    TARGET_DRAFTED,
+)
+from tests.conftest import auth, signup
 
 
 async def _make_cadence(ts, steps):
@@ -449,3 +457,87 @@ def test_cadence_in_step_defaults():
     # Wire model rejects an empty cadence (the service enforces the same rule).
     with pytest.raises(Exception):
         CadenceIn(name="empty", steps=[])
+
+
+async def test_campaign_with_cadence_enrolls_on_approve(ts):
+    from nexus.models.workflow import ListItem, ProspectList
+
+    camp_svc = get_campaign_service()
+    cad_svc = get_cadence_service()
+    cadence = await cad_svc.create_cadence(
+        ts,
+        name="2-touch",
+        description=None,
+        steps=[{"delay_days": 0, "angle": "a"}, {"delay_days": 3, "angle": "b"}],
+        created_by_user_id="u1",
+    )
+    plist = ProspectList(tenant_id=ts.tenant_id, name="seg", filter={})
+    ts.add(plist)
+    await ts.flush()
+    acc = Account(tenant_id=ts.tenant_id, name="Acme", domain="acme.com")
+    ts.add(acc)
+    await ts.flush()
+    ts.add(Contact(tenant_id=ts.tenant_id, account_id=acc.id, full_name="Lead", email="lead@acme.com"))
+    ts.add(ListItem(tenant_id=ts.tenant_id, list_id=plist.id, account_id=acc.id))
+    await ts.flush()
+
+    campaign = await camp_svc.create(
+        ts,
+        name="Q3",
+        list_id=plist.id,
+        icp={"industries": ["SaaS"]},
+        sequence="ai-orchestrated-outbound",
+        created_by_user_id="u1",
+        cadence_id=cadence.id,
+    )
+    await camp_svc.run_draft_phase(ts, campaign)
+    assert campaign.status == CAMP_AWAITING_APPROVAL
+    await camp_svc.approve_and_send(ts, campaign, decided_by="u1")
+
+    # Cadence path: approval ENROLLS rather than sending once. The campaign stays SENDING and
+    # the periodic tick drives the touches from here.
+    assert campaign.status == CAMP_SENDING
+    enrollments = await ts.list(CadenceEnrollment, CadenceEnrollment.campaign_id == campaign.id)
+    assert len(enrollments) == 1
+    assert enrollments[0].status == ENROLL_ACTIVE
+    targets = await camp_svc.list_targets(ts, campaign.id)
+    assert all(t.status == TARGET_APPROVED for t in targets)
+
+    report = await cad_svc.cadence_report(ts, campaign.id)
+    assert report["total_enrollments"] == 1
+    assert report["by_status"].get(ENROLL_ACTIVE) == 1
+    assert report["cadence_id"] == cadence.id
+
+
+async def test_cadences_crud_http(client):
+    token = await signup(client, slug="cad", email="mgr@cad.com", company="Cad")
+    r = await client.post(
+        "/api/cadences",
+        headers=auth(token),
+        json={
+            "name": "3-touch",
+            "description": "outbound",
+            "steps": [{"delay_days": 0, "angle": "intro"}, {"delay_days": 3, "angle": "bump"}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    cid = r.json()["id"]
+    assert [s["step_index"] for s in r.json()["steps"]] == [0, 1]
+
+    r = await client.get("/api/cadences", headers=auth(token))
+    assert r.status_code == 200
+    assert any(c["id"] == cid for c in r.json())
+
+    r = await client.get(f"/api/cadences/{cid}", headers=auth(token))
+    assert r.status_code == 200
+    assert r.json()["steps"][1]["angle"] == "bump"
+
+    r = await client.patch(f"/api/cadences/{cid}", headers=auth(token), json={"is_active": False})
+    assert r.status_code == 200
+    assert r.json()["is_active"] is False
+
+    # An empty cadence is rejected by the wire contract (422).
+    r = await client.post(
+        "/api/cadences", headers=auth(token), json={"name": "empty", "steps": []}
+    )
+    assert r.status_code == 422

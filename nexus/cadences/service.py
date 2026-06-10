@@ -510,6 +510,40 @@ class CadenceService:
             await self._advance(ts, e, now=now)
         return e
 
+    # ----- Reporting ----------------------------------------------------------------
+    async def cadence_report(self, ts: TenantSession, campaign_id: str) -> dict:
+        """Roll up a campaign's enrollments + touches for the manager dashboard."""
+        campaign = await ts.get(Campaign, campaign_id)
+        enrollments = await ts.list(
+            CadenceEnrollment, CadenceEnrollment.campaign_id == campaign_id
+        )
+        by_status: dict[str, int] = {}
+        stops: dict[str, int] = {}
+        for e in enrollments:
+            by_status[e.status] = by_status.get(e.status, 0) + 1
+            if e.stop_reason:
+                stops[e.stop_reason] = stops.get(e.stop_reason, 0) + 1
+        sent = skipped = 0
+        ids = [e.id for e in enrollments]
+        if ids:
+            touches = await ts.list(
+                CadenceTouch, CadenceTouch.enrollment_id.in_(ids)
+            )
+            for t in touches:
+                if t.status == TOUCH_SENT:
+                    sent += 1
+                elif t.status == TOUCH_SKIPPED:
+                    skipped += 1
+        return {
+            "campaign_id": campaign_id,
+            "cadence_id": campaign.cadence_id if campaign else None,
+            "total_enrollments": len(enrollments),
+            "by_status": by_status,
+            "touches_sent": sent,
+            "touches_skipped": skipped,
+            "stops": stops,
+        }
+
 
 _service = CadenceService()
 

@@ -51,6 +51,11 @@ async def create_campaign(
     plist = await ts.get(ProspectList, body.list_id)
     if plist is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "List not found")
+    if body.cadence_id is not None:
+        from nexus.models.cadence import Cadence
+
+        if await ts.get(Cadence, body.cadence_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Cadence not found")
     svc = get_campaign_service()
     campaign = await svc.create(
         ts,
@@ -60,6 +65,8 @@ async def create_campaign(
         sequence=body.sequence,
         created_by_user_id=principal.user_id,
         send_risky=body.send_risky,
+        cadence_id=body.cadence_id,
+        review_each_touch=body.review_each_touch,
     )
     # Drive the draft phase inline to the approval gate.
     await svc.run_draft_phase(ts, campaign)

@@ -14,6 +14,8 @@ class CampaignIn(BaseModel):
     icp: dict = Field(default_factory=dict)
     sequence: str = Field(default="ai-orchestrated-outbound", max_length=120)
     send_risky: bool = False
+    cadence_id: str | None = None
+    review_each_touch: bool = False
 
 
 class CampaignTargetOut(BaseModel):
@@ -45,6 +47,8 @@ class CampaignOut(BaseModel):
     icp: dict = Field(default_factory=dict)
     report: dict = Field(default_factory=dict)
     send_risky: bool = False
+    cadence_id: str | None = None
+    review_each_touch: bool = False
     created_at: datetime
 
     @classmethod
@@ -58,6 +62,8 @@ class CampaignOut(BaseModel):
             icp=c.icp or {},
             report=c.report or {},
             send_risky=c.send_risky,
+            cadence_id=c.cadence_id,
+            review_each_touch=c.review_each_touch,
             created_at=c.created_at,
         )
 

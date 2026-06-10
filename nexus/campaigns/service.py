@@ -15,6 +15,7 @@ from __future__ import annotations
 from nexus.agents.runtime import get_agent_runtime
 from nexus.campaigns.sourcing import get_contact_sourcing_service
 from nexus.core.config import get_settings
+from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Account
 from nexus.models.campaign import (
@@ -63,8 +64,14 @@ class CampaignService:
         sequence: str,
         created_by_user_id: str | None,
         send_risky: bool = False,
+        cadence_id: str | None = None,
+        review_each_touch: bool = False,
     ) -> Campaign:
-        """Create the campaign and one PENDING target per account in the List."""
+        """Create the campaign and one PENDING target per account in the List.
+
+        When ``cadence_id`` is set, approval enrolls each drafted target into that cadence
+        (multi-touch) instead of sending once; ``review_each_touch`` parks every touch for
+        human review before it sends."""
         campaign = Campaign(
             tenant_id=ts.tenant_id,
             name=name,
@@ -72,6 +79,8 @@ class CampaignService:
             icp=icp or {},
             sequence=sequence or "ai-orchestrated-outbound",
             send_risky=send_risky,
+            cadence_id=cadence_id,
+            review_each_touch=review_each_touch,
             created_by_user_id=created_by_user_id,
         )
         ts.add(campaign)
@@ -119,13 +128,16 @@ class CampaignService:
     async def approve_and_send(
         self, ts: TenantSession, campaign: Campaign, *, decided_by: str | None
     ) -> Campaign:
-        """Campaign-level approval: one human decision, then send every DRAFTED target."""
+        """Campaign-level approval: one human decision. A cadence campaign enrolls its
+        drafted targets (the tick drives the touches); a plain campaign sends once."""
         if campaign.status != CAMP_AWAITING_APPROVAL:
             raise CampaignError(
                 f"campaign must be awaiting_approval to approve, is '{campaign.status}'"
             )
         campaign.status = CAMP_APPROVED
         await ts.flush()
+        if campaign.cadence_id:
+            return await self._enroll_drafted(ts, campaign, now=utcnow())
         return await self.run_send_phase(ts, campaign)
 
     async def cancel(self, ts: TenantSession, campaign: Campaign) -> Campaign:
@@ -152,6 +164,28 @@ class CampaignService:
 
         campaign.report = await self._build_report(ts, campaign)
         campaign.status = CAMP_COMPLETED
+        await ts.flush()
+        return campaign
+
+    async def _enroll_drafted(
+        self, ts: TenantSession, campaign: Campaign, *, now
+    ) -> Campaign:
+        """Cadence path: enroll every DRAFTED target into the campaign's cadence and leave
+        the campaign in SENDING. The periodic ``advance_cadences`` tick takes over from here.
+
+        Lazy import of the cadence service avoids an import cycle: ``cadences.service``
+        imports ``CampaignService`` at module load, so the reverse edge must stay lazy."""
+        from nexus.cadences.service import get_cadence_service
+
+        cad_svc = get_cadence_service()
+        campaign.status = CAMP_SENDING
+        await ts.flush()
+        for target in await self.list_targets(ts, campaign.id):
+            if target.status != TARGET_DRAFTED:
+                continue
+            await cad_svc.enroll(ts, campaign, target, now=now)
+            target.status = TARGET_APPROVED
+        campaign.report = await self._build_report(ts, campaign)
         await ts.flush()
         return campaign
 
