@@ -1,0 +1,46 @@
+"""Continuous Automation heartbeat.
+
+A periodic coroutine that runs alongside the pull-only worker loop. Each tick, while the
+global ``automation_enabled`` switch is on, it enqueues the recurring driver jobs
+(``advance_cadences`` + ``refresh_due_accounts``). Both drivers are idempotent and
+self-filtering, so enqueuing them every tick is safe and needs no per-job bookkeeping.
+
+Run as part of ``python -m nexus.workers.worker`` (see ``worker.py``).
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from nexus.core.config import get_settings
+from nexus.workers.queue import TaskQueue, get_task_queue
+from nexus.workers.tasks import enqueue_advance_cadences, enqueue_refresh_due_accounts
+
+logger = logging.getLogger("nexus.workers.scheduler")
+
+
+async def _enqueue_due(queue: TaskQueue) -> int:
+    """Enqueue the recurring drivers if automation is enabled. Returns the number enqueued."""
+    if not get_settings().automation_enabled:
+        return 0
+    await enqueue_advance_cadences(queue=queue)
+    await enqueue_refresh_due_accounts(queue=queue)
+    return 2
+
+
+async def run_scheduler(
+    *, stop: asyncio.Event | None = None, queue: TaskQueue | None = None
+) -> None:
+    """Heartbeat loop: enqueue drivers each tick until ``stop`` is set. Inert (loops but
+    enqueues nothing) while ``automation_enabled`` is off."""
+    stop = stop or asyncio.Event()
+    queue = queue or get_task_queue()
+    logger.info("scheduler started")
+    while not stop.is_set():
+        await _enqueue_due(queue)
+        try:
+            # stop.wait() with a timeout makes shutdown prompt (no fixed sleep to drain).
+            await asyncio.wait_for(stop.wait(), timeout=get_settings().automation_tick_interval_s)
+        except asyncio.TimeoutError:
+            pass  # tick elapsed; loop again
+    logger.info("scheduler stopping")

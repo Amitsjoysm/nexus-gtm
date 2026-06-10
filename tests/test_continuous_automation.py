@@ -168,3 +168,37 @@ async def test_refresh_is_tenant_isolated(monkeypatch):
     async with get_sessionmaker()() as s:
         assert (await s.get(Account, out_id)).last_refreshed_at is None  # untouched
     set_task_queue(None)
+
+
+import asyncio
+
+from nexus.workers.scheduler import _enqueue_due, run_scheduler
+
+
+@pytest.mark.asyncio
+async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
+    monkeypatch.setattr(get_settings(), "automation_enabled", True)
+    q = InMemoryTaskQueue()
+    count = await _enqueue_due(q)
+    assert count == 2
+    jobs = await _drain(q)
+    assert {j.name for j in jobs} == {"advance_cadences", "refresh_due_accounts"}
+
+
+@pytest.mark.asyncio
+async def test_enqueue_due_noop_when_disabled(monkeypatch):
+    monkeypatch.setattr(get_settings(), "automation_enabled", False)
+    q = InMemoryTaskQueue()
+    count = await _enqueue_due(q)
+    assert count == 0
+    assert await _drain(q) == []
+
+
+@pytest.mark.asyncio
+async def test_run_scheduler_stops_promptly_when_event_set(monkeypatch):
+    monkeypatch.setattr(get_settings(), "automation_enabled", False)
+    stop = asyncio.Event()
+    stop.set()  # already set → loop body never runs, returns immediately
+    q = InMemoryTaskQueue()
+    await asyncio.wait_for(run_scheduler(stop=stop, queue=q), timeout=1.0)
+    assert await _drain(q) == []
