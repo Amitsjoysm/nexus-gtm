@@ -14,18 +14,31 @@ import logging
 
 from nexus.core.config import get_settings
 from nexus.workers.queue import TaskQueue, get_task_queue
-from nexus.workers.tasks import enqueue_advance_cadences, enqueue_refresh_due_accounts
+from nexus.workers.tasks import (
+    enqueue_advance_cadences,
+    enqueue_refresh_due_accounts,
+    enqueue_sync_crm_due_accounts,
+)
 
 logger = logging.getLogger("nexus.workers.scheduler")
 
 
 async def _enqueue_due(queue: TaskQueue) -> int:
-    """Enqueue the recurring drivers if automation is enabled. Returns the number enqueued."""
-    if not get_settings().automation_enabled:
-        return 0
-    await enqueue_advance_cadences(queue=queue)
-    await enqueue_refresh_due_accounts(queue=queue)
-    return 2
+    """Enqueue the recurring drivers for whichever switches are on. Returns the count enqueued.
+
+    The cadence + account-refresh drivers gate on automation_enabled; the CRM sweep gates on its
+    own crm_sync_enabled switch (so it can run independently). Each handler re-checks its switch,
+    so this is a pre-filter, not the authority."""
+    settings = get_settings()
+    count = 0
+    if settings.automation_enabled:
+        await enqueue_advance_cadences(queue=queue)
+        await enqueue_refresh_due_accounts(queue=queue)
+        count += 2
+    if settings.crm_sync_enabled:
+        await enqueue_sync_crm_due_accounts(queue=queue)
+        count += 1
+    return count
 
 
 async def run_scheduler(

@@ -326,3 +326,27 @@ async def test_process_account_publishes_account_scored(monkeypatch):
     jobs = await _drain(q)
     assert any(j.name == "sync_crm_account" and j.payload["account_id"] == aid for j in jobs)
     set_task_queue(None)
+
+
+from nexus.workers.scheduler import _enqueue_due
+
+
+@pytest.mark.asyncio
+async def test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled(monkeypatch):
+    monkeypatch.setattr(get_settings(), "automation_enabled", False)
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    q = InMemoryTaskQueue()
+    await _enqueue_due(q)
+    jobs = await _drain(q)
+    assert {j.name for j in jobs} == {"sync_crm_due_accounts"}
+
+
+@pytest.mark.asyncio
+async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
+    monkeypatch.setattr(get_settings(), "automation_enabled", True)
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", False)
+    q = InMemoryTaskQueue()
+    await _enqueue_due(q)
+    jobs = await _drain(q)
+    assert "sync_crm_due_accounts" not in {j.name for j in jobs}
+    assert {j.name for j in jobs} == {"advance_cadences", "refresh_due_accounts"}
