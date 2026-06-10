@@ -266,3 +266,63 @@ async def test_single_account_handler_respects_tenant_opt_out(monkeypatch):
     assert res == {"skipped": "tenant_opted_out"}
     assert conn.pushed_accounts == []
     set_crm_connector(None)
+
+
+from nexus.core.events import Event, EventBus
+from nexus.ingestion.crm_sync import on_account_scored, register_crm_sync_subscribers
+
+
+@pytest.mark.asyncio
+async def test_on_account_scored_enqueues_when_enabled(monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    q = InMemoryTaskQueue()
+    set_task_queue(q)
+    await on_account_scored(
+        Event(name="account.scored", tenant_id="t1", payload={"account_id": "a1"})
+    )
+    jobs = await _drain(q)
+    assert len(jobs) == 1
+    assert jobs[0].name == "sync_crm_account"
+    assert jobs[0].payload == {"tenant_id": "t1", "account_id": "a1"}
+    set_task_queue(None)
+
+
+@pytest.mark.asyncio
+async def test_on_account_scored_noop_when_disabled(monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", False)
+    q = InMemoryTaskQueue()
+    set_task_queue(q)
+    await on_account_scored(
+        Event(name="account.scored", tenant_id="t1", payload={"account_id": "a1"})
+    )
+    assert await _drain(q) == []
+    set_task_queue(None)
+
+
+@pytest.mark.asyncio
+async def test_process_account_publishes_account_scored(monkeypatch):
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    q = InMemoryTaskQueue()
+    set_task_queue(q)
+    bus = EventBus()                      # isolated bus for this test
+    register_crm_sync_subscribers(bus)
+    monkeypatch.setattr("nexus.pipeline.get_event_bus", lambda: bus)
+
+    async with get_sessionmaker()() as s:
+        t = Tenant(name="Pub", slug="pub-evt", automation_enabled=True)
+        s.add(t)
+        await s.flush()
+        acct = Account(tenant_id=t.id, name="Pub", domain="pub.x")
+        s.add(acct)
+        await s.commit()
+        tid, aid = t.id, acct.id
+
+    from nexus.pipeline import process_account
+
+    async with tenant_session(tid) as ts:
+        acct = await ts.get(Account, aid)
+        await process_account(ts, acct)
+
+    jobs = await _drain(q)
+    assert any(j.name == "sync_crm_account" and j.payload["account_id"] == aid for j in jobs)
+    set_task_queue(None)

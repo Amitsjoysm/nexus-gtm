@@ -5,6 +5,7 @@ This is the orchestration seam wired by the API (synchronously) and the worker (
 from __future__ import annotations
 
 from nexus.agents.runtime import AgentRuntime, get_agent_runtime
+from nexus.core.events import Event, get_event_bus
 from nexus.core.tenancy import TenantSession
 from nexus.inbox.service import get_inbox_service
 from nexus.ingestion.service import get_ingestion_service
@@ -37,6 +38,21 @@ async def process_account(
             ts, account=account, signal=sig, composite=composite, plays=enabled_plays
         ):
             play_run_ids.append(run.id)
+
+    # Generic domain event: the account has been (re)scored and its state may have changed.
+    # Subscribers (e.g. the CRM auto-sync fast-path) react off-request; publish is a no-op when
+    # no one is listening, so this is free when the feature is off.
+    await get_event_bus().publish(
+        Event(
+            name="account.scored",
+            tenant_id=ts.tenant_id,
+            payload={
+                "account_id": account.id,
+                "composite_score": composite,
+                "new_signals": len(new_signals),
+            },
+        )
+    )
 
     return {
         "account_id": account.id,
