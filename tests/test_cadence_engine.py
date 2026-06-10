@@ -143,3 +143,138 @@ async def test_enroll_sets_first_due():
         assert e.contact_id == "ct1"
         assert e.started_at == t0
         assert e.next_touch_at == t0 + timedelta(days=2)
+
+
+from nexus.campaigns.service import get_campaign_service
+from nexus.models.account import Contact
+from nexus.models.cadence import (
+    ENROLL_PAUSED,
+    STOP_MANUAL,
+    STOP_MAX_TOUCHES,
+    STOP_UNDELIVERABLE,
+    TOUCH_SKIPPED,
+)
+from nexus.models.outcome import Outcome
+
+NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest_asyncio.fixture
+async def ts():
+    """A TenantSession bound to a fresh tenant. The context commits on exit."""
+    tid = await make_tenant(slug="cad-svc", name="Cad Svc")
+    async with tenant_session(tid) as session:
+        yield session
+
+
+async def _enrollable(ts, now, *, steps, review_each_touch=False, email="lead@acme.com"):
+    """Build an account + contact, a cadence, a campaign wired to it, and one DRAFTED
+    target; enroll the target. Returns (campaign, enrollment, account, contact). Pass a
+    malformed ``email`` to drive the undeliverable path (the stub verifier rejects bad syntax)."""
+    acc = Account(tenant_id=ts.tenant_id, name="Acme", domain="acme.com")
+    ts.add(acc)
+    await ts.flush()
+    contact = Contact(
+        tenant_id=ts.tenant_id, account_id=acc.id, full_name="Lead", email=email
+    )
+    ts.add(contact)
+    await ts.flush()
+    cadence = await get_cadence_service().create_cadence(
+        ts, name="multi-touch", description=None, steps=steps, created_by_user_id="u1"
+    )
+    campaign = Campaign(
+        tenant_id=ts.tenant_id,
+        name="Q3",
+        list_id="l1",
+        icp={"industries": ["SaaS"]},
+        sequence="ai-orchestrated-outbound",
+        cadence_id=cadence.id,
+        review_each_touch=review_each_touch,
+        created_by_user_id="u1",
+    )
+    ts.add(campaign)
+    await ts.flush()
+    target = CampaignTarget(
+        tenant_id=ts.tenant_id,
+        campaign_id=campaign.id,
+        account_id=acc.id,
+        status=TARGET_DRAFTED,
+        draft={"contact_id": contact.id},
+    )
+    ts.add(target)
+    await ts.flush()
+    enrollment = await get_cadence_service().enroll(ts, campaign, target, now=now)
+    return campaign, enrollment, acc, contact
+
+
+async def test_cadence_happy_path_sends_each_touch(ts):
+    svc = get_cadence_service()
+    _, e, _, _ = await _enrollable(
+        ts,
+        NOW,
+        steps=[
+            {"delay_days": 0, "angle": "introduce the value prop"},
+            {"delay_days": 3, "angle": "follow up with a case study"},
+        ],
+    )
+    assert e.status == ENROLL_ACTIVE
+    assert e.current_step_index == 0
+
+    # Tick at t0: the first touch sends and the enrollment advances to step 1 (due in 3 days).
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 1
+    await ts.refresh(e)
+    assert e.current_step_index == 1
+    assert e.status == ENROLL_ACTIVE
+    touches = await ts.list(CadenceTouch, CadenceTouch.enrollment_id == e.id)
+    assert [t.status for t in touches] == [TOUCH_SENT]
+
+    # Same instant: step 1 is not due yet — no work, no double send.
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 0
+
+    # t0 + 3 days: the final touch sends and the enrollment completes.
+    later = NOW + timedelta(days=3)
+    assert await svc.advance_due_for_tenant(ts, now=later, limit=100) == 1
+    await ts.refresh(e)
+    assert e.status == ENROLL_COMPLETED
+    assert e.completed_at is not None
+    touches = await ts.list(CadenceTouch, CadenceTouch.enrollment_id == e.id)
+    assert sorted(t.step_index for t in touches) == [0, 1]
+    assert all(t.status == TOUCH_SENT for t in touches)
+
+    # Each send recorded an Outcome("sent") for manager attribution.
+    outcomes = await ts.list(Outcome, Outcome.stage == "sent")
+    assert len(outcomes) == 2
+
+
+async def test_cadence_touch_is_idempotent_on_reclaim(ts):
+    """Structural idempotency: a crash that sent a touch but never advanced must not double
+    send. We simulate it — a TOUCH_SENT row exists for step 0 while the enrollment is still
+    parked at step 0 and due. The next tick must NOT re-send or duplicate the touch; it just
+    advances. This is the same guarantee the unique (enrollment_id, step_index) gives at the
+    DB layer, asserted at the service layer."""
+    svc = get_cadence_service()
+    _, e, _, _ = await _enrollable(
+        ts,
+        NOW,
+        steps=[
+            {"delay_days": 0, "angle": "intro"},
+            {"delay_days": 2, "angle": "bump"},
+        ],
+    )
+    # Pre-existing sent touch for step 0, enrollment still at step 0 (the crash window).
+    ts.add(CadenceTouch(
+        tenant_id=ts.tenant_id, enrollment_id=e.id, step_index=0,
+        status=TOUCH_SENT, sent_at=NOW,
+    ))
+    await ts.flush()
+
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 1
+    await ts.refresh(e)
+    assert e.current_step_index == 1          # advanced past the already-sent step
+    assert e.status == ENROLL_ACTIVE
+    touches = await ts.list(CadenceTouch, CadenceTouch.enrollment_id == e.id)
+    assert [t.step_index for t in touches] == [0]   # no duplicate touch for step 0
+    assert [t.status for t in touches] == [TOUCH_SENT]
+    # No second send happened: still zero Outcome("sent") rows (the existing touch was
+    # pre-inserted directly, bypassing _send, so the count proves no re-send).
+    assert await ts.list(Outcome, Outcome.stage == "sent") == []
