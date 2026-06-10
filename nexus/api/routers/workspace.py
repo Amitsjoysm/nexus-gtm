@@ -11,6 +11,8 @@ from sqlalchemy import select
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
+    AutomationSettingsIn,
+    AutomationSettingsOut,
     MemberInviteRequest,
     MemberOut,
     MemberRoleUpdate,
@@ -20,7 +22,7 @@ from nexus.api.schemas import (
 from nexus.core.rbac import Permission
 from nexus.core.security import hash_password
 from nexus.core.tenancy import TenantSession
-from nexus.models.identity import Membership, User, Workspace
+from nexus.models.identity import Membership, Tenant, User, Workspace
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
@@ -59,6 +61,29 @@ async def rename_workspace(
     ws.name = body.name
     await ts.flush()
     return WorkspaceOut(id=ws.id, name=ws.name)
+
+
+# ---- automation (continuous-automation opt-in) ----
+@router.get("/automation", response_model=AutomationSettingsOut)
+async def get_automation(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> AutomationSettingsOut:
+    # Tenant is the isolation boundary itself (not TenantScoped); load via the raw session.
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    return AutomationSettingsOut(automation_enabled=bool(tenant.automation_enabled))
+
+
+@router.patch("/automation", response_model=AutomationSettingsOut)
+async def set_automation(
+    body: AutomationSettingsIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> AutomationSettingsOut:
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    tenant.automation_enabled = body.automation_enabled
+    await ts.flush()
+    return AutomationSettingsOut(automation_enabled=tenant.automation_enabled)
 
 
 # ---- members ----

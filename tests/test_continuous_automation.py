@@ -222,3 +222,68 @@ async def test_worker_and_scheduler_stop_on_shared_event(monkeypatch):
         timeout=2.0,
     )
     set_task_queue(None)
+
+
+# ---- D-Task 8: automation toggle API ----
+
+from tests.conftest import auth, signup
+
+
+@pytest.mark.asyncio
+async def test_automation_toggle_get_and_patch(client):
+    token = await signup(client, slug="toggle", email="owner@toggle.x", company="Toggle")
+    # default off
+    r = await client.get("/api/workspace/automation", headers=auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"automation_enabled": False}
+    # turn on
+    r = await client.patch(
+        "/api/workspace/automation",
+        headers=auth(token),
+        json={"automation_enabled": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"automation_enabled": True}
+    # reads back on
+    r = await client.get("/api/workspace/automation", headers=auth(token))
+    assert r.json() == {"automation_enabled": True}
+
+
+@pytest.mark.asyncio
+async def test_automation_toggle_isolated_between_tenants(client):
+    a = await signup(client, slug="ta", email="a@ta.x", company="TenantA")
+    b = await signup(client, slug="tb", email="b@tb.x", company="TenantB")
+    await client.patch(
+        "/api/workspace/automation", headers=auth(a), json={"automation_enabled": True}
+    )
+    r = await client.get("/api/workspace/automation", headers=auth(b))
+    assert r.json() == {"automation_enabled": False}  # B unaffected
+
+
+@pytest.mark.asyncio
+async def test_automation_toggle_forbidden_for_rep(client):
+    owner = await signup(client, slug="rbac", email="owner@rbac.x", company="RbacCo")
+    # invite a rep, then log in as that rep
+    inv = await client.post(
+        "/api/workspace/members",
+        headers=auth(owner),
+        json={
+            "email": "rep@rbac.x",
+            "full_name": "Rep",
+            "password": "password123",
+            "role": "rep",
+        },
+    )
+    assert inv.status_code == 201, inv.text
+    login = await client.post(
+        "/api/auth/login", json={"email": "rep@rbac.x", "password": "password123"}
+    )
+    assert login.status_code == 200, login.text
+    rep_token = login.json()["access_token"]
+
+    r = await client.patch(
+        "/api/workspace/automation",
+        headers=auth(rep_token),
+        json={"automation_enabled": True},
+    )
+    assert r.status_code == 403, r.text

@@ -184,6 +184,14 @@ class WorkspaceOut(BaseModel):
     name: str
 
 
+class AutomationSettingsIn(BaseModel):
+    automation_enabled: bool
+
+
+class AutomationSettingsOut(BaseModel):
+    automation_enabled: bool
+
+
 # ---- members ----
 _ROLE_PATTERN = r"^(owner|admin|manager|rep)$"
 
