@@ -1,0 +1,27 @@
+# Caddy fronts the app with automatic HTTPS (Let's Encrypt) for whatever DOMAIN
+# is set in .env — app.autosdr.ai today, any other domain tomorrow, no other change.
+# DOMAIN=localhost gives a self-signed local cert for testing the full stack.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip zstd
+
+	# Long-cache hashed build assets; everything else is API or the SPA shell.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	reverse_proxy app:8000 {
+		# SSE streams (campaign/run progress, chat) must not buffer.
+		flush_interval -1
+	}
+}

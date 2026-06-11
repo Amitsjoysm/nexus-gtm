@@ -18,3 +18,7 @@ node_modules/
 .code-review-graph/
 # Local git worktrees for isolated feature work
 .worktrees/
+
+# Deployment secrets + release artifacts (never committed)
+deploy/.env
+release/
