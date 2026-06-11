@@ -18,6 +18,7 @@ from nexus.api.schemas import (
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Account
+from nexus.models.campaign import Campaign
 from nexus.models.outcome import Outcome
 from nexus.outcomes.service import STAGES, get_outcome_service
 
@@ -30,6 +31,7 @@ def _outcome_out(o: Outcome) -> OutcomeOut:
         stage=o.stage,
         account_id=o.account_id,
         contact_id=o.contact_id,
+        campaign_id=o.campaign_id,
         industry=o.industry,
         employee_count=o.employee_count,
         country=o.country,
@@ -54,12 +56,15 @@ async def record_outcome(
         account = await ts.get(Account, body.account_id)
         if account is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    if body.campaign_id is not None and await ts.get(Campaign, body.campaign_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Campaign not found")
     outcome = await get_outcome_service().record(
         ts,
         stage=body.stage,
         account=account,
         account_id=body.account_id,
         contact_id=body.contact_id,
+        campaign_id=body.campaign_id,
         meta=body.meta,
     )
     return _outcome_out(outcome)

@@ -92,7 +92,11 @@ async def get_campaign(
 ) -> CampaignDetailOut:
     campaign = await _get_campaign(ts, campaign_id)
     targets = await get_campaign_service().list_targets(ts, campaign.id)
-    return CampaignDetailOut.from_models(campaign, targets)
+    # Reply attribution rollup: outcomes recorded against this campaign, by stage.
+    from nexus.outcomes.service import get_outcome_service
+
+    attribution = await get_outcome_service().campaign_attribution(ts, campaign.id)
+    return CampaignDetailOut.from_models(campaign, targets, outcomes=attribution)
 
 
 @router.get("/{campaign_id}/preview", response_model=CampaignPreviewOut)

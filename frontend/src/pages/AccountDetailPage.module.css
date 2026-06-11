@@ -297,3 +297,11 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* CRM trust chip next to the domain in the header ------------------------ */
+.headMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}

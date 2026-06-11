@@ -34,6 +34,12 @@ class Outcome(IdMixin, TimestampMixin, TenantScoped, Base):
         ForeignKey("contacts.id"), nullable=True
     )
 
+    # Attribution: which campaign produced this outcome. Lets the campaign report roll up
+    # replies/meetings/wins per campaign (the ROI view) instead of outcomes floating free.
+    campaign_id: Mapped[str | None] = mapped_column(
+        ForeignKey("campaigns.id"), index=True, nullable=True
+    )
+
     # Frozen firmographic snapshot of the account at outcome time. Kept on the row (not joined back
     # to ``accounts``) so reweighting is reproducible even after the account is re-enriched/deleted.
     industry: Mapped[str | None] = mapped_column(String(120), nullable=True)

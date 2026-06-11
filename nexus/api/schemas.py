@@ -62,6 +62,10 @@ class AccountIn(BaseModel):
 
 class AccountOut(AccountIn):
     id: str
+    # CRM trust signals: where this record syncs to and when it last did. Surfaced in the UI
+    # ("Synced to Salesforce · 2m ago") so reps can trust the data they act on.
+    crm_source: str | None = None
+    crm_synced_at: str | None = None
 
 
 class ContactIn(BaseModel):
@@ -103,6 +107,7 @@ class OutcomeIn(BaseModel):
     stage: str  # one of nexus.outcomes.service.STAGES
     account_id: str | None = None
     contact_id: str | None = None
+    campaign_id: str | None = None  # attribute this outcome to the campaign that drove it
     meta: dict = Field(default_factory=dict)
 
 
@@ -111,6 +116,7 @@ class OutcomeOut(BaseModel):
     stage: str
     account_id: str | None = None
     contact_id: str | None = None
+    campaign_id: str | None = None
     industry: str | None = None
     employee_count: int | None = None
     country: str | None = None
@@ -168,6 +174,10 @@ class InboxTaskOut(BaseModel):
     account_id: str | None = None
     suggested_action: dict
     triage: TriageOut | None = None
+    # SLA aging: when the task entered the queue and how long it has sat there. The UI
+    # renders this as a commitment cue ("In queue 2d") so old tasks don't silently rot.
+    created_at: str | None = None
+    age_hours: float | None = None
 
 
 # ---- lists ----

@@ -231,7 +231,20 @@ export function AccountDetailPage() {
               </Link>
             }
             title={acc.name}
-            description={acc.domain ?? undefined}
+            description={
+              <span className={styles.headMeta}>
+                {acc.domain && <span>{acc.domain}</span>}
+                {acc.crm_synced_at ? (
+                  <Badge tone="success" dot>
+                    Synced to {humanize(acc.crm_source ?? "CRM")} · {timeAgo(acc.crm_synced_at)}
+                  </Badge>
+                ) : acc.crm_source ? (
+                  <Badge tone="neutral" dot>
+                    From {humanize(acc.crm_source)} · not pushed yet
+                  </Badge>
+                ) : null}
+              </span>
+            }
             actions={
               <>
                 {canOrchestrate && (

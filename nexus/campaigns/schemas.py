@@ -70,13 +70,23 @@ class CampaignOut(BaseModel):
 
 class CampaignDetailOut(CampaignOut):
     targets: list[CampaignTargetOut] = Field(default_factory=list)
+    # Reply attribution: per-stage outcome counts (replied/meeting/won/...) recorded against
+    # this campaign — the ROI rollup that proves what the sends actually produced.
+    outcomes: dict = Field(default_factory=dict)
 
     @classmethod
     def from_models(
-        cls, c: Campaign, targets: list[CampaignTarget]
+        cls,
+        c: Campaign,
+        targets: list[CampaignTarget],
+        outcomes: dict | None = None,
     ) -> "CampaignDetailOut":
         base = CampaignOut.from_model(c)
-        return cls(**base.model_dump(), targets=[CampaignTargetOut.from_model(t) for t in targets])
+        return cls(
+            **base.model_dump(),
+            targets=[CampaignTargetOut.from_model(t) for t in targets],
+            outcomes=outcomes or {},
+        )
 
 
 class CampaignPreviewOut(BaseModel):

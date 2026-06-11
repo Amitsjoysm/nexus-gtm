@@ -16,6 +16,7 @@ from nexus.api.schemas import (
     TriageOut,
 )
 from nexus.analytics.service import get_analytics_service
+from nexus.core.db import ensure_aware, utcnow
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.inbox.service import get_inbox_service
@@ -39,6 +40,14 @@ async def list_inbox(
     svc = get_inbox_service()
     tasks = await svc.list_open(ts, owner_user_id=owner, limit=limit)
     triage = await svc.triage(ts, tasks)
+    now = utcnow()
+
+    def _age_hours(t) -> float | None:
+        created = ensure_aware(t.created_at)
+        if created is None:
+            return None
+        return round(max(0.0, (now - created).total_seconds() / 3600), 1)
+
     return [
         InboxTaskOut(
             id=t.id,
@@ -49,6 +58,8 @@ async def list_inbox(
             account_id=t.account_id,
             suggested_action=t.suggested_action or {},
             triage=TriageOut(**triage[t.id].as_dict()) if t.id in triage else None,
+            created_at=t.created_at.isoformat() if t.created_at else None,
+            age_hours=_age_hours(t),
         )
         for t in tasks
     ]
