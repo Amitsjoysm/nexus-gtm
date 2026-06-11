@@ -9,6 +9,7 @@ from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
 
 from nexus.api.deps import Principal, get_principal, get_tenant_session, require
 from nexus.campaigns.schemas import (
@@ -144,11 +145,20 @@ def _format_sse(seq: int, type_: str, data: dict) -> str:
 
 
 async def _counts(ts: TenantSession, campaign_id: str) -> dict[str, int]:
-    targets = await ts.list(CampaignTarget, CampaignTarget.campaign_id == campaign_id)
-    counts: dict[str, int] = {}
-    for t in targets:
-        counts[t.status] = counts.get(t.status, 0) + 1
-    return counts
+    # GROUP BY in SQL: the SSE progress loop calls this twice a second per open viewer, so
+    # materializing every target row in Python (O(targets) each tick) would melt under a
+    # large campaign. This returns one row per status instead.
+    rows = (
+        await ts.session.execute(
+            select(CampaignTarget.status, func.count())
+            .where(
+                CampaignTarget.tenant_id == ts.tenant_id,
+                CampaignTarget.campaign_id == campaign_id,
+            )
+            .group_by(CampaignTarget.status)
+        )
+    ).all()
+    return {status: int(n) for status, n in rows}
 
 
 async def _campaign_stream(

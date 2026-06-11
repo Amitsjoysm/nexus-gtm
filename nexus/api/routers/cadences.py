@@ -21,7 +21,7 @@ from nexus.cadences.service import CadenceError, get_cadence_service
 from nexus.core.db import utcnow
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
-from nexus.models.cadence import Cadence, CadenceEnrollment, CadenceTouch
+from nexus.models.cadence import Cadence, CadenceEnrollment, CadenceStep, CadenceTouch
 
 router = APIRouter(tags=["cadences"])
 
@@ -81,13 +81,23 @@ async def list_cadences(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_campaigns)),
 ) -> list[CadenceOut]:
-    svc = get_cadence_service()
     stmt = ts.select(Cadence).order_by(Cadence.created_at.desc()).limit(100)
     cadences = list((await ts.session.scalars(stmt)).all())
-    out: list[CadenceOut] = []
-    for c in cadences:
-        out.append(CadenceOut.from_models(c, await svc.list_steps(ts, c.id)))
-    return out
+    if not cadences:
+        return []
+    # One bulk steps query instead of one per cadence — a full page of cadences was 101
+    # queries (the campaign-create modal also hits this endpoint, so it's on a hot path).
+    steps_by_cadence: dict[str, list[CadenceStep]] = {c.id: [] for c in cadences}
+    step_rows = (
+        await ts.session.scalars(
+            ts.select(CadenceStep)
+            .where(CadenceStep.cadence_id.in_(list(steps_by_cadence.keys())))
+            .order_by(CadenceStep.step_index.asc())
+        )
+    ).all()
+    for s in step_rows:
+        steps_by_cadence[s.cadence_id].append(s)
+    return [CadenceOut.from_models(c, steps_by_cadence[c.id]) for c in cadences]
 
 
 @router.get("/cadences/{cadence_id}", response_model=CadenceOut)

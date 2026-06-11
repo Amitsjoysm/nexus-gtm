@@ -12,13 +12,19 @@ interface Options {
   enabled?: boolean;
 }
 
+/** ±10% per-tick jitter so a fleet of clients doesn't phase-lock into request spikes. */
+function jittered(intervalMs: number): number {
+  return Math.round(intervalMs * (0.9 + Math.random() * 0.2));
+}
+
 /**
  * Fire `onTick` on a fixed interval, but only while the tab is visible.
  *
  * A backgrounded tab pauses polling and resumes (firing once immediately to catch up) when it
  * returns to the foreground. This is the "live" mechanism for the dashboard: cheap enough to run
  * across a million tenants because hidden tabs cost nothing and each tick hits one small
- * tenant-scoped aggregate — no realtime broker, no idle background load.
+ * tenant-scoped aggregate — no realtime broker, no idle background load. Each delay carries a
+ * little jitter so thousands of open dashboards don't all hit the API on the same beat.
  *
  * `onTick` is read through a ref so a new closure each render doesn't tear down the interval.
  */
@@ -35,18 +41,29 @@ export function useLivePoll(onTick: () => void, { intervalMs = 12000, enabled = 
       return;
     }
     let timer: number | undefined;
+    let running = false;
 
     const fire = () => {
       onTickRef.current();
       setLastTick(Date.now());
     };
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        fire();
+        if (running) schedule();
+      }, jittered(intervalMs));
+    };
     const start = () => {
-      if (timer == null) timer = window.setInterval(fire, intervalMs);
+      if (!running) {
+        running = true;
+        schedule();
+      }
       setLive(true);
     };
     const stop = () => {
+      running = false;
       if (timer != null) {
-        window.clearInterval(timer);
+        window.clearTimeout(timer);
         timer = undefined;
       }
       setLive(false);

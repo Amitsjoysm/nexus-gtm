@@ -31,12 +31,18 @@ class SEPConnector(abc.ABC):
 class _RecordingConnector(SEPConnector):
     """Base stub that logs/records the push rather than calling a remote API."""
 
+    # Module singleton in a long-lived process: keep only recent pushes, or the buffer
+    # grows without bound as campaigns/cadences send (same cap as the CRM connector).
+    MAX_RECORDED_PUSHES = 1000
+
     def __init__(self) -> None:
         self.pushed: list[dict] = []
 
     async def push_contact(self, *, sequence, email, payload) -> SEPPushResult:
         record = {"sequence": sequence, "email": email, "payload": payload}
         self.pushed.append(record)
+        if len(self.pushed) > self.MAX_RECORDED_PUSHES:
+            del self.pushed[: len(self.pushed) - self.MAX_RECORDED_PUSHES]
         logger.info("[%s] push to sequence %s for %s", self.platform, sequence, email)
         return SEPPushResult(ok=True, platform=self.platform, detail=record)
 

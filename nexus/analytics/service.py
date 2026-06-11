@@ -25,26 +25,46 @@ _ACTIVITY_MAX = 50
 
 class AnalyticsService:
     async def overview(self, ts: TenantSession) -> dict:
-        async def _count(model, *where) -> int:
-            stmt = select(func.count()).select_from(model).where(
-                model.tenant_id == ts.tenant_id, *where
-            )
-            return int((await ts.session.scalar(stmt)) or 0)
+        """All dashboard KPIs in ONE database round trip.
 
-        avg_stmt = select(func.avg(AccountScore.composite)).where(
-            AccountScore.tenant_id == ts.tenant_id
+        This is the hottest read in the app (every open dashboard polls it), so the eight
+        aggregates ride a single SELECT of scalar subqueries instead of eight sequential
+        queries — one network round trip and one transaction snapshot instead of eight.
+        Portable: bare scalar-subquery SELECTs run identically on SQLite and Postgres."""
+        tid = ts.tenant_id
+
+        def _count(model, *where):
+            return (
+                select(func.count())
+                .select_from(model)
+                .where(model.tenant_id == tid, *where)
+                .scalar_subquery()
+            )
+
+        stmt = select(
+            _count(Account).label("accounts"),
+            _count(Contact).label("contacts"),
+            _count(SignalEvent).label("signals"),
+            _count(InboxTask, InboxTask.status == "open").label("open_tasks"),
+            _count(AgentRun).label("agent_runs"),
+            _count(AgentRun, AgentRun.status == "failed").label("agent_failures"),
+            _count(PlayRun).label("plays_executed"),
+            select(func.avg(AccountScore.composite))
+            .where(AccountScore.tenant_id == tid)
+            .scalar_subquery()
+            .label("avg_composite"),
         )
-        avg_composite = await ts.session.scalar(avg_stmt)
+        row = (await ts.session.execute(stmt)).one()
 
         return {
-            "accounts": await _count(Account),
-            "contacts": await _count(Contact),
-            "signals": await _count(SignalEvent),
-            "open_tasks": await _count(InboxTask, InboxTask.status == "open"),
-            "agent_runs": await _count(AgentRun),
-            "agent_failures": await _count(AgentRun, AgentRun.status == "failed"),
-            "plays_executed": await _count(PlayRun),
-            "avg_composite_score": round(float(avg_composite), 1) if avg_composite else 0.0,
+            "accounts": int(row.accounts or 0),
+            "contacts": int(row.contacts or 0),
+            "signals": int(row.signals or 0),
+            "open_tasks": int(row.open_tasks or 0),
+            "agent_runs": int(row.agent_runs or 0),
+            "agent_failures": int(row.agent_failures or 0),
+            "plays_executed": int(row.plays_executed or 0),
+            "avg_composite_score": round(float(row.avg_composite), 1) if row.avg_composite else 0.0,
         }
 
     async def activity(self, ts: TenantSession, *, limit: int = 20) -> list[dict]:
@@ -56,12 +76,22 @@ class AnalyticsService:
         limit = max(1, min(limit, _ACTIVITY_MAX))
         items: list[dict] = []
 
+        # Column-pruned reads: each source selects ONLY the fields the feed renders. The full
+        # ORM rows would also drag Text bodies (signals, alerts) and JSON blobs (agent run
+        # input/output) across the wire on every poll, plus per-row ORM construction.
         async def _recent(stmt):
-            return (await ts.session.execute(stmt)).scalars().all()
+            return (await ts.session.execute(stmt)).all()
 
         # Buying signals detected on the tenant's accounts.
         for s in await _recent(
-            select(SignalEvent)
+            select(
+                SignalEvent.id,
+                SignalEvent.title,
+                SignalEvent.kind,
+                SignalEvent.account_id,
+                SignalEvent.occurred_at,
+                SignalEvent.strength,
+            )
             .where(SignalEvent.tenant_id == ts.tenant_id)
             .order_by(SignalEvent.occurred_at.desc())
             .limit(limit)
@@ -79,7 +109,7 @@ class AnalyticsService:
         # Notifications raised by plays / agents / thresholds; tone tracks severity.
         _alert_tone = {"critical": "critical", "warning": "warning", "info": "info"}
         for a in await _recent(
-            select(Alert)
+            select(Alert.id, Alert.title, Alert.severity, Alert.account_id, Alert.created_at)
             .where(Alert.tenant_id == ts.tenant_id)
             .order_by(Alert.created_at.desc())
             .limit(limit)
@@ -96,7 +126,15 @@ class AnalyticsService:
 
         # Account relevance (re)scored — the heartbeat of the scoring loop.
         for sc in await _recent(
-            select(AccountScore)
+            select(
+                AccountScore.id,
+                AccountScore.composite,
+                AccountScore.icp_fit,
+                AccountScore.intent,
+                AccountScore.health,
+                AccountScore.account_id,
+                AccountScore.computed_at,
+            )
             .where(AccountScore.tenant_id == ts.tenant_id)
             .order_by(AccountScore.computed_at.desc())
             .limit(limit)
@@ -113,7 +151,14 @@ class AnalyticsService:
 
         # AI agent invocations; a failure is the one that wants attention.
         for r in await _recent(
-            select(AgentRun)
+            select(
+                AgentRun.id,
+                AgentRun.agent,
+                AgentRun.status,
+                AgentRun.error,
+                AgentRun.account_id,
+                AgentRun.created_at,
+            )
             .where(AgentRun.tenant_id == ts.tenant_id)
             .order_by(AgentRun.created_at.desc())
             .limit(limit)

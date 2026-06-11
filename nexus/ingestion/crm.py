@@ -67,11 +67,22 @@ def _contact_payload(contact: Contact) -> dict:
 class CRMConnector(abc.ABC):
     source: str
 
+    # The connector is a long-lived module singleton, and with auto-sync on it pushes
+    # continuously — unbounded recording buffers would grow for the life of the worker
+    # process. Keep only the most recent pushes (plain lists, trimmed in place, so tests
+    # can keep asserting list equality).
+    MAX_RECORDED_PUSHES = 1000
+
     def __init__(self) -> None:
         # Recording buffers make the outbound half provable offline (mirrors the SEP stub).
         # Real adapters still populate these for observability before/after the API call.
         self.pushed_accounts: list[dict] = []
         self.pushed_activities: list[dict] = []
+
+    def _record(self, buffer: list[dict], record: dict) -> None:
+        buffer.append(record)
+        if len(buffer) > self.MAX_RECORDED_PUSHES:
+            del buffer[: len(buffer) - self.MAX_RECORDED_PUSHES]
 
     @abc.abstractmethod
     async def fetch_accounts(self) -> list[CRMAccount]: ...
@@ -115,7 +126,7 @@ class CRMConnector(abc.ABC):
             "country": account.country,
             "contacts": [_contact_payload(c) for c in (contacts or [])],
         }
-        self.pushed_accounts.append(record)
+        self._record(self.pushed_accounts, record)
         logger.info("[%s] push account %s (%s)", self.source, account.name, account.id)
         return CRMPushResult(
             ok=True, source=self.source, external_id=account.crm_id, detail=record
@@ -126,7 +137,7 @@ class CRMConnector(abc.ABC):
     ) -> CRMPushResult:
         """Log an engagement event (e.g. ``outreach_sent``, ``signal``) against an account."""
         record = {"account_id": account_id, "kind": kind, "detail": detail or {}}
-        self.pushed_activities.append(record)
+        self._record(self.pushed_activities, record)
         logger.info("[%s] push activity %s for account %s", self.source, kind, account_id)
         return CRMPushResult(
             ok=True, source=self.source, external_id=account_id, detail=record
