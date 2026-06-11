@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nexus.core.db import Base, IdMixin, TimestampMixin
@@ -18,6 +18,8 @@ class Alert(IdMixin, TimestampMixin, TenantScoped, Base):
     """A notification delivered in-app and (optionally) fanned out to webhook/email."""
 
     __tablename__ = "alerts"
+    # Backs the activity feed's "newest alerts for this tenant" read.
+    __table_args__ = (Index("ix_alert_tenant_created", "tenant_id", "created_at"),)
 
     title: Mapped[str] = mapped_column(String(300))
     body: Mapped[str] = mapped_column(Text, default="")

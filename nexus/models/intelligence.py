@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nexus.core.db import Base, IdMixin, TimestampMixin, utcnow
@@ -12,6 +12,8 @@ from nexus.core.tenancy import TenantScoped
 
 class AccountScore(IdMixin, TimestampMixin, TenantScoped, Base):
     __tablename__ = "account_scores"
+    # Backs the activity feed's "newest scores for this tenant" read.
+    __table_args__ = (Index("ix_score_tenant_computed", "tenant_id", "computed_at"),)
 
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     icp_fit: Mapped[int] = mapped_column(Integer, default=0)      # 0..100
@@ -27,6 +29,8 @@ class AgentRun(IdMixin, TimestampMixin, TenantScoped, Base):
     """Audit trail for every agent invocation (inputs, output, status, cost)."""
 
     __tablename__ = "agent_runs"
+    # Backs the activity feed's "newest runs for this tenant" read.
+    __table_args__ = (Index("ix_agentrun_tenant_created", "tenant_id", "created_at"),)
 
     agent: Mapped[str] = mapped_column(String(40), index=True)
     account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)

@@ -9,7 +9,7 @@ authenticated API call without changing either surface.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
@@ -99,16 +99,19 @@ async def crm_sync_status(
         Account.crm_synced_at.is_(None),
         Account.updated_at > Account.crm_synced_at,
     )
-    total = await ts.session.scalar(
-        select(func.count()).select_from(Account).where(Account.tenant_id == ts.tenant_id)
-    )
-    pending = await ts.session.scalar(
-        select(func.count())
-        .select_from(Account)
-        .where(Account.tenant_id == ts.tenant_id, due_where)
-    )
-    total = total or 0
-    pending = pending or 0
+    # total + pending in one scan via conditional aggregation (one round trip, not two).
+    row = (
+        await ts.session.execute(
+            select(
+                func.count().label("total"),
+                func.sum(case((due_where, 1), else_=0)).label("pending"),
+            )
+            .select_from(Account)
+            .where(Account.tenant_id == ts.tenant_id)
+        )
+    ).one()
+    total = int(row.total or 0)
+    pending = int(row.pending or 0)
     return CRMSyncStatusOut(
         enabled=enabled,
         provider=(settings.crm_provider or "stub"),

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nexus.core.db import Base, IdMixin, TimestampMixin, utcnow
@@ -27,8 +27,11 @@ SIGNAL_KINDS = {
 class SignalEvent(IdMixin, TimestampMixin, TenantScoped, Base):
     __tablename__ = "signal_events"
     # Idempotent ingestion: the same external signal can be ingested once per tenant.
+    # The (tenant, occurred_at) index backs the activity feed's "newest N for this
+    # tenant" read so it never sorts the tenant's full signal history per poll.
     __table_args__ = (
         UniqueConstraint("tenant_id", "dedupe_key", name="uq_signal_dedupe"),
+        Index("ix_signal_tenant_occurred", "tenant_id", "occurred_at"),
     )
 
     account_id: Mapped[str | None] = mapped_column(
