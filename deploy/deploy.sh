@@ -51,8 +51,8 @@ docker compose -f docker-compose.prod.yml build app
 say "starting postgres + valkey"
 docker compose -f docker-compose.prod.yml up -d postgres valkey
 
-say "running database migrations (alembic upgrade head)"
-docker compose -f docker-compose.prod.yml run --rm app alembic upgrade head
+say "bootstrapping database (create-or-migrate)"
+docker compose -f docker-compose.prod.yml run --rm app python scripts/bootstrap_db.py
 
 say "starting app, worker, caddy"
 docker compose -f docker-compose.prod.yml up -d

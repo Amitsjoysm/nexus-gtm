@@ -176,3 +176,20 @@ async def test_manual_crm_push_stamps_synced_at(client):
 
     after = (await client.get(f"/api/accounts/{aid}", headers=auth(token))).json()
     assert after["crm_synced_at"] is not None
+
+
+def test_db_bootstrap_decision_matrix():
+    """Deploy bootstrap: fresh DBs are created+stamped, create_all DBs stamped, stamped DBs upgraded.
+    (Migration 0001 is a create_all of current metadata, so running the chain on a fresh
+    database would duplicate tables — the bootstrap must branch on database state.)"""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "bootstrap_db.py"
+    spec = importlib.util.spec_from_file_location("bootstrap_db", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod.decide(set()) == "create"
+    assert mod.decide({"accounts", "tenants"}) == "stamp"
+    assert mod.decide({"accounts", "tenants", "alembic_version"}) == "upgrade"

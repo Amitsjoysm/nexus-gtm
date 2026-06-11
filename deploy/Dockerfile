@@ -30,6 +30,7 @@ RUN pip install --no-cache-dir ".[postgres,redis,migrate,metrics]"
 
 # The compiled SPA from stage 1 (served by FastAPI with SPA fallback).
 COPY --from=frontend /src/nexus/web/dist ./nexus/web/dist
+COPY scripts ./scripts
 
 # Non-root runtime user.
 RUN useradd --create-home --uid 10001 nexus
