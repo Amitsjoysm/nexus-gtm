@@ -162,3 +162,38 @@
     display: none;
   }
 }
+
+/* Actionable activity rows + notification bell --------------------------- */
+.itemClickable {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.itemClickable:hover {
+  background: var(--surface-2);
+}
+
+.itemClickable:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.itemChevron {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--text-subtle);
+}
+
+.bellOn {
+  color: var(--accent);
+  background: var(--accent-quiet);
+}

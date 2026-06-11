@@ -77,3 +77,26 @@
     width: 100%;
   }
 }
+
+/* Keyboard-first triage ------------------------------------------------- */
+.kbdHint {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.kbdHint kbd {
+  display: inline-block;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.selected {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

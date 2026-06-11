@@ -34,9 +34,12 @@ export interface Account {
   employee_count: number | null;
   country: string | null;
   tech_stack: string[];
+  /** CRM trust signals: where this record syncs and when it last did. */
+  crm_source?: string | null;
+  crm_synced_at?: string | null;
 }
 
-export type AccountInput = Omit<Account, "id">;
+export type AccountInput = Omit<Account, "id" | "crm_source" | "crm_synced_at">;
 
 export interface Lookalike {
   name: string;
@@ -74,6 +77,8 @@ export interface OutcomeInput {
   stage: OutcomeStage;
   account_id?: string | null;
   contact_id?: string | null;
+  /** Attribute this outcome to the campaign that drove it. */
+  campaign_id?: string | null;
   meta?: Record<string, unknown>;
 }
 
@@ -123,6 +128,9 @@ export interface InboxTask {
   account_id: string | null;
   suggested_action: Record<string, unknown>;
   triage?: TriageSummary | null;
+  /** SLA aging: when the task entered the queue and how long it has waited. */
+  created_at?: string | null;
+  age_hours?: number | null;
 }
 
 export interface SignalEvent {
@@ -590,6 +598,8 @@ export interface Campaign {
 
 export interface CampaignDetail extends Campaign {
   targets: CampaignTarget[];
+  /** Reply attribution: per-stage outcome counts recorded against this campaign. */
+  outcomes: Record<string, number>;
 }
 
 export interface CampaignPreview {

@@ -274,6 +274,23 @@ function CampaignDetailPanel({
 
               <CountBar counts={counts} />
 
+              {Object.values(c.outcomes ?? {}).some((n) => n > 0) && (
+                <div className={styles.results} aria-label="Attributed results">
+                  <span className={styles.resultsLabel}>Results</span>
+                  {(["replied", "meeting", "won", "lost"] as const)
+                    .filter((s) => (c.outcomes[s] ?? 0) > 0)
+                    .map((s) => (
+                      <Badge
+                        key={s}
+                        tone={s === "won" ? "success" : s === "lost" ? "neutral" : "info"}
+                        dot
+                      >
+                        {humanize(s)} {formatNumber(c.outcomes[s])}
+                      </Badge>
+                    ))}
+                </div>
+              )}
+
               {(awaiting || streaming) && (
                 <div className={styles.actions}>
                   {awaiting && (

@@ -8,6 +8,7 @@ import {
   Card,
   CardHeader,
   EmptyState,
+  IconButton,
   Icons,
   Skeleton,
   useToast,
@@ -17,6 +18,7 @@ import { ActivationChecklist } from "@/components/Onboarding";
 import { LiveIndicator } from "@/components/LiveIndicator";
 import { useApi } from "@/hooks/useApi";
 import type { AsyncState } from "@/hooks/useApi";
+import { useHotSignalNotifications } from "@/hooks/useHotSignalNotifications";
 import { useLivePoll } from "@/hooks/useLivePoll";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -99,6 +101,9 @@ export function DashboardPage() {
   // The "live" pulse: repoll everything visible on an interval, pausing on a hidden tab.
   const { live, lastTick } = useLivePoll(refreshAll, { intervalMs: LIVE_INTERVAL_MS });
 
+  // Opt-in browser notifications for strong buying signals landing in the live feed.
+  const notifications = useHotSignalNotifications(activity.data);
+
   const seedDemo = useCallback(async () => {
     setSeeding(true);
     try {
@@ -124,6 +129,19 @@ export function DashboardPage() {
         actions={
           <>
             <LiveIndicator live={live} lastTick={lastTick} className={styles.live} />
+            {notifications.supported && canViewAttribution && (
+              <IconButton
+                label={
+                  notifications.enabled
+                    ? "Turn off hot-signal notifications"
+                    : "Turn on hot-signal notifications"
+                }
+                icon={<Icons.BellIcon />}
+                aria-pressed={notifications.enabled}
+                className={notifications.enabled ? styles.bellOn : undefined}
+                onClick={() => void notifications.toggle()}
+              />
+            )}
             <Button
               variant="secondary"
               iconLeft={<Icons.RefreshIcon />}
@@ -191,7 +209,13 @@ export function DashboardPage() {
 
       <div className={styles.columns}>
         <div className={styles.col}>
-          {canViewAttribution && <ActivityFeed state={activity} live={live} />}
+          {canViewAttribution && (
+            <ActivityFeed
+              state={activity}
+              live={live}
+              onOpenAccount={(id) => navigate(`/accounts/${id}`)}
+            />
+          )}
 
           <Card padding="md">
             <CardHeader
@@ -347,7 +371,15 @@ const ACTIVITY_LABELS: Record<string, string> = {
  * The live pulse: a merged, newest-first stream of signals, alerts, account scores, and agent
  * runs. Manager-only (it reads the analytics activity endpoint). Auto-refreshes with the page.
  */
-function ActivityFeed({ state, live }: { state: AsyncState<ActivityItem[]>; live: boolean }) {
+function ActivityFeed({
+  state,
+  live,
+  onOpenAccount,
+}: {
+  state: AsyncState<ActivityItem[]>;
+  live: boolean;
+  onOpenAccount: (accountId: string) => void;
+}) {
   return (
     <Card padding="md">
       <CardHeader
@@ -375,23 +407,42 @@ function ActivityFeed({ state, live }: { state: AsyncState<ActivityItem[]>; live
       >
         {(rows) => (
           <div className={styles.list}>
-            {rows.slice(0, 8).map((item) => (
-              <div key={item.id} className={styles.item}>
-                <Badge className={styles.itemAccent} tone={activityTone(item.tone)} dot>
-                  {ACTIVITY_LABELS[item.kind] ?? humanize(item.kind)}
-                </Badge>
-                <div className={styles.itemBody}>
-                  <div className={styles.itemTitle}>{item.title}</div>
-                  <div className={styles.itemMeta}>
-                    {item.account_name && <span>{item.account_name}</span>}
-                    {item.account_name && <span aria-hidden="true">·</span>}
-                    {item.detail && <span>{humanize(item.detail)}</span>}
-                    {item.detail && <span aria-hidden="true">·</span>}
-                    <span>{timeAgo(item.at)}</span>
+            {rows.slice(0, 8).map((item) => {
+              const body = (
+                <>
+                  <Badge className={styles.itemAccent} tone={activityTone(item.tone)} dot>
+                    {ACTIVITY_LABELS[item.kind] ?? humanize(item.kind)}
+                  </Badge>
+                  <div className={styles.itemBody}>
+                    <div className={styles.itemTitle}>{item.title}</div>
+                    <div className={styles.itemMeta}>
+                      {item.account_name && <span>{item.account_name}</span>}
+                      {item.account_name && <span aria-hidden="true">·</span>}
+                      {item.detail && <span>{humanize(item.detail)}</span>}
+                      {item.detail && <span aria-hidden="true">·</span>}
+                      <span>{timeAgo(item.at)}</span>
+                    </div>
                   </div>
+                </>
+              );
+              // Signal → action in one move: rows tied to an account open it directly.
+              return item.account_id ? (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`${styles.item} ${styles.itemClickable}`}
+                  onClick={() => onOpenAccount(item.account_id!)}
+                  aria-label={`Open account: ${item.account_name ?? item.title}`}
+                >
+                  {body}
+                  <Icons.ChevronRightIcon className={styles.itemChevron} aria-hidden="true" />
+                </button>
+              ) : (
+                <div key={item.id} className={styles.item}>
+                  {body}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </DataState>

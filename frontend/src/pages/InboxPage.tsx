@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
@@ -9,6 +10,7 @@ import {
   Skeleton,
   useToast,
 } from "@/components/ui";
+import type { BadgeTone } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
@@ -23,6 +25,27 @@ import styles from "./InboxPage.module.css";
 function suggestionLabel(action: Record<string, unknown>): string | null {
   const type = action.type ?? action.action ?? action.kind;
   return typeof type === "string" ? humanize(type) : null;
+}
+
+/** SLA aging tone: a task that has sat for a day deserves attention; three days is overdue. */
+function slaTone(ageHours: number): BadgeTone {
+  if (ageHours >= 72) return "danger";
+  if (ageHours >= 24) return "warning";
+  return "neutral";
+}
+
+/** "In queue 3h" / "In queue 2d" — the commitment cue that keeps queues from rotting. */
+function slaLabel(ageHours: number): string {
+  const rel = formatAgeHours(ageHours);
+  return rel === "just now" ? "Just added" : `In queue ${rel.replace(" ago", "")}`;
+}
+
+/** True when the keydown originated in a form control, where shortcuts must not fire. */
+function isTypingTarget(e: KeyboardEvent): boolean {
+  const el = e.target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
 }
 
 /**
@@ -62,29 +85,79 @@ function TriageStrip({ triage }: { triage: TriageSummary }) {
 export function InboxPage() {
   const api = useApiClient();
   const toast = useToast();
+  const navigate = useNavigate();
   const [pending, setPending] = useState<Record<string, boolean>>({});
+  const [selected, setSelected] = useState(0);
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const inbox = useApi<InboxTask[]>((signal) => api.listInbox(signal), []);
+  const rows = inbox.data ?? [];
 
-  async function complete(task: InboxTask) {
-    setPending((p) => ({ ...p, [task.id]: true }));
-    try {
-      await api.completeTask(task.id);
-      inbox.setData((prev) => (prev ?? []).filter((t) => t.id !== task.id));
-      toast.success("Task completed", task.title);
-    } catch (err) {
-      toast.error(
-        "Couldn't complete task",
-        err instanceof ApiError ? err.detail : "Please try again.",
-      );
-    } finally {
-      setPending((p) => {
-        const next = { ...p };
-        delete next[task.id];
-        return next;
-      });
+  const complete = useCallback(
+    async (task: InboxTask) => {
+      setPending((p) => ({ ...p, [task.id]: true }));
+      try {
+        await api.completeTask(task.id);
+        inbox.setData((prev) => (prev ?? []).filter((t) => t.id !== task.id));
+        toast.success("Task completed", task.title);
+      } catch (err) {
+        toast.error(
+          "Couldn't complete task",
+          err instanceof ApiError ? err.detail : "Please try again.",
+        );
+      } finally {
+        setPending((p) => {
+          const next = { ...p };
+          delete next[task.id];
+          return next;
+        });
+      }
+    },
+    [api, inbox, toast],
+  );
+
+  const openAccount = useCallback(
+    (task: InboxTask) => {
+      if (task.account_id) navigate(`/accounts/${task.account_id}`);
+    },
+    [navigate],
+  );
+
+  // Keyboard-first triage: J/K (or arrows) move, E completes, D/Enter opens the account.
+  // Reps clear dozens of tasks a day; speed-per-task is the adoption metric that matters.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (isTypingTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (rows.length === 0) return;
+      const key = e.key.toLowerCase();
+      if (key === "j" || key === "arrowdown") {
+        e.preventDefault();
+        setSelected((i) => Math.min(i + 1, rows.length - 1));
+      } else if (key === "k" || key === "arrowup") {
+        e.preventDefault();
+        setSelected((i) => Math.max(i - 1, 0));
+      } else if (key === "e") {
+        e.preventDefault();
+        const task = rows[Math.min(selected, rows.length - 1)];
+        if (task && !pending[task.id]) void complete(task);
+      } else if (key === "d" || key === "enter") {
+        e.preventDefault();
+        const task = rows[Math.min(selected, rows.length - 1)];
+        if (task) openAccount(task);
+      }
     }
-  }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rows, selected, pending, complete, openAccount]);
+
+  // Keep the selection valid as tasks complete, and keep the selected row in view.
+  useEffect(() => {
+    if (selected > rows.length - 1) setSelected(Math.max(0, rows.length - 1));
+  }, [rows.length, selected]);
+  useEffect(() => {
+    const task = rows[selected];
+    if (task) rowRefs.current.get(task.id)?.scrollIntoView({ block: "nearest" });
+  }, [rows, selected]);
 
   return (
     <div>
@@ -102,6 +175,11 @@ export function InboxPage() {
         }
       />
 
+      <p className={styles.kbdHint}>
+        Keyboard: <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>E</kbd> complete · <kbd>D</kbd> open
+        account
+      </p>
+
       <DataState
         state={inbox}
         skeleton={
@@ -115,7 +193,7 @@ export function InboxPage() {
             ))}
           </div>
         }
-        isEmpty={(rows) => rows.length === 0}
+        isEmpty={(items) => items.length === 0}
         empty={
           <EmptyState
             icon={<Icons.InboxIcon />}
@@ -124,18 +202,33 @@ export function InboxPage() {
           />
         }
       >
-        {(rows) => (
-          <div className={styles.list}>
-            {rows.map((task) => {
+        {(items) => (
+          <div className={styles.list} role="list" aria-label="Inbox tasks">
+            {items.map((task, idx) => {
               const label = suggestionLabel(task.suggested_action);
+              const isSelected = idx === selected;
               return (
-                <Card key={task.id} padding="md">
+                <Card
+                  key={task.id}
+                  padding="md"
+                  role="listitem"
+                  aria-current={isSelected || undefined}
+                  className={isSelected ? styles.selected : undefined}
+                  ref={(el: HTMLDivElement | null) => {
+                    if (el) rowRefs.current.set(task.id, el);
+                    else rowRefs.current.delete(task.id);
+                  }}
+                  onClick={() => setSelected(idx)}
+                >
                   <div className={styles.task}>
                     <div className={styles.main}>
                       <div className={styles.titleRow}>
                         <Badge tone={priorityTone(task.priority)} dot>
                           Priority {task.priority}
                         </Badge>
+                        {task.age_hours != null && (
+                          <Badge tone={slaTone(task.age_hours)}>{slaLabel(task.age_hours)}</Badge>
+                        )}
                         <span className={styles.title}>{task.title}</span>
                       </div>
                       <p className={styles.reason}>{task.reason}</p>
@@ -149,6 +242,15 @@ export function InboxPage() {
                       )}
                     </div>
                     <div className={styles.actions}>
+                      {task.account_id && (
+                        <Button
+                          variant="ghost"
+                          iconLeft={<Icons.BuildingIcon />}
+                          onClick={() => openAccount(task)}
+                        >
+                          Open account
+                        </Button>
+                      )}
                       <Button
                         variant="secondary"
                         iconLeft={<Icons.CheckIcon />}
