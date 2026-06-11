@@ -193,3 +193,44 @@ def test_db_bootstrap_decision_matrix():
     assert mod.decide(set()) == "create"
     assert mod.decide({"accounts", "tenants"}) == "stamp"
     assert mod.decide({"accounts", "tenants", "alembic_version"}) == "upgrade"
+
+
+@pytest.mark.asyncio
+async def test_ingestion_clamps_oversized_wire_fields():
+    """Regression: real web sources produce titles/URLs/dedupe keys longer than the
+    VARCHAR limits Postgres enforces (SQLite doesn't, so only clamping protects prod).
+    Distinct over-long dedupe keys must also remain distinct after bounding."""
+    from nexus.core.db import get_sessionmaker
+    from nexus.ingestion.service import IngestionService
+    from nexus.ingestion.sources import RawSignal
+    from nexus.models.account import Account
+    from nexus.models.identity import Tenant
+    from nexus.workers.tasks import tenant_session
+
+    async with get_sessionmaker()() as s:
+        t = Tenant(name="Clamp", slug="clamp-co")
+        s.add(t)
+        await s.flush()
+        acct = Account(tenant_id=t.id, name="A", domain="a.clamp")
+        s.add(acct)
+        await s.commit()
+        tid, aid = t.id, acct.id
+
+    long_a = "news:" + "x" * 500 + "-a"
+    long_b = "news:" + "x" * 500 + "-b"   # differs only past the truncation point
+    raws = [
+        RawSignal(kind="news", source="s" * 200, title="t" * 1000,
+                  dedupe_key=long_a, url="https://e.x/" + "u" * 1000),
+        RawSignal(kind="news", source="web", title="ok", dedupe_key=long_b),
+    ]
+    async with tenant_session(tid) as ts:
+        acct = await ts.get(Account, aid)
+        created = await IngestionService().ingest(ts, acct, raws)
+
+    assert len(created) == 2                      # no false dedupe collision
+    for ev in created:
+        assert len(ev.dedupe_key) <= 200
+        assert len(ev.title) <= 400
+        assert ev.url is None or len(ev.url) <= 500
+        assert len(ev.source) <= 60
+    assert created[0].dedupe_key != created[1].dedupe_key

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 
 from nexus.core.config import get_settings
@@ -12,6 +13,30 @@ from nexus.models.account import Account
 from nexus.models.signal import SIGNAL_KINDS, SignalEvent
 
 logger = logging.getLogger("nexus.ingestion")
+
+# SignalEvent column limits. Postgres enforces VARCHAR lengths (SQLite does not, so the
+# offline suite can't catch overflows); real-world titles/URLs from web sources routinely
+# exceed them, so every wire-derived value is clamped at this single choke point.
+_MAX_TITLE = 400
+_MAX_URL = 500
+_MAX_SOURCE = 60
+_MAX_DEDUPE = 200
+
+
+def _clamp(value: str | None, limit: int) -> str | None:
+    if value is None or len(value) <= limit:
+        return value
+    return value[:limit]
+
+
+def _clamp_dedupe(key: str) -> str:
+    """Bound the dedupe key without losing uniqueness: over-long keys keep a readable
+    prefix plus a digest of the FULL key, so two distinct long keys can't collide the
+    way plain truncation would."""
+    if len(key) <= _MAX_DEDUPE:
+        return key
+    digest = hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()
+    return f"{key[:_MAX_DEDUPE - len(digest) - 1]}:{digest}"
 
 
 class IngestionService:
@@ -34,20 +59,21 @@ class IngestionService:
         for r in raw:
             if r.kind not in SIGNAL_KINDS:
                 continue
-            if r.dedupe_key in existing:
+            dedupe_key = _clamp_dedupe(r.dedupe_key)
+            if dedupe_key in existing:
                 continue
-            existing.add(r.dedupe_key)
+            existing.add(dedupe_key)
             ev = SignalEvent(
                 tenant_id=ts.tenant_id,
                 account_id=account.id,
                 contact_id=r.contact_id,
                 kind=r.kind,
-                source=r.source,
-                title=r.title,
+                source=_clamp(r.source, _MAX_SOURCE),
+                title=_clamp(r.title, _MAX_TITLE),
                 body=r.body,
-                url=r.url,
+                url=_clamp(r.url, _MAX_URL),
                 strength=r.resolved_strength(),
-                dedupe_key=r.dedupe_key,
+                dedupe_key=dedupe_key,
                 occurred_at=r.occurred_at,
             )
             ts.add(ev)
