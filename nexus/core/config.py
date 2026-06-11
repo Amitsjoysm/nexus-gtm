@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     crm_sync_enabled: bool = False        # global master switch for auto-sync
     crm_sync_batch_size: int = 100        # max accounts claimed per heartbeat sweep
 
+    # Daily digest (SDR adoption): once per interval, summarize the last day's GTM activity
+    # into an email-channel alert per opted-in tenant. Rides the automation heartbeat (only
+    # ticks while automation_enabled) and is idempotent per interval, so the scheduler can
+    # enqueue it every tick without double-sending.
+    digest_interval_hours: int = 24
+
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
     # A selected engine with no key degrades to keyless DuckDuckGo so search keeps working.

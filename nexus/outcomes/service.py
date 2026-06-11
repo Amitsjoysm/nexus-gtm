@@ -83,12 +83,15 @@ class OutcomeService:
         account: Account | None = None,
         account_id: str | None = None,
         contact_id: str | None = None,
+        campaign_id: str | None = None,
         meta: dict | None = None,
     ) -> Outcome:
         """Capture one outcome, freezing the account's firmographics onto the row.
 
         Pass an ``account`` to snapshot its firmographics; ``account_id``/``contact_id`` link the
-        row without requiring the loaded object. ``stage`` must be one of :data:`STAGES`.
+        row without requiring the loaded object. ``campaign_id`` attributes the outcome to the
+        campaign that drove it (feeds the per-campaign ROI rollup). ``stage`` must be one of
+        :data:`STAGES`.
         """
         if stage not in STAGES:
             raise ValueError(f"Unknown outcome stage {stage!r}; expected one of {STAGES}")
@@ -97,6 +100,7 @@ class OutcomeService:
             stage=stage,
             account_id=account.id if account is not None else account_id,
             contact_id=contact_id,
+            campaign_id=campaign_id,
             industry=account.industry if account is not None else None,
             employee_count=account.employee_count if account is not None else None,
             country=account.country if account is not None else None,
@@ -106,6 +110,20 @@ class OutcomeService:
         ts.add(outcome)
         await ts.flush()
         return outcome
+
+    async def campaign_attribution(self, ts: TenantSession, campaign_id: str) -> dict[str, int]:
+        """Per-stage outcome counts attributed to one campaign — the ROI rollup managers read."""
+        rows = (
+            await ts.session.execute(
+                select(Outcome.stage, func.count())
+                .where(
+                    Outcome.tenant_id == ts.tenant_id,
+                    Outcome.campaign_id == campaign_id,
+                )
+                .group_by(Outcome.stage)
+            )
+        ).all()
+        return {stage: int(n) for stage, n in rows}
 
     async def list_recent(self, ts: TenantSession, *, limit: int = 50) -> list[Outcome]:
         stmt = (

@@ -17,6 +17,7 @@ from nexus.workers.queue import TaskQueue, get_task_queue
 from nexus.workers.tasks import (
     enqueue_advance_cadences,
     enqueue_refresh_due_accounts,
+    enqueue_send_daily_digests,
     enqueue_sync_crm_due_accounts,
 )
 
@@ -34,7 +35,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
     if settings.automation_enabled:
         await enqueue_advance_cadences(queue=queue)
         await enqueue_refresh_due_accounts(queue=queue)
-        count += 2
+        # Digest rides the automation switch; its handler is idempotent per interval, so
+        # enqueueing every tick costs one cheap timestamp check per tenant.
+        await enqueue_send_daily_digests(queue=queue)
+        count += 3
     if settings.crm_sync_enabled:
         await enqueue_sync_crm_due_accounts(queue=queue)
         count += 1

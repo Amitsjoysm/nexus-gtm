@@ -292,6 +292,113 @@ async def handle_sync_crm_account(payload: dict) -> dict:
     return {"account_id": aid, "ok": res.ok}
 
 
+async def handle_send_daily_digests(payload: dict) -> dict:
+    """Daily digest: one email-channel alert per opted-in tenant summarizing the last digest
+    interval (new signals, accounts scored, open tasks). Idempotent per interval — the previous
+    digest's timestamp is the gate — so the heartbeat can enqueue this every tick. Quiet
+    workspaces get no digest (an empty digest trains reps to ignore the real ones).
+    ``now`` is overridable via payload['now_iso'] for deterministic tests."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+
+    from nexus.core.config import get_settings
+    from nexus.core.db import ensure_aware
+    from nexus.models.alerts import Alert
+    from nexus.models.identity import Tenant
+    from nexus.models.intelligence import AccountScore
+    from nexus.models.signal import SignalEvent
+    from nexus.models.workflow import InboxTask
+
+    settings = get_settings()
+    if not settings.automation_enabled:
+        return {"skipped": "automation_disabled"}
+
+    now = (
+        datetime.fromisoformat(payload["now_iso"])
+        if payload.get("now_iso")
+        else datetime.now(timezone.utc)
+    )
+    interval = timedelta(hours=settings.digest_interval_hours)
+    window_start = now - interval
+
+    async with get_sessionmaker()() as session:
+        tenant_ids = (
+            await session.scalars(
+                select(Tenant.id).where(Tenant.automation_enabled == True)  # noqa: E712
+            )
+        ).all()
+
+    sent = 0
+    for tid in tenant_ids:
+        async with tenant_session(tid) as ts:
+            last = await ts.session.scalar(
+                select(func.max(Alert.created_at)).where(
+                    Alert.tenant_id == tid, Alert.source == "digest"
+                )
+            )
+            if last is not None and ensure_aware(last) > window_start:
+                continue  # this interval's digest already went out
+
+            signals = int(
+                (
+                    await ts.session.scalar(
+                        select(func.count())
+                        .select_from(SignalEvent)
+                        .where(
+                            SignalEvent.tenant_id == tid,
+                            SignalEvent.occurred_at >= window_start,
+                        )
+                    )
+                )
+                or 0
+            )
+            scored = int(
+                (
+                    await ts.session.scalar(
+                        select(func.count())
+                        .select_from(AccountScore)
+                        .where(
+                            AccountScore.tenant_id == tid,
+                            AccountScore.computed_at >= window_start,
+                        )
+                    )
+                )
+                or 0
+            )
+            open_tasks = int(
+                (
+                    await ts.session.scalar(
+                        select(func.count())
+                        .select_from(InboxTask)
+                        .where(InboxTask.tenant_id == tid, InboxTask.status == "open")
+                    )
+                )
+                or 0
+            )
+            if signals == 0 and scored == 0 and open_tasks == 0:
+                continue
+
+            ts.add(
+                Alert(
+                    tenant_id=tid,
+                    title=f"Your NEXUS digest: {signals} new signals, {open_tasks} tasks waiting",
+                    body=(
+                        f"In the last {settings.digest_interval_hours} hours: {signals} buying "
+                        f"signals detected, {scored} accounts (re)scored, {open_tasks} inbox "
+                        "tasks open. Open your inbox to work the highest-priority accounts first."
+                    ),
+                    severity="info",
+                    channel="email",
+                    source="digest",
+                    meta={"signals": signals, "scored": scored, "open_tasks": open_tasks},
+                )
+            )
+            sent += 1
+
+    return {"digests": sent, "tenants": len(tenant_ids)}
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
@@ -300,6 +407,7 @@ HANDLERS: dict[str, Handler] = {
     "refresh_due_accounts": handle_refresh_due_accounts,
     "sync_crm_account": handle_sync_crm_account,
     "sync_crm_due_accounts": handle_sync_crm_due_accounts,
+    "send_daily_digests": handle_send_daily_digests,
 }
 
 
@@ -355,6 +463,11 @@ async def enqueue_sync_crm_account(
 async def enqueue_sync_crm_due_accounts(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="sync_crm_due_accounts", payload={}))
+
+
+async def enqueue_send_daily_digests(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="send_daily_digests", payload={}))
 
 
 async def dispatch(job: Job) -> dict:

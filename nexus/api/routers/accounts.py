@@ -31,6 +31,8 @@ def _account_out(a: Account) -> AccountOut:
         employee_count=a.employee_count,
         country=a.country,
         tech_stack=a.tech_stack or [],
+        crm_source=a.crm_source,
+        crm_synced_at=a.crm_synced_at.isoformat() if a.crm_synced_at else None,
     )
 
 

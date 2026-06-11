@@ -378,7 +378,9 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
     await _enqueue_due(q)
     jobs = await _drain(q)
     assert "sync_crm_due_accounts" not in {j.name for j in jobs}
-    assert {j.name for j in jobs} == {"advance_cadences", "refresh_due_accounts"}
+    assert {j.name for j in jobs} == {
+        "advance_cadences", "refresh_due_accounts", "send_daily_digests",
+    }
 
 
 @pytest.mark.asyncio
