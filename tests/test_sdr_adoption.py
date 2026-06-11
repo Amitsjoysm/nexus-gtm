@@ -155,3 +155,24 @@ async def test_digest_skips_quiet_and_opted_out_tenants(client, monkeypatch):
 
     res = await handle_send_daily_digests({})
     assert res["digests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_manual_crm_push_stamps_synced_at(client):
+    """Regression: a rep's manual 'Sync to CRM' must update the trust chip — the manual
+    push routes through the shared sync unit and stamps crm_synced_at like auto-sync."""
+    token = await signup(client, slug="mpush", email="o@mpush.x", company="MpushCo")
+    r = await client.post(
+        "/api/integrations/crm/sync",
+        headers=auth(token),
+        json={"source": "salesforce", "accounts": [{"external_id": "m1", "name": "ManualCo"}]},
+    )
+    aid = r.json()["account_ids"][0]
+    before = (await client.get(f"/api/accounts/{aid}", headers=auth(token))).json()
+    assert before["crm_synced_at"] is None
+
+    push = await client.post(f"/api/integrations/crm/push/{aid}", headers=auth(token))
+    assert push.status_code == 200 and push.json()["ok"] is True, push.text
+
+    after = (await client.get(f"/api/accounts/{aid}", headers=auth(token))).json()
+    assert after["crm_synced_at"] is not None

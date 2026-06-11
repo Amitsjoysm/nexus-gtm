@@ -21,6 +21,7 @@ from nexus.api.schemas import (
     SEPPushResponse,
 )
 from nexus.core.config import get_settings
+from nexus.core.db import utcnow
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.ingestion.crm import (
@@ -29,6 +30,7 @@ from nexus.ingestion.crm import (
     SalesforceConnector,
     get_crm_connector,
 )
+from nexus.ingestion.crm_sync import sync_account_to_crm
 from nexus.integrations.sep import get_sep_connector
 from nexus.models.account import Account, Contact
 from nexus.models.identity import Tenant
@@ -75,7 +77,12 @@ async def crm_push(
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
     contacts = await ts.list(Contact, Contact.account_id == account_id)
-    result = await get_crm_connector().push_account(account, contacts=contacts)
+    # Route through the shared sync unit so a manual push stamps crm_synced_at exactly like
+    # auto-sync does — the trust chip ("Synced to Salesforce · 2m ago") must reflect manual
+    # pushes too, and change-detection must not re-push an account a rep just pushed.
+    result = await sync_account_to_crm(
+        ts, account, connector=get_crm_connector(), now=utcnow()
+    )
     return CRMPushResponse(
         ok=result.ok,
         source=result.source,
