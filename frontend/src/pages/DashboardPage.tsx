@@ -14,12 +14,16 @@ import {
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { ActivationChecklist } from "@/components/Onboarding";
+import { LiveIndicator } from "@/components/LiveIndicator";
 import { useApi } from "@/hooks/useApi";
+import type { AsyncState } from "@/hooks/useApi";
+import { useLivePoll } from "@/hooks/useLivePoll";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
-import { priorityTone, severityTone, strengthMeta } from "@/lib/display";
+import { activityTone, priorityTone, severityTone, strengthMeta } from "@/lib/display";
 import type {
+  ActivityItem,
   AnalyticsOverview,
   Alert,
   InboxTask,
@@ -29,6 +33,9 @@ import type {
   SignalEvent,
 } from "@/lib/types";
 import styles from "./DashboardPage.module.css";
+
+/** How often the dashboard repolls while the tab is visible (paused when hidden). */
+const LIVE_INTERVAL_MS = 12_000;
 
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
 
@@ -74,13 +81,23 @@ export function DashboardPage() {
   const inbox = useApi<InboxTask[]>((signal) => api.listInbox(signal), []);
   const alerts = useApi<Alert[]>((signal) => api.listAlerts("open", signal), []);
   const signals = useApi<SignalEvent[]>((signal) => api.listSignals({ limit: 6 }, signal), []);
+  // The cross-entity activity feed is a manager analytics surface (view_analytics). Reps skip
+  // the request entirely so their dashboard never shows a permission error where the feed sits.
+  const activity = useApi<ActivityItem[]>(
+    (signal) => (canViewAttribution ? api.analyticsActivity(24, signal) : Promise.resolve([])),
+    [canViewAttribution],
+  );
 
   const refreshAll = useCallback(() => {
     overview.refetch();
     inbox.refetch();
     alerts.refetch();
     signals.refetch();
-  }, [overview, inbox, alerts, signals]);
+    activity.refetch();
+  }, [overview, inbox, alerts, signals, activity]);
+
+  // The "live" pulse: repoll everything visible on an interval, pausing on a hidden tab.
+  const { live, lastTick } = useLivePoll(refreshAll, { intervalMs: LIVE_INTERVAL_MS });
 
   const seedDemo = useCallback(async () => {
     setSeeding(true);
@@ -106,6 +123,7 @@ export function DashboardPage() {
         description="Your go-to-market intelligence at a glance."
         actions={
           <>
+            <LiveIndicator live={live} lastTick={lastTick} className={styles.live} />
             <Button
               variant="secondary"
               iconLeft={<Icons.RefreshIcon />}
@@ -173,6 +191,8 @@ export function DashboardPage() {
 
       <div className={styles.columns}>
         <div className={styles.col}>
+          {canViewAttribution && <ActivityFeed state={activity} live={live} />}
+
           <Card padding="md">
             <CardHeader
               title="Top inbox tasks"
@@ -313,6 +333,69 @@ export function DashboardPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+const ACTIVITY_LABELS: Record<string, string> = {
+  signal: "Signal",
+  alert: "Alert",
+  account_scored: "Scored",
+  agent_run: "Agent",
+};
+
+/**
+ * The live pulse: a merged, newest-first stream of signals, alerts, account scores, and agent
+ * runs. Manager-only (it reads the analytics activity endpoint). Auto-refreshes with the page.
+ */
+function ActivityFeed({ state, live }: { state: AsyncState<ActivityItem[]>; live: boolean }) {
+  return (
+    <Card padding="md">
+      <CardHeader
+        title="Live activity"
+        subtitle="Signals, scores, alerts, and agent runs across your workspace"
+        actions={
+          <Badge tone={live ? "success" : "neutral"} dot>
+            {live ? "Live" : "Paused"}
+          </Badge>
+        }
+      />
+      <DataState
+        state={state}
+        errorTitle="Couldn't load activity"
+        skeleton={<RowsSkeleton rows={6} />}
+        isEmpty={(rows) => rows.length === 0}
+        empty={
+          <EmptyState
+            compact
+            icon={<Icons.TrendUpIcon />}
+            title="Nothing's happened yet"
+            description="As signals land, accounts get scored, and agents run, the stream shows up here."
+          />
+        }
+      >
+        {(rows) => (
+          <div className={styles.list}>
+            {rows.slice(0, 8).map((item) => (
+              <div key={item.id} className={styles.item}>
+                <Badge className={styles.itemAccent} tone={activityTone(item.tone)} dot>
+                  {ACTIVITY_LABELS[item.kind] ?? humanize(item.kind)}
+                </Badge>
+                <div className={styles.itemBody}>
+                  <div className={styles.itemTitle}>{item.title}</div>
+                  <div className={styles.itemMeta}>
+                    {item.account_name && <span>{item.account_name}</span>}
+                    {item.account_name && <span aria-hidden="true">·</span>}
+                    {item.detail && <span>{humanize(item.detail)}</span>}
+                    {item.detail && <span aria-hidden="true">·</span>}
+                    <span>{timeAgo(item.at)}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </DataState>
+    </Card>
   );
 }
 

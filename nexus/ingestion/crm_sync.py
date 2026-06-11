@@ -45,7 +45,14 @@ async def sync_account_to_crm(
                     kind="signal",
                     detail={"signal": sig.title, "kind": sig.kind, "source": sig.source},
                 )
+    # Stamp the sync clock. Writing crm_synced_at is itself a row UPDATE, which trips
+    # TimestampMixin's onupdate=utcnow and would push updated_at *past* the value we just
+    # wrote — leaving the account perpetually "due" (updated_at > crm_synced_at) and
+    # re-syncing on every sweep. That defeats change-detection and is a real scale problem
+    # at a million accounts. Pin updated_at to the same instant so only a later *content*
+    # change re-arms the due check; the sync write itself never does.
     account.crm_synced_at = now
+    account.updated_at = now
     return res
 
 

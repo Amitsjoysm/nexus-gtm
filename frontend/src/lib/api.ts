@@ -10,6 +10,7 @@
 import type {
   Account,
   AccountInput,
+  ActivityItem,
   AgentRunResponse,
   Alert,
   AlertStatus,
@@ -17,6 +18,16 @@ import type {
   Approval,
   ApprovalDecisionRequest,
   ApprovalStatus,
+  AutomationSettings,
+  Cadence,
+  CadenceEnrollment,
+  CadenceInput,
+  CadenceReport,
+  Campaign,
+  CampaignDetail,
+  CampaignInput,
+  CampaignPreview,
+  CampaignProgress,
   ChatSession,
   ChatStreamEvent,
   ChatTurnResponse,
@@ -27,9 +38,11 @@ import type {
   CRMPushResponse,
   CRMSyncRequest,
   CRMSyncResponse,
+  CRMSyncStatus,
   CsvImportResult,
   CustomFieldDef,
   DiscoveryResult,
+  EnrollmentDetail,
   InboxTask,
   LearnedWeights,
   ListBuildResult,
@@ -41,6 +54,7 @@ import type {
   OutcomeSummary,
   Play,
   PlayInput,
+  ProspectList,
   RelevanceProfile,
   RelevanceProfileInput,
   ResultsQuery,
@@ -232,6 +246,9 @@ export class ApiClient {
       signal,
     });
   }
+  listSavedLists(signal?: AbortSignal) {
+    return this.request<ProspectList[]>("/lists", { signal });
+  }
 
   // ---- plays ----
   listPlays(signal?: AbortSignal) {
@@ -262,6 +279,9 @@ export class ApiClient {
       signal,
     });
   }
+  crmSyncStatus(signal?: AbortSignal) {
+    return this.request<CRMSyncStatus>("/integrations/crm/sync-status", { signal });
+  }
 
   // ---- inbox ----
   listInbox(signal?: AbortSignal) {
@@ -290,6 +310,76 @@ export class ApiClient {
   // ---- analytics ----
   analyticsOverview(signal?: AbortSignal) {
     return this.request<AnalyticsOverview>("/analytics/overview", { signal });
+  }
+  analyticsActivity(limit = 20, signal?: AbortSignal) {
+    return this.request<ActivityItem[]>("/analytics/activity", { query: { limit }, signal });
+  }
+
+  // ---- segment campaigns ----
+  listCampaigns(signal?: AbortSignal) {
+    return this.request<Campaign[]>("/campaigns", { signal });
+  }
+  getCampaign(id: string, signal?: AbortSignal) {
+    return this.request<CampaignDetail>(`/campaigns/${id}`, { signal });
+  }
+  createCampaign(body: CampaignInput, signal?: AbortSignal) {
+    return this.request<Campaign>("/campaigns", { method: "POST", body, signal });
+  }
+  previewCampaign(id: string, signal?: AbortSignal) {
+    return this.request<CampaignPreview>(`/campaigns/${id}/preview`, { signal });
+  }
+  approveCampaign(id: string, signal?: AbortSignal) {
+    return this.request<Campaign>(`/campaigns/${id}/approve`, { method: "POST", signal });
+  }
+  cancelCampaign(id: string, signal?: AbortSignal) {
+    return this.request<Campaign>(`/campaigns/${id}/cancel`, { method: "POST", signal });
+  }
+
+  // ---- cadences ----
+  listCadences(signal?: AbortSignal) {
+    return this.request<Cadence[]>("/cadences", { signal });
+  }
+  getCadence(id: string, signal?: AbortSignal) {
+    return this.request<Cadence>(`/cadences/${id}`, { signal });
+  }
+  createCadence(body: CadenceInput, signal?: AbortSignal) {
+    return this.request<Cadence>("/cadences", { method: "POST", body, signal });
+  }
+  deactivateCadence(id: string, signal?: AbortSignal) {
+    return this.request<null>(`/cadences/${id}`, { method: "DELETE", signal });
+  }
+  listEnrollments(campaignId: string, signal?: AbortSignal) {
+    return this.request<CadenceEnrollment[]>(
+      `/campaigns/${campaignId}/enrollments`,
+      { signal },
+    );
+  }
+  getEnrollment(id: string, signal?: AbortSignal) {
+    return this.request<EnrollmentDetail>(`/enrollments/${id}`, { signal });
+  }
+  cadenceReport(campaignId: string, signal?: AbortSignal) {
+    return this.request<CadenceReport>(`/campaigns/${campaignId}/cadence-report`, { signal });
+  }
+  pauseEnrollment(id: string, signal?: AbortSignal) {
+    return this.request<CadenceEnrollment>(`/enrollments/${id}/pause`, { method: "POST", signal });
+  }
+  resumeEnrollment(id: string, signal?: AbortSignal) {
+    return this.request<CadenceEnrollment>(`/enrollments/${id}/resume`, { method: "POST", signal });
+  }
+  stopEnrollment(id: string, signal?: AbortSignal) {
+    return this.request<CadenceEnrollment>(`/enrollments/${id}/stop`, { method: "POST", signal });
+  }
+  approveTouch(enrollmentId: string, stepIndex: number, editedBody?: string, signal?: AbortSignal) {
+    return this.request<CadenceEnrollment>(
+      `/enrollments/${enrollmentId}/touches/${stepIndex}/approve`,
+      { method: "POST", body: { edited_body: editedBody ?? null }, signal },
+    );
+  }
+  rejectTouch(enrollmentId: string, stepIndex: number, stop = false, signal?: AbortSignal) {
+    return this.request<CadenceEnrollment>(
+      `/enrollments/${enrollmentId}/touches/${stepIndex}/reject`,
+      { method: "POST", body: { stop }, signal },
+    );
   }
 
   // ---- outcome-feedback loop ----
@@ -331,6 +421,16 @@ export class ApiClient {
   }
   listWorkspaces(signal?: AbortSignal) {
     return this.request<Workspace[]>("/workspace/workspaces", { signal });
+  }
+  getAutomation(signal?: AbortSignal) {
+    return this.request<AutomationSettings>("/workspace/automation", { signal });
+  }
+  setAutomation(enabled: boolean, signal?: AbortSignal) {
+    return this.request<AutomationSettings>("/workspace/automation", {
+      method: "PATCH",
+      body: { automation_enabled: enabled },
+      signal,
+    });
   }
 
   // ---- orchestration ----
@@ -503,6 +603,45 @@ export class ApiClient {
         for (const frame of frames) {
           const event = parseSseFrame(frame);
           if (event) opts.onEvent(event);
+        }
+      }
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+  }
+
+  /**
+   * Stream a campaign's draft/send progress over SSE. Same hand-rolled fetch+reader as
+   * `streamRunEvents` (EventSource can't send Authorization). The server emits `progress`
+   * frames (status + per-status target counts) and closes at a terminal status or the
+   * approval gate — at which point the promise resolves and the caller refetches once.
+   */
+  async streamCampaignEvents(
+    campaignId: string,
+    opts: { onProgress: (p: CampaignProgress) => void; lastEventId?: number },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const headers: Record<string, string> = { Accept: "text/event-stream" };
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    if (opts.lastEventId) headers["Last-Event-ID"] = String(opts.lastEventId);
+    const res = await fetch(this.buildUrl(`/campaigns/${campaignId}/events`), { headers, signal });
+    if (res.status === 401) this.onUnauthorized?.();
+    if (!res.ok || !res.body) {
+      throw new ApiError(res.status, res.statusText || "Couldn't open the campaign stream");
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const ev = parseSseFrame(frame);
+          if (ev && ev.type === "progress") opts.onProgress(ev.data as unknown as CampaignProgress);
         }
       }
     } finally {

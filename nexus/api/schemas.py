@@ -1,6 +1,8 @@
 """Pydantic request/response schemas for the API."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -174,6 +176,15 @@ class ListBuildRequest(BaseModel):
     filter: dict = Field(default_factory=dict)
 
 
+class ProspectListOut(BaseModel):
+    """A saved segment: its name and how many accounts it currently holds."""
+
+    id: str
+    name: str
+    accounts: int
+    created_at: datetime
+
+
 # ---- workspaces ----
 class WorkspaceIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -306,3 +317,17 @@ class PlayIn(BaseModel):
 
 class PlayOut(PlayIn):
     id: str
+
+
+# ---- analytics: live activity feed ----
+class ActivityItemOut(BaseModel):
+    """One entry in the dashboard's unified live feed (signal / alert / score / agent run)."""
+
+    id: str
+    kind: str            # signal | alert | account_scored | agent_run
+    title: str
+    detail: str = ""
+    account_id: str | None = None
+    account_name: str | None = None
+    at: str              # ISO-8601 timestamp, newest-first in the response
+    tone: str = "neutral"  # neutral | info | success | warning | critical

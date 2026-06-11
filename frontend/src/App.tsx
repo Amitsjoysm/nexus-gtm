@@ -37,6 +37,9 @@ const RunsPage = lazyPage(() => import("@/pages/RunsPage"), "RunsPage");
 const RunDetailPage = lazyPage(() => import("@/pages/RunDetailPage"), "RunDetailPage");
 const ApprovalsPage = lazyPage(() => import("@/pages/ApprovalsPage"), "ApprovalsPage");
 const ChatPage = lazyPage(() => import("@/pages/ChatPage"), "ChatPage");
+const CampaignsPage = lazyPage(() => import("@/pages/CampaignsPage"), "CampaignsPage");
+const CadencesPage = lazyPage(() => import("@/pages/CadencesPage"), "CadencesPage");
+const SettingsPage = lazyPage(() => import("@/pages/SettingsPage"), "SettingsPage");
 
 const ROLE_RANK: Record<Role, number> = { owner: 3, admin: 2, manager: 1, rep: 0 };
 
@@ -129,6 +132,22 @@ export function App() {
                   }
                 />
                 <Route
+                  path="/campaigns"
+                  element={
+                    <RequireRole minRole="manager">
+                      <CampaignsPage />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/cadences"
+                  element={
+                    <RequireRole minRole="manager">
+                      <CadencesPage />
+                    </RequireRole>
+                  }
+                />
+                <Route
                   path="/plays"
                   element={
                     <RequireRole minRole="manager">
@@ -149,6 +168,14 @@ export function App() {
                   element={
                     <RequireRole minRole="admin">
                       <IntegrationsPage />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/settings"
+                  element={
+                    <RequireRole minRole="admin">
+                      <SettingsPage />
                     </RequireRole>
                   }
                 />

@@ -2,6 +2,22 @@
 import type { BadgeTone } from "@/components/ui";
 import type { AlertSeverity } from "./types";
 
+/** Activity-feed tone string → Badge tone ("critical" maps to the danger pill). */
+export function activityTone(tone: string): BadgeTone {
+  switch (tone) {
+    case "critical":
+      return "danger";
+    case "warning":
+      return "warning";
+    case "success":
+      return "success";
+    case "info":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
+
 export function severityTone(severity: AlertSeverity): BadgeTone {
   switch (severity) {
     case "critical":
@@ -25,4 +41,69 @@ export function priorityTone(priority: number): BadgeTone {
   if (priority <= 1) return "danger";
   if (priority <= 3) return "warning";
   return "neutral";
+}
+
+/** Campaign lifecycle status → tone. */
+export function campaignTone(status: string): BadgeTone {
+  switch (status) {
+    case "completed":
+      return "success";
+    case "awaiting_approval":
+      return "warning";
+    case "failed":
+      return "danger";
+    case "drafting":
+    case "approved":
+    case "sending":
+      return "info";
+    default:
+      return "neutral"; // draft_pending, cancelled
+  }
+}
+
+/** Campaign target status → tone. */
+export function targetTone(status: string): BadgeTone {
+  switch (status) {
+    case "sent":
+      return "success";
+    case "drafted":
+    case "approved":
+      return "info";
+    case "skipped":
+      return "warning";
+    case "failed":
+      return "danger";
+    default:
+      return "neutral"; // pending, drafting
+  }
+}
+
+/** Cadence enrollment status → tone. */
+export function enrollmentTone(status: string): BadgeTone {
+  switch (status) {
+    case "active":
+      return "success";
+    case "paused":
+      return "warning";
+    case "stopped":
+      return "danger";
+    default:
+      return "neutral"; // completed
+  }
+}
+
+/** Cadence touch status → tone. */
+export function touchTone(status: string): BadgeTone {
+  switch (status) {
+    case "sent":
+      return "success";
+    case "awaiting_approval":
+      return "warning";
+    case "failed":
+      return "danger";
+    case "skipped":
+      return "neutral";
+    default:
+      return "neutral";
+  }
 }

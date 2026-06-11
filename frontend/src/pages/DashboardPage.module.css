@@ -1,3 +1,7 @@
+.live {
+  align-self: center;
+}
+
 .stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -153,5 +157,8 @@
   .stats,
   .statSkeleton {
     grid-template-columns: 1fr;
+  }
+  .live {
+    display: none;
   }
 }
