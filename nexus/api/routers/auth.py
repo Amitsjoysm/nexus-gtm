@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,23 +27,36 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db_session))
     if (await db.scalars(select(User).where(User.email == req.email))).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
 
-    tenant = Tenant(name=req.company_name, slug=req.company_slug)
-    db.add(tenant)
-    await db.flush()
+    # The slug/email pre-checks above are check-then-insert: under concurrency two signups
+    # can both pass them, and the loser hits the unique constraint at flush or COMMIT —
+    # the latter normally fires in the session dependency AFTER this handler returns, i.e.
+    # an unhandled 500. Guard the whole insert sequence and commit here so the race always
+    # surfaces as a clean 409.
+    try:
+        tenant = Tenant(name=req.company_name, slug=req.company_slug)
+        db.add(tenant)
+        await db.flush()
 
-    user = User(email=req.email, full_name=req.full_name, password_hash=hash_password(req.password))
-    db.add(user)
-    await db.flush()
+        user = User(
+            email=req.email, full_name=req.full_name, password_hash=hash_password(req.password)
+        )
+        db.add(user)
+        await db.flush()
 
-    workspace = Workspace(tenant_id=tenant.id, name=f"{req.company_name} Workspace")
-    db.add(workspace)
-    await db.flush()
+        workspace = Workspace(tenant_id=tenant.id, name=f"{req.company_name} Workspace")
+        db.add(workspace)
+        await db.flush()
 
-    membership = Membership(
-        tenant_id=tenant.id, user_id=user.id, workspace_id=workspace.id, role="owner"
-    )
-    db.add(membership)
-    await db.flush()
+        membership = Membership(
+            tenant_id=tenant.id, user_id=user.id, workspace_id=workspace.id, role="owner"
+        )
+        db.add(membership)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Company slug or email already registered"
+        )
 
     token = create_access_token(user_id=user.id, tenant_id=tenant.id, role="owner")
     return TokenResponse(access_token=token, tenant_id=tenant.id, role="owner")

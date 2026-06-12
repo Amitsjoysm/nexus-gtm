@@ -198,7 +198,16 @@ export function InboxPage() {
           <EmptyState
             icon={<Icons.InboxIcon />}
             title="You're at inbox zero"
-            description="No pending tasks right now. New actions appear here as signals are detected."
+            description="Tasks are generated automatically when buying signals land on your accounts."
+            action={
+              <Button
+                variant="secondary"
+                iconLeft={<Icons.BuildingIcon />}
+                onClick={() => navigate("/accounts")}
+              >
+                Browse accounts
+              </Button>
+            }
           />
         }
       >

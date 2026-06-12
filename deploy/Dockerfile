@@ -38,4 +38,4 @@ USER nexus
 
 EXPOSE 8000
 # Default command is the API; the worker overrides this in compose.
-CMD ["uvicorn", "nexus.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["uvicorn", "nexus.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--proxy-headers", "--forwarded-allow-ips", "*"]

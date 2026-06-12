@@ -192,6 +192,12 @@ export class ApiClient {
   listContacts(accountId: string, signal?: AbortSignal) {
     return this.request<Contact[]>(`/accounts/${accountId}/contacts`, { signal });
   }
+  enrichContact(contactId: string, signal?: AbortSignal) {
+    return this.request<Contact>(`/accounts/contacts/${contactId}/enrich`, {
+      method: "POST",
+      signal,
+    });
+  }
   findLookalikes(accountId: string, limit = 10, signal?: AbortSignal) {
     return this.request<LookalikeResponse>(
       `/accounts/${accountId}/lookalikes?limit=${limit}`,

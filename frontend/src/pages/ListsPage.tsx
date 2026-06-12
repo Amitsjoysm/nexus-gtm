@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { FormEvent } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
@@ -13,10 +14,12 @@ import {
   useToast,
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
+import { DataState } from "@/components/DataState";
+import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import { formatNumber } from "@/lib/format";
-import type { Account, ListFilter } from "@/lib/types";
+import { formatNumber, timeAgo } from "@/lib/format";
+import type { Account, ListFilter, ProspectList } from "@/lib/types";
 import styles from "./ListsPage.module.css";
 
 const EMPTY_FORM = {
@@ -42,6 +45,7 @@ export function ListsPage() {
   const [results, setResults] = useState<Account[] | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [savedNonce, setSavedNonce] = useState(0);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [listName, setListName] = useState("");
@@ -89,6 +93,7 @@ export function ListsPage() {
       );
       setModalOpen(false);
       setListName("");
+      setSavedNonce((n) => n + 1);
     } catch (err) {
       toast.error(
         "Couldn't save list",
@@ -262,6 +267,8 @@ export function ListsPage() {
         </div>
       </div>
 
+      <SavedLists refreshKey={savedNonce} />
+
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
@@ -295,5 +302,48 @@ export function ListsPage() {
         </form>
       </Modal>
     </div>
+  );
+}
+
+/** The segments already saved in this workspace; each one is a campaign waiting to launch. */
+function SavedLists({ refreshKey }: { refreshKey: number }) {
+  const api = useApiClient();
+  const navigate = useNavigate();
+  const lists = useApi<ProspectList[]>((signal) => api.listSavedLists(signal), [refreshKey]);
+
+  return (
+    <Card padding="md" className={styles.saved}>
+      <div className={styles.savedHead}>
+        <h3 className={styles.savedTitle}>Saved lists</h3>
+        <Button variant="ghost" size="sm" onClick={() => navigate("/campaigns")}>
+          Launch a campaign
+        </Button>
+      </div>
+      <DataState
+        state={lists}
+        errorTitle="Couldn't load saved lists"
+        skeleton={<p className={styles.savedEmpty}>Loading saved lists…</p>}
+        isEmpty={(rows) => rows.length === 0}
+        empty={
+          <p className={styles.savedEmpty}>
+            No saved lists yet. Preview a filter above and save it to build your first segment.
+          </p>
+        }
+      >
+        {(rows) => (
+          <ul className={styles.savedList} aria-label="Saved lists">
+            {rows.map((l) => (
+              <li key={l.id} className={styles.savedRow}>
+                <span className={styles.savedName}>{l.name}</span>
+                <span className={styles.savedMeta}>
+                  {formatNumber(l.accounts)} {l.accounts === 1 ? "account" : "accounts"} · saved{" "}
+                  {timeAgo(l.created_at)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </DataState>
+    </Card>
   );
 }

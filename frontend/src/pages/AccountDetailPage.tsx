@@ -91,6 +91,28 @@ export function AccountDetailPage() {
 
   const account = useApi<Account>((signal) => api.getAccount(id, signal), [id]);
   const contacts = useApi<Contact[]>((signal) => api.listContacts(id, signal), [id]);
+
+  // Waterfall enrichment for one contact (email + confidence), inline from the roster.
+  const [enriching, setEnriching] = useState<Record<string, boolean>>({});
+  async function enrichOne(c: Contact) {
+    setEnriching((p) => ({ ...p, [c.id]: true }));
+    try {
+      const updated = await api.enrichContact(c.id);
+      contacts.setData((prev) => (prev ?? []).map((x) => (x.id === updated.id ? updated : x)));
+      toast.success("Contact enriched", updated.email ?? updated.full_name);
+    } catch (err) {
+      toast.error(
+        "Couldn't enrich contact",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setEnriching((p) => {
+        const next = { ...p };
+        delete next[c.id];
+        return next;
+      });
+    }
+  }
   const signals = useApi<SignalEvent[]>(
     (signal) => api.listSignals({ account_id: id, limit: 50 }, signal),
     [id],
@@ -387,6 +409,15 @@ export function AccountDetailPage() {
                           : null}
                       </div>
                     </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={enriching[c.id]}
+                      onClick={() => enrichOne(c)}
+                      aria-label={`Enrich ${c.full_name}`}
+                    >
+                      Enrich
+                    </Button>
                   </div>
                 ))
               }

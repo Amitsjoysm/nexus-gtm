@@ -17,12 +17,28 @@ logger = logging.getLogger("nexus.workers.worker")
 
 
 async def run_worker(*, stop: asyncio.Event | None = None, poll_timeout: float = 1.0) -> None:
-    """Process jobs until ``stop`` is set. With an in-memory queue, use the same event loop."""
+    """Process jobs until ``stop`` is set. With an in-memory queue, use the same event loop.
+
+    Infrastructure blips (a Valkey restart, a dropped connection) must not kill the loop:
+    ``dispatch`` already contains handler errors, so anything escaping here is the queue
+    itself — log it and retry with bounded backoff instead of crash-looping the container
+    and pausing every periodic driver during the outage."""
     stop = stop or asyncio.Event()
     queue = get_task_queue()
     logger.info("worker started")
+    backoff = 1.0
     while not stop.is_set():
-        job = await queue.dequeue(timeout=poll_timeout)
+        try:
+            job = await queue.dequeue(timeout=poll_timeout)
+        except Exception:
+            logger.exception("queue unavailable; retrying in %.0fs", backoff)
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=backoff)
+            except asyncio.TimeoutError:
+                pass
+            backoff = min(backoff * 2, 30.0)
+            continue
+        backoff = 1.0
         if job is None:
             continue
         result = await dispatch(job)

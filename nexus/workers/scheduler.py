@@ -54,7 +54,12 @@ async def run_scheduler(
     queue = queue or get_task_queue()
     logger.info("scheduler started")
     while not stop.is_set():
-        await _enqueue_due(queue)
+        try:
+            await _enqueue_due(queue)
+        except Exception:
+            # The drivers are idempotent and re-enqueued every tick, so a failed beat
+            # (queue blip) costs one interval — never the whole heartbeat.
+            logger.exception("heartbeat tick failed; will retry next tick")
         try:
             # stop.wait() with a timeout makes shutdown prompt (no fixed sleep to drain).
             await asyncio.wait_for(stop.wait(), timeout=get_settings().automation_tick_interval_s)

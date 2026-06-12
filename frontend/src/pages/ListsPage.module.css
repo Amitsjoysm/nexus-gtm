@@ -68,3 +68,54 @@
     position: static;
   }
 }
+
+/* Saved lists ------------------------------------------------------------- */
+.saved {
+  margin-top: var(--space-6);
+}
+
+.savedHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.savedTitle {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.savedList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.savedRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-base);
+}
+
+.savedName {
+  font-weight: var(--weight-medium);
+}
+
+.savedMeta {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.savedEmpty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
@@ -21,6 +22,7 @@ import styles from "./AlertsPage.module.css";
 
 export function AlertsPage() {
   const api = useApiClient();
+  const navigate = useNavigate();
   const toast = useToast();
   const [status, setStatus] = useState<AlertStatus>("open");
   const [pending, setPending] = useState<Record<string, boolean>>({});
@@ -95,8 +97,19 @@ export function AlertsPage() {
             title={status === "open" ? "No open alerts" : "Nothing acknowledged yet"}
             description={
               status === "open"
-                ? "You're all caught up. New alerts will appear here."
+                ? "Alerts fire when a play's trigger matches a signal, or from the daily digest."
                 : "Acknowledged alerts will be listed here for reference."
+            }
+            action={
+              status === "open" ? (
+                <Button
+                  variant="secondary"
+                  iconLeft={<Icons.BoltIcon />}
+                  onClick={() => navigate("/plays")}
+                >
+                  Set up a play
+                </Button>
+              ) : undefined
             }
           />
         }
