@@ -114,9 +114,12 @@ def get_ingestion_service() -> IngestionService:
         from nexus.ingestion.sources import DemoSignalSource, WebNewsSource
         from nexus.enrichment.browser import get_browser_provider
 
-        _service = IngestionService(
-            sources=[DemoSignalSource(), WebNewsSource(get_browser_provider())]
-        )
+        sources: list[SignalSource] = []
+        if get_settings().demo_signals_enabled:
+            # Synthetic signals: local/dev only. Production must not fabricate events.
+            sources.append(DemoSignalSource())
+        sources.append(WebNewsSource(get_browser_provider()))
+        _service = IngestionService(sources=sources)
     return _service
 
 

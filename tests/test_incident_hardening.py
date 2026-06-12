@@ -89,3 +89,24 @@ async def test_scheduler_heartbeat_survives_enqueue_failure(monkeypatch):
     assert not task.done()    # heartbeat is still alive despite enqueue failures
     stop.set()
     await asyncio.wait_for(task, timeout=10)
+
+
+def test_default_ingestion_excludes_demo_signals_when_disabled(monkeypatch):
+    """Production must never fabricate signals: with NEXUS_DEMO_SIGNALS_ENABLED=false the
+    default ingestion pipeline contains only real sources."""
+    from nexus.ingestion import service as svc_mod
+    from nexus.ingestion.service import get_ingestion_service, set_ingestion_service
+    from nexus.ingestion.sources import DemoSignalSource
+
+    monkeypatch.setattr(get_settings(), "demo_signals_enabled", False)
+    set_ingestion_service(None)  # force re-composition from settings
+    try:
+        sources = get_ingestion_service().sources
+        assert not any(isinstance(s, DemoSignalSource) for s in sources)
+        assert len(sources) >= 1  # the real web source is still there
+
+        monkeypatch.setattr(get_settings(), "demo_signals_enabled", True)
+        set_ingestion_service(None)
+        assert any(isinstance(s, DemoSignalSource) for s in get_ingestion_service().sources)
+    finally:
+        set_ingestion_service(None)

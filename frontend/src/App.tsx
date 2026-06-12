@@ -20,7 +20,20 @@ import type { Role } from "@/lib/types";
 const lazyPage = <K extends string>(
   load: () => Promise<Record<K, ComponentType>>,
   key: K,
-) => lazy(() => load().then((m) => ({ default: m[key] })));
+) =>
+  lazy(() =>
+    load()
+      .then((m) => ({ default: m[key] }))
+      .catch((err) => {
+        // A deploy can strand a stale shell pointing at dead chunk URLs. One forced
+        // reload fetches the fresh shell; the sessionStorage guard prevents loops.
+        if (!sessionStorage.getItem("nexus_chunk_reload")) {
+          sessionStorage.setItem("nexus_chunk_reload", "1");
+          window.location.reload();
+        }
+        throw err;
+      }),
+  );
 
 const DashboardPage = lazyPage(() => import("@/pages/DashboardPage"), "DashboardPage");
 const InboxPage = lazyPage(() => import("@/pages/InboxPage"), "InboxPage");

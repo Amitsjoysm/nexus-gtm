@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     crm_sync_enabled: bool = False        # global master switch for auto-sync
     crm_sync_batch_size: int = 100        # max accounts claimed per heartbeat sweep
 
+    # Synthetic demo signals (DemoSignalSource) in the DEFAULT ingestion pipeline. They make
+    # a fresh local workspace come alive without network, but in production they would show
+    # reps fabricated funding/hiring events as if they were real — deployments must set
+    # NEXUS_DEMO_SIGNALS_ENABLED=false so only genuine sources feed the pipeline.
+    demo_signals_enabled: bool = True
+
     # Daily digest (SDR adoption): once per interval, summarize the last day's GTM activity
     # into an email-channel alert per opted-in tenant. Rides the automation heartbeat (only
     # ticks while automation_enabled) and is idempotent per interval, so the scheduler can
