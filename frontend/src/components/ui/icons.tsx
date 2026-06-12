@@ -8,6 +8,12 @@ function Svg(props: SVGProps<SVGSVGElement>) {
   return (
     <svg
       viewBox="0 0 24 24"
+      // Intrinsic size: an SVG with only a viewBox stretches to its container's width,
+      // so any usage the page CSS forgot to size rendered as a giant full-width "logo"
+      // (seen on the Inbox suggestion row and the Alerts channel icon). 1em pins every
+      // icon to the surrounding text size by default; explicit CSS still overrides.
+      width="1em"
+      height="1em"
       fill="none"
       stroke="currentColor"
       strokeWidth={1.8}
