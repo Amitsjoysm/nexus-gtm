@@ -16,8 +16,10 @@ from dataclasses import dataclass, field
 
 from nexus.agents.runtime import AgentRuntime
 from nexus.core.tenancy import TenantSession
+from nexus.integrations.email_sender import is_configured as smtp_is_configured, send_email
 from nexus.integrations.sep import get_sep_connector
 from nexus.models.account import Contact
+from nexus.models.identity import Tenant
 from nexus.models.orchestration import OrchestrationRun
 from nexus.verification import STATUS_INVALID
 
@@ -207,8 +209,27 @@ class SendMessageTool(Tool):
                 "run_id": tc.run.id,
             },
         )
+
+        # Real delivery: if the workspace configured its own SMTP (Gmail/Outlook), actually send
+        # the email from its mailbox. When SMTP isn't configured we keep the recording-only
+        # behavior (the SEP push above), so workspaces without a mailbox — and the offline suite —
+        # are unchanged. A delivery failure raises so the touch is NOT marked sent (it retries),
+        # rather than silently recording a send that never left.
+        delivered: bool | None = None
+        if email:
+            tenant = await tc.ts.session.get(Tenant, tc.ts.tenant_id)
+            settings = (getattr(tenant, "email_settings", None) or {}) if tenant else {}
+            if smtp_is_configured(settings):
+                send_res = await send_email(
+                    settings, to=email,
+                    subject=draft.get("subject", ""), body=draft.get("body", ""),
+                )
+                delivered = send_res.ok
+                if not send_res.ok:
+                    raise ToolError(f"smtp send failed: {send_res.detail}")
+
         return {"ok": res.ok, "platform": res.platform, "sequence": sequence,
-                "email": email, "email_status": email_status}
+                "email": email, "email_status": email_status, "delivered": delivered}
 
 
 class DiscoveryTool(_AgentTool):

@@ -1,7 +1,7 @@
 """Identity & access: tenants, workspaces, users, memberships."""
 from __future__ import annotations
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from nexus.core.db import Base, IdMixin, TimestampMixin
@@ -18,6 +18,11 @@ class Tenant(IdMixin, TimestampMixin, Base):
     # Continuous Automation opt-in: when True (and the global automation_enabled master
     # switch is on), this tenant's accounts/cadences are driven autonomously by the heartbeat.
     automation_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Per-workspace outbound email (SMTP) config so cadences send from the customer's own
+    # Gmail/Outlook mailbox. Shape: {provider, host, port, username, from_email, from_name,
+    # password, use_tls, enabled, verified_at}. The password is write-only — never serialized
+    # back out of the API. Empty {} means "not configured" (sends stay gated/recorded only).
+    email_settings: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class User(IdMixin, TimestampMixin, Base):

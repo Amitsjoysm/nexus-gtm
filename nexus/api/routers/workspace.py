@@ -13,6 +13,10 @@ from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
     AutomationSettingsIn,
     AutomationSettingsOut,
+    EmailSettingsIn,
+    EmailSettingsOut,
+    EmailTestIn,
+    EmailTestOut,
     MemberInviteRequest,
     MemberOut,
     MemberRoleUpdate,
@@ -84,6 +88,96 @@ async def set_automation(
     tenant.automation_enabled = body.automation_enabled
     await ts.flush()
     return AutomationSettingsOut(automation_enabled=tenant.automation_enabled)
+
+
+# ---- outbound email (per-workspace SMTP: Gmail / Outlook) ----
+def _email_settings_out(s: dict | None) -> EmailSettingsOut:
+    s = s or {}
+    return EmailSettingsOut(
+        provider=s.get("provider", "gmail"),
+        host=s.get("host", ""),
+        port=int(s.get("port", 587)),
+        username=s.get("username", ""),
+        from_email=s.get("from_email", ""),
+        from_name=s.get("from_name", ""),
+        use_tls=bool(s.get("use_tls", True)),
+        enabled=bool(s.get("enabled", False)),
+        has_password=bool(s.get("password")),
+        verified_at=s.get("verified_at"),
+    )
+
+
+@router.get("/email", response_model=EmailSettingsOut)
+async def get_email_settings(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailSettingsOut:
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    return _email_settings_out(tenant.email_settings)
+
+
+@router.put("/email", response_model=EmailSettingsOut)
+async def set_email_settings(
+    body: EmailSettingsIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailSettingsOut:
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    current = dict(tenant.email_settings or {})
+    updated = {
+        "provider": body.provider,
+        "host": body.host,
+        "port": body.port,
+        "username": body.username,
+        "from_email": body.from_email,
+        "from_name": body.from_name,
+        "use_tls": body.use_tls,
+        "enabled": body.enabled,
+        # Password is write-only: a blank/omitted value keeps the stored secret.
+        "password": body.password if body.password else current.get("password", ""),
+        "verified_at": current.get("verified_at"),
+    }
+    tenant.email_settings = updated
+    await ts.flush()
+    return _email_settings_out(updated)
+
+
+@router.post("/email/test", response_model=EmailTestOut)
+async def test_email_settings(
+    body: EmailTestIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailTestOut:
+    """Send a test email through the configured SMTP, to the requester (or a given address)."""
+    from nexus.integrations.email_sender import resolve_smtp, send_email
+
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    settings = dict(tenant.email_settings or {})
+    cfg = resolve_smtp(settings)
+    if not cfg["host"] or not cfg["username"] or not cfg["password"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "SMTP is not fully configured")
+    to = body.to
+    if not to:
+        user = await ts.session.get(User, principal.user_id)
+        to = user.email if user else None
+    if not to:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No recipient for the test email")
+    res = await send_email(
+        settings, to=to,
+        subject="NEXUS test email",
+        body="This is a test from NEXUS. If you received it, your SMTP is set up correctly.",
+    )
+    if res.ok:
+        settings["verified_at"] = _utcnow_iso()
+        tenant.email_settings = settings
+        await ts.flush()
+    return EmailTestOut(ok=res.ok, detail=res.detail)
+
+
+def _utcnow_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ---- members ----

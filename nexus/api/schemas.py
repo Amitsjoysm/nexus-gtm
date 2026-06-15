@@ -220,6 +220,42 @@ class AutomationSettingsOut(BaseModel):
     automation_enabled: bool
 
 
+class EmailSettingsIn(BaseModel):
+    """Workspace SMTP config. `password` is write-only: omit/blank to keep the stored one."""
+
+    provider: str = Field(default="gmail", max_length=20)  # gmail | outlook | office365 | smtp
+    host: str = Field(default="", max_length=200)
+    port: int = Field(default=587, ge=1, le=65535)
+    username: str = Field(default="", max_length=320)
+    password: str | None = Field(default=None, max_length=512)
+    from_email: str = Field(default="", max_length=320)
+    from_name: str = Field(default="", max_length=120)
+    use_tls: bool = True
+    enabled: bool = False
+
+
+class EmailSettingsOut(BaseModel):
+    provider: str = "gmail"
+    host: str = ""
+    port: int = 587
+    username: str = ""
+    from_email: str = ""
+    from_name: str = ""
+    use_tls: bool = True
+    enabled: bool = False
+    has_password: bool = False           # never return the secret itself
+    verified_at: str | None = None
+
+
+class EmailTestIn(BaseModel):
+    to: str | None = Field(default=None, max_length=320)  # defaults to the requester's email
+
+
+class EmailTestOut(BaseModel):
+    ok: bool
+    detail: str = ""
+
+
 # ---- members ----
 _ROLE_PATTERN = r"^(owner|admin|manager|rep)$"
 
