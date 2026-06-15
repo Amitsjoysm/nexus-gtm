@@ -91,6 +91,7 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [researchingId, setResearchingId] = useState<string | null>(null);
   const [listModalOpen, setListModalOpen] = useState(false);
+  const [cadenceModalOpen, setCadenceModalOpen] = useState(false);
 
   const candidates = data?.candidates ?? [];
   const dynamicColumns = data?.columns ?? [];
@@ -382,11 +383,21 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
             </Button>
             <Button
               size="sm"
+              variant="secondary"
               iconLeft={<Icons.ListIcon />}
               onClick={() => setListModalOpen(true)}
             >
               Add to list
             </Button>
+            {canRun && (
+              <Button
+                size="sm"
+                iconLeft={<Icons.SendIcon />}
+                onClick={() => setCadenceModalOpen(true)}
+              >
+                Add to cadence
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -447,6 +458,17 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
         onClose={() => setListModalOpen(false)}
         onSaved={() => {
           setListModalOpen(false);
+          setSelected(new Set());
+        }}
+      />
+
+      <AddToCadenceModal
+        open={cadenceModalOpen}
+        candidates={candidates}
+        selected={selected}
+        onClose={() => setCadenceModalOpen(false)}
+        onLaunched={() => {
+          setCadenceModalOpen(false);
           setSelected(new Set());
         }}
       />
@@ -557,6 +579,145 @@ function SaveListModal({
           }}
         />
       </Field>
+    </Modal>
+  );
+}
+
+/* ----------------------------- add to cadence ---------------------------- */
+
+function AddToCadenceModal({
+  open,
+  candidates,
+  selected,
+  onClose,
+  onLaunched,
+}: {
+  open: boolean;
+  candidates: DiscoveryCandidate[];
+  selected: Set<string>;
+  onClose: () => void;
+  onLaunched: () => void;
+}) {
+  const api = useApiClient();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const [name, setName] = useState("");
+  const [mode, setMode] = useState<"new_cadence" | "existing_cadence">("new_cadence");
+  const [cadenceId, setCadenceId] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Pull cadences only when the user actually wants to enroll into an existing one.
+  const cadences = useApi(
+    (signal) =>
+      open && mode === "existing_cadence" ? api.listCadences(signal) : Promise.resolve([]),
+    [open, mode],
+  );
+  const cadenceList = cadences.data ?? [];
+
+  // Split the selection by entity: contacts carry their account into the campaign.
+  const { accountIds, contactIds } = useMemo(() => {
+    const a: string[] = [];
+    const c: string[] = [];
+    for (const cand of candidates) {
+      if (!selected.has(cand.id)) continue;
+      if (cand.entity === "contact") c.push(cand.id);
+      else a.push(cand.id);
+    }
+    return { accountIds: a, contactIds: c };
+  }, [candidates, selected]);
+  const targetCount = accountIds.length + contactIds.length;
+
+  const needsCadence = mode === "existing_cadence" && cadenceId === "";
+  const disabled = name.trim() === "" || targetCount === 0 || needsCadence;
+
+  async function launch() {
+    if (disabled) return;
+    setBusy(true);
+    try {
+      await api.launchFromSelection({
+        name: name.trim(),
+        account_ids: accountIds,
+        contact_ids: contactIds,
+        mode,
+        cadence_id: mode === "existing_cadence" ? cadenceId : null,
+      });
+      toast.success(
+        "Cadence drafted",
+        "Personalized emails are drafted and waiting for your approval — nothing sends until you approve.",
+      );
+      setName("");
+      onLaunched();
+      navigate("/campaigns");
+    } catch (err) {
+      toast.error(
+        "Couldn't build the cadence",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Add to cadence"
+      description="Drafts a personalized, multi-touch email sequence for the selected prospects. Nothing sends until you approve it."
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={launch} loading={busy} disabled={disabled}>
+            Draft cadence
+          </Button>
+        </>
+      }
+    >
+      <Field label="Campaign name">
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Fintech Q3 outreach"
+          autoFocus
+        />
+      </Field>
+      <Field label="Cadence">
+        <Select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as "new_cadence" | "existing_cadence")}
+          options={[
+            { value: "new_cadence", label: "New personalized cadence (3 touches)" },
+            { value: "existing_cadence", label: "Add to an existing cadence" },
+          ]}
+        />
+      </Field>
+      {mode === "existing_cadence" && (
+        <Field
+          label="Choose cadence"
+          hint={
+            !cadences.loading && cadenceList.length === 0
+              ? "No cadences yet — create one on the Cadences page first."
+              : undefined
+          }
+        >
+          <Select
+            value={cadenceId}
+            onChange={(e) => setCadenceId(e.target.value)}
+            disabled={cadences.loading || cadenceList.length === 0}
+            options={[
+              { value: "", label: cadences.loading ? "Loading…" : "Select a cadence…" },
+              ...cadenceList.map((c) => ({ value: c.id, label: c.name })),
+            ]}
+          />
+        </Field>
+      )}
+      <p className={styles.cadenceHint}>
+        {targetCount} prospect{targetCount === 1 ? "" : "s"} selected. Drafts wait for approval
+        before any email is sent.
+      </p>
     </Modal>
   );
 }

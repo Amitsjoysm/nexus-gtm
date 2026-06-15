@@ -624,6 +624,17 @@ export interface CampaignInput {
   review_each_touch?: boolean;
 }
 
+/** Turn a discovery-results selection into a gated personalized cadence in one call. */
+export interface LaunchFromSelectionInput {
+  name: string;
+  account_ids?: string[];
+  contact_ids?: string[];
+  icp?: Record<string, unknown>;
+  mode: "new_cadence" | "existing_cadence";
+  cadence_id?: string | null;
+  review_each_touch?: boolean;
+}
+
 /** One frame from a campaign's SSE progress stream (status + per-status target counts). */
 export interface CampaignProgress {
   status: CampaignStatus | string;

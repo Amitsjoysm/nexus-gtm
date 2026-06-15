@@ -110,6 +110,12 @@
   color: var(--text-subtle);
 }
 
+.cadenceHint {
+  margin-top: var(--space-3);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+}
+
 .fitCell {
   display: flex;
   align-items: center;

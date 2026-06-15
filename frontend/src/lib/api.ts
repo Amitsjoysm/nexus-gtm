@@ -34,6 +34,7 @@ import type {
   Contact,
   CreateCustomFieldRequest,
   CreateSessionRequest,
+  LaunchFromSelectionInput,
   LookalikeResponse,
   CRMPushResponse,
   CRMSyncRequest,
@@ -331,6 +332,13 @@ export class ApiClient {
   }
   createCampaign(body: CampaignInput, signal?: AbortSignal) {
     return this.request<Campaign>("/campaigns", { method: "POST", body, signal });
+  }
+  launchFromSelection(body: LaunchFromSelectionInput, signal?: AbortSignal) {
+    return this.request<Campaign>("/campaigns/launch-from-selection", {
+      method: "POST",
+      body,
+      signal,
+    });
   }
   previewCampaign(id: string, signal?: AbortSignal) {
     return this.request<CampaignPreview>(`/campaigns/${id}/preview`, { signal });
