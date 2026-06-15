@@ -61,7 +61,7 @@ class DiscoveryAgent(BaseAgent):
                                    value_props=[], product_context="")
 
         if target == "contacts":
-            return await self._discover_contacts(ctx, profile, max_candidates)
+            return await self._discover_contacts(ctx, profile, scoring_icp, icp, max_candidates)
         return await self._discover_companies(ctx, profile, scoring_icp, icp, max_candidates)
 
     async def _discover_companies(
@@ -115,8 +115,14 @@ class DiscoveryAgent(BaseAgent):
             "candidates": candidates,
         }
 
-    async def _discover_contacts(self, ctx: AgentContext, profile, max_candidates: int) -> dict:
-        """Own-data only this slice: rank contacts by their account's ICP fit."""
+    async def _discover_contacts(
+        self, ctx: AgentContext, profile, scoring_icp: dict, icp: dict, max_candidates: int
+    ) -> dict:
+        """Rank the tenant's own contacts by their account's ICP fit, then fill the gap with
+        net-new buying-committee personas sourced for the best-fit accounts that haven't already
+        surfaced a contact. Sourced personas are persisted ``enrichment_source="sourcing:<prov>"``
+        so they're marked as sourced and stay gated from real outreach until a verified email is
+        found — discovery surfaces who to target; the cadence/campaign send-bar still applies."""
         contacts = await ctx.ts.list(Contact)
         scored = []
         for c in contacts:
@@ -127,16 +133,63 @@ class DiscoveryAgent(BaseAgent):
             scored.append((fit, c, acc))
         scored.sort(key=lambda t: (-t[0].score, t[1].full_name))
         top = scored[:max_candidates]
-        candidates = [
-            {
-                "entity": "contact", "id": c.id, "name": c.full_name, "title": c.title,
-                "domain": acc.domain, "fit_score": fit.score, "fit_reasons": fit.reasons,
-                "source": "own", "is_new": False, "custom_fields": c.custom_fields or {},
-            }
-            for (fit, c, acc) in top
-        ]
-        return {"target": "contacts", "counts": {"own": len(top), "new": 0},
+        candidates = [self._contact_candidate(c, acc, fit, source="own", is_new=False)
+                      for (fit, c, acc) in top]
+        seen_accounts = {c.account_id for (_, c, _) in top}
+
+        new_count = 0
+        if len(candidates) < max_candidates and ctx.registry is not None:
+            # The stub/real providers key the persona title off ``buyer_titles``; the
+            # conversational ICP stores it under ``titles`` — bridge so the rep gets the role
+            # they asked for ("VP Sales") rather than a generic "Decision Maker".
+            search_icp = dict(icp)
+            if not search_icp.get("buyer_titles") and icp.get("titles"):
+                search_icp["buyer_titles"] = icp["titles"]
+
+            accounts = await ctx.ts.list(Account)
+            survivors = [a for a in accounts if _passes_hard_filters(a, scoring_icp)]
+            acc_scored = sorted(
+                ((ctx.relevance.score_icp_fit(profile, a), a) for a in survivors),
+                key=lambda t: (-t[0].score, t[1].name),
+            )
+            for fit, acc in acc_scored:
+                if len(candidates) >= max_candidates:
+                    break
+                if acc.id in seen_accounts:
+                    continue
+                found = await ctx.registry.contact_search(acc, search_icp, limit=1)
+                if not found:
+                    continue
+                cand = found[0]
+                person = Contact(
+                    tenant_id=ctx.ts.tenant_id,
+                    account_id=acc.id,
+                    full_name=cand.full_name,
+                    title=cand.title,
+                    seniority=cand.seniority,
+                    email=cand.email,
+                    enrichment_source=f"sourcing:{cand.source}",
+                )
+                ctx.ts.add(person)
+                await ctx.ts.flush()
+                candidates.append(
+                    self._contact_candidate(person, acc, fit, source="discovery", is_new=True)
+                )
+                seen_accounts.add(acc.id)
+                new_count += 1
+
+        return {"target": "contacts", "counts": {"own": len(top), "new": new_count},
                 "candidates": candidates}
+
+    @staticmethod
+    def _contact_candidate(contact: Contact, account: Account, fit, *, source: str,
+                           is_new: bool) -> dict:
+        return {
+            "entity": "contact", "id": contact.id, "name": contact.full_name,
+            "title": contact.title, "domain": account.domain, "fit_score": fit.score,
+            "fit_reasons": fit.reasons, "source": source, "is_new": is_new,
+            "custom_fields": contact.custom_fields or {},
+        }
 
     @staticmethod
     def _candidate(account: Account, fit, *, source: str, is_new: bool) -> dict:

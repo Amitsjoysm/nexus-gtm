@@ -113,6 +113,60 @@ async def test_discover_goal_runs_inline_and_writes_blackboard():
         assert any(c["source"] == "own" for c in disc["candidates"])
 
 
+@pytest.mark.asyncio
+async def test_discovery_contacts_sources_net_new_personas_for_best_fit_accounts():
+    """Contact discovery on a workspace with matching accounts but no people must surface
+    net-new buying-committee personas (not an empty table), persisted as sourced + gated."""
+    from nexus.models.account import Account, Contact
+
+    tid = await make_tenant("t-disc-contacts")
+    icp = {"industries": ["Fintech"], "geo": ["United States"],
+           "company_size": {"min": 200, "max": 5000}, "titles": ["VP Sales"]}
+    async with tenant_session(tid) as ts:
+        ts.add(Account(tenant_id=tid, name="FinOne", domain="finone.com", industry="Fintech",
+                       employee_count=800, country="United States"))
+        await ts.flush()
+        rt = _runtime(FakeBrowser([]))
+        res = await rt.run("discovery", ts, account_id=None,
+                           target="contacts", icp=icp, max_candidates=10)
+        out = res.output
+        assert out["target"] == "contacts"
+        assert out["counts"]["new"] >= 1  # net-new persona sourced for FinOne
+        cand = out["candidates"][0]
+        assert cand["entity"] == "contact" and cand["source"] == "discovery"
+        assert cand["title"] == "VP Sales"  # buyer title bridged from icp["titles"]
+        # The persona is persisted and marked as sourced (so the send-bar still gates it).
+        people = await ts.list(Contact)
+        assert people and all(c.enrichment_source.startswith("sourcing:") for c in people)
+
+
+@pytest.mark.asyncio
+async def test_discovery_contacts_ranks_existing_before_sourcing():
+    """Existing contacts rank first as own data; net-new only fills the remaining gap."""
+    from nexus.models.account import Account, Contact
+
+    tid = await make_tenant("t-disc-contacts2")
+    icp = {"industries": ["Fintech"], "geo": ["United States"],
+           "company_size": {"min": 200, "max": 5000}, "titles": ["VP Sales"]}
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="FinOne", domain="finone.com", industry="Fintech",
+                      employee_count=800, country="United States")
+        ts.add(acc)
+        await ts.flush()
+        ts.add(Contact(tenant_id=tid, account_id=acc.id, full_name="Dana Rep", title="AE"))
+        await ts.flush()
+        rt = _runtime(FakeBrowser([]))
+        res = await rt.run("discovery", ts, account_id=None,
+                           target="contacts", icp=icp, max_candidates=10)
+        out = res.output
+        assert out["counts"]["own"] == 1
+        assert out["candidates"][0]["name"] == "Dana Rep"
+        assert out["candidates"][0]["source"] == "own"
+        # FinOne already surfaced a person, so it isn't re-sourced.
+        assert all(not (c["source"] == "discovery" and c["domain"] == "finone.com")
+                   for c in out["candidates"])
+
+
 def test_discover_goal_is_available_and_read_only():
     from nexus.orchestration.planner import available_goals, get_planner
 
