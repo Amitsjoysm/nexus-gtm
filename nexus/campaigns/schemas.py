@@ -18,6 +18,23 @@ class CampaignIn(BaseModel):
     review_each_touch: bool = False
 
 
+class LaunchFromSelectionIn(BaseModel):
+    """Turn a discovery-results selection into a personalized, gated cadence in one call.
+
+    The orchestrator builds an ad-hoc list from the selected accounts/contacts, drafts a
+    grounded email per account (research_compose), and parks the campaign at the approval gate —
+    it never sends without a human approving. ``mode`` chooses a brand-new multi-touch cadence or
+    an existing one to enroll into."""
+
+    name: str = Field(..., max_length=200)
+    account_ids: list[str] = Field(default_factory=list)
+    contact_ids: list[str] = Field(default_factory=list)
+    icp: dict = Field(default_factory=dict)
+    mode: str = Field(default="new_cadence")  # new_cadence | existing_cadence
+    cadence_id: str | None = None             # required when mode == existing_cadence
+    review_each_touch: bool = False
+
+
 class CampaignTargetOut(BaseModel):
     id: str
     account_id: str

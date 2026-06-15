@@ -18,11 +18,15 @@ from nexus.campaigns.schemas import (
     CampaignPreviewOut,
     CampaignTargetOut,
     CampaignDetailOut,
+    LaunchFromSelectionIn,
 )
 from nexus.campaigns.service import CampaignError, get_campaign_service
+from nexus.cadences.service import get_cadence_service
 from nexus.core.config import get_settings
 from nexus.core.rbac import Permission, has_permission
 from nexus.core.tenancy import TenantSession
+from nexus.models.account import Account, Contact
+from nexus.models.cadence import Cadence
 from nexus.models.campaign import (
     Campaign,
     CampaignTarget,
@@ -30,8 +34,16 @@ from nexus.models.campaign import (
     CAMP_TERMINAL,
     TARGET_DRAFTED,
 )
-from nexus.models.workflow import ProspectList
+from nexus.models.workflow import ListItem, ProspectList
 from nexus.workers.tasks import tenant_session
+
+# A sensible default multi-touch sequence for cadences auto-built from a discovery selection.
+# Angles steer the per-touch compose (research_compose) so each email opens differently.
+_DEFAULT_CADENCE_STEPS = [
+    {"channel": "email", "delay_days": 0, "angle": "Personalized intro tied to a recent buying signal"},
+    {"channel": "email", "delay_days": 3, "angle": "Value proposition mapped to their likely pains"},
+    {"channel": "email", "delay_days": 6, "angle": "Short, polite break-up with a clear ask"},
+]
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -71,6 +83,75 @@ async def create_campaign(
     )
     # Drive the draft phase inline to the approval gate.
     await svc.run_draft_phase(ts, campaign)
+    return CampaignOut.from_model(campaign)
+
+
+@router.post(
+    "/launch-from-selection",
+    response_model=CampaignOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def launch_from_selection(
+    body: LaunchFromSelectionIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_campaigns)),
+) -> CampaignOut:
+    """One-click 'Add to cadence' from the discovery results table.
+
+    Builds an ad-hoc list from the selected accounts (and the accounts behind any selected
+    contacts), attaches a cadence (a fresh 3-touch sequence, or an existing one), drafts a
+    grounded personalized email per account, and parks the campaign at the approval gate. No
+    email sends until a human approves — this is the 'draft + approval gate' autonomy level."""
+    # Resolve the target accounts: explicit account ids + the accounts behind selected contacts.
+    account_ids: set[str] = set(body.account_ids)
+    for cid in body.contact_ids:
+        contact = await ts.get(Contact, cid)
+        if contact is not None:
+            account_ids.add(contact.account_id)
+    valid = [aid for aid in account_ids if await ts.get(Account, aid) is not None]
+    if not valid:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No valid accounts in the selection")
+
+    # Resolve the cadence first so we fail before creating anything on a bad cadence_id.
+    if body.mode == "existing_cadence":
+        if body.cadence_id is None or await ts.get(Cadence, body.cadence_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Cadence not found")
+        cadence_id = body.cadence_id
+    else:
+        cadence = await get_cadence_service().create_cadence(
+            ts,
+            name=f"{body.name} cadence",
+            description="Auto-built from a discovery selection.",
+            steps=_DEFAULT_CADENCE_STEPS,
+            created_by_user_id=principal.user_id,
+        )
+        cadence_id = cadence.id
+
+    # Build the ad-hoc list with explicit members (the list builder only does fit-floor segments).
+    plist = ProspectList(
+        tenant_id=ts.tenant_id,
+        name=f"{body.name} — targets",
+        owner_user_id=principal.user_id,
+        filter={"source": "discovery_selection"},
+    )
+    ts.add(plist)
+    await ts.flush()
+    for aid in valid:
+        ts.add(ListItem(tenant_id=ts.tenant_id, list_id=plist.id, account_id=aid))
+    await ts.flush()
+
+    svc = get_campaign_service()
+    campaign = await svc.create(
+        ts,
+        name=body.name,
+        list_id=plist.id,
+        icp=body.icp,
+        sequence="ai-orchestrated-outbound",
+        created_by_user_id=principal.user_id,
+        cadence_id=cadence_id,
+        review_each_touch=body.review_each_touch,
+    )
+    await svc.run_draft_phase(ts, campaign)  # holds at the approval gate; nothing sends yet
     return CampaignOut.from_model(campaign)
 
 
