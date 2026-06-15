@@ -70,7 +70,13 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db_session)) -
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
 
     memberships = list(
-        (await db.scalars(select(Membership).where(Membership.user_id == user.id))).all()
+        (
+            await db.scalars(
+                select(Membership)
+                .where(Membership.user_id == user.id)
+                .order_by(Membership.created_at.asc())  # earliest = the user's home workspace
+            )
+        ).all()
     )
     if not memberships:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "User has no tenant memberships")
@@ -85,13 +91,15 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db_session)) -
 async def _resolve_membership(
     db: AsyncSession, memberships: list[Membership], tenant_slug: str | None
 ) -> Membership:
-    if len(memberships) == 1:
+    """Pick which workspace a login lands in.
+
+    Without an explicit tenant_slug, default to the user's first (home) workspace and let them
+    switch in-app afterwards — NEVER error. Erroring here was a lockout: the moment a user
+    belonged to a second workspace, plain email+password login (the only thing the login form
+    sends) 400'd and they could not get in at all. ``memberships`` is pre-ordered by created_at.
+    """
+    if tenant_slug is None:
         return memberships[0]
-    if not tenant_slug:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "User belongs to multiple tenants; specify tenant_slug",
-        )
     tenant = (await db.scalars(select(Tenant).where(Tenant.slug == tenant_slug))).first()
     if tenant is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown tenant '{tenant_slug}'")

@@ -87,3 +87,33 @@ async def test_duplicate_workspace_slug_is_409(client):
 async def test_create_workspace_requires_auth(client):
     r = await client.post("/api/auth/workspaces", json={"name": "X", "slug": "x"})
     assert r.status_code in (401, 403), r.text
+
+
+@pytest.mark.asyncio
+async def test_login_with_multiple_workspaces_defaults_to_home_not_400(client):
+    """Regression (lockout): once a user owns 2+ workspaces, plain email+password login — the
+    only thing the login form sends — must still work, landing in the earliest (home) workspace.
+    It used to 400 'specify tenant_slug', locking multi-workspace users out of the UI entirely."""
+    token = await signup(client, slug="home", email="o@home.x", company="Home Co")
+    home_tid = decode_access_token(token)["tid"]
+    await client.post("/api/auth/workspaces", headers=auth(token), json={"name": "Second", "slug": "second"})
+
+    # No tenant_slug -> 200, pinned to the home (earliest) workspace.
+    r = await client.post("/api/auth/login", json={"email": "o@home.x", "password": "password123"})
+    assert r.status_code == 200, r.text
+    assert r.json()["tenant_id"] == home_tid
+
+    # Explicit tenant_slug still targets a specific workspace.
+    r = await client.post(
+        "/api/auth/login",
+        json={"email": "o@home.x", "password": "password123", "tenant_slug": "second"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["tenant_id"] != home_tid
+
+    # Unknown slug still 404s.
+    r = await client.post(
+        "/api/auth/login",
+        json={"email": "o@home.x", "password": "password123", "tenant_slug": "nope"},
+    )
+    assert r.status_code == 404, r.text
