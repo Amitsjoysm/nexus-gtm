@@ -1,13 +1,24 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Badge, Card, CardHeader, Icons, Skeleton, useToast } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Field,
+  Icons,
+  Input,
+  Select,
+  Skeleton,
+  useToast,
+} from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatNumber, humanize } from "@/lib/format";
-import type { AutomationSettings, CRMSyncStatus } from "@/lib/types";
+import type { AutomationSettings, CRMSyncStatus, EmailSettings } from "@/lib/types";
 import styles from "./SettingsPage.module.css";
 
 export function SettingsPage() {
@@ -112,8 +123,175 @@ export function SettingsPage() {
             )}
           </DataState>
         </Card>
+
+        <EmailCard />
       </div>
     </div>
+  );
+}
+
+function EmailCard() {
+  const api = useApiClient();
+  const toast = useToast();
+  const state = useApi<EmailSettings>((signal) => api.getEmailSettings(signal), []);
+
+  const [provider, setProvider] = useState("gmail");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [fromName, setFromName] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [hasPassword, setHasPassword] = useState(false);
+  const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+
+  // Hydrate the form once the saved settings load.
+  const loaded = state.data;
+  useEffect(() => {
+    if (!loaded) return;
+    setProvider(loaded.provider || "gmail");
+    setUsername(loaded.username || "");
+    setFromName(loaded.from_name || "");
+    setEnabled(loaded.enabled);
+    setHasPassword(loaded.has_password);
+    setVerifiedAt(loaded.verified_at);
+  }, [loaded]);
+
+  async function save() {
+    setBusy(true);
+    try {
+      const res = await api.setEmailSettings({
+        provider,
+        username: username.trim(),
+        // Send the password only if the user typed one (write-only on the server).
+        ...(password ? { password } : {}),
+        from_name: fromName.trim(),
+        from_email: username.trim(),
+        enabled,
+      });
+      state.setData(res);
+      setPassword("");
+      setHasPassword(res.has_password);
+      toast.success("Email settings saved");
+    } catch (err) {
+      toast.error("Couldn't save email settings", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendTest() {
+    setTesting(true);
+    try {
+      const res = await api.testEmailSettings();
+      if (res.ok) {
+        toast.success("Test email sent", "Check the inbox of your account email.");
+        setVerifiedAt(new Date().toISOString());
+      } else {
+        toast.error("Test failed", res.detail);
+      }
+    } catch (err) {
+      toast.error("Test failed", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const providerHint =
+    provider === "gmail"
+      ? "Use a Google App Password (Account → Security → App passwords), not your login password."
+      : provider === "outlook" || provider === "office365"
+        ? "Use an app password if your account has 2FA enabled."
+        : "Enter your SMTP username and password.";
+
+  return (
+    <Card padding="lg">
+      <CardHeader
+        title="Outbound email (SMTP)"
+        subtitle="Send approved cadence emails from your own Gmail or Outlook mailbox. Nothing sends until you approve a cadence."
+      />
+      <DataState
+        state={state}
+        errorTitle="Couldn't load email settings"
+        skeleton={<Skeleton width="100%" height={180} />}
+      >
+        {() => (
+          <div className={styles.emailForm}>
+            <div className={styles.emailRow}>
+              <Field label="Provider">
+                <Select
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value)}
+                  options={[
+                    { value: "gmail", label: "Gmail" },
+                    { value: "outlook", label: "Outlook.com" },
+                    { value: "office365", label: "Microsoft 365" },
+                    { value: "smtp", label: "Custom SMTP" },
+                  ]}
+                />
+              </Field>
+              <Field label="From name">
+                <Input value={fromName} onChange={(e) => setFromName(e.target.value)} placeholder="Jane from Acme" />
+              </Field>
+            </div>
+            <Field label="Email address (username)">
+              <Input
+                type="email"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="you@company.com"
+                autoComplete="email"
+              />
+            </Field>
+            <Field label="App password" hint={providerHint}>
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={hasPassword ? "•••••••• (leave blank to keep)" : "App password"}
+                autoComplete="new-password"
+              />
+            </Field>
+
+            <div className={styles.control}>
+              <div className={styles.controlText}>
+                <span className={styles.controlLabel}>Sending is {enabled ? "on" : "off"}</span>
+                <span className={styles.controlHint}>
+                  {verifiedAt
+                    ? "Verified. Approved cadences will send from this mailbox."
+                    : "Send a test first to confirm your credentials, then turn sending on."}
+                </span>
+              </div>
+              <Switch
+                checked={enabled}
+                disabled={busy}
+                label="Enable sending"
+                onChange={setEnabled}
+              />
+            </div>
+
+            <div className={styles.emailActions}>
+              <Button onClick={save} loading={busy} disabled={username.trim() === ""}>
+                Save settings
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={sendTest}
+                loading={testing}
+                disabled={busy || (!hasPassword && password === "")}
+              >
+                Send test email
+              </Button>
+              {verifiedAt && (
+                <Badge tone="success" dot>
+                  Verified
+                </Badge>
+              )}
+            </div>
+          </div>
+        )}
+      </DataState>
+    </Card>
   );
 }
 

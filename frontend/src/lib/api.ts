@@ -19,6 +19,9 @@ import type {
   ApprovalDecisionRequest,
   ApprovalStatus,
   AutomationSettings,
+  EmailSettings,
+  EmailSettingsInput,
+  EmailTestResult,
   Cadence,
   CadenceEnrollment,
   CadenceInput,
@@ -444,6 +447,19 @@ export class ApiClient {
     return this.request<AutomationSettings>("/workspace/automation", {
       method: "PATCH",
       body: { automation_enabled: enabled },
+      signal,
+    });
+  }
+  getEmailSettings(signal?: AbortSignal) {
+    return this.request<EmailSettings>("/workspace/email", { signal });
+  }
+  setEmailSettings(body: EmailSettingsInput, signal?: AbortSignal) {
+    return this.request<EmailSettings>("/workspace/email", { method: "PUT", body, signal });
+  }
+  testEmailSettings(to?: string, signal?: AbortSignal) {
+    return this.request<EmailTestResult>("/workspace/email/test", {
+      method: "POST",
+      body: { to: to ?? null },
       signal,
     });
   }

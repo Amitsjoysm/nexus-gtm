@@ -718,6 +718,36 @@ export interface AutomationSettings {
   automation_enabled: boolean;
 }
 
+export interface EmailSettings {
+  provider: string;
+  host: string;
+  port: number;
+  username: string;
+  from_email: string;
+  from_name: string;
+  use_tls: boolean;
+  enabled: boolean;
+  has_password: boolean;
+  verified_at: string | null;
+}
+
+export interface EmailSettingsInput {
+  provider: string;
+  host?: string;
+  port?: number;
+  username: string;
+  password?: string; // write-only; omit to keep the stored one
+  from_email?: string;
+  from_name?: string;
+  use_tls?: boolean;
+  enabled: boolean;
+}
+
+export interface EmailTestResult {
+  ok: boolean;
+  detail: string;
+}
+
 export interface CRMSyncStatus {
   enabled: boolean;
   provider: string;

@@ -160,11 +160,33 @@
   max-width: 60ch;
 }
 
+.emailForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.emailRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.emailActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
 @media (max-width: 560px) {
   .control {
     flex-direction: row;
   }
   .syncStats {
     grid-template-columns: 1fr 1fr;
+  }
+  .emailRow {
+    grid-template-columns: 1fr;
   }
 }
