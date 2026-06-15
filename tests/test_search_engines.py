@@ -82,6 +82,50 @@ async def test_exa_degrades_to_empty_after_persistent_429(monkeypatch):
     assert client.calls == 3  # initial + 2 retries, then give up
 
 
+class _KeyAwareClient:
+    """Replays a response per x-api-key, recording which keys were tried (in order)."""
+
+    def __init__(self, by_key):
+        self.by_key = by_key
+        self.used_keys: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, endpoint, json, headers):
+        k = headers["x-api-key"]
+        self.used_keys.append(k)
+        return self.by_key.get(k, _FakeResp(429))
+
+
+async def test_exa_pool_rotates_off_rate_limited_key(monkeypatch):
+    from nexus.integrations.search import engines
+
+    ok = {"results": [{"title": "Acme", "url": "https://acme.com", "text": "logistics"}]}
+    client = _KeyAwareClient({"k1": _FakeResp(429), "k2": _FakeResp(200, ok)})
+    monkeypatch.setattr(engines.httpx, "AsyncClient", lambda *a, **k: client)
+
+    async def _nosleep(*a, **k):
+        return None
+
+    monkeypatch.setattr(engines.asyncio, "sleep", _nosleep)
+    provider = ExaSearchProvider(api_keys=["k1", "k2"])
+    hits = await provider.search("logistics", limit=5)
+    assert len(hits) == 1 and hits[0].url == "https://acme.com"
+    assert client.used_keys == ["k1", "k2"]  # tried k1 (429), rotated to k2 (200)
+    assert provider.api_key == "k2"          # sticky on the working key
+
+
+def test_build_engine_exa_uses_key_pool():
+    s = _settings(exa_api_key="primary")
+    s.exa_api_key_list = ["primary", "k2", "k3"]
+    p = build_engine("exa", s)
+    assert isinstance(p, ExaSearchProvider) and p.api_keys == ["primary", "k2", "k3"]
+
+
 # --------------------------------------------------------------- parsing (pure)
 
 

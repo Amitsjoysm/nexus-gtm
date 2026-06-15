@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
     # A selected engine with no key degrades to keyless DuckDuckGo so search keeps working.
     exa_api_key: str = ""
+    # Optional rotation pool (comma-separated). The provider switches to the next key on a 429,
+    # so bursty discovery rides out a single key's rate limit instead of going dark.
+    exa_api_keys: str = ""
     brave_api_key: str = ""
     serper_api_key: str = ""
 
@@ -166,6 +169,18 @@ class Settings(BaseSettings):
     @property
     def contact_search_source_list(self) -> list[str]:
         return self._csv_list(self.contact_search_sources)
+
+    @property
+    def exa_api_key_list(self) -> list[str]:
+        """Primary key first, then the rotation pool — deduped, blanks dropped."""
+        keys = [(self.exa_api_key or "").strip()] + self._csv_list(self.exa_api_keys)
+        seen: set[str] = set()
+        out: list[str] = []
+        for k in keys:
+            if k and k not in seen:
+                seen.add(k)
+                out.append(k)
+        return out
 
     @model_validator(mode="after")
     def _reject_insecure_prod(self) -> "Settings":

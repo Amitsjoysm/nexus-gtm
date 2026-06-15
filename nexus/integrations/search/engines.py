@@ -56,12 +56,22 @@ class ExaSearchProvider(SearchProvider):
     ENDPOINT = "https://api.exa.ai/search"
     ENDPOINT_SIMILAR = "https://api.exa.ai/findSimilar"
 
-    def __init__(self, api_key: str, *, timeout: float = _TIMEOUT):
-        self.api_key = (api_key or "").strip()
+    def __init__(self, api_key: str = "", *, api_keys: list[str] | None = None,
+                 timeout: float = _TIMEOUT):
+        keys = [k.strip() for k in (api_keys or []) if k and k.strip()]
+        if not keys and api_key and api_key.strip():
+            keys = [api_key.strip()]
+        self.api_keys = keys
+        self._key_idx = 0
         self.timeout = timeout
 
+    @property
+    def api_key(self) -> str:
+        """The key currently in use (rotates within the pool on rate-limit)."""
+        return self.api_keys[self._key_idx] if self.api_keys else ""
+
     async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]:
-        if not self.api_key:
+        if not self.api_keys:
             return []
         payload = {
             "query": query,
@@ -87,23 +97,41 @@ class ExaSearchProvider(SearchProvider):
         return await self._post(self.ENDPOINT_SIMILAR, payload, limit)
 
     async def _post(self, endpoint: str, payload: dict, limit: int) -> list[SearchHit]:
-        headers = {"x-api-key": self.api_key, "Content-Type": "application/json"}
-        for attempt in range(len(_RETRY_BACKOFFS) + 1):
+        keys = self.api_keys
+        if not keys:
+            return []
+        # Budget: one shot per key (rotate to ride out a single key's 429) + transient backoffs.
+        # Rotation is sticky — once a key works we stay on it until it too rate-limits.
+        backoff_used = 0
+        for attempt in range(len(keys) + len(_RETRY_BACKOFFS)):
+            headers = {"x-api-key": keys[self._key_idx], "Content-Type": "application/json"}
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     resp = await client.post(endpoint, json=payload, headers=headers)
-                if resp.status_code in _RETRY_STATUS and attempt < len(_RETRY_BACKOFFS):
-                    await asyncio.sleep(_RETRY_BACKOFFS[attempt])  # rate-limited / transient 5xx
+                if resp.status_code == 429:
+                    if len(keys) > 1:
+                        self._key_idx = (self._key_idx + 1) % len(keys)  # next key in the pool
+                    # Pause only after cycling the whole pool, to avoid hammering on a hard cap.
+                    if (len(keys) == 1 or (attempt + 1) % len(keys) == 0) \
+                            and backoff_used < len(_RETRY_BACKOFFS):
+                        await asyncio.sleep(_RETRY_BACKOFFS[backoff_used])
+                        backoff_used += 1
+                    continue
+                if resp.status_code in _RETRY_STATUS and backoff_used < len(_RETRY_BACKOFFS):
+                    await asyncio.sleep(_RETRY_BACKOFFS[backoff_used])  # transient 5xx
+                    backoff_used += 1
                     continue
                 resp.raise_for_status()
                 return self._parse(resp.json(), limit)
             except Exception as exc:  # network / anti-bot / HTTP — retry, then degrade gracefully
-                if attempt < len(_RETRY_BACKOFFS):
-                    await asyncio.sleep(_RETRY_BACKOFFS[attempt])
+                if backoff_used < len(_RETRY_BACKOFFS):
+                    await asyncio.sleep(_RETRY_BACKOFFS[backoff_used])
+                    backoff_used += 1
                     continue
                 logger.warning("Exa request to %s failed after %d attempts: %r",
                                endpoint, attempt + 1, exc)
                 return []
+        logger.warning("Exa %s: %d-key pool + retries all rate-limited", endpoint, len(keys))
         return []
 
     def _parse(self, data: dict, limit: int) -> list[SearchHit]:
@@ -225,6 +253,16 @@ def build_engine(name: str, settings, *, browser=None) -> SearchProvider:
         logger.warning("unknown search engine %r; using stub", name)
         return StubSearchProvider()
     provider_cls, attr = spec
+    if key == "exa":
+        # Exa supports a key rotation pool (exa_api_key + exa_api_keys).
+        keys = getattr(settings, "exa_api_key_list", None)
+        if keys is None:
+            single = (getattr(settings, attr, "") or "").strip()
+            keys = [single] if single else []
+        if not keys:
+            logger.warning("exa selected but no key is set; falling back to DuckDuckGo")
+            return DuckDuckGoSearchProvider(browser=browser)
+        return ExaSearchProvider(api_keys=keys)
     api_key = (getattr(settings, attr, "") or "").strip()
     if not api_key:
         logger.warning("%s selected but %s is unset; falling back to DuckDuckGo", key, attr)
