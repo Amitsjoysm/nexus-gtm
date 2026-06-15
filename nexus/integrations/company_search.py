@@ -83,11 +83,32 @@ _NON_COMPANY_HOSTS: frozenset[str] = frozenset({
 })
 
 # Title shapes that betray a listicle / job page / news headline rather than a company name.
+# Note the plural list-nouns ("companies"/"startups"): a homepage <title> is the company's own
+# name and almost never contains them, whereas a SERP for "fintech companies in the US" returns
+# headlines that literally do ("Fintech Companies in United States 2026 | TechList.ai"). The naive
+# "number before companies" check missed those, so match the bare plural too.
 _NON_COMPANY_NAME_RE = re.compile(
     r"\b(top\s+\d+|best\s+\d+|\d+\s+(top|best|leading|companies|startups|jobs|vacancies)"
-    r"|jobs?|vacanc(y|ies)|hiring|careers?|salaries|reviews?|news|list of|directory)\b",
+    r"|companies|startups|vacanc(y|ies)|hiring|careers?|salaries|reviews?|news"
+    r"|jobs?|list of|listicle|director(y|ies)|rankings?)\b",
     re.IGNORECASE,
 )
+
+# A four-digit recent year in a title ("... 2026") is a listicle/news tell, never part of a name.
+_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+
+# Title segment separators: a SERP title is often "<core> - <tagline> | <site>". Keep the head.
+_TITLE_SPLIT_RE = re.compile(r"\s+[|–—]\s+|\s+-\s+|:\s+")
+
+
+def clean_company_name(title: str | None) -> str:
+    """Reduce a SERP title to its leading segment — the company's own name — dropping the
+    "- tagline | SiteName" cruft so a kept candidate is stored as "Acme Robotics", not
+    "Acme Robotics - Industrial IoT | acme.io". Splits only on *spaced* separators so hyphenated
+    names ("Coca-Cola") survive."""
+    if not title:
+        return ""
+    return (_TITLE_SPLIT_RE.split(title.strip(), maxsplit=1)[0] or "").strip()
 
 
 def looks_like_company(domain: str | None, name: str | None) -> bool:
@@ -95,16 +116,22 @@ def looks_like_company(domain: str | None, name: str | None) -> bool:
 
     Deliberately conservative on persistence: a false negative just means a real company is
     missed from the free web tier (a real provider would find it), whereas a false positive
-    pollutes the workspace with junk Accounts the rep then has to clean up."""
+    pollutes the workspace with junk Accounts the rep then has to clean up. ``name`` is expected
+    to already be cleaned via :func:`clean_company_name`."""
     if not domain:
         return False
     host = domain.lower().lstrip(".")
     if any(host == bad or host.endswith("." + bad) for bad in _NON_COMPANY_HOSTS):
         return False
-    if name and _NON_COMPANY_NAME_RE.search(name):
+    if not name:
+        return True  # domain-only candidate; nothing in the name to disqualify it
+    if _NON_COMPANY_NAME_RE.search(name) or _YEAR_RE.search(name):
         return False
-    # A real company name isn't mostly digits, and a site-name title ("X | Y - Z") is a tell.
-    if name and sum(ch.isdigit() for ch in name) > len(name) / 3:
+    # Real company names are short; a 7+ word title is a headline, not a name.
+    if len(name.split()) > 6:
+        return False
+    # A real company name isn't mostly digits.
+    if sum(ch.isdigit() for ch in name) > len(name) / 3:
         return False
     return True
 
@@ -164,14 +191,14 @@ class SearchBackedCompanySearchProvider(CompanySearchProvider):
         out: list[CompanyCandidate] = []
         for hit in hits:
             domain = domain_from_url(getattr(hit, "url", None))
-            title = (getattr(hit, "title", None) or "").strip()
+            name = clean_company_name(getattr(hit, "title", None))
             # Skip aggregators, job boards, news, and listicles — they were being persisted as
             # bogus Accounts. A general web SERP is mostly these; only keep plausible companies.
-            if not looks_like_company(domain, title):
+            if not looks_like_company(domain, name):
                 continue
             out.append(
                 CompanyCandidate(
-                    name=(getattr(hit, "title", None) or domain).strip(),
+                    name=(name or domain).strip(),
                     domain=domain,
                     url=getattr(hit, "url", None),
                     industry=industry,
