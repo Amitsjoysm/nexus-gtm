@@ -49,6 +49,7 @@ import type {
   ListFilter,
   LoginRequest,
   Member,
+  NewWorkspaceRequest,
   Outcome,
   OutcomeInput,
   OutcomeSummary,
@@ -566,6 +567,9 @@ export class ApiClient {
     return this.request<TokenResponse>("/auth/switch", {
       method: "POST", body: { tenant_id: tenantId }, signal,
     });
+  }
+  createWorkspace(body: NewWorkspaceRequest, signal?: AbortSignal) {
+    return this.request<TokenResponse>("/auth/workspaces", { method: "POST", body, signal });
   }
 
   /**

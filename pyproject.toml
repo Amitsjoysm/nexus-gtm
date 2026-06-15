@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "NEXUS GTM — AI-powered Go-To-Market intelligence platform (multi-tenant SaaS)"
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi>=0.110",
+    "fastapi>=0.110,<0.116",   # pin: 0.116+ router objects break prometheus-instrumentator<8 introspection
     "uvicorn[standard]>=0.29",
     "sqlalchemy[asyncio]>=2.0",
     "pydantic>=2.6",
@@ -27,7 +27,7 @@ dependencies = [
 postgres = ["asyncpg>=0.29"]
 redis = ["redis>=5.0"]
 scraping = ["scrapling>=0.4"]   # enables the Scrapling browser/enrichment adapter
-metrics = ["prometheus-fastapi-instrumentator>=7.0"]
+metrics = ["prometheus-fastapi-instrumentator>=7.0,<8"]   # 8.x mismatches FastAPI<0.116 route resolution
 migrate = ["alembic>=1.13"]     # schema migrations for production databases
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-cov>=5.0", "fakeredis>=2.20"]
 

@@ -553,6 +553,11 @@ export interface SwitchTenantRequest {
   tenant_id: string;
 }
 
+export interface NewWorkspaceRequest {
+  name: string;
+  slug: string;
+}
+
 // ---- segment campaigns ----
 export type CampaignStatus =
   | "draft_pending"

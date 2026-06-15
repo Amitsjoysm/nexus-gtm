@@ -39,6 +39,13 @@ class SwitchTenantRequest(BaseModel):
     tenant_id: str
 
 
+class NewWorkspaceRequest(BaseModel):
+    """Create another workspace (tenant/org) owned by the already-authenticated user."""
+
+    name: str = Field(min_length=1, max_length=200)
+    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9\-]{1,79}$")
+
+
 # ---- relevance ----
 class RelevanceProfileIn(BaseModel):
     icp: dict = Field(default_factory=dict)

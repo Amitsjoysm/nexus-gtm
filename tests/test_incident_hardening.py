@@ -110,3 +110,15 @@ def test_default_ingestion_excludes_demo_signals_when_disabled(monkeypatch):
         assert any(isinstance(s, DemoSignalSource) for s in get_ingestion_service().sources)
     finally:
         set_ingestion_service(None)
+
+
+@pytest.mark.asyncio
+async def test_metrics_off_by_default_and_app_serves(client):
+    """Regression: metrics must be opt-in. Auto-enabling the instrumentator put a
+    version-fragile middleware on every request — an incompatible FastAPI/instrumentator
+    pair then 500'd logins. Default app: no /metrics, normal endpoints work."""
+    assert get_settings().metrics_enabled is False
+    r = await client.get("/api/health") if False else await client.get("/health")
+    assert r.status_code == 200, r.text
+    r = await client.get("/metrics")
+    assert r.status_code == 404  # not mounted by default

@@ -55,12 +55,22 @@ async def lifespan(app: FastAPI):
 
 
 def _maybe_enable_metrics(app: FastAPI) -> None:
-    """Expose Prometheus ``/metrics`` if the optional ``metrics`` extra is installed."""
+    """Expose Prometheus ``/metrics`` — only when explicitly enabled.
+
+    Opt-in (NEXUS_METRICS_ENABLED, default off): the instrumentator wraps every request, so a
+    version mismatch between FastAPI and the instrumentator turns a metrics bug into a 500 on
+    *every* endpoint (it did exactly that — an unpinned build pulled a FastAPI whose router
+    objects the instrumentator couldn't introspect, and logins started 500ing). Observability
+    must never sit on the critical path by default; instrumenting is also wrapped so even an
+    enabled-but-incompatible install degrades to "no metrics" instead of breaking the app."""
+    if not get_settings().metrics_enabled:
+        return
     try:
         from prometheus_fastapi_instrumentator import Instrumentator
-    except ImportError:
-        return
-    Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+        Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+    except Exception:  # ImportError, or an instrumentator/FastAPI incompatibility
+        logging.getLogger("nexus.main").warning("metrics disabled: instrumentation failed", exc_info=True)
 
 
 def create_app() -> FastAPI:

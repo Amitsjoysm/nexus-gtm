@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexus.api.deps import Principal, get_db_session, get_principal
 from nexus.api.schemas import (
     LoginRequest,
+    NewWorkspaceRequest,
     SignupRequest,
     SwitchTenantRequest,
     TenantOut,
@@ -117,6 +118,42 @@ async def list_tenants(
     return [
         TenantOut(tenant_id=t.id, name=t.name, slug=t.slug, role=role) for (t, role) in rows
     ]
+
+
+@router.post("/workspaces", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def create_workspace(
+    req: NewWorkspaceRequest,
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_db_session),
+) -> TokenResponse:
+    """Provision a new tenant (workspace/org) owned by the authenticated user and switch into it.
+
+    This is what makes the topbar workspace switcher useful for an existing user: signup only
+    creates a tenant for a brand-new account, so without this a one-tenant owner could never
+    reach a second workspace. Returns a fresh JWT pinned to the new tenant."""
+    try:
+        tenant = Tenant(name=req.name, slug=req.slug)
+        db.add(tenant)
+        await db.flush()
+
+        workspace = Workspace(tenant_id=tenant.id, name=f"{req.name} Workspace")
+        db.add(workspace)
+        await db.flush()
+
+        membership = Membership(
+            tenant_id=tenant.id,
+            user_id=principal.user_id,
+            workspace_id=workspace.id,
+            role="owner",
+        )
+        db.add(membership)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "That workspace URL is already taken")
+
+    token = create_access_token(user_id=principal.user_id, tenant_id=tenant.id, role="owner")
+    return TokenResponse(access_token=token, tenant_id=tenant.id, role="owner")
 
 
 @router.post("/switch", response_model=TokenResponse)

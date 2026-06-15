@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     # enqueue it every tick without double-sending.
     digest_interval_hours: int = 24
 
+    # Prometheus /metrics. OFF by default: the instrumentator wraps every request, so a
+    # FastAPI/instrumentator version mismatch becomes a 500 on every endpoint. Enable only
+    # with compatible pinned versions and a scraper in front.
+    metrics_enabled: bool = False
+
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
     # A selected engine with no key degrades to keyless DuckDuckGo so search keeps working.

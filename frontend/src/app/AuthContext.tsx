@@ -9,7 +9,7 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { ApiClient } from "@/lib/api";
-import type { LoginRequest, Role, SignupRequest } from "@/lib/types";
+import type { LoginRequest, NewWorkspaceRequest, Role, SignupRequest } from "@/lib/types";
 
 interface Session {
   token: string;
@@ -27,6 +27,8 @@ interface AuthApi {
   logout: () => void;
   /** Re-issue a JWT for another tenant the user belongs to, then swap + refetch. */
   switchTenant: (tenantId: string) => Promise<void>;
+  /** Create a new workspace (tenant) owned by the user and switch into it. */
+  createWorkspace: (body: NewWorkspaceRequest) => Promise<void>;
   /** Increments on every tenant switch so screens can key off it to remount/refetch. */
   tenantEpoch: number;
 }
@@ -108,9 +110,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [api],
   );
 
+  const createWorkspace = useCallback(
+    async (body: NewWorkspaceRequest) => {
+      const res = await api.createWorkspace(body);
+      setSession({ token: res.access_token, role: res.role, tenantId: res.tenant_id });
+      setTenantEpoch((n) => n + 1);  // new empty tenant: remount/refetch every screen
+    },
+    [api],
+  );
+
   const value = useMemo<AuthApi>(
-    () => ({ api, session, isAuthed: !!session, login, signup, logout, switchTenant, tenantEpoch }),
-    [api, session, login, signup, logout, switchTenant, tenantEpoch],
+    () => ({ api, session, isAuthed: !!session, login, signup, logout, switchTenant, createWorkspace, tenantEpoch }),
+    [api, session, login, signup, logout, switchTenant, createWorkspace, tenantEpoch],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

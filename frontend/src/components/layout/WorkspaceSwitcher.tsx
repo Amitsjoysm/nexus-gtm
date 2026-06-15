@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Badge, Skeleton, useToast } from "@/components/ui";
-import { BuildingIcon, CheckIcon, ChevronRightIcon } from "@/components/ui/icons";
+import type { FormEvent } from "react";
+import { Badge, Button, Field, Input, Modal, Skeleton, useToast } from "@/components/ui";
+import { BuildingIcon, CheckIcon, ChevronRightIcon, PlusIcon } from "@/components/ui/icons";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { useApi } from "@/hooks/useApi";
+import { ApiError } from "@/lib/api";
 import type { TenantSummary } from "@/lib/types";
 import styles from "./WorkspaceSwitcher.module.css";
 
@@ -17,20 +19,32 @@ const MENU_MIN_WIDTH = 240;
 const MENU_GAP = 6;
 const VIEWPORT_PAD = 8;
 
+/** name -> URL-safe slug matching the backend pattern (^[a-z0-9][a-z0-9-]{1,79}$). */
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
 /**
  * App-shell control for switching between the workspaces (tenants) a user belongs to.
- * Quiet by default: a labelled trigger showing the current workspace; a portaled menu
- * (position:fixed, so it escapes the sticky topbar's backdrop-filter/overflow) lists the
- * others. With one workspace it collapses to static text — no affordance the user can't use.
+ * Always interactive: the menu lists every workspace the user owns/joins, plus a "Create
+ * workspace" action — so even a brand-new single-workspace owner has a path to a second one
+ * (a one-tenant user used to see dead static text with nothing to switch to). Portaled menu
+ * (position:fixed) escapes the sticky topbar's backdrop-filter/overflow.
  */
 export function WorkspaceSwitcher() {
   const api = useApiClient();
-  const { session, switchTenant } = useAuth();
+  const { session, switchTenant, createWorkspace } = useAuth();
   const toast = useToast();
   const { data: tenants, loading } = useApi((signal) => api.listTenants(signal), []);
 
   const currentId = session?.tenantId ?? null;
-  const current = tenants?.find((t) => t.tenant_id === currentId) ?? null;
+  const list = tenants ?? [];
+  const current = list.find((t) => t.tenant_id === currentId) ?? null;
   const currentName = current?.name ?? "Workspace";
 
   if (loading) {
@@ -44,26 +58,16 @@ export function WorkspaceSwitcher() {
     );
   }
 
-  // One workspace (or the list failed to load): nothing to switch to — show it as plain text.
-  if (!tenants || tenants.length <= 1) {
-    return (
-      <div className={styles.staticTrigger}>
-        <span className={styles.icon} aria-hidden="true">
-          <BuildingIcon />
-        </span>
-        <span className={styles.staticName}>{currentName}</span>
-      </div>
-    );
-  }
-
   return (
     <SwitcherMenu
-      tenants={tenants}
+      tenants={list}
       currentId={currentId}
       currentName={currentName}
       onSwitch={switchTenant}
+      onCreate={createWorkspace}
       onToastSuccess={(name) => toast.success(`Switched to ${name}`)}
       onToastError={(message) => toast.error("Couldn't switch workspace", message)}
+      onCreateSuccess={(name) => toast.success(`Created ${name}`, "You're now in the new workspace.")}
     />
   );
 }
@@ -73,24 +77,33 @@ function SwitcherMenu({
   currentId,
   currentName,
   onSwitch,
+  onCreate,
   onToastSuccess,
   onToastError,
+  onCreateSuccess,
 }: {
   tenants: TenantSummary[];
   currentId: string | null;
   currentName: string;
   onSwitch: (tenantId: string) => Promise<void>;
+  onCreate: (body: { name: string; slug: string }) => Promise<void>;
   onToastSuccess: (name: string) => void;
   onToastError: (message: string) => void;
+  onCreateSuccess: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [rect, setRect] = useState<MenuRect | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  // The "Create workspace" row is the last focusable item after the tenant list.
+  const itemCount = tenants.length + 1;
+  const createIndex = tenants.length;
 
   const currentIndex = Math.max(
     0,
@@ -117,7 +130,6 @@ function SwitcherMenu({
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
 
-  // Keep the menu anchored to the trigger while the viewport changes.
   useLayoutEffect(() => {
     if (!open) return;
     place();
@@ -131,13 +143,11 @@ function SwitcherMenu({
     };
   }, [open, place]);
 
-  // Move DOM focus to the active item as the user arrows through the menu.
   useEffect(() => {
     if (!open) return;
     itemRefs.current[activeIndex]?.focus();
   }, [open, activeIndex]);
 
-  // Dismiss on outside pointer-down.
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -174,11 +184,11 @@ function SwitcherMenu({
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
-        setActiveIndex((i) => (i + 1) % tenants.length);
+        setActiveIndex((i) => (i + 1) % itemCount);
         break;
       case "ArrowUp":
         event.preventDefault();
-        setActiveIndex((i) => (i - 1 + tenants.length) % tenants.length);
+        setActiveIndex((i) => (i - 1 + itemCount) % itemCount);
         break;
       case "Home":
         event.preventDefault();
@@ -186,7 +196,7 @@ function SwitcherMenu({
         break;
       case "End":
         event.preventDefault();
-        setActiveIndex(tenants.length - 1);
+        setActiveIndex(itemCount - 1);
         break;
       case "Escape":
         event.preventDefault();
@@ -208,7 +218,7 @@ function SwitcherMenu({
         className={styles.trigger}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Current workspace: ${currentName}. Switch workspace`}
+        aria-label={`Current workspace: ${currentName}. Switch or create a workspace`}
         onClick={() => (open ? closeMenu() : openMenu())}
       >
         <span className={styles.icon} aria-hidden="true">
@@ -266,9 +276,127 @@ function SwitcherMenu({
                 );
               })}
             </ul>
+            <div className={styles.footer}>
+              <button
+                ref={(el) => {
+                  itemRefs.current[createIndex] = el;
+                }}
+                type="button"
+                role="menuitem"
+                className={styles.createItem}
+                tabIndex={createIndex === activeIndex ? 0 : -1}
+                disabled={switching}
+                onClick={() => {
+                  closeMenu(false);
+                  setCreateOpen(true);
+                }}
+              >
+                <span className={styles.createIcon} aria-hidden="true">
+                  <PlusIcon />
+                </span>
+                Create workspace
+              </button>
+            </div>
           </div>,
           document.body,
         )}
+
+      {createOpen && (
+        <CreateWorkspaceModal
+          onClose={() => setCreateOpen(false)}
+          onCreate={onCreate}
+          onCreated={(name) => {
+            setCreateOpen(false);
+            onCreateSuccess(name);
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function CreateWorkspaceModal({
+  onClose,
+  onCreate,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreate: (body: { name: string; slug: string }) => Promise<void>;
+  onCreated: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [slugEdited, setSlugEdited] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Auto-derive the slug from the name until the user edits it directly.
+  const effectiveSlug = slugEdited ? slug : slugify(name);
+  const slugValid = /^[a-z0-9][a-z0-9-]{1,79}$/.test(effectiveSlug);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !slugValid) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onCreate({ name: name.trim(), slug: effectiveSlug });
+      onCreated(name.trim());
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : "Couldn't create the workspace.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Create a workspace"
+      description="A new, separate workspace with its own accounts, signals, and members. You'll switch into it right away."
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            form="create-workspace-form"
+            type="submit"
+            loading={submitting}
+            disabled={!name.trim() || !slugValid}
+          >
+            Create workspace
+          </Button>
+        </>
+      }
+    >
+      <form id="create-workspace-form" onSubmit={onSubmit} noValidate>
+        <Field label="Workspace name" required>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Acme West Region"
+            autoFocus
+            required
+          />
+        </Field>
+        <Field
+          label="Workspace URL"
+          hint="Lowercase letters, numbers, and hyphens. Used to identify the workspace."
+          error={!slugValid && effectiveSlug.length > 0 ? "At least 2 chars: a-z, 0-9, hyphens." : error ?? undefined}
+        >
+          <Input
+            value={effectiveSlug}
+            onChange={(e) => {
+              setSlugEdited(true);
+              setSlug(slugify(e.target.value));
+            }}
+            placeholder="acme-west"
+          />
+        </Field>
+      </form>
+    </Modal>
   );
 }
