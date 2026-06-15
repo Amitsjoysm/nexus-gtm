@@ -21,10 +21,16 @@ Response parsing is split into pure ``_parse`` helpers so it is unit-tested with
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
 import httpx
+
+# Status codes worth a retry: rate limit + transient upstream errors. A free-tier key hits 429
+# under bursty use, and silently degrading to [] makes discovery look like "no matches".
+_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+_RETRY_BACKOFFS = (0.5, 1.5)  # two retries; ~2s worst-case added latency before degrading
 
 from nexus.integrations.search.provider import (
     DuckDuckGoSearchProvider,
@@ -81,19 +87,24 @@ class ExaSearchProvider(SearchProvider):
         return await self._post(self.ENDPOINT_SIMILAR, payload, limit)
 
     async def _post(self, endpoint: str, payload: dict, limit: int) -> list[SearchHit]:
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.post(
-                    endpoint,
-                    json=payload,
-                    headers={"x-api-key": self.api_key, "Content-Type": "application/json"},
-                )
+        headers = {"x-api-key": self.api_key, "Content-Type": "application/json"}
+        for attempt in range(len(_RETRY_BACKOFFS) + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    resp = await client.post(endpoint, json=payload, headers=headers)
+                if resp.status_code in _RETRY_STATUS and attempt < len(_RETRY_BACKOFFS):
+                    await asyncio.sleep(_RETRY_BACKOFFS[attempt])  # rate-limited / transient 5xx
+                    continue
                 resp.raise_for_status()
-                data = resp.json()
-        except Exception as exc:  # network / anti-bot / HTTP — degrade gracefully
-            logger.warning("Exa request to %s failed: %r", endpoint, exc)
-            return []
-        return self._parse(data, limit)
+                return self._parse(resp.json(), limit)
+            except Exception as exc:  # network / anti-bot / HTTP — retry, then degrade gracefully
+                if attempt < len(_RETRY_BACKOFFS):
+                    await asyncio.sleep(_RETRY_BACKOFFS[attempt])
+                    continue
+                logger.warning("Exa request to %s failed after %d attempts: %r",
+                               endpoint, attempt + 1, exc)
+                return []
+        return []
 
     def _parse(self, data: dict, limit: int) -> list[SearchHit]:
         out: list[SearchHit] = []

@@ -22,6 +22,66 @@ from nexus.integrations.search import (
 from nexus.integrations.search.engines import build_engine
 
 
+class _FakeResp:
+    def __init__(self, status, payload=None):
+        self.status_code = status
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _FakeClient:
+    """Async-context httpx stand-in that replays scripted responses (last one repeats)."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, *a, **k):
+        r = self._responses[min(self.calls, len(self._responses) - 1)]
+        self.calls += 1
+        return r
+
+
+def _patch(monkeypatch, responses):
+    from nexus.integrations.search import engines
+
+    client = _FakeClient(responses)
+    monkeypatch.setattr(engines.httpx, "AsyncClient", lambda *a, **k: client)
+
+    async def _nosleep(*a, **k):
+        return None
+
+    monkeypatch.setattr(engines.asyncio, "sleep", _nosleep)
+    return client
+
+
+async def test_exa_retries_on_429_then_succeeds(monkeypatch):
+    ok = {"results": [{"title": "Acme", "url": "https://acme.com", "text": "logistics"}]}
+    client = _patch(monkeypatch, [_FakeResp(429), _FakeResp(200, ok)])
+    hits = await ExaSearchProvider("k").search("logistics", limit=5)
+    assert client.calls == 2  # one 429, then the retry succeeded
+    assert len(hits) == 1 and hits[0].url == "https://acme.com"
+
+
+async def test_exa_degrades_to_empty_after_persistent_429(monkeypatch):
+    client = _patch(monkeypatch, [_FakeResp(429)])
+    hits = await ExaSearchProvider("k").search("logistics", limit=5)
+    assert hits == []
+    assert client.calls == 3  # initial + 2 retries, then give up
+
+
 # --------------------------------------------------------------- parsing (pure)
 
 
