@@ -38,9 +38,11 @@ function slugify(name: string): string {
  */
 export function WorkspaceSwitcher() {
   const api = useApiClient();
-  const { session, switchTenant, createWorkspace } = useAuth();
+  const { session, switchTenant, createWorkspace, tenantEpoch } = useAuth();
   const toast = useToast();
-  const { data: tenants, loading } = useApi((signal) => api.listTenants(signal), []);
+  // Re-key on tenantEpoch so the list (and the current-workspace label) refreshes the moment
+  // the user switches or creates a workspace — otherwise the trigger shows a stale name.
+  const { data: tenants, loading } = useApi((signal) => api.listTenants(signal), [tenantEpoch]);
 
   const currentId = session?.tenantId ?? null;
   const list = tenants ?? [];
