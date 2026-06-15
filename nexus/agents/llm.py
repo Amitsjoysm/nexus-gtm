@@ -12,11 +12,14 @@ deterministic templates so offline output still looks like a real agent's.
 from __future__ import annotations
 
 import abc
+import logging
 from dataclasses import dataclass, field
 
 import httpx
 
 from nexus.core.config import get_settings
+
+logger = logging.getLogger("nexus.agents.llm")
 
 
 @dataclass(slots=True)
@@ -174,6 +177,105 @@ class OpenAICompatProvider(LLMProvider):
         return LLMResponse(text=text, tokens=tokens)
 
 
+class GroqLLMProvider(OpenAICompatProvider):
+    """Groq exposes an OpenAI-compatible /chat/completions endpoint, so it's just preset URL+model."""
+
+    def __init__(self, api_key: str, model: str, base_url: str = "https://api.groq.com/openai/v1"):
+        super().__init__(base_url=base_url, api_key=api_key, model=model)
+
+
+class AnthropicLLMProvider(LLMProvider):
+    """Anthropic's native /v1/messages API (not OpenAI-shaped): system is a top-level field and
+    only user/assistant turns go in ``messages``."""
+
+    ENDPOINT = "https://api.anthropic.com/v1/messages"
+    VERSION = "2023-06-01"
+
+    def __init__(self, api_key: str, model: str):
+        self.api_key = api_key
+        self.model = model
+        self._client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=60)
+        return self._client
+
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 800,
+        purpose: str | None = None,
+        variables: dict | None = None,
+    ) -> LLMResponse:
+        system = "\n\n".join(m.content for m in messages if m.role == "system") or None
+        turns = [
+            {"role": m.role, "content": m.content} for m in messages if m.role != "system"
+        ] or [{"role": "user", "content": ""}]
+        payload: dict = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": turns,
+        }
+        if system:
+            payload["system"] = system
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": self.VERSION,
+            "content-type": "application/json",
+        }
+        resp = await self._http().post(self.ENDPOINT, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+        text = "".join(
+            block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"
+        )
+        tokens = sum(data.get("usage", {}).get(k, 0) for k in ("input_tokens", "output_tokens"))
+        return LLMResponse(text=text, tokens=tokens)
+
+
+class FallbackLLMProvider(LLMProvider):
+    """Try providers in order; on any error fall through to the next. The last provider should be
+    the stub so completion never fails — a transient Anthropic/Groq outage degrades to deterministic
+    output instead of breaking the agent pipeline (and the rep workflow on top of it)."""
+
+    def __init__(self, providers: list[LLMProvider]):
+        if not providers:
+            raise ValueError("FallbackLLMProvider needs at least one provider")
+        self.providers = providers
+
+    async def complete(self, messages, *, temperature=0.2, max_tokens=800,
+                       purpose=None, variables=None) -> LLMResponse:
+        last_exc: Exception | None = None
+        for i, provider in enumerate(self.providers):
+            try:
+                return await provider.complete(
+                    messages, temperature=temperature, max_tokens=max_tokens,
+                    purpose=purpose, variables=variables,
+                )
+            except Exception as exc:  # noqa: BLE001 — fall through to the next provider
+                last_exc = exc
+                logger.warning("LLM provider %s failed (%r); falling back", type(provider).__name__, exc)
+        raise last_exc  # only reached if every provider raised (i.e. no stub at the tail)
+
+
+def _build_llm_chain(s) -> LLMProvider:
+    """Assemble the provider (chain). ``auto`` prefers Anthropic, then Groq, then any configured
+    OpenAI-compatible endpoint, always tailed by the stub so completion can't hard-fail."""
+    chain: list[LLMProvider] = []
+    if s.anthropic_api_key:
+        chain.append(AnthropicLLMProvider(s.anthropic_api_key, s.anthropic_model))
+    if s.groq_api_key:
+        chain.append(GroqLLMProvider(s.groq_api_key, s.groq_model, s.groq_base_url))
+    if s.llm_api_key:
+        chain.append(OpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model))
+    chain.append(StubLLMProvider())
+    return chain[0] if len(chain) == 1 else FallbackLLMProvider(chain)
+
+
 _provider: LLMProvider | None = None
 
 
@@ -181,7 +283,17 @@ def get_llm_provider() -> LLMProvider:
     global _provider
     if _provider is None:
         s = get_settings()
-        if s.llm_provider == "openai_compat" and s.llm_api_key:
+        if s.llm_provider == "auto":
+            _provider = _build_llm_chain(s)
+        elif s.llm_provider == "anthropic" and s.anthropic_api_key:
+            _provider = FallbackLLMProvider(
+                [AnthropicLLMProvider(s.anthropic_api_key, s.anthropic_model), StubLLMProvider()]
+            )
+        elif s.llm_provider == "groq" and s.groq_api_key:
+            _provider = FallbackLLMProvider(
+                [GroqLLMProvider(s.groq_api_key, s.groq_model, s.groq_base_url), StubLLMProvider()]
+            )
+        elif s.llm_provider == "openai_compat" and s.llm_api_key:
             _provider = OpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model)
         else:
             _provider = StubLLMProvider()

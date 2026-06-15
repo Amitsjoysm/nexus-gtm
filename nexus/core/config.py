@@ -42,11 +42,19 @@ class Settings(BaseSettings):
     queue_backend: Literal["memory", "redis"] = "memory"
     redis_url: str = "redis://localhost:6379/0"
 
-    # LLM
-    llm_provider: Literal["stub", "openai_compat"] = "stub"
+    # LLM. "auto" builds a runtime fallback chain (Anthropic -> Groq -> OpenAI-compat -> stub)
+    # from whichever keys are present, so a provider outage degrades instead of erroring.
+    llm_provider: Literal["stub", "openai_compat", "anthropic", "groq", "auto"] = "stub"
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
+    # Anthropic (preferred when keyed) — native /v1/messages API.
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-6"
+    # Groq (OpenAI-compatible) — the fast secondary LLM, used after Anthropic.
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_model: str = "llama-3.3-70b-versatile"
 
     # Browser / scraping
     browser_provider: Literal["auto", "scrapling", "duckduckgo", "cloak"] = "auto"
