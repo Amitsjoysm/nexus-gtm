@@ -29,7 +29,7 @@ redis = ["redis>=5.0"]
 scraping = ["scrapling>=0.4"]   # enables the Scrapling browser/enrichment adapter
 metrics = ["prometheus-fastapi-instrumentator>=7.0,<8"]   # 8.x mismatches FastAPI<0.116 route resolution
 migrate = ["alembic>=1.13"]     # schema migrations for production databases
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-cov>=5.0", "fakeredis>=2.20"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-cov>=5.0", "fakeredis>=2.20", "pytest-xdist>=3.5"]
 
 [tool.setuptools.packages.find]
 include = ["nexus*"]
