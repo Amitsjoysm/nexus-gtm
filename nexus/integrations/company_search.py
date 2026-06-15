@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -63,6 +64,49 @@ def domain_from_url(url: str | None) -> str | None:
     if netloc.startswith("www."):
         netloc = netloc[4:]
     return netloc or None
+
+
+# Hosts that are never the company we want: search/social, news, job boards, and
+# "best-of"/directory aggregators. A SERP for "logistics companies" is full of these, and the
+# naive title-as-name extraction was persisting them as real Accounts (e.g. "100 Top Companies
+# in Pune | F6S" -> f6s.com). Matched as suffix so subdomains are covered.
+_NON_COMPANY_HOSTS: frozenset[str] = frozenset({
+    "google.com", "bing.com", "duckduckgo.com", "yahoo.com", "baidu.com",
+    "linkedin.com", "facebook.com", "twitter.com", "x.com", "instagram.com",
+    "youtube.com", "reddit.com", "medium.com", "quora.com", "pinterest.com",
+    "wikipedia.org", "crunchbase.com", "f6s.com", "g2.com", "capterra.com",
+    "glassdoor.com", "indeed.com", "naukri.com", "workindia.in", "ziprecruiter.com",
+    "monster.com", "shine.com", "timesjobs.com", "foundit.in",
+    "economictimes.indiatimes.com", "indiatimes.com", "forbes.com", "inc.com",
+    "businessinsider.com", "techcrunch.com", "yelp.com", "clutch.co",
+    "trustpilot.com", "ambitionbox.com", "zaubacorp.com", "tofler.in",
+})
+
+# Title shapes that betray a listicle / job page / news headline rather than a company name.
+_NON_COMPANY_NAME_RE = re.compile(
+    r"\b(top\s+\d+|best\s+\d+|\d+\s+(top|best|leading|companies|startups|jobs|vacancies)"
+    r"|jobs?|vacanc(y|ies)|hiring|careers?|salaries|reviews?|news|list of|directory)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_company(domain: str | None, name: str | None) -> bool:
+    """True when a SERP hit plausibly *is* a company, not an aggregator/listicle/job/news page.
+
+    Deliberately conservative on persistence: a false negative just means a real company is
+    missed from the free web tier (a real provider would find it), whereas a false positive
+    pollutes the workspace with junk Accounts the rep then has to clean up."""
+    if not domain:
+        return False
+    host = domain.lower().lstrip(".")
+    if any(host == bad or host.endswith("." + bad) for bad in _NON_COMPANY_HOSTS):
+        return False
+    if name and _NON_COMPANY_NAME_RE.search(name):
+        return False
+    # A real company name isn't mostly digits, and a site-name title ("X | Y - Z") is a tell.
+    if name and sum(ch.isdigit() for ch in name) > len(name) / 3:
+        return False
+    return True
 
 
 def icp_to_query(icp: dict) -> str:
@@ -120,7 +164,10 @@ class SearchBackedCompanySearchProvider(CompanySearchProvider):
         out: list[CompanyCandidate] = []
         for hit in hits:
             domain = domain_from_url(getattr(hit, "url", None))
-            if not domain:
+            title = (getattr(hit, "title", None) or "").strip()
+            # Skip aggregators, job boards, news, and listicles — they were being persisted as
+            # bogus Accounts. A general web SERP is mostly these; only keep plausible companies.
+            if not looks_like_company(domain, title):
                 continue
             out.append(
                 CompanyCandidate(
