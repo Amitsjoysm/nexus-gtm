@@ -128,6 +128,7 @@ class Settings(BaseSettings):
     orch_chat_recency_window: int = 4         # last K raw messages kept verbatim
     orch_chat_summary_token_cap: int = 150    # rolling summary ceiling (approx tokens)
     discovery_max_candidates: int = 25        # cap on discovery result list size
+    discovery_contacts_per_account: int = 5   # buying-committee size sourced per account
     campaign_preview_sample: int = 3          # drafted targets shown at the approval gate
 
     @property

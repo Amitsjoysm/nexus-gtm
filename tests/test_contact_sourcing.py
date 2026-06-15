@@ -25,9 +25,9 @@ async def test_zero_contact_account_sources_persona_and_email():
     assert isinstance(outcome, SourcingOutcome)
     assert outcome.sourced is True
     assert outcome.contact is not None
-    assert outcome.contact.full_name == "Acme Lead"
+    assert outcome.contact.full_name == "Acme VP Sales"
     assert outcome.contact.title == "VP Sales"
-    assert outcome.contact.email == "acme.lead@acme.com"
+    assert outcome.contact.email == "acme.sales@acme.com"
     assert outcome.contact.enrichment_source.startswith("sourcing:")
     assert outcome.email_confidence == 0.4
 

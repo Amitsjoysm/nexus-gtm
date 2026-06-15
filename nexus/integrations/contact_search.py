@@ -33,22 +33,35 @@ class ContactSearchProvider(abc.ABC):
     ) -> list[ContactCandidate]: ...
 
 
+# When the ICP names no buyer titles, fall back to a typical B2B buying committee so contact
+# discovery still returns a multi-role committee rather than a single generic "Lead".
+_DEFAULT_COMMITTEE: tuple[str, ...] = (
+    "VP Sales", "Head of Operations", "Chief Technology Officer",
+    "Chief Financial Officer", "Chief Executive Officer",
+)
+
+
 class StubContactSearchProvider(ContactSearchProvider):
-    """Deterministic offline persona: one candidate, titled from the ICP's first buyer title."""
+    """Deterministic offline buying committee: one persona per ICP buyer title (capped at
+    ``limit``). Names are placeholders (a real provider — Exa people-search / Apollo — supplies
+    real identities); titles are real so the email finder can pattern-guess a role address and
+    Reacher can verify it. Returns up to ``limit`` distinct personas, not just one."""
 
     name = "stub"
 
     async def search(
         self, account: Account, icp: dict, *, limit: int = 3
     ) -> list[ContactCandidate]:
-        buyer_titles = (icp or {}).get("buyer_titles") or []
-        title = buyer_titles[0] if buyer_titles else "Decision Maker"
-        return [
-            ContactCandidate(
-                full_name=f"{account.name} Lead",
-                title=title,
-                email=None,
-                source=self.name,
-                confidence=0.3,
+        titles = list((icp or {}).get("buyer_titles") or ()) or list(_DEFAULT_COMMITTEE)
+        out: list[ContactCandidate] = []
+        for title in titles[: max(1, limit)]:
+            out.append(
+                ContactCandidate(
+                    full_name=f"{account.name} {title}",
+                    title=title,
+                    email=None,
+                    source=self.name,
+                    confidence=0.3,
+                )
             )
-        ]
+        return out

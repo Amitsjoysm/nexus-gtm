@@ -146,6 +146,7 @@ class DiscoveryAgent(BaseAgent):
             if not search_icp.get("buyer_titles") and icp.get("titles"):
                 search_icp["buyer_titles"] = icp["titles"]
 
+            per_account = max(1, get_settings().discovery_contacts_per_account)
             accounts = await ctx.ts.list(Account)
             survivors = [a for a in accounts if _passes_hard_filters(a, scoring_icp)]
             acc_scored = sorted(
@@ -157,26 +158,27 @@ class DiscoveryAgent(BaseAgent):
                     break
                 if acc.id in seen_accounts:
                     continue
-                found = await ctx.registry.contact_search(acc, search_icp, limit=1)
-                if not found:
-                    continue
-                cand = found[0]
-                person = Contact(
-                    tenant_id=ctx.ts.tenant_id,
-                    account_id=acc.id,
-                    full_name=cand.full_name,
-                    title=cand.title,
-                    seniority=cand.seniority,
-                    email=cand.email,
-                    enrichment_source=f"sourcing:{cand.source}",
-                )
-                ctx.ts.add(person)
-                await ctx.ts.flush()
-                candidates.append(
-                    self._contact_candidate(person, acc, fit, source="discovery", is_new=True)
-                )
+                # Source the buying committee for this account (up to per_account people).
+                found = await ctx.registry.contact_search(acc, search_icp, limit=per_account)
+                for cand in found:
+                    if len(candidates) >= max_candidates:
+                        break
+                    person = Contact(
+                        tenant_id=ctx.ts.tenant_id,
+                        account_id=acc.id,
+                        full_name=cand.full_name,
+                        title=cand.title,
+                        seniority=cand.seniority,
+                        email=cand.email,
+                        enrichment_source=f"sourcing:{cand.source}",
+                    )
+                    ctx.ts.add(person)
+                    await ctx.ts.flush()
+                    candidates.append(
+                        self._contact_candidate(person, acc, fit, source="discovery", is_new=True)
+                    )
+                    new_count += 1
                 seen_accounts.add(acc.id)
-                new_count += 1
 
         return {"target": "contacts", "counts": {"own": len(top), "new": new_count},
                 "candidates": candidates}
