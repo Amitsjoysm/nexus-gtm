@@ -294,7 +294,9 @@ def _build_company_search(sources: list[str], *, search: SearchProvider,
     return providers
 
 
-def _build_contact_search(sources: list[str]) -> list[ContactSearchProvider]:
+def _build_contact_search(sources: list[str], *, search=None) -> list[ContactSearchProvider]:
+    from nexus.integrations.contact_search import SearchBackedContactSearchProvider
+
     providers: list[ContactSearchProvider] = []
     for token in sources:
         key = token.strip().lower()
@@ -302,6 +304,12 @@ def _build_contact_search(sources: list[str]) -> list[ContactSearchProvider]:
             continue
         if key == "stub":
             providers.append(StubContactSearchProvider())
+        elif key == "search" and search is not None:
+            # Real people via web search (Exa) + LLM name extraction; lazy LLM so a missing
+            # key just degrades to no extracted names (the stub committee then fills in).
+            from nexus.agents.llm import get_llm_provider
+
+            providers.append(SearchBackedContactSearchProvider(search, get_llm_provider()))
         else:
             # Apollo / InfoJoy / ZoomInfo adapters land here later; skip unknown tokens
             # rather than silently substituting another source.
@@ -329,7 +337,7 @@ def build_registry_from_settings(browser=None) -> DataSourceRegistry:
         search=search,
         research=build_research_provider(s.research_provider),
         email_verify=build_email_verifier(s.email_verify_provider),
-        contact_search=_build_contact_search(s.contact_search_source_list),
+        contact_search=_build_contact_search(s.contact_search_source_list, search=search),
     )
 
 

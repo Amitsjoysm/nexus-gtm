@@ -4,9 +4,12 @@ from __future__ import annotations
 from nexus.integrations.contact_search import (
     ContactCandidate,
     ContactSearchProvider,
+    SearchBackedContactSearchProvider,
     StubContactSearchProvider,
+    _parse_people,
 )
-from nexus.integrations.registry import DataSourceRegistry
+from nexus.agents.llm import StubLLMProvider
+from nexus.integrations.registry import DataSourceRegistry, _build_contact_search
 from nexus.models.account import Account
 from tests.conftest import make_tenant, tenant_session
 
@@ -43,6 +46,70 @@ async def test_stub_defaults_to_buying_committee_when_no_buyer_titles():
     # Falls back to a default committee so contacts discovery isn't empty.
     assert len(cands) == 3
     assert cands[0].title == "VP Sales"
+
+
+class _Hit:
+    def __init__(self, title, snippet="", url=""):
+        self.title, self.snippet, self.url = title, snippet, url
+
+
+class _FakeSearch:
+    def __init__(self, hits):
+        self._hits = hits
+
+    async def search(self, q, *, limit=5):
+        return self._hits
+
+
+class _FakeLLM:
+    def __init__(self, text):
+        self.text = text
+
+    async def complete(self, messages, **k):
+        from nexus.agents.llm import LLMResponse
+
+        return LLMResponse(text=self.text)
+
+
+def test_parse_people_tolerates_prose_and_garbage():
+    assert _parse_people('Here you go: [{"full_name":"A"}] done') == [{"full_name": "A"}]
+    assert _parse_people("no array here") == []
+    assert _parse_people("[stub] not json") == []
+    assert _parse_people("{}") == []
+    assert _parse_people(None) == []
+
+
+async def test_search_contact_extracts_real_names_via_llm():
+    acc = Account(tenant_id="t", name="Acme", domain="acme.com")
+    hits = [_Hit("Jane Smith - VP Sales at Acme | LinkedIn", "Jane Smith, VP Sales, Acme")]
+    llm = _FakeLLM('[{"full_name":"Jane Smith","title":"VP Sales","seniority":"VP",'
+                   '"linkedin_url":"https://linkedin.com/in/jane"}]')
+    prov = SearchBackedContactSearchProvider(_FakeSearch(hits), llm)
+    out = await prov.search(acc, {"titles": ["VP Sales"]}, limit=5)
+    assert len(out) == 1
+    assert out[0].full_name == "Jane Smith" and out[0].title == "VP Sales"
+    assert out[0].source == "search" and out[0].linkedin_url.endswith("jane")
+
+
+async def test_search_contact_empty_when_llm_is_stub():
+    """Offline (stub LLM) extracts no names -> [], so the caller falls back to the role stub."""
+    acc = Account(tenant_id="t", name="Acme", domain="acme.com")
+    prov = SearchBackedContactSearchProvider(_FakeSearch([_Hit("x", "y")]), StubLLMProvider())
+    assert await prov.search(acc, {"titles": ["VP Sales"]}, limit=5) == []
+
+
+async def test_search_contact_empty_when_no_hits():
+    acc = Account(tenant_id="t", name="Acme", domain="acme.com")
+    prov = SearchBackedContactSearchProvider(_FakeSearch([]), _FakeLLM("[]"))
+    assert await prov.search(acc, {"titles": ["VP Sales"]}, limit=5) == []
+
+
+def test_build_contact_search_wires_search_token_when_provider_present():
+    provs = _build_contact_search(["search", "stub"], search=_FakeSearch([]))
+    assert [p.name for p in provs] == ["search", "stub"]
+    # Without a search provider, the 'search' token is skipped (degrades to stub).
+    provs2 = _build_contact_search(["search"], search=None)
+    assert [p.name for p in provs2] == ["stub"]
 
 
 async def test_registry_contact_search_dedupes_by_name_title():
