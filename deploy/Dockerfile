@@ -32,7 +32,8 @@ RUN pip install --no-cache-dir ".[postgres,redis,migrate,metrics]"
 COPY --from=frontend /src/nexus/web/dist ./nexus/web/dist
 COPY scripts ./scripts
 COPY deploy/entrypoint.sh ./entrypoint.sh
-RUN chmod +x ./entrypoint.sh
+# Strip any CRLF (Windows checkouts) so the shebang works in the Linux container, then make exec.
+RUN sed -i 's/\r$//' ./entrypoint.sh && chmod +x ./entrypoint.sh
 
 # Non-root runtime user.
 RUN useradd --create-home --uid 10001 nexus
