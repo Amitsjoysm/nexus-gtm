@@ -31,11 +31,16 @@ RUN pip install --no-cache-dir ".[postgres,redis,migrate,metrics]"
 # The compiled SPA from stage 1 (served by FastAPI with SPA fallback).
 COPY --from=frontend /src/nexus/web/dist ./nexus/web/dist
 COPY scripts ./scripts
+COPY deploy/entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
 
 # Non-root runtime user.
 RUN useradd --create-home --uid 10001 nexus
 USER nexus
 
 EXPOSE 8000
-# Default command is the API; the worker overrides this in compose.
+# The entrypoint migrates the DB to head (when NEXUS_RUN_MIGRATIONS=1, set on the app service)
+# then execs the command below. The worker overrides the command in compose (and leaves
+# NEXUS_RUN_MIGRATIONS unset, so it never races the app on migrations).
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uvicorn", "nexus.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--proxy-headers", "--forwarded-allow-ips", "*"]

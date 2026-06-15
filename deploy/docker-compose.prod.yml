@@ -48,6 +48,8 @@ services:
       NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD}@postgres:5432/nexus
       NEXUS_REDIS_URL: redis://valkey:6379/0
       NEXUS_QUEUE_BACKEND: redis
+      # The app container migrates the DB to head on start (the worker does not, to avoid a race).
+      NEXUS_RUN_MIGRATIONS: "1"
     depends_on:
       postgres:
         condition: service_healthy
