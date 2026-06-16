@@ -13,9 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from nexus.core.config import get_settings
 from nexus.core.tenancy import TenantSession
 from nexus.integrations.company_search import clean_company_name, domain_from_url, looks_like_company
-from nexus.integrations.registry import get_registry
+from nexus.integrations.search.provider import get_search_provider
 from nexus.models.account import Account
 from nexus.outcomes.service import get_outcome_service
 from nexus.relevance.engine import get_profile, get_relevance_engine
@@ -47,24 +48,58 @@ class Lookalike:
         }
 
 
-def _seed_url(account: Account) -> str | None:
-    """Prefer an explicit domain; build a canonical https URL the similarity API can seed from."""
-    domain = (account.domain or "").strip().lower()
-    if not domain:
-        return None
-    return domain if "://" in domain else f"https://{domain}"
+def _similar_query(account: Account) -> str:
+    """Build a 'find companies like this one' query from the seed's firmographics — what the
+    company *does* (description), its industry, geo, and stack — rather than its bare URL. This
+    is what surfaces real peers (corporate-card fintechs, not the seed's own profile pages)."""
+    cf = account.custom_fields or {}
+    desc = (cf.get("description") or "").strip()
+    bits: list[str] = []
+    if desc:
+        bits.append(desc)
+    elif account.industry:
+        bits.append(f"{account.industry} company")
+    if account.country:
+        bits.append(account.country)
+    if account.tech_stack:
+        bits.append("using " + ", ".join(str(t) for t in account.tech_stack[:3]))
+    profile = " ".join(bits).strip()
+    name = (account.name or account.domain or "").strip()
+    if not profile:
+        return f"companies similar to {name}" if name else ""
+    return f"companies similar to {name}: {profile}" if name else profile
 
 
 class LookalikeService:
     async def find(
         self, ts: TenantSession, account: Account, *, limit: int = 10
     ) -> list[Lookalike]:
-        seed = _seed_url(account)
-        if seed is None:
-            return []
-        seed_domain = domain_from_url(seed)
+        seed_domain = (account.domain or "").strip().lower()
 
-        hits = await get_registry().find_similar(seed, limit=limit)
+        # 1) Make sure we actually know what this company is. Enrich blank firmographics from the
+        #    web first (industry/description/geo/tech) so the similarity query is rich, not bare.
+        settings = get_settings()
+        needs_profile = account.industry is None or not (account.custom_fields or {}).get("description")
+        if settings.account_enrich_enabled and needs_profile:
+            try:
+                from nexus.enrichment.account import get_account_enricher
+
+                if await get_account_enricher().enrich(account):
+                    await ts.flush()
+            except Exception:  # enrichment must never block lookalikes
+                pass
+
+        # 2) Search for company homepages matching that profile (Exa category=company excludes
+        #    directories/news), skipping the seed's own domain.
+        query = _similar_query(account)
+        if not query:
+            return []
+        provider = get_search_provider()
+        exclude = [seed_domain] if seed_domain else None
+        if hasattr(provider, "search_companies"):
+            hits = await provider.search_companies(query, limit=max(limit * 3, 15), exclude_domains=exclude)
+        else:
+            hits = await provider.search(query, limit=max(limit * 3, 15))
         if not hits:
             return []
 

@@ -81,6 +81,25 @@ class ExaSearchProvider(SearchProvider):
         }
         return await self._post(self.ENDPOINT, payload, limit)
 
+    async def search_companies(
+        self, query: str, *, limit: int = 10, exclude_domains: list[str] | None = None
+    ) -> list[SearchHit]:
+        """Exa search biased to company homepages (``category=company``), optionally excluding
+        some domains. This is what makes 'find similar companies' return real businesses instead
+        of directory/profile/news pages."""
+        if not self.api_keys:
+            return []
+        payload: dict = {
+            "query": query,
+            "numResults": limit,
+            "category": "company",
+            "contents": {"text": {"maxCharacters": _SNIPPET_CAP}},
+        }
+        domains = [d for d in (exclude_domains or []) if d]
+        if domains:
+            payload["excludeDomains"] = domains
+        return await self._post(self.ENDPOINT, payload, limit)
+
     async def find_similar(self, url: str, *, limit: int = 10) -> list[SearchHit]:
         """Exa ``/findSimilar``: pages similar to a seed URL — the lookalike seam.
 

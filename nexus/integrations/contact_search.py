@@ -144,9 +144,13 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
         company = account.name or account.domain or ""
         if not company:
             return []
-        queries = [f"{company} leadership team executives"]
+        # Ground the people search in what the company is (industry) before chasing titles, so the
+        # results are that company's actual leadership rather than namesakes elsewhere.
+        industry = (account.industry or "").strip()
+        ctx = f" {industry}" if industry else ""
+        queries = [f"{company}{ctx} leadership team executives"]
         if titles:
-            queries.append(f'{" OR ".join(titles[:3])} {company} linkedin')
+            queries.append(f'{" OR ".join(titles[:3])} at {company}{ctx} linkedin')
         hits: list[dict] = []
         for q in queries:
             try:
