@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     # (Exa→DuckDuckGo + LLM) when no premium data provider is configured. Off by default so CI
     # stays zero-network; the pipeline only enriches accounts that are missing firmographics.
     account_enrich_enabled: bool = False
+    # Minimum signal strength (0..1) that creates an Inbox task. Weaker signals (e.g. a generic
+    # press mention, 0.4) still persist to the account timeline and feed Plays, but don't clutter
+    # the rep's daily task list — only meaningful events (funding/hiring/intent) become tasks.
+    inbox_min_signal_strength: float = 0.5
     signal_sources: str = "demo"               # ordered signal sources
     search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend

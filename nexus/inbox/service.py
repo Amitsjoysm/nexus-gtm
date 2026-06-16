@@ -9,6 +9,21 @@ from nexus.models.account import Account, Contact
 from nexus.models.signal import SignalEvent
 from nexus.models.workflow import InboxTask
 
+# Human task labels per signal kind, so the Inbox reads as account work — "Brex: New funding" —
+# not a raw news headline ("Banking News and Analysis | Banking Dive").
+_KIND_LABEL = {
+    "funding": "New funding — reach out",
+    "hiring": "Hiring / leadership change",
+    "job_posting": "Relevant hiring",
+    "job_switch": "Champion changed roles",
+    "g2_intent": "Active buying intent",
+    "tech_install": "Adopted a relevant tech",
+    "web_visit": "Visited your site",
+    "product_usage": "Product activity",
+    "news": "Company news",
+    "call": "Follow up on call",
+}
+
 
 class InboxService:
     async def create_from_signal(
@@ -34,8 +49,9 @@ class InboxService:
             owner_user_id=owner_user_id,
             account_id=account.id,
             signal_id=signal.id,
-            title=f"{signal.title}",
-            reason=f"{signal.kind} signal · account score {composite_score if composite_score is not None else 'n/a'}",
+            title=f"{account.name}: {_KIND_LABEL.get(signal.kind, signal.kind)}",
+            # The raw headline becomes the supporting context, not the task title itself.
+            reason=f"{signal.title} · account score {composite_score if composite_score is not None else 'n/a'}",
             priority=priority,
             suggested_action=suggested_action or {"type": "review_account", "account_id": account.id},
         )
@@ -43,14 +59,28 @@ class InboxService:
         await ts.flush()
         return task
 
-    async def list_open(
-        self, ts: TenantSession, *, owner_user_id: str | None = None, limit: int = 50
+    async def list_tasks(
+        self,
+        ts: TenantSession,
+        *,
+        owner_user_id: str | None = None,
+        status: str = "open",
+        limit: int = 50,
     ) -> list[InboxTask]:
-        where = [InboxTask.status == "open"]
+        """List tasks by status so an SDR can recover their pending/previous work, not just
+        today's open items. ``status`` is 'open', 'done', or 'all'."""
+        where = []
+        if status in ("open", "done", "snoozed"):
+            where.append(InboxTask.status == status)
         if owner_user_id:
             where.append(InboxTask.owner_user_id == owner_user_id)
         stmt = ts.select(InboxTask, *where).order_by(InboxTask.priority.desc()).limit(limit)
         return list((await ts.session.scalars(stmt)).all())
+
+    async def list_open(
+        self, ts: TenantSession, *, owner_user_id: str | None = None, limit: int = 50
+    ) -> list[InboxTask]:
+        return await self.list_tasks(ts, owner_user_id=owner_user_id, status="open", limit=limit)
 
     async def triage(
         self, ts: TenantSession, tasks: list[InboxTask]
@@ -99,6 +129,15 @@ class InboxService:
         if task is None:
             return None
         task.status = "done"
+        await ts.flush()
+        return task
+
+    async def reopen(self, ts: TenantSession, task_id: str) -> InboxTask | None:
+        """Mark a completed task incomplete again (done -> open) so it returns to the list."""
+        task = await ts.get(InboxTask, task_id)
+        if task is None:
+            return None
+        task.status = "open"
         await ts.flush()
         return task
 

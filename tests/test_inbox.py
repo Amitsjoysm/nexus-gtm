@@ -49,7 +49,10 @@ async def test_open_tasks_ordered_by_priority_desc():
         await svc.create_from_signal(ts, strong, acc, composite_score=90)
 
         tasks = await svc.list_open(ts)
-        assert [t.title for t in tasks] == ["hot", "minor"]
+        # Title is now account-centric ("Acme: ...") and the headline moved to `reason`; the
+        # high-priority signal still sorts first.
+        assert [t.title for t in tasks] == ["Acme: Active buying intent", "Acme: Company news"]
+        assert [t.reason.split(" · ")[0] for t in tasks] == ["hot", "minor"]
 
 
 async def test_complete_marks_done():

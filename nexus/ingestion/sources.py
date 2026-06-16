@@ -8,11 +8,55 @@ implement the same interface; ``DemoSignalSource`` keeps the system runnable wit
 from __future__ import annotations
 
 import abc
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from nexus.core.db import utcnow
 from nexus.models.account import Account
+
+# Name tokens too generic to identify an account in a news headline.
+_GENERIC_NAME_TOKENS = frozenset({
+    "inc", "llc", "ltd", "corp", "the", "and", "co", "company", "group", "holdings",
+    "technologies", "technology", "tech", "solutions", "systems", "global",
+    "international", "services", "labs", "io", "app", "ai",
+})
+
+# Headlines that are real buying signals -> (signal kind, strength). First match wins. A headline
+# that mentions the account but matches none of these is a low-strength "news" mention (kept for
+# the timeline, but on its own it won't create an Inbox task).
+_NEWS_PATTERNS: tuple[tuple[str, tuple[str, ...], float], ...] = (
+    ("funding", ("raises", "raised", "funding round", "series a", "series b", "series c",
+                 "series d", "seed round", "venture", "valuation", "secures $", "raises $"), 0.85),
+    ("hiring", ("appoints", "names new", "hires", "joins as", "new ceo", "new cfo", "new cro",
+                "new chief", "promoted to", "is hiring", "headcount"), 0.6),
+    ("news", ("acquires", "acquisition", "merger", "partners with", "partnership", "launches",
+              "expands", "expansion", "opens new", "ipo", "goes public"), 0.6),
+)
+
+
+def _account_keys(account: Account) -> set[str]:
+    """Identifying tokens that must appear in a headline for it to be 'about' this account — the
+    main name token(s) plus the domain root. Drops generic corp-suffix words."""
+    keys: set[str] = set()
+    name = (account.name or "").strip().lower()
+    if name:
+        keys.add(name)
+        for tok in re.split(r"[^a-z0-9]+", name):
+            if len(tok) >= 3 and tok not in _GENERIC_NAME_TOKENS:
+                keys.add(tok)
+    root = (account.domain or "").lower().split(".")[0].strip()
+    if len(root) >= 3 and root not in _GENERIC_NAME_TOKENS:
+        keys.add(root)
+    return keys
+
+
+def _classify_news(text: str) -> tuple[str, float]:
+    low = text.lower()
+    for kind, needles, strength in _NEWS_PATTERNS:
+        if any(n in low for n in needles):
+            return kind, strength
+    return "news", 0.4
 
 # Built-in signal library — the catalogue NEXUS ships with out of the box.
 SIGNAL_LIBRARY: dict[str, dict] = {
@@ -92,18 +136,46 @@ class WebNewsSource(SignalSource):
         self.browser = browser
 
     async def fetch(self, account: Account) -> list[RawSignal]:
-        hits = await self.browser.search(f"{account.name} news", limit=3)
+        name = (account.name or "").strip()
+        if not name:
+            return []
+        keys = _account_keys(account)
+        if not keys:
+            return []
+        # Bias the query toward buying-event news, and include the industry so a generic name
+        # ("Bill", "Increase") doesn't pull unrelated results.
+        industry = (account.industry or "").strip()
+        query = f'{name} {industry} (funding OR hiring OR launches OR partnership OR acquisition)'
+        try:
+            hits = await self.browser.search(query.strip(), limit=6) or []
+        except Exception:  # a flaky search must not break ingestion
+            hits = []
+
         out: list[RawSignal] = []
+        seen: set[str] = set()
         for h in hits:
-            url = h.get("url", "")
+            title = (h.get("title") or "").strip()
+            snippet = (h.get("snippet") or "").strip()
+            url = h.get("url") or ""
+            hay = f"{title} {snippet}".lower()
+            # The result must actually NAME this account, else it's a generic news-site index
+            # ("Banking News and Analysis | Banking Dive") — the exact junk that polluted the inbox.
+            if not any(k in hay for k in keys):
+                continue
+            dedupe_key = f"news:{url or title}"
+            if not title or dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            kind, strength = _classify_news(f"{title} {snippet}")
             out.append(
                 RawSignal(
-                    kind="news",
+                    kind=kind,
                     source=self.name,
-                    title=h.get("title", "News")[:380],
-                    body=h.get("snippet"),
+                    title=title[:380],
+                    body=snippet or None,
                     url=url,
-                    dedupe_key=f"news:{url or h.get('title','')}",
+                    strength=strength,
+                    dedupe_key=dedupe_key,
                 )
             )
-        return out
+        return out[:4]

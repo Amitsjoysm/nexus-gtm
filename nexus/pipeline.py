@@ -5,6 +5,7 @@ This is the orchestration seam wired by the API (synchronously) and the worker (
 from __future__ import annotations
 
 from nexus.agents.runtime import AgentRuntime, get_agent_runtime
+from nexus.core.config import get_settings
 from nexus.core.events import Event, get_event_bus
 from nexus.core.tenancy import TenantSession
 from nexus.inbox.service import get_inbox_service
@@ -24,8 +25,6 @@ async def process_account(
     # Firmographic enrichment from the web (only when enabled, and only for accounts still
     # missing the basics) — so scoring and the UI see real industry/size/tech instead of blanks.
     # Never breaks the pipeline: the enricher isolates its own failures and returns [].
-    from nexus.core.config import get_settings
-
     if get_settings().account_enrich_enabled and (
         account.industry is None or account.employee_count is None
     ):
@@ -43,11 +42,15 @@ async def process_account(
     # Load enabled plays ONCE for the whole batch instead of re-querying per signal
     # (the per-signal loop below would otherwise re-read the plays table N times).
     enabled_plays = await ts.list(Play, Play.enabled == True)  # noqa: E712
+    # Only meaningful signals become Inbox tasks; weak ones (a generic press mention) still feed
+    # the timeline and Plays but don't clutter the rep's daily task list.
+    min_strength = get_settings().inbox_min_signal_strength
     task_ids: list[str] = []
     play_run_ids: list[str] = []
     for sig in new_signals:
-        task = await inbox.create_from_signal(ts, sig, account, composite_score=composite)
-        task_ids.append(task.id)
+        if sig.strength >= min_strength:
+            task = await inbox.create_from_signal(ts, sig, account, composite_score=composite)
+            task_ids.append(task.id)
         for run in await plays.evaluate(
             ts, account=account, signal=sig, composite=composite, plays=enabled_plays
         ):

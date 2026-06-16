@@ -34,11 +34,12 @@ async def list_inbox(
     principal: Principal = Depends(require(Permission.manage_accounts)),
     ts: TenantSession = Depends(get_tenant_session),
     mine: bool = False,
+    status: str = "open",  # open | done | snoozed | all — lets reps recover past/pending work
     limit: int = 50,
 ) -> list[InboxTaskOut]:
     owner = principal.user_id if mine else None
     svc = get_inbox_service()
-    tasks = await svc.list_open(ts, owner_user_id=owner, limit=limit)
+    tasks = await svc.list_tasks(ts, owner_user_id=owner, status=status, limit=limit)
     triage = await svc.triage(ts, tasks)
     now = utcnow()
 
@@ -72,6 +73,27 @@ async def complete_task(
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> InboxTaskOut:
     task = await get_inbox_service().complete(ts, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
+    return InboxTaskOut(
+        id=task.id,
+        title=task.title,
+        reason=task.reason,
+        priority=task.priority,
+        status=task.status,
+        account_id=task.account_id,
+        suggested_action=task.suggested_action or {},
+    )
+
+
+@router.post("/inbox/{task_id}/reopen", response_model=InboxTaskOut)
+async def reopen_task(
+    task_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> InboxTaskOut:
+    """Mark a completed task incomplete again (it returns to the open list)."""
+    task = await get_inbox_service().reopen(ts, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     return InboxTaskOut(
