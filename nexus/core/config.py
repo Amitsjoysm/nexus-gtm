@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # zero-network and no shipped behavior silently regresses.
     company_search_sources: str = "search"     # ordered: e.g. "infojoy,search,apify"
     enrich_sources: str = "stub"               # ordered enrichment providers
+    # Fill blank account firmographics (industry/size/country/tech/description) from the web
+    # (Exa→DuckDuckGo + LLM) when no premium data provider is configured. Off by default so CI
+    # stays zero-network; the pipeline only enriches accounts that are missing firmographics.
+    account_enrich_enabled: bool = False
     signal_sources: str = "demo"               # ordered signal sources
     search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend

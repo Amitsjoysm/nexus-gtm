@@ -21,6 +21,20 @@ async def process_account(
 
     new_signals = await get_ingestion_service().run_sources(ts, account)
 
+    # Firmographic enrichment from the web (only when enabled, and only for accounts still
+    # missing the basics) — so scoring and the UI see real industry/size/tech instead of blanks.
+    # Never breaks the pipeline: the enricher isolates its own failures and returns [].
+    from nexus.core.config import get_settings
+
+    if get_settings().account_enrich_enabled and (
+        account.industry is None or account.employee_count is None
+    ):
+        from nexus.enrichment.account import get_account_enricher
+
+        filled = await get_account_enricher().enrich(account)
+        if filled:
+            await ts.flush()
+
     score = await runtime.run("scoring", ts, account_id=account.id, persist=True)
     composite = score.output.get("composite")
 

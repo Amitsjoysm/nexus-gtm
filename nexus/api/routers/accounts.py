@@ -165,3 +165,21 @@ async def enrich_contact(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
     await get_enricher().enrich_contact(ts, contact)
     return _contact_out(contact)
+
+
+@router.post("/{account_id}/enrich", response_model=AccountOut)
+async def enrich_account(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> AccountOut:
+    """Fill blank firmographics (industry/size/country/tech/description) from the web on demand.
+    Uses Exa when keyed, else DuckDuckGo, then the LLM; existing values are never overwritten."""
+    from nexus.enrichment.account import get_account_enricher
+
+    account = await ts.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    await get_account_enricher().enrich(account)
+    await ts.flush()
+    return _account_out(account)
