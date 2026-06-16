@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from nexus.core.tenancy import TenantSession
-from nexus.integrations.company_search import domain_from_url
+from nexus.integrations.company_search import clean_company_name, domain_from_url, looks_like_company
 from nexus.integrations.registry import get_registry
 from nexus.models.account import Account
 from nexus.outcomes.service import get_outcome_service
@@ -85,8 +85,12 @@ class LookalikeService:
             domain = domain_from_url(getattr(hit, "url", None))
             if not domain or domain == seed_domain or domain in seen:
                 continue
+            title = clean_company_name(getattr(hit, "title", None)) or domain
+            # Drop aggregator / data-vendor / profile pages — a real lookalike is a company,
+            # not the seed's listing on LinkedIn / Crunchbase / PitchBook / an app store.
+            if not looks_like_company(domain, title):
+                continue
             seen.add(domain)
-            title = (getattr(hit, "title", None) or domain).strip()
             # Transient (un-persisted) account so the relevance engine can score the candidate
             # from whatever firmographics we have; never added to the session.
             candidate = Account(tenant_id=ts.tenant_id, name=title, domain=domain)

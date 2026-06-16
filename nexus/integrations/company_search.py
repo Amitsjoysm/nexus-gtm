@@ -80,6 +80,12 @@ _NON_COMPANY_HOSTS: frozenset[str] = frozenset({
     "economictimes.indiatimes.com", "indiatimes.com", "forbes.com", "inc.com",
     "businessinsider.com", "techcrunch.com", "yelp.com", "clutch.co",
     "trustpilot.com", "ambitionbox.com", "zaubacorp.com", "tofler.in",
+    # Data-vendor / company-profile / app-store sites: a "similar page" to a company's homepage
+    # is often its own listing on one of these, not a real competitor.
+    "cbinsights.com", "pitchbook.com", "owler.com", "zoominfo.com", "apollo.io",
+    "growjo.com", "tracxn.com", "dnb.com", "bloomberg.com", "indexed.vc",
+    "apps.apple.com", "play.google.com", "appstore.com", "producthunt.com",
+    "wellfound.com", "angel.co", "rocketreach.co", "leadiq.com", "datanyze.com",
 })
 
 # Title shapes that betray a listicle / job page / news headline rather than a company name.
