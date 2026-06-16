@@ -73,6 +73,7 @@ export function AccountDetailPage() {
   const { session } = useAuth();
   const [tab, setTab] = useState<Tab>("overview");
   const [running, setRunning] = useState(false);
+  const [enrichingAcct, setEnrichingAcct] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
@@ -205,6 +206,19 @@ export function AccountDetailPage() {
     }
   }
 
+  async function runEnrich() {
+    setEnrichingAcct(true);
+    try {
+      await api.enrichAccount(id);
+      toast.success("Account enriched", "Pulled firmographics from the web.");
+      account.refetch();
+    } catch (err) {
+      toast.error("Enrichment failed", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setEnrichingAcct(false);
+    }
+  }
+
   async function recordOutcome(e: FormEvent) {
     e.preventDefault();
     setRecording(true);
@@ -296,6 +310,15 @@ export function AccountDetailPage() {
                   aria-label={`Sync ${acc.name} to the CRM`}
                 >
                   Sync to CRM
+                </Button>
+                <Button
+                  variant="secondary"
+                  iconLeft={<Icons.SearchIcon />}
+                  loading={enrichingAcct}
+                  onClick={runEnrich}
+                  aria-label={`Enrich ${acc.name} from the web`}
+                >
+                  Enrich from web
                 </Button>
                 <Button
                   iconLeft={<Icons.SparklesIcon />}

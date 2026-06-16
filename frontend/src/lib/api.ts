@@ -203,6 +203,9 @@ export class ApiClient {
       signal,
     });
   }
+  enrichAccount(accountId: string, signal?: AbortSignal) {
+    return this.request<Account>(`/accounts/${accountId}/enrich`, { method: "POST", signal });
+  }
   findLookalikes(accountId: string, limit = 10, signal?: AbortSignal) {
     return this.request<LookalikeResponse>(
       `/accounts/${accountId}/lookalikes?limit=${limit}`,
