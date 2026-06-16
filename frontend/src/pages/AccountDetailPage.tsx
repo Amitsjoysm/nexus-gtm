@@ -762,8 +762,7 @@ function LookalikeResult({ state }: { state: LookalikeState }) {
   if (state.data.length === 0) {
     return (
       <p className={styles.agentNote}>
-        No lookalikes found. Similarity search needs a configured provider (Exa); offline this
-        stays empty.
+        No similar companies found for this account. Try one with a known website domain.
       </p>
     );
   }

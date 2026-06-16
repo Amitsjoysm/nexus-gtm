@@ -89,12 +89,18 @@ class ExaSearchProvider(SearchProvider):
         """
         if not self.api_key or not url:
             return []
+        # Over-fetch so that, after the caller collapses multiple pages per competitor down to
+        # one domain, we still surface ~limit distinct companies.
+        n = max(limit * 3, 15)
         payload = {
             "url": url,
-            "numResults": limit,
+            # Exclude the seed's own domain — otherwise findSimilar returns the company's own
+            # subpages, which the lookalike service then dedups to nothing ("No lookalikes").
+            "excludeSourceDomain": True,
+            "numResults": n,
             "contents": {"text": {"maxCharacters": _SNIPPET_CAP}},
         }
-        return await self._post(self.ENDPOINT_SIMILAR, payload, limit)
+        return await self._post(self.ENDPOINT_SIMILAR, payload, n)
 
     async def _post(self, endpoint: str, payload: dict, limit: int) -> list[SearchHit]:
         keys = self.api_keys
