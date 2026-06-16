@@ -3,6 +3,34 @@
   align-items: center;
   gap: var(--space-3);
   margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.filters > * {
+  min-width: 120px;
+}
+
+.link {
+  color: var(--color-accent, var(--text-default));
+  text-decoration: none;
+  font-weight: var(--font-weight-medium);
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.rowActions {
+  display: inline-flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
 }
 .search {
   position: relative;

@@ -12,6 +12,7 @@ import {
   Icons,
   Input,
   Modal,
+  Select,
   useToast,
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
@@ -22,6 +23,15 @@ import { ApiError } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import type { Account, AccountInput } from "@/lib/types";
 import styles from "./AccountsPage.module.css";
+
+function fitTone(score: number | null | undefined): "success" | "warning" | "danger" | "neutral" {
+  if (score == null) return "neutral";
+  if (score >= 70) return "success";
+  if (score >= 40) return "warning";
+  return "danger";
+}
+
+const ALL = "__all__";
 
 const EMPTY_FORM = {
   name: "",
@@ -39,23 +49,54 @@ export function AccountsPage() {
 
   const accounts = useApi<Account[]>((signal) => api.listAccounts(signal), []);
   const [query, setQuery] = useState("");
+  const [industry, setIndustry] = useState(ALL);
+  const [country, setCountry] = useState(ALL);
+  const [source, setSource] = useState(ALL);
+  const [minFit, setMinFit] = useState(0);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
 
+  async function pushToCrm(a: Account) {
+    setBusyId(a.id);
+    try {
+      await api.crmPush(a.id);
+      toast.success("Pushed to CRM", a.name);
+      accounts.refetch();
+    } catch (err) {
+      toast.error("CRM push failed", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function removeAccount(a: Account) {
+    setBusyId(a.id);
+    try {
+      await api.archiveAccount(a.id);
+      toast.success("Removed", `${a.name} is hidden from your list.`);
+      accounts.refetch();
+    } catch (err) {
+      toast.error("Couldn't remove", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   const columns: Column<Account>[] = useMemo(
     () => [
+      { key: "name", header: "Account", render: (a) => <span className={styles.name}>{a.name}</span> },
       {
-        key: "name",
-        header: "Account",
-        render: (a) => <span className={styles.name}>{a.name}</span>,
-      },
-      {
-        key: "domain",
-        header: "Domain",
-        hideOnMobile: true,
+        key: "fit_score",
+        header: "Fit",
+        align: "right",
         render: (a) =>
-          a.domain ? a.domain : <span className={styles.muted}>—</span>,
+          a.fit_score != null ? (
+            <Badge tone={fitTone(a.fit_score)}>{a.fit_score}</Badge>
+          ) : (
+            <span className={styles.muted}>—</span>
+          ),
       },
       {
         key: "industry",
@@ -64,43 +105,80 @@ export function AccountsPage() {
         render: (a) => a.industry ?? <span className={styles.muted}>—</span>,
       },
       {
+        key: "country",
+        header: "Location",
+        hideOnMobile: true,
+        render: (a) => a.country ?? <span className={styles.muted}>—</span>,
+      },
+      {
         key: "employee_count",
         header: "Employees",
         align: "right",
         render: (a) => formatNumber(a.employee_count),
       },
       {
-        key: "tech_stack",
-        header: "Tech",
+        key: "linkedin_url",
+        header: "LinkedIn",
         hideOnMobile: true,
         render: (a) =>
-          a.tech_stack.length ? (
-            <span className={styles.tech}>
-              {a.tech_stack.slice(0, 3).map((t) => (
-                <Badge key={t} tone="neutral">
-                  {t}
-                </Badge>
-              ))}
-              {a.tech_stack.length > 3 && (
-                <Badge tone="neutral">+{a.tech_stack.length - 3}</Badge>
-              )}
-            </span>
+          a.linkedin_url ? (
+            <a
+              href={a.linkedin_url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className={styles.link}
+              onClick={(e) => e.stopPropagation()}
+              aria-label={`Open ${a.name} on LinkedIn`}
+            >
+              View
+            </a>
           ) : (
             <span className={styles.muted}>—</span>
           ),
       },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        render: (a) => (
+          <span className={styles.rowActions} onClick={(e) => e.stopPropagation()}>
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={busyId === a.id}
+              onClick={() => pushToCrm(a)}
+              aria-label={`Push ${a.name} to CRM`}
+            >
+              <Icons.PlugIcon />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={busyId === a.id}
+              onClick={() => removeAccount(a)}
+              aria-label={`Remove ${a.name}`}
+            >
+              <Icons.TrashIcon />
+            </Button>
+          </span>
+        ),
+      },
     ],
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [busyId],
   );
 
   function filtered(rows: Account[]): Account[] {
     const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((a) =>
-      [a.name, a.domain, a.industry, a.country]
-        .filter(Boolean)
-        .some((v) => v!.toLowerCase().includes(q)),
-    );
+    return rows.filter((a) => {
+      if (q && ![a.name, a.domain, a.industry, a.country].filter(Boolean).some((v) => v!.toLowerCase().includes(q)))
+        return false;
+      if (industry !== ALL && a.industry !== industry) return false;
+      if (country !== ALL && a.country !== country) return false;
+      if (source !== ALL && (a.source ?? "") !== source) return false;
+      if (minFit > 0 && (a.fit_score ?? -1) < minFit) return false;
+      return true;
+    });
   }
 
   async function onSubmit(e: FormEvent) {
@@ -173,6 +251,10 @@ export function AccountsPage() {
       >
         {(rows) => {
           const visible = filtered(rows);
+          const opts = (vals: (string | null)[]) => [
+            { value: ALL, label: "All" },
+            ...Array.from(new Set(vals.filter((v): v is string => !!v))).sort().map((v) => ({ value: v, label: v })),
+          ];
           return (
             <>
               <div className={styles.toolbar}>
@@ -187,6 +269,22 @@ export function AccountsPage() {
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     aria-label="Search accounts"
+                  />
+                </div>
+                <div className={styles.filters}>
+                  <Select aria-label="Industry" value={industry} onChange={(e) => setIndustry(e.target.value)} options={opts(rows.map((a) => a.industry))} />
+                  <Select aria-label="Location" value={country} onChange={(e) => setCountry(e.target.value)} options={opts(rows.map((a) => a.country))} />
+                  <Select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)} options={opts(rows.map((a) => a.source ?? null))} />
+                  <Select
+                    aria-label="Minimum fit"
+                    value={String(minFit)}
+                    onChange={(e) => setMinFit(Number(e.target.value))}
+                    options={[
+                      { value: "0", label: "Any fit" },
+                      { value: "40", label: "Fit ≥ 40" },
+                      { value: "60", label: "Fit ≥ 60" },
+                      { value: "80", label: "Fit ≥ 80" },
+                    ]}
                   />
                 </div>
                 <span className={styles.count}>

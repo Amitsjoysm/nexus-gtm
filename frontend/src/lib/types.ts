@@ -34,6 +34,10 @@ export interface Account {
   employee_count: number | null;
   country: string | null;
   tech_stack: string[];
+  fit_score?: number | null;
+  linkedin_url?: string | null;
+  description?: string | null;
+  source?: string | null;
   /** CRM trust signals: where this record syncs and when it last did. */
   crm_source?: string | null;
   crm_synced_at?: string | null;
@@ -121,6 +125,7 @@ export interface WorkspaceContact {
   email: string | null;
   email_status: string | null;
   email_confidence: number;
+  linkedin_url: string | null;
   enrichment_source: string | null;
 }
 

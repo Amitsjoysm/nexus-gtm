@@ -1,12 +1,26 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Badge, DataTable, EmptyState, ErrorState, Icons, Input, Skeleton } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  Icons,
+  Input,
+  Select,
+  Skeleton,
+  useToast,
+} from "@/components/ui";
 import type { Column } from "@/components/ui";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
+import { ApiError } from "@/lib/api";
 import type { WorkspaceContact } from "@/lib/types";
 import styles from "./ContactsPage.module.css";
+
+const ALL = "__all__";
 
 const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
   valid: "success",
@@ -18,17 +32,35 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> 
 export function ContactsPage() {
   const api = useApiClient();
   const navigate = useNavigate();
+  const toast = useToast();
   const contacts = useApi<WorkspaceContact[]>((signal) => api.listWorkspaceContacts(undefined, signal), []);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState(ALL);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const rows = contacts.data ?? [];
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((c) =>
-      [c.full_name, c.title, c.email, c.account_name].some((v) => (v ?? "").toLowerCase().includes(q)),
-    );
-  }, [rows, query]);
+    return rows.filter((c) => {
+      if (q && ![c.full_name, c.title, c.email, c.account_name].some((v) => (v ?? "").toLowerCase().includes(q)))
+        return false;
+      if (statusFilter !== ALL && (c.email_status ?? "none") !== statusFilter) return false;
+      return true;
+    });
+  }, [rows, query, statusFilter]);
+
+  async function verify(c: WorkspaceContact) {
+    setBusyId(c.id);
+    try {
+      await api.enrichContact(c.id);
+      toast.success("Verifying…", `Re-checked ${c.full_name}'s email.`);
+      contacts.refetch();
+    } catch (err) {
+      toast.error("Verify failed", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const columns: Column<WorkspaceContact>[] = useMemo(
     () => [
@@ -58,8 +90,46 @@ export function ContactsPage() {
             <span className={styles.muted}>—</span>
           ),
       },
+      {
+        key: "linkedin_url",
+        header: "LinkedIn",
+        hideOnMobile: true,
+        render: (c) =>
+          c.linkedin_url ? (
+            <a
+              href={c.linkedin_url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className={styles.account}
+              onClick={(e) => e.stopPropagation()}
+            >
+              View
+            </a>
+          ) : (
+            <span className={styles.muted}>—</span>
+          ),
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        render: (c) => (
+          <span onClick={(e) => e.stopPropagation()}>
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={busyId === c.id}
+              onClick={() => verify(c)}
+              aria-label={`Verify ${c.full_name}'s email`}
+            >
+              Verify
+            </Button>
+          </span>
+        ),
+      },
     ],
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [busyId],
   );
 
   return (
@@ -76,6 +146,19 @@ export function ContactsPage() {
           placeholder="Search name, title, email, or account…"
           iconLeft={<Icons.SearchIcon />}
           aria-label="Search contacts"
+        />
+        <Select
+          aria-label="Email status"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          options={[
+            { value: ALL, label: "Any status" },
+            { value: "valid", label: "Valid" },
+            { value: "risky", label: "Risky" },
+            { value: "unknown", label: "Unknown" },
+            { value: "invalid", label: "Invalid" },
+            { value: "none", label: "Unverified" },
+          ]}
         />
         <span className={styles.count}>
           {visible.length} of {rows.length}
