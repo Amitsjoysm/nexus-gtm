@@ -69,8 +69,9 @@ class SearchBackedAccountEnricher:
                                f"Snippets:\n{blob}\n\n"
                                'Return JSON with keys: "industry" (string), "employee_count" '
                                '(integer or null), "country" (string), "description" (one '
-                               'sentence), "tech_stack" (array of strings). Use null/"" /[] when '
-                               "unknown. JSON only, no prose."),
+                               'sentence), "tech_stack" (array of strings), "linkedin_url" (the '
+                               "company's LinkedIn page URL if present, else \"\"). Use null/\"\"/[] "
+                               "when unknown. JSON only, no prose."),
                 ],
                 temperature=0.0, max_tokens=400, purpose="account_enrich",
             )
@@ -101,13 +102,21 @@ class SearchBackedAccountEnricher:
             account.tech_stack = [str(t).strip()[:60] for t in tech if str(t).strip()][:20]
             if account.tech_stack:
                 filled.append("tech_stack")
+        # description + linkedin_url live in custom_fields (no dedicated columns).
+        cf = dict(account.custom_fields or {})
+        cf_changed = False
         description = (data.get("description") or "").strip()
-        if description:
-            cf = dict(account.custom_fields or {})
-            if not cf.get("description"):
-                cf["description"] = description[:500]
-                account.custom_fields = cf
-                filled.append("description")
+        if description and not cf.get("description"):
+            cf["description"] = description[:500]
+            cf_changed = True
+            filled.append("description")
+        linkedin = (data.get("linkedin_url") or "").strip()
+        if linkedin and "linkedin.com" in linkedin.lower() and not cf.get("linkedin_url"):
+            cf["linkedin_url"] = linkedin[:300]
+            cf_changed = True
+            filled.append("linkedin_url")
+        if cf_changed:
+            account.custom_fields = cf
         return filled
 
     async def enrich(self, account: Account) -> list[str]:

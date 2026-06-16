@@ -1,6 +1,8 @@
 """Accounts & contacts: CRUD plus waterfall contact enrichment."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -18,11 +20,15 @@ from nexus.enrichment.waterfall import get_enricher
 from nexus.integrations.company_search import domain_from_url
 from nexus.lookalike import get_lookalike_service
 from nexus.models.account import Account, Contact
+from nexus.models.intelligence import AccountScore
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
+_MIN_DT = datetime.min.replace(tzinfo=timezone.utc)
 
-def _account_out(a: Account) -> AccountOut:
+
+def _account_out(a: Account, *, fit_score: int | None = None) -> AccountOut:
+    cf = a.custom_fields or {}
     return AccountOut(
         id=a.id,
         name=a.name,
@@ -31,6 +37,10 @@ def _account_out(a: Account) -> AccountOut:
         employee_count=a.employee_count,
         country=a.country,
         tech_stack=a.tech_stack or [],
+        fit_score=fit_score,
+        linkedin_url=cf.get("linkedin_url"),
+        description=cf.get("description"),
+        source=a.source,
         crm_source=a.crm_source,
         crm_synced_at=a.crm_synced_at.isoformat() if a.crm_synced_at else None,
     )
@@ -72,14 +82,27 @@ async def create_account(
     return _account_out(account)
 
 
+async def _latest_fit_scores(ts: TenantSession, account_ids: list[str]) -> dict[str, int]:
+    """Latest composite (0..100) per account, batch-loaded to avoid N+1."""
+    if not account_ids:
+        return {}
+    rows = await ts.list(AccountScore, AccountScore.account_id.in_(account_ids))
+    out: dict[str, int] = {}
+    for s in sorted(rows, key=lambda r: r.created_at or _MIN_DT):  # ascending → latest wins
+        out[s.account_id] = s.composite
+    return out
+
+
 @router.get("", response_model=list[AccountOut])
 async def list_accounts(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
-    limit: int = 100,
+    limit: int = 200,
 ) -> list[AccountOut]:
-    accounts = await ts.list(Account, limit=limit)
-    return [_account_out(a) for a in accounts]
+    # Archived accounts (an SDR removed them as not-relevant) are hidden from the working list.
+    accounts = [a for a in await ts.list(Account, limit=limit) if not (a.custom_fields or {}).get("archived")]
+    scores = await _latest_fit_scores(ts, [a.id for a in accounts])
+    return [_account_out(a, fit_score=scores.get(a.id)) for a in accounts]
 
 
 @router.get("/{account_id}", response_model=AccountOut)
@@ -91,7 +114,40 @@ async def get_account(
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
-    return _account_out(account)
+    scores = await _latest_fit_scores(ts, [account.id])
+    return _account_out(account, fit_score=scores.get(account.id))
+
+
+async def _set_archived(ts: TenantSession, account_id: str, archived: bool) -> AccountOut:
+    account = await ts.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    cf = dict(account.custom_fields or {})
+    cf["archived"] = archived
+    account.custom_fields = cf
+    await ts.flush()
+    scores = await _latest_fit_scores(ts, [account.id])
+    return _account_out(account, fit_score=scores.get(account.id))
+
+
+@router.post("/{account_id}/archive", response_model=AccountOut)
+async def archive_account(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> AccountOut:
+    """Remove an account from the working list (soft, recoverable) — for 'not relevant to me'.
+    History and any CRM sync are preserved; it simply stops showing in the Accounts list."""
+    return await _set_archived(ts, account_id, True)
+
+
+@router.post("/{account_id}/unarchive", response_model=AccountOut)
+async def unarchive_account(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> AccountOut:
+    return await _set_archived(ts, account_id, False)
 
 
 @router.post(

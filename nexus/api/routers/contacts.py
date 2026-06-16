@@ -56,6 +56,7 @@ async def list_contacts(
                 email=contact.email,
                 email_status=contact.email_status,
                 email_confidence=contact.email_confidence,
+                linkedin_url=contact.linkedin_url,
                 enrichment_source=contact.enrichment_source,
             )
         )

@@ -69,6 +69,10 @@ class AccountIn(BaseModel):
 
 class AccountOut(AccountIn):
     id: str
+    fit_score: int | None = None        # latest ICP relevance score (0..100), for the Fit column
+    linkedin_url: str | None = None      # company LinkedIn (from enrichment), so reps can verify
+    description: str | None = None        # one-line "what they do" (from enrichment)
+    source: str | None = None             # discovery | csv | crm — where the account came from
     # CRM trust signals: where this record syncs to and when it last did. Surfaced in the UI
     # ("Synced to Salesforce · 2m ago") so reps can trust the data they act on.
     crm_source: str | None = None
@@ -105,6 +109,7 @@ class WorkspaceContactOut(BaseModel):
     email: str | None = None
     email_status: str | None = None
     email_confidence: float = 0.0
+    linkedin_url: str | None = None
     enrichment_source: str | None = None
 
 
