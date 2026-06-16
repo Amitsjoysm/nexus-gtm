@@ -110,6 +110,20 @@ export interface Contact {
   enrichment_source: string | null;
 }
 
+export interface WorkspaceContact {
+  id: string;
+  account_id: string;
+  account_name: string;
+  account_domain: string | null;
+  full_name: string;
+  title: string | null;
+  seniority: string | null;
+  email: string | null;
+  email_status: string | null;
+  email_confidence: number;
+  enrichment_source: string | null;
+}
+
 export interface TriageSummary {
   signal_kind: string | null;
   signal_strength: number | null;

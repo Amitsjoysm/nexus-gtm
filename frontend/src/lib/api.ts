@@ -22,6 +22,7 @@ import type {
   EmailSettings,
   EmailSettingsInput,
   EmailTestResult,
+  WorkspaceContact,
   Cadence,
   CadenceEnrollment,
   CadenceInput,
@@ -187,6 +188,12 @@ export class ApiClient {
   // ---- accounts ----
   listAccounts(signal?: AbortSignal) {
     return this.request<Account[]>("/accounts", { signal });
+  }
+  listWorkspaceContacts(q?: string, signal?: AbortSignal) {
+    return this.request<WorkspaceContact[]>("/contacts", {
+      query: q ? { q } : undefined,
+      signal,
+    });
   }
   getAccount(id: string, signal?: AbortSignal) {
     return this.request<Account>(`/accounts/${id}`, { signal });

@@ -92,6 +92,22 @@ class ContactOut(ContactIn):
     enrichment_source: str | None = None
 
 
+class WorkspaceContactOut(BaseModel):
+    """A contact with its account context, for the workspace-wide Contacts list."""
+
+    id: str
+    account_id: str
+    account_name: str
+    account_domain: str | None = None
+    full_name: str
+    title: str | None = None
+    seniority: str | None = None
+    email: str | None = None
+    email_status: str | None = None
+    email_confidence: float = 0.0
+    enrichment_source: str | None = None
+
+
 class LookalikeOut(BaseModel):
     name: str
     domain: str

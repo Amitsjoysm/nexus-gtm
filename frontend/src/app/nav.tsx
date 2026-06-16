@@ -34,6 +34,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/inbox", label: "Inbox", icon: <InboxIcon /> },
   { to: "/accounts", label: "Accounts", icon: <BuildingIcon /> },
+  { to: "/contacts", label: "Contacts", icon: <UsersIcon /> },
   { to: "/lists", label: "Lists", icon: <ListIcon /> },
   { to: "/signals", label: "Signals", icon: <SignalIcon /> },
   { to: "/alerts", label: "Alerts", icon: <BellIcon /> },
