@@ -80,7 +80,7 @@ export function DashboardPage() {
   const [seeding, setSeeding] = useState(false);
 
   const overview = useApi<AnalyticsOverview>((signal) => api.analyticsOverview(signal), []);
-  const inbox = useApi<InboxTask[]>((signal) => api.listInbox(signal), []);
+  const inbox = useApi<InboxTask[]>((signal) => api.listInbox(undefined, signal), []);
   const alerts = useApi<Alert[]>((signal) => api.listAlerts("open", signal), []);
   const signals = useApi<SignalEvent[]>((signal) => api.listSignals({ limit: 6 }, signal), []);
   // The cross-entity activity feed is a manager analytics surface (view_analytics). Reps skip

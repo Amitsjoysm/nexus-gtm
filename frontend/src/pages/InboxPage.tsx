@@ -8,6 +8,7 @@ import {
   EmptyState,
   Icons,
   Skeleton,
+  Tabs,
   useToast,
 } from "@/components/ui";
 import type { BadgeTone } from "@/components/ui";
@@ -88,21 +89,25 @@ export function InboxPage() {
   const navigate = useNavigate();
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState(0);
+  const [view, setView] = useState<"open" | "done">("open");
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  const inbox = useApi<InboxTask[]>((signal) => api.listInbox(signal), []);
+  const isDone = view === "done";
+  const inbox = useApi<InboxTask[]>((signal) => api.listInbox(view, signal), [view]);
   const rows = inbox.data ?? [];
 
-  const complete = useCallback(
-    async (task: InboxTask) => {
+  // One primary mutation: complete an open task, or reopen a completed one. Either way the
+  // task leaves the current view, so we optimistically drop it from the list.
+  const act = useCallback(
+    async (task: InboxTask, kind: "complete" | "reopen") => {
       setPending((p) => ({ ...p, [task.id]: true }));
       try {
-        await api.completeTask(task.id);
+        await (kind === "complete" ? api.completeTask(task.id) : api.reopenTask(task.id));
         inbox.setData((prev) => (prev ?? []).filter((t) => t.id !== task.id));
-        toast.success("Task completed", task.title);
+        toast.success(kind === "complete" ? "Task completed" : "Marked incomplete", task.title);
       } catch (err) {
         toast.error(
-          "Couldn't complete task",
+          kind === "complete" ? "Couldn't complete task" : "Couldn't reopen task",
           err instanceof ApiError ? err.detail : "Please try again.",
         );
       } finally {
@@ -115,6 +120,7 @@ export function InboxPage() {
     },
     [api, inbox, toast],
   );
+  const primaryKind = isDone ? "reopen" : "complete";
 
   const openAccount = useCallback(
     (task: InboxTask) => {
@@ -139,7 +145,7 @@ export function InboxPage() {
       } else if (key === "e") {
         e.preventDefault();
         const task = rows[Math.min(selected, rows.length - 1)];
-        if (task && !pending[task.id]) void complete(task);
+        if (task && !pending[task.id]) void act(task, primaryKind);
       } else if (key === "d" || key === "enter") {
         e.preventDefault();
         const task = rows[Math.min(selected, rows.length - 1)];
@@ -148,7 +154,7 @@ export function InboxPage() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rows, selected, pending, complete, openAccount]);
+  }, [rows, selected, pending, act, primaryKind, openAccount]);
 
   // Keep the selection valid as tasks complete, and keep the selected row in view.
   useEffect(() => {
@@ -175,9 +181,24 @@ export function InboxPage() {
         }
       />
 
+      <div className={styles.tabsRow}>
+        <Tabs
+          aria-label="Inbox view"
+          value={view}
+          onChange={(v) => {
+            setView(v as "open" | "done");
+            setSelected(0);
+          }}
+          items={[
+            { value: "open", label: "Open" },
+            { value: "done", label: "Completed" },
+          ]}
+        />
+      </div>
+
       <p className={styles.kbdHint}>
-        Keyboard: <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>E</kbd> complete · <kbd>D</kbd> open
-        account
+        Keyboard: <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>E</kbd>{" "}
+        {isDone ? "mark incomplete" : "complete"} · <kbd>D</kbd> open account
       </p>
 
       <DataState
@@ -195,20 +216,33 @@ export function InboxPage() {
         }
         isEmpty={(items) => items.length === 0}
         empty={
-          <EmptyState
-            icon={<Icons.InboxIcon />}
-            title="You're at inbox zero"
-            description="Tasks are generated automatically when buying signals land on your accounts."
-            action={
-              <Button
-                variant="secondary"
-                iconLeft={<Icons.BuildingIcon />}
-                onClick={() => navigate("/accounts")}
-              >
-                Browse accounts
-              </Button>
-            }
-          />
+          isDone ? (
+            <EmptyState
+              icon={<Icons.CheckIcon />}
+              title="No completed tasks yet"
+              description="Tasks you complete will appear here, so you can recover anything closed by mistake."
+              action={
+                <Button variant="secondary" onClick={() => setView("open")}>
+                  Back to open tasks
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={<Icons.InboxIcon />}
+              title="You're at inbox zero"
+              description="Tasks are generated automatically when buying signals land on your accounts."
+              action={
+                <Button
+                  variant="secondary"
+                  iconLeft={<Icons.BuildingIcon />}
+                  onClick={() => navigate("/accounts")}
+                >
+                  Browse accounts
+                </Button>
+              }
+            />
+          )
         }
       >
         {(items) => (
@@ -262,11 +296,11 @@ export function InboxPage() {
                       )}
                       <Button
                         variant="secondary"
-                        iconLeft={<Icons.CheckIcon />}
+                        iconLeft={isDone ? <Icons.RefreshIcon /> : <Icons.CheckIcon />}
                         loading={pending[task.id]}
-                        onClick={() => complete(task)}
+                        onClick={() => act(task, primaryKind)}
                       >
-                        Complete
+                        {isDone ? "Mark incomplete" : "Complete"}
                       </Button>
                     </div>
                   </div>

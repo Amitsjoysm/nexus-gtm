@@ -78,6 +78,10 @@
   }
 }
 
+.tabsRow {
+  margin-bottom: var(--space-3);
+}
+
 /* Keyboard-first triage ------------------------------------------------- */
 .kbdHint {
   margin: 0 0 var(--space-4);

@@ -308,11 +308,14 @@ export class ApiClient {
   }
 
   // ---- inbox ----
-  listInbox(signal?: AbortSignal) {
-    return this.request<InboxTask[]>("/inbox", { signal });
+  listInbox(status?: string, signal?: AbortSignal) {
+    return this.request<InboxTask[]>("/inbox", { query: status ? { status } : undefined, signal });
   }
   completeTask(id: string, signal?: AbortSignal) {
     return this.request<InboxTask>(`/inbox/${id}/complete`, { method: "POST", signal });
+  }
+  reopenTask(id: string, signal?: AbortSignal) {
+    return this.request<InboxTask>(`/inbox/${id}/reopen`, { method: "POST", signal });
   }
 
   // ---- signals ----
