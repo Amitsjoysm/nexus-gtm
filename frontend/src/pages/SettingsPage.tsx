@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
   Button,
   Card,
   CardHeader,
+  EmptyState,
   Field,
   Icons,
   Input,
+  Modal,
   Select,
   Skeleton,
   useToast,
@@ -18,7 +20,7 @@ import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatNumber, humanize } from "@/lib/format";
-import type { AutomationSettings, CRMSyncStatus, EmailSettings } from "@/lib/types";
+import type { AutomationSettings, CRMSyncStatus, EmailAccount } from "@/lib/types";
 import styles from "./SettingsPage.module.css";
 
 export function SettingsPage() {
@@ -124,174 +126,307 @@ export function SettingsPage() {
           </DataState>
         </Card>
 
-        <EmailCard />
+        <MailboxesCard />
       </div>
     </div>
   );
 }
 
-function EmailCard() {
+const EMPTY_MAILBOX = {
+  label: "",
+  provider: "gmail",
+  username: "",
+  password: "",
+  from_name: "",
+  enabled: true,
+};
+
+function MailboxesCard() {
   const api = useApiClient();
   const toast = useToast();
-  const state = useApi<EmailSettings>((signal) => api.getEmailSettings(signal), []);
+  const accounts = useApi<EmailAccount[]>((signal) => api.listEmailAccounts(signal), []);
+  // null = closed; "new" = adding; an account = editing it.
+  const [editing, setEditing] = useState<EmailAccount | "new" | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
-  const [provider, setProvider] = useState("gmail");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [fromName, setFromName] = useState("");
-  const [enabled, setEnabled] = useState(false);
-  const [hasPassword, setHasPassword] = useState(false);
-  const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [testing, setTesting] = useState(false);
-
-  // Hydrate the form once the saved settings load.
-  const loaded = state.data;
-  useEffect(() => {
-    if (!loaded) return;
-    setProvider(loaded.provider || "gmail");
-    setUsername(loaded.username || "");
-    setFromName(loaded.from_name || "");
-    setEnabled(loaded.enabled);
-    setHasPassword(loaded.has_password);
-    setVerifiedAt(loaded.verified_at);
-  }, [loaded]);
-
-  async function save() {
-    setBusy(true);
+  async function makeDefault(a: EmailAccount) {
+    setBusyId(a.id);
     try {
-      const res = await api.setEmailSettings({
-        provider,
-        username: username.trim(),
-        // Send the password only if the user typed one (write-only on the server).
-        ...(password ? { password } : {}),
-        from_name: fromName.trim(),
-        from_email: username.trim(),
-        enabled,
-      });
-      state.setData(res);
-      setPassword("");
-      setHasPassword(res.has_password);
-      toast.success("Email settings saved");
+      await api.setDefaultEmailAccount(a.id);
+      accounts.refetch();
     } catch (err) {
-      toast.error("Couldn't save email settings", err instanceof ApiError ? err.detail : "Try again.");
+      toast.error("Couldn't set default", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   }
 
-  async function sendTest() {
-    setTesting(true);
+  async function test(a: EmailAccount) {
+    setBusyId(a.id);
     try {
-      const res = await api.testEmailSettings();
+      const res = await api.testEmailAccount(a.id);
       if (res.ok) {
-        toast.success("Test email sent", "Check the inbox of your account email.");
-        setVerifiedAt(new Date().toISOString());
+        toast.success("Test email sent", `Check the inbox of ${a.from_email}.`);
+        accounts.refetch();
       } else {
         toast.error("Test failed", res.detail);
       }
     } catch (err) {
       toast.error("Test failed", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
-      setTesting(false);
+      setBusyId(null);
     }
   }
 
-  const providerHint =
-    provider === "gmail"
-      ? "Use a Google App Password (Account → Security → App passwords), not your login password."
-      : provider === "outlook" || provider === "office365"
-        ? "Use an app password if your account has 2FA enabled."
-        : "Enter your SMTP username and password.";
+  async function remove(a: EmailAccount) {
+    setBusyId(a.id);
+    try {
+      await api.deleteEmailAccount(a.id);
+      toast.success("Mailbox removed", a.label || a.from_email);
+      accounts.refetch();
+    } catch (err) {
+      toast.error("Couldn't remove", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <Card padding="lg">
       <CardHeader
-        title="Outbound email (SMTP)"
-        subtitle="Send approved cadence emails from your own Gmail or Outlook mailbox. Nothing sends until you approve a cadence."
+        title="Sending mailboxes (SMTP)"
+        subtitle="Send approved outreach from your own Gmail or Outlook mailboxes. Add more than one to send from different reps. Nothing sends until you approve it."
+        actions={
+          <Button
+            size="sm"
+            variant="secondary"
+            iconLeft={<Icons.PlusIcon />}
+            onClick={() => setEditing("new")}
+          >
+            Add mailbox
+          </Button>
+        }
       />
       <DataState
-        state={state}
-        errorTitle="Couldn't load email settings"
-        skeleton={<Skeleton width="100%" height={180} />}
+        state={accounts}
+        errorTitle="Couldn't load mailboxes"
+        skeleton={<Skeleton width="100%" height={120} />}
+        isEmpty={(rows) => rows.length === 0}
+        empty={
+          <EmptyState
+            compact
+            icon={<Icons.SendIcon />}
+            title="No mailboxes yet"
+            description="Add a Gmail or Outlook mailbox to send approved outreach from your own address."
+            action={
+              <Button iconLeft={<Icons.PlusIcon />} onClick={() => setEditing("new")}>
+                Add mailbox
+              </Button>
+            }
+          />
+        }
       >
-        {() => (
-          <div className={styles.emailForm}>
-            <div className={styles.emailRow}>
-              <Field label="Provider">
-                <Select
-                  value={provider}
-                  onChange={(e) => setProvider(e.target.value)}
-                  options={[
-                    { value: "gmail", label: "Gmail" },
-                    { value: "outlook", label: "Outlook.com" },
-                    { value: "office365", label: "Microsoft 365" },
-                    { value: "smtp", label: "Custom SMTP" },
-                  ]}
-                />
-              </Field>
-              <Field label="From name">
-                <Input value={fromName} onChange={(e) => setFromName(e.target.value)} placeholder="Jane from Acme" />
-              </Field>
-            </div>
-            <Field label="Email address (username)">
-              <Input
-                type="email"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="you@company.com"
-                autoComplete="email"
-              />
-            </Field>
-            <Field label="App password" hint={providerHint}>
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={hasPassword ? "•••••••• (leave blank to keep)" : "App password"}
-                autoComplete="new-password"
-              />
-            </Field>
-
-            <div className={styles.control}>
-              <div className={styles.controlText}>
-                <span className={styles.controlLabel}>Sending is {enabled ? "on" : "off"}</span>
-                <span className={styles.controlHint}>
-                  {verifiedAt
-                    ? "Verified. Approved cadences will send from this mailbox."
-                    : "Send a test first to confirm your credentials, then turn sending on."}
-                </span>
-              </div>
-              <Switch
-                checked={enabled}
-                disabled={busy}
-                label="Enable sending"
-                onChange={setEnabled}
-              />
-            </div>
-
-            <div className={styles.emailActions}>
-              <Button onClick={save} loading={busy} disabled={username.trim() === ""}>
-                Save settings
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={sendTest}
-                loading={testing}
-                disabled={busy || (!hasPassword && password === "")}
-              >
-                Send test email
-              </Button>
-              {verifiedAt && (
-                <Badge tone="success" dot>
-                  Verified
-                </Badge>
-              )}
-            </div>
-          </div>
+        {(rows) => (
+          <ul className={styles.mbList}>
+            {rows.map((a) => (
+              <li key={a.id} className={styles.mbRow}>
+                <div className={styles.mbInfo}>
+                  <span className={styles.mbLabel}>{a.label || a.from_email}</span>
+                  <span className={styles.mbEmail}>{a.from_email}</span>
+                  <div className={styles.mbBadges}>
+                    {a.default && <Badge tone="accent" dot>Default</Badge>}
+                    {a.verified_at ? (
+                      <Badge tone="success" dot>Verified</Badge>
+                    ) : (
+                      <Badge tone="warning" dot>Unverified</Badge>
+                    )}
+                    {!a.enabled && <Badge tone="neutral">Off</Badge>}
+                  </div>
+                </div>
+                <div className={styles.mbActions}>
+                  {!a.default && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={busyId === a.id}
+                      onClick={() => makeDefault(a)}
+                    >
+                      Make default
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    loading={busyId === a.id}
+                    onClick={() => test(a)}
+                  >
+                    Send test
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(a)}>
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    loading={busyId === a.id}
+                    onClick={() => remove(a)}
+                    aria-label={`Remove ${a.label || a.from_email}`}
+                  >
+                    <Icons.TrashIcon />
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
       </DataState>
+
+      {editing !== null && (
+        <MailboxModal
+          account={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            accounts.refetch();
+          }}
+        />
+      )}
     </Card>
+  );
+}
+
+function MailboxModal({
+  account,
+  onClose,
+  onSaved,
+}: {
+  account: EmailAccount | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const api = useApiClient();
+  const toast = useToast();
+  const [form, setForm] = useState(
+    account
+      ? {
+          label: account.label,
+          provider: account.provider || "gmail",
+          username: account.username,
+          password: "",
+          from_name: account.from_name,
+          enabled: account.enabled,
+        }
+      : EMPTY_MAILBOX,
+  );
+  const [busy, setBusy] = useState(false);
+
+  function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  const providerHint =
+    form.provider === "gmail"
+      ? "Use a Google App Password (Account → Security → App passwords), not your login password."
+      : form.provider === "outlook" || form.provider === "office365"
+        ? "Use an app password if your account has 2FA enabled."
+        : "Enter your SMTP username and password.";
+
+  async function save() {
+    setBusy(true);
+    try {
+      const body = {
+        label: form.label.trim(),
+        provider: form.provider,
+        username: form.username.trim(),
+        from_email: form.username.trim(),
+        from_name: form.from_name.trim(),
+        enabled: form.enabled,
+        // Password is write-only: send only when the user typed one.
+        ...(form.password ? { password: form.password } : {}),
+      };
+      if (account) await api.updateEmailAccount(account.id, body);
+      else await api.addEmailAccount(body);
+      toast.success(account ? "Mailbox updated" : "Mailbox added");
+      onSaved();
+    } catch (err) {
+      toast.error("Couldn't save mailbox", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={account ? "Edit mailbox" : "Add mailbox"}
+      description="Approved outreach can send from this address."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={save} loading={busy} disabled={form.username.trim() === ""}>
+            {account ? "Save mailbox" : "Add mailbox"}
+          </Button>
+        </>
+      }
+    >
+      <div className={styles.emailForm}>
+        <div className={styles.emailRow}>
+          <Field label="Provider">
+            <Select
+              value={form.provider}
+              onChange={(e) => set("provider", e.target.value)}
+              options={[
+                { value: "gmail", label: "Gmail" },
+                { value: "outlook", label: "Outlook.com" },
+                { value: "office365", label: "Microsoft 365" },
+                { value: "smtp", label: "Custom SMTP" },
+              ]}
+            />
+          </Field>
+          <Field label="Label" hint="A name you'll recognize at the approval gate.">
+            <Input value={form.label} onChange={(e) => set("label", e.target.value)} placeholder="Jane — Sales" />
+          </Field>
+        </div>
+        <Field label="From name">
+          <Input value={form.from_name} onChange={(e) => set("from_name", e.target.value)} placeholder="Jane from Acme" />
+        </Field>
+        <Field label="Email address (username)">
+          <Input
+            type="email"
+            value={form.username}
+            onChange={(e) => set("username", e.target.value)}
+            placeholder="you@company.com"
+            autoComplete="email"
+          />
+        </Field>
+        <Field label="App password" hint={providerHint}>
+          <Input
+            type="password"
+            value={form.password}
+            onChange={(e) => set("password", e.target.value)}
+            placeholder={account?.has_password ? "•••••••• (leave blank to keep)" : "App password"}
+            autoComplete="new-password"
+          />
+        </Field>
+        <div className={styles.control}>
+          <div className={styles.controlText}>
+            <span className={styles.controlLabel}>Sending is {form.enabled ? "on" : "off"}</span>
+            <span className={styles.controlHint}>
+              When on, this mailbox can send approved outreach. Send a test first to verify it.
+            </span>
+          </div>
+          <Switch
+            checked={form.enabled}
+            disabled={busy}
+            label="Enable sending"
+            onChange={(v) => set("enabled", v)}
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }
 

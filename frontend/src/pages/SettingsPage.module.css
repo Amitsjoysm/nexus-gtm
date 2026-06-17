@@ -179,7 +179,58 @@
   flex-wrap: wrap;
 }
 
+/* multi-mailbox list */
+.mbList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mbRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  flex-wrap: wrap;
+}
+.mbInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mbLabel {
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+.mbEmail {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.mbBadges {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  flex-wrap: wrap;
+}
+.mbActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
 @media (max-width: 560px) {
+  .mbRow {
+    align-items: flex-start;
+  }
   .control {
     flex-direction: row;
   }

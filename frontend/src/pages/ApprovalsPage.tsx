@@ -9,6 +9,7 @@ import {
   Field,
   Icons,
   Input,
+  Select,
   Skeleton,
   Tabs,
   Textarea,
@@ -20,7 +21,7 @@ import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { APPROVAL_STATUS_TONE, EMAIL_STATUS_META, asEmailStatus } from "@/lib/runStatus";
-import type { Approval, ApprovalPayload, ApprovalStatus } from "@/lib/types";
+import type { Approval, ApprovalPayload, ApprovalStatus, Mailbox } from "@/lib/types";
 import styles from "./ApprovalsPage.module.css";
 
 const TABS: { value: ApprovalStatus; label: string }[] = [
@@ -37,12 +38,15 @@ export function ApprovalsPage() {
     (signal) => api.listApprovals(status, signal),
     [status],
   );
+  // Send-ready mailboxes for the "Send from" picker. Read-only for approvers; empty when the
+  // workspace hasn't configured SMTP (then sends record-only and no picker shows).
+  const mailboxes = useApi<Mailbox[]>((signal) => api.listMailboxes(signal), []);
 
   return (
     <div>
       <PageHeader
         title="Approvals"
-        description="The human gate before any AI-drafted message leaves the building. Review, edit, and approve or reject each send."
+        description="The human gate before any AI-drafted message leaves the building. Review, redraft, and approve or reject each send."
       />
 
       <Tabs
@@ -90,6 +94,7 @@ export function ApprovalsPage() {
                 <ApprovalCard
                   key={approval.id}
                   approval={approval}
+                  mailboxes={mailboxes.data ?? []}
                   onDecided={() => approvals.refetch()}
                 />
               ))}
@@ -107,9 +112,11 @@ function str(value: unknown): string {
 
 function ApprovalCard({
   approval,
+  mailboxes,
   onDecided,
 }: {
   approval: Approval;
+  mailboxes: Mailbox[];
   onDecided: () => void;
 }) {
   const api = useApiClient();
@@ -130,20 +137,57 @@ function ApprovalCard({
   const [subject, setSubject] = useState(draftSubject);
   const [body, setBody] = useState(draftBody);
   const [editing, setEditing] = useState(false);
+  const [redrafting, setRedrafting] = useState(false);
+  const [instructions, setInstructions] = useState("");
+  const [redraftBusy, setRedraftBusy] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+
+  const defaultMailbox = mailboxes.find((m) => m.default)?.id ?? mailboxes[0]?.id ?? "";
+  const [fromAccount, setFromAccount] = useState("");
+  const selectedMailbox = fromAccount || defaultMailbox;
+
+  async function redraft() {
+    const text = instructions.trim();
+    if (!text) return;
+    setRedraftBusy(true);
+    try {
+      const updated = await api.redraftApproval(approval.id, text);
+      const p = updated.payload as ApprovalPayload;
+      setSubject(str(p.subject));
+      setBody(str(p.body) || str(p.message));
+      setInstructions("");
+      setRedrafting(false);
+      setEditing(false);
+      toast.success("Draft regenerated", "Review the new version before sending.");
+    } catch (err) {
+      toast.error(
+        "Couldn't regenerate",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setRedraftBusy(false);
+    }
+  }
 
   async function decide(decision: "approve" | "reject") {
     setBusy(decision);
     try {
-      const edits =
-        decision === "approve" && editing
-          ? { subject: subject.trim(), body: body.trim() }
-          : undefined;
-      await api.decideApproval(approval.id, { decision, edits });
-      toast.success(
-        decision === "approve" ? "Approved" : "Rejected",
-        decision === "approve" ? "The message was sent to the sequence." : "The send was skipped.",
-      );
+      if (decision === "approve") {
+        await api.decideApproval(approval.id, {
+          decision,
+          edits: editing ? { subject: subject.trim(), body: body.trim() } : undefined,
+          from_account: selectedMailbox || undefined,
+        });
+        toast.success("Approved", "The message was sent to the sequence.");
+      } else {
+        await api.decideApproval(approval.id, {
+          decision,
+          reason: reason.trim() || undefined,
+        });
+        toast.success("Rejected", "The send was skipped.");
+      }
       onDecided();
     } catch (err) {
       toast.error(
@@ -163,6 +207,7 @@ function ApprovalCard({
             {approval.status[0].toUpperCase() + approval.status.slice(1)}
           </Badge>
           <span className={styles.kind}>{str(approval.kind) || "Outreach"}</span>
+          {payload.redrafted === true && <Badge tone="info">Redrafted</Badge>}
         </div>
         <Link to={`/runs/${approval.run_id}`} className={styles.runLink}>
           View run <Icons.ChevronRightIcon />
@@ -210,57 +255,134 @@ function ApprovalCard({
         )}
       </div>
 
+      {pending && redrafting && (
+        <div className={styles.redraftBox}>
+          <Field
+            label="Tell the AI how to revise this"
+            hint="It rewrites the message grounded in the same research facts."
+          >
+            <Textarea
+              rows={3}
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              placeholder="e.g. Make it two sentences, lead with the funding signal, mention SOC 2."
+            />
+          </Field>
+          <div className={styles.boxActions}>
+            <Button variant="ghost" onClick={() => setRedrafting(false)} disabled={redraftBusy}>
+              Cancel
+            </Button>
+            <Button
+              variant="secondary"
+              iconLeft={<Icons.SparklesIcon />}
+              loading={redraftBusy}
+              disabled={!instructions.trim()}
+              onClick={redraft}
+            >
+              Regenerate draft
+            </Button>
+          </div>
+        </div>
+      )}
+
       {willBeBlocked && (
         <div className={styles.warning} role="alert">
           <Icons.AlertTriangleIcon />
           <span>
             {!grounded
-              ? "This draft isn't grounded in research facts, so the send will be refused. Re-run research or reject it."
+              ? "This draft isn't grounded in research facts, so the send will be refused. Redraft with research, or reject it."
               : "The recipient address is undeliverable, so the send will be refused. Fix the contact or reject it."}
           </span>
         </div>
       )}
 
-      {pending ? (
-        <div className={styles.actions}>
-          <Button
-            variant="ghost"
-            iconLeft={<Icons.FileTextIcon />}
-            onClick={() => setEditing((v) => !v)}
-            disabled={busy !== null}
-          >
-            {editing ? "Preview" : "Edit draft"}
-          </Button>
-          <div className={styles.actionsRight}>
+      {pending && rejecting && (
+        <div className={styles.rejectBox}>
+          <Field label="Reason" hint="Optional. The rep who owns the account will see this.">
+            <Textarea
+              rows={2}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Wrong persona — target the VP of Eng, not the recruiter."
+            />
+          </Field>
+          <div className={styles.boxActions}>
+            <Button variant="ghost" onClick={() => setRejecting(false)} disabled={busy !== null}>
+              Cancel
+            </Button>
             <Button
               variant="secondary"
               iconLeft={<Icons.XIcon />}
               loading={busy === "reject"}
-              disabled={busy === "approve"}
               onClick={() => decide("reject")}
+            >
+              Confirm rejection
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {pending && !rejecting ? (
+        <div className={styles.actions}>
+          <div className={styles.actionsLeft}>
+            <Button
+              variant="ghost"
+              iconLeft={<Icons.FileTextIcon />}
+              onClick={() => setEditing((v) => !v)}
+              disabled={busy !== null}
+            >
+              {editing ? "Preview" : "Edit draft"}
+            </Button>
+            <Button
+              variant="ghost"
+              iconLeft={<Icons.SparklesIcon />}
+              onClick={() => setRedrafting((v) => !v)}
+              disabled={busy !== null}
+            >
+              Redraft with AI
+            </Button>
+          </div>
+          <div className={styles.actionsRight}>
+            {mailboxes.length > 0 && (
+              <Select
+                aria-label="Send from mailbox"
+                value={selectedMailbox}
+                onChange={(e) => setFromAccount(e.target.value)}
+                options={mailboxes.map((m) => ({
+                  value: m.id,
+                  label: `From: ${m.label || m.from_email}`,
+                }))}
+              />
+            )}
+            <Button
+              variant="secondary"
+              iconLeft={<Icons.XIcon />}
+              disabled={busy !== null}
+              onClick={() => setRejecting(true)}
             >
               Reject
             </Button>
             <Button
               iconLeft={<Icons.SendIcon />}
               loading={busy === "approve"}
-              disabled={busy === "reject" || willBeBlocked}
-              title={
-                willBeBlocked
-                  ? "Blocked by the grounded + verified send gate"
-                  : undefined
-              }
+              disabled={busy !== null || willBeBlocked}
+              title={willBeBlocked ? "Blocked by the grounded + verified send gate" : undefined}
               onClick={() => decide("approve")}
             >
               Approve &amp; send
             </Button>
           </div>
         </div>
-      ) : (
+      ) : !pending ? (
         <div className={styles.decided}>
           {approval.decided_at ? `Decided ${timeAgo(approval.decided_at)}` : "Decided"}
+          {str(approval.edits?.reason) && (
+            <span className={styles.reasonNote}> · {str(approval.edits?.reason)}</span>
+          )}
         </div>
-      )}
+      ) : null}
     </Card>
   );
 }
+
+export default ApprovalsPage;

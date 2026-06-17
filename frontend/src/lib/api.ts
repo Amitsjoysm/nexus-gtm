@@ -19,9 +19,12 @@ import type {
   ApprovalDecisionRequest,
   ApprovalStatus,
   AutomationSettings,
+  EmailAccount,
+  EmailAccountInput,
   EmailSettings,
   EmailSettingsInput,
   EmailTestResult,
+  Mailbox,
   WorkspaceContact,
   Cadence,
   CadenceEnrollment,
@@ -480,6 +483,41 @@ export class ApiClient {
     });
   }
 
+  // ---- sending mailboxes (multi-account SMTP) ----
+  listEmailAccounts(signal?: AbortSignal) {
+    return this.request<EmailAccount[]>("/workspace/email/accounts", { signal });
+  }
+  addEmailAccount(body: EmailAccountInput, signal?: AbortSignal) {
+    return this.request<EmailAccount>("/workspace/email/accounts", { method: "POST", body, signal });
+  }
+  updateEmailAccount(id: string, body: EmailAccountInput, signal?: AbortSignal) {
+    return this.request<EmailAccount>(`/workspace/email/accounts/${id}`, {
+      method: "PUT",
+      body,
+      signal,
+    });
+  }
+  deleteEmailAccount(id: string, signal?: AbortSignal) {
+    return this.request<void>(`/workspace/email/accounts/${id}`, { method: "DELETE", signal });
+  }
+  setDefaultEmailAccount(id: string, signal?: AbortSignal) {
+    return this.request<EmailAccount>(`/workspace/email/accounts/${id}/default`, {
+      method: "POST",
+      signal,
+    });
+  }
+  testEmailAccount(id: string, to?: string, signal?: AbortSignal) {
+    return this.request<EmailTestResult>(`/workspace/email/accounts/${id}/test`, {
+      method: "POST",
+      body: { to: to ?? null },
+      signal,
+    });
+  }
+  /** Send-ready mailboxes for the approval gate (approvers, not only admins). */
+  listMailboxes(signal?: AbortSignal) {
+    return this.request<Mailbox[]>("/workspace/email/mailboxes", { signal });
+  }
+
   // ---- orchestration ----
   createRun(body: RunCreateRequest, signal?: AbortSignal) {
     return this.request<Run>("/orchestration/runs", { method: "POST", body, signal });
@@ -503,6 +541,13 @@ export class ApiClient {
     return this.request<Run>(`/orchestration/approvals/${id}/decision`, {
       method: "POST",
       body,
+      signal,
+    });
+  }
+  redraftApproval(id: string, instructions: string, signal?: AbortSignal) {
+    return this.request<Approval>(`/orchestration/approvals/${id}/redraft`, {
+      method: "POST",
+      body: { instructions },
       signal,
     });
   }

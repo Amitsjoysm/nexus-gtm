@@ -425,12 +425,22 @@ export interface Approval {
   kind: string;
   status: ApprovalStatus;
   payload: Record<string, unknown>;
+  /** Reviewer edits applied at the gate, plus a `reason` when rejected. */
+  edits?: Record<string, unknown>;
   decided_at: string | null;
 }
 
 export interface ApprovalDecisionRequest {
   decision: "approve" | "reject";
   edits?: Record<string, unknown>;
+  /** On approve: which configured mailbox to send from (account id; default if omitted). */
+  from_account?: string | null;
+  /** On reject: why, for the audit trail. */
+  reason?: string | null;
+}
+
+export interface ApprovalRedraftRequest {
+  instructions: string;
 }
 
 /** One frame from the run's Server-Sent Events stream. */
@@ -765,6 +775,44 @@ export interface EmailSettingsInput {
 export interface EmailTestResult {
   ok: boolean;
   detail: string;
+}
+
+/** One sending mailbox in the workspace's multi-account SMTP config. */
+export interface EmailAccount {
+  id: string;
+  label: string;
+  provider: string;
+  host: string;
+  port: number;
+  username: string;
+  from_email: string;
+  from_name: string;
+  use_tls: boolean;
+  enabled: boolean;
+  default: boolean;
+  has_password: boolean;
+  verified_at: string | null;
+}
+
+export interface EmailAccountInput {
+  label?: string;
+  provider: string;
+  host?: string;
+  port?: number;
+  username: string;
+  password?: string; // write-only; omit to keep the stored one
+  from_email?: string;
+  from_name?: string;
+  use_tls?: boolean;
+  enabled: boolean;
+}
+
+/** Send-ready mailbox shown at the approval gate (no secrets, visible to approvers). */
+export interface Mailbox {
+  id: string;
+  label: string;
+  from_email: string;
+  default: boolean;
 }
 
 export interface CRMSyncStatus {
