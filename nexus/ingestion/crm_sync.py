@@ -34,6 +34,12 @@ async def sync_account_to_crm(
     if not res.ok:
         return res
 
+    # Persist the CRM's id for this account so the next sync updates in place (no duplicate),
+    # and so push_activity can associate notes to the right company.
+    if res.external_id and account.crm_id != res.external_id:
+        account.crm_id = res.external_id
+        account.crm_source = connector.source
+
     prior = account.crm_synced_at
     if prior is not None:  # no first-sync activity backfill
         prior = ensure_aware(prior)

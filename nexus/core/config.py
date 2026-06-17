@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     campaign_sourcing_enabled: bool = True       # inline auto-retry on SKIP_NO_CONTACT
     campaign_sourced_min_send_confidence: float = 0.5  # bar a sourced address must clear to send
     crm_provider: str = "stub"                 # outbound CRM connector: stub|salesforce|hubspot
+    hubspot_access_token: str = ""             # HubSpot private-app token (when crm_provider=hubspot)
+    hubspot_api_base: str = "https://api.hubapi.com"  # override for region/proxy/testing
     # Channel & Cadence (sub-project C): multi-touch email cadence engine. Disabled by
     # default (safe opt-in, like campaign_sourcing) so the advance tick is a no-op until a
     # deployment turns it on with one env line.
