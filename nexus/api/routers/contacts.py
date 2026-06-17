@@ -25,9 +25,13 @@ async def list_contacts(
 ) -> list[WorkspaceContactOut]:
     """All contacts in the workspace (joined to their account), newest first. ``q`` filters on
     name / title / email / account name; ``account_id`` scopes to one account."""
+    # Tenant scoping is enforced in the query (the only reliable layer — RLS is defense-in-depth
+    # and may be bypassed by the DB role). Filter Contact.tenant_id AND Account.tenant_id so a
+    # cross-tenant join can never surface another workspace's people.
     stmt = (
         select(Contact, Account.name, Account.domain)
         .join(Account, Account.id == Contact.account_id)
+        .where(Contact.tenant_id == ts.tenant_id, Account.tenant_id == ts.tenant_id)
         .order_by(Contact.created_at.desc())
     )
     if account_id:

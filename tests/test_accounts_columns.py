@@ -40,6 +40,32 @@ async def test_archive_hides_account_from_list_and_unarchive_restores(client):
     assert len((await client.get("/api/accounts", headers=auth(token))).json()) == 1  # back
 
 
+async def test_contacts_list_is_tenant_isolated(client):
+    """The workspace Contacts list must never surface another tenant's people (the query is the
+    only isolation layer — RLS can be bypassed by the DB role)."""
+    t1 = await signup(client, slug="iso1", email="o@iso1.x", company="Iso One")
+    t2 = await signup(client, slug="iso2", email="o@iso2.x", company="Iso Two")
+    tid1 = decode_access_token(t1)["tid"]
+    tid2 = decode_access_token(t2)["tid"]
+    async with tenant_session(tid1) as ts:
+        a = Account(tenant_id=tid1, name="Acme One", domain="one.co")
+        ts.add(a)
+        await ts.flush()
+        ts.add(Contact(tenant_id=tid1, account_id=a.id, full_name="Alice One", email="a@one.co"))
+        await ts.flush()
+    async with tenant_session(tid2) as ts:
+        b = Account(tenant_id=tid2, name="Acme Two", domain="two.co")
+        ts.add(b)
+        await ts.flush()
+        ts.add(Contact(tenant_id=tid2, account_id=b.id, full_name="Bob Two", email="b@two.co"))
+        await ts.flush()
+
+    r1 = (await client.get("/api/contacts", headers=auth(t1))).json()
+    r2 = (await client.get("/api/contacts", headers=auth(t2))).json()
+    assert [c["full_name"] for c in r1] == ["Alice One"]   # tenant 1 sees only its own
+    assert [c["full_name"] for c in r2] == ["Bob Two"]      # tenant 2 sees only its own
+
+
 async def test_contacts_list_carries_linkedin(client):
     token = await signup(client, slug="cli", email="o@cli.x", company="Cli")
     tid = decode_access_token(token)["tid"]

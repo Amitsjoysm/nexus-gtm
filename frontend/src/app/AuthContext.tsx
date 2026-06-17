@@ -74,11 +74,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return client;
   }, []);
 
-  // Keep the Authorization header in sync with the session.
+  // Keep the Authorization header in lockstep with the session *synchronously during render*,
+  // before any child renders or fires a request. A tenant switch remounts the whole app subtree
+  // (AppShell keys on tenantEpoch); child effects run before a parent's effect, so syncing the
+  // token in an effect would let the remounted page fetch with the previous tenant's token and
+  // show its data under the new workspace. setToken is idempotent, so calling it every render is
+  // cheap and safe (it sets a field, not React state).
+  api.setToken(session?.token ?? null);
+
+  // Persist the session for reloads (a real side effect, so it stays in an effect).
   useEffect(() => {
-    api.setToken(session?.token ?? null);
     if (session) localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-  }, [api, session]);
+  }, [session]);
 
   const login = useCallback(
     async (body: LoginRequest) => {
