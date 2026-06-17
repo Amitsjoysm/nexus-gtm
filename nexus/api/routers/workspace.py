@@ -13,6 +13,9 @@ from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
     AutomationSettingsIn,
     AutomationSettingsOut,
+    EmailAccountIn,
+    EmailAccountOut,
+    MailboxOut,
     EmailSettingsIn,
     EmailSettingsOut,
     EmailTestIn,
@@ -178,6 +181,215 @@ def _utcnow_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+# ---- multiple sending mailboxes -------------------------------------------------------
+import uuid as _uuid  # noqa: E402
+
+from nexus.integrations.email_sender import (  # noqa: E402
+    account_is_configured as _account_is_configured,
+    list_accounts as _email_list_accounts,
+    resolve_smtp as _resolve_smtp,
+    send_email as _send_email,
+)
+
+
+def _account_out(a: dict) -> EmailAccountOut:
+    return EmailAccountOut(
+        id=a["id"],
+        label=a.get("label", ""),
+        provider=a.get("provider", "gmail"),
+        host=a.get("host", ""),
+        port=int(a.get("port", 587)),
+        username=a.get("username", ""),
+        from_email=a.get("from_email", "") or a.get("username", ""),
+        from_name=a.get("from_name", ""),
+        use_tls=bool(a.get("use_tls", True)),
+        enabled=bool(a.get("enabled", True)),
+        default=bool(a.get("default", False)),
+        has_password=bool(a.get("password")),
+        verified_at=a.get("verified_at"),
+    )
+
+
+def _load_accounts(tenant: Tenant) -> list[dict]:
+    """Mutable account list, migrating a legacy single-account config on first touch."""
+    settings = dict(tenant.email_settings or {})
+    accts = settings.get("accounts")
+    if isinstance(accts, list):
+        return [dict(a) for a in accts]
+    return [dict(a) for a in _email_list_accounts(settings)]  # [] or one migrated legacy acct
+
+
+def _save_accounts(tenant: Tenant, accounts: list[dict]) -> None:
+    settings = dict(tenant.email_settings or {})
+    settings["accounts"] = accounts
+    settings["enabled"] = any(a.get("enabled") for a in accounts)  # master switch follows accounts
+    tenant.email_settings = settings
+
+
+@router.get("/email/accounts", response_model=list[EmailAccountOut])
+async def list_email_accounts(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> list[EmailAccountOut]:
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    accounts = _load_accounts(tenant)
+    if accounts and "accounts" not in (tenant.email_settings or {}):
+        _save_accounts(tenant, accounts)  # persist the legacy → accounts migration once
+        await ts.flush()
+    return [_account_out(a) for a in accounts]
+
+
+@router.get("/email/mailboxes", response_model=list[MailboxOut])
+async def list_send_mailboxes(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.approve_outreach)),
+) -> list[MailboxOut]:
+    """Send-ready mailboxes for the approval gate. Approvers (not only admins) may read these;
+    only configured, enabled accounts are returned, and never any secret."""
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    accounts = _load_accounts(tenant)
+    return [
+        MailboxOut(id=a["id"], label=a.get("label", "") or a.get("from_email", ""),
+                   from_email=a.get("from_email", "") or a.get("username", ""),
+                   default=bool(a.get("default")))
+        for a in accounts
+        if _account_is_configured(a)
+    ]
+
+
+@router.post("/email/accounts", response_model=EmailAccountOut, status_code=status.HTTP_201_CREATED)
+async def add_email_account(
+    body: EmailAccountIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailAccountOut:
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    accounts = _load_accounts(tenant)
+    acct = {
+        "id": _uuid.uuid4().hex[:12],
+        "label": body.label or body.from_email or body.username or "Mailbox",
+        "provider": body.provider,
+        "host": body.host,
+        "port": body.port,
+        "username": body.username,
+        "password": body.password or "",
+        "from_email": body.from_email or body.username,
+        "from_name": body.from_name,
+        "use_tls": body.use_tls,
+        "enabled": body.enabled,
+        "default": not any(a.get("default") for a in accounts),  # first added becomes default
+        "verified_at": None,
+    }
+    accounts.append(acct)
+    _save_accounts(tenant, accounts)
+    await ts.flush()
+    return _account_out(acct)
+
+
+@router.put("/email/accounts/{account_id}", response_model=EmailAccountOut)
+async def update_email_account(
+    account_id: str,
+    body: EmailAccountIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailAccountOut:
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    accounts = _load_accounts(tenant)
+    acct = next((a for a in accounts if a["id"] == account_id), None)
+    if acct is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
+    acct.update(
+        {
+            "label": body.label or acct.get("label", ""),
+            "provider": body.provider,
+            "host": body.host,
+            "port": body.port,
+            "username": body.username,
+            "from_email": body.from_email or body.username,
+            "from_name": body.from_name,
+            "use_tls": body.use_tls,
+            "enabled": body.enabled,
+            # Password is write-only: a blank/omitted value keeps the stored secret.
+            "password": body.password if body.password else acct.get("password", ""),
+        }
+    )
+    if body.password:
+        acct["verified_at"] = None  # creds changed → must re-verify
+    _save_accounts(tenant, accounts)
+    await ts.flush()
+    return _account_out(acct)
+
+
+@router.delete("/email/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_email_account(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> Response:
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    accounts = _load_accounts(tenant)
+    remaining = [a for a in accounts if a["id"] != account_id]
+    if len(remaining) == len(accounts):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
+    if remaining and not any(a.get("default") for a in remaining):
+        remaining[0]["default"] = True  # never leave the workspace without a default mailbox
+    _save_accounts(tenant, remaining)
+    await ts.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/email/accounts/{account_id}/default", response_model=EmailAccountOut)
+async def set_default_email_account(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailAccountOut:
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    accounts = _load_accounts(tenant)
+    target = next((a for a in accounts if a["id"] == account_id), None)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
+    for a in accounts:
+        a["default"] = a["id"] == account_id
+    _save_accounts(tenant, accounts)
+    await ts.flush()
+    return _account_out(target)
+
+
+@router.post("/email/accounts/{account_id}/test", response_model=EmailTestOut)
+async def test_email_account(
+    account_id: str,
+    body: EmailTestIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailTestOut:
+    """Send a test email from one specific mailbox, to the requester (or a given address)."""
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    accounts = _load_accounts(tenant)
+    acct = next((a for a in accounts if a["id"] == account_id), None)
+    if acct is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
+    cfg = _resolve_smtp(acct)
+    if not cfg["host"] or not cfg["username"] or not cfg["password"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "SMTP is not fully configured")
+    to = body.to
+    if not to:
+        user = await ts.session.get(User, principal.user_id)
+        to = user.email if user else None
+    if not to:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No recipient for the test email")
+    res = await _send_email(
+        acct, to=to,
+        subject="NEXUS test email",
+        body="This is a test from NEXUS. If you received it, this mailbox is set up correctly.",
+    )
+    if res.ok:
+        acct["verified_at"] = _utcnow_iso()
+        _save_accounts(tenant, accounts)
+        await ts.flush()
+    return EmailTestOut(ok=res.ok, detail=res.detail)
 
 
 # ---- members ----

@@ -44,6 +44,11 @@ class MessagingAgent(BaseAgent):
             # Per-touch cadence angle: shape this specific touch (e.g. a follow-up nudge,
             # a case-study share) so successive touches don't repeat the same message.
             content += f" Angle for this touch: {angle}."
+        guidance = (ctx.inputs.get("guidance") or "").strip()
+        if guidance:
+            # Reviewer redraft instructions from the approval gate take precedence — they are
+            # an explicit human steer on this exact message ("make it shorter", "mention SOC2").
+            content += f" Revise per the reviewer's instructions: {guidance}."
         user = LLMMessage(role="user", content=content)
         message = await ctx.complete(
             [ctx.system_message(), user],

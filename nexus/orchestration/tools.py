@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from nexus.agents.runtime import AgentRuntime
 from nexus.core.tenancy import TenantSession
-from nexus.integrations.email_sender import is_configured as smtp_is_configured, send_email
+from nexus.integrations.email_sender import account_is_configured, resolve_account, send_email
 from nexus.integrations.sep import get_sep_connector
 from nexus.models.account import Contact
 from nexus.models.identity import Tenant
@@ -216,12 +216,17 @@ class SendMessageTool(Tool):
         # are unchanged. A delivery failure raises so the touch is NOT marked sent (it retries),
         # rather than silently recording a send that never left.
         delivered: bool | None = None
+        from_account: str | None = None
         if email:
             tenant = await tc.ts.session.get(Tenant, tc.ts.tenant_id)
             settings = (getattr(tenant, "email_settings", None) or {}) if tenant else {}
-            if smtp_is_configured(settings):
+            # Route to the mailbox the reviewer chose at the gate (draft["from_account"]),
+            # falling back to the workspace default account. None when SMTP is unconfigured.
+            account = resolve_account(settings, draft.get("from_account"))
+            if account and account_is_configured(account):
+                from_account = account["id"]
                 send_res = await send_email(
-                    settings, to=email,
+                    account, to=email,
                     subject=draft.get("subject", ""), body=draft.get("body", ""),
                 )
                 delivered = send_res.ok
@@ -229,7 +234,8 @@ class SendMessageTool(Tool):
                     raise ToolError(f"smtp send failed: {send_res.detail}")
 
         return {"ok": res.ok, "platform": res.platform, "sequence": sequence,
-                "email": email, "email_status": email_status, "delivered": delivered}
+                "email": email, "email_status": email_status, "delivered": delivered,
+                "from_account": from_account}
 
 
 class DiscoveryTool(_AgentTool):

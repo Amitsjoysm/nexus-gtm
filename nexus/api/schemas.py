@@ -277,6 +277,47 @@ class EmailTestOut(BaseModel):
     detail: str = ""
 
 
+# ---- multiple sending mailboxes (email_settings["accounts"]) ----
+class EmailAccountIn(BaseModel):
+    """One sending mailbox. `password` is write-only: omit/blank to keep the stored one."""
+
+    label: str = Field(default="", max_length=80)
+    provider: str = Field(default="gmail", max_length=20)
+    host: str = Field(default="", max_length=200)
+    port: int = Field(default=587, ge=1, le=65535)
+    username: str = Field(default="", max_length=320)
+    password: str | None = Field(default=None, max_length=512)
+    from_email: str = Field(default="", max_length=320)
+    from_name: str = Field(default="", max_length=120)
+    use_tls: bool = True
+    enabled: bool = True
+
+
+class EmailAccountOut(BaseModel):
+    id: str
+    label: str = ""
+    provider: str = "gmail"
+    host: str = ""
+    port: int = 587
+    username: str = ""
+    from_email: str = ""
+    from_name: str = ""
+    use_tls: bool = True
+    enabled: bool = True
+    default: bool = False
+    has_password: bool = False           # never return the secret itself
+    verified_at: str | None = None
+
+
+class MailboxOut(BaseModel):
+    """Slim, send-ready mailbox for the approval gate (approvers, not just admins, see these)."""
+
+    id: str
+    label: str = ""
+    from_email: str = ""
+    default: bool = False
+
+
 # ---- members ----
 _ROLE_PATTERN = r"^(owner|admin|manager|rep)$"
 

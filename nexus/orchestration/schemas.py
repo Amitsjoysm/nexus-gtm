@@ -85,6 +85,7 @@ class ApprovalOut(BaseModel):
     kind: str
     status: str
     payload: dict = Field(default_factory=dict)
+    edits: dict = Field(default_factory=dict)  # reviewer edits + reject reason (no secrets)
     decided_at: datetime | None = None
 
     @classmethod
@@ -96,6 +97,7 @@ class ApprovalOut(BaseModel):
             kind=a.kind,
             status=a.status,
             payload=a.payload or {},
+            edits=a.edits or {},
             decided_at=a.decided_at,
         )
 
@@ -104,6 +106,16 @@ class ApprovalDecisionRequest(BaseModel):
     decision: Literal["approve", "reject"]
     # Optional reviewer edits applied to the draft before it goes out (subject/body).
     edits: dict = Field(default_factory=dict)
+    # On approve: which configured SMTP mailbox to send from (account id; default if omitted).
+    from_account: str | None = None
+    # On reject: why, for the audit trail and the rep who has to follow up.
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ApprovalRedraftRequest(BaseModel):
+    """Reviewer instructions to regenerate a parked draft with AI (the approval stays pending)."""
+
+    instructions: str = Field(min_length=1, max_length=1000)
 
 
 class ResultColumn(BaseModel):

@@ -242,10 +242,16 @@ class OrchestrationEngine:
         *,
         decision: str,
         edits: dict | None = None,
+        reason: str | None = None,
+        from_account: str | None = None,
         decided_by: str | None = None,
         runtime: AgentRuntime | None = None,
     ) -> OrchestrationRun:
-        """Apply a human decision to a parked step, then resume (approve) or skip (reject)."""
+        """Apply a human decision to a parked step, then resume (approve) or skip (reject).
+
+        ``from_account`` lets the reviewer choose which configured sending mailbox the message
+        goes out from; ``reason`` records why a send was rejected.
+        """
         if decision not in ("approve", "reject"):
             raise OrchestrationError(f"invalid decision '{decision}'")
         approval = await ts.get(Approval, approval_id)
@@ -268,23 +274,31 @@ class OrchestrationEngine:
 
         if decision == "reject":
             approval.status = APPROVAL_REJECTED
+            if reason:
+                approval.edits = {**(approval.edits or {}), "reason": reason}
+                flag_modified(approval, "edits")
             step.status = STEP_REJECTED
-            step.error = "rejected by reviewer"
+            step.error = f"rejected by reviewer: {reason}" if reason else "rejected by reviewer"
             await ts.flush()
             await self._emit(
-                ts, run, "approval.rejected", {"approval_id": approval.id, "step_idx": step.idx}
+                ts, run, "approval.rejected",
+                {"approval_id": approval.id, "step_idx": step.idx, "reason": reason or ""},
             )
             await self._cascade_skip(ts, run, steps, step.idx, reason="upstream step rejected")
             await self._finalize(ts, run, steps)
             return run
 
-        # Approve: a reviewer may have edited the draft at the gate (subject/body).
-        if edits:
+        # Approve: a reviewer may have edited the draft at the gate (subject/body) and/or
+        # chosen which configured mailbox the message sends from.
+        if edits or from_account:
             draft = dict(run.blackboard.get("draft") or {})
-            draft.update(edits)
+            if edits:
+                draft.update(edits)
+                approval.edits = {**(approval.edits or {}), **edits}
+            if from_account:
+                draft["from_account"] = from_account
             run.blackboard["draft"] = draft
             flag_modified(run, "blackboard")
-            approval.edits = edits
         approval.status = APPROVAL_APPROVED
         run.status = RUN_RUNNING
         await ts.flush()
@@ -299,6 +313,65 @@ class OrchestrationEngine:
         else:
             await self._drive(ts, run, steps, runtime=runtime)
         return run
+
+    async def redraft(
+        self,
+        ts: TenantSession,
+        approval_id: str,
+        *,
+        instructions: str,
+        runtime: AgentRuntime | None = None,
+    ) -> Approval:
+        """Regenerate the parked draft with the reviewer's instructions, leaving it pending.
+
+        Re-runs the messaging agent grounded in the same research (so the grounded-send gate
+        still holds), updates ``run.blackboard["draft"]`` and refreshes the approval payload so
+        the reviewer sees the new draft without losing their place at the gate.
+        """
+        instructions = (instructions or "").strip()
+        if not instructions:
+            raise OrchestrationError("redraft instructions are required")
+        approval = await ts.get(Approval, approval_id)
+        if approval is None:
+            raise OrchestrationError("approval not found")
+        if approval.status != APPROVAL_PENDING:
+            raise OrchestrationError(f"approval already {approval.status}")
+        run = await ts.get(OrchestrationRun, approval.run_id)
+        if run is None:
+            raise OrchestrationError("run not found")
+        if run.account_id is None and not run.blackboard.get("account_id"):
+            raise OrchestrationError("cannot redraft without an account context")
+
+        runtime = runtime or get_agent_runtime()
+        draft = dict(run.blackboard.get("draft") or {})
+        result = await runtime.run(
+            "messaging",
+            ts,
+            account_id=run.account_id or run.blackboard.get("account_id"),
+            contact_id=draft.get("contact_id"),
+            guidance=instructions,
+        )
+        out = result.output if isinstance(result.output, dict) else {}
+        if result.status != "completed" or out.get("error"):
+            raise OrchestrationError(result.error or out.get("error") or "redraft failed")
+
+        draft["subject"] = out.get("subject", draft.get("subject", ""))
+        draft["body"] = out.get("body", draft.get("body", ""))
+        draft["message"] = out.get("message", draft.get("message", ""))
+        run.blackboard["draft"] = draft
+        flag_modified(run, "blackboard")
+
+        # The approval payload is the snapshot the UI renders — refresh its content fields.
+        payload = dict(approval.payload or {})
+        payload.update(
+            {"subject": draft["subject"], "body": draft["body"],
+             "message": draft.get("message", ""), "redrafted": True}
+        )
+        approval.payload = payload
+        flag_modified(approval, "payload")
+        await ts.flush()
+        await self._emit(ts, run, "approval.redrafted", {"approval_id": approval.id})
+        return approval
 
     # -- cancellation ---------------------------------------------------------------
 

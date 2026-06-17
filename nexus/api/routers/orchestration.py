@@ -22,6 +22,7 @@ from nexus.orchestration.planner import PlanError
 from nexus.orchestration.schemas import (
     ApprovalDecisionRequest,
     ApprovalOut,
+    ApprovalRedraftRequest,
     ResultColumn,
     ResultsResponse,
     RunCreateRequest,
@@ -266,9 +267,27 @@ async def decide_approval(
             approval_id,
             decision=body.decision,
             edits=body.edits or None,
+            reason=body.reason,
+            from_account=body.from_account,
             decided_by=principal.user_id,
         )
     except OrchestrationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     steps = await _load_steps(ts, run.id)
     return RunOut.from_model(run, steps)
+
+
+@router.post("/approvals/{approval_id}/redraft", response_model=ApprovalOut)
+async def redraft_approval(
+    approval_id: str,
+    body: ApprovalRedraftRequest,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.approve_outreach)),
+) -> ApprovalOut:
+    """Regenerate the parked draft from reviewer instructions; the approval stays pending."""
+    engine = get_orchestration_engine()
+    try:
+        approval = await engine.redraft(ts, approval_id, instructions=body.instructions)
+    except OrchestrationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    return ApprovalOut.from_model(approval)

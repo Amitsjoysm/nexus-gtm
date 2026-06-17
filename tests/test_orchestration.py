@@ -13,7 +13,9 @@ from nexus.agents.llm import get_llm_provider
 from nexus.integrations import sep
 from nexus.integrations.sep import OutreachConnector, set_sep_connector
 from nexus.models.account import Account, Contact
+from nexus.models.identity import Tenant
 from nexus.models.orchestration import (
+    APPROVAL_APPROVED,
     APPROVAL_PENDING,
     Approval,
     RunEvent,
@@ -148,6 +150,119 @@ async def test_reject_skips_send_and_completes():
         steps = await engine._load_steps(ts, run)
         assert steps[3].status == STEP_REJECTED
         assert sep.get_sep_connector().pushed == []
+
+
+async def test_reject_with_reason_is_recorded():
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = await _seed(ts, tid)
+        engine = OrchestrationEngine()
+        run = await engine.create_run(ts, "research_account", {"account_id": acc.id})
+        await engine.execute_run(ts, run, runtime=_runtime())
+        approval = (await ts.list(Approval, Approval.status == APPROVAL_PENDING))[0]
+
+        await engine.decide(
+            ts, approval.id, decision="reject", reason="off-ICP, wrong persona",
+            runtime=_runtime(),
+        )
+        refreshed = await ts.get(Approval, approval.id)
+        assert refreshed.edits.get("reason") == "off-ICP, wrong persona"
+        steps = await engine._load_steps(ts, run)
+        assert "off-ICP" in (steps[3].error or "")
+
+
+async def test_redraft_regenerates_pending_draft():
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = await _seed(ts, tid)
+        engine = OrchestrationEngine()
+        run = await engine.create_run(ts, "research_account", {"account_id": acc.id})
+        await engine.execute_run(ts, run, runtime=_runtime())
+        approval = (await ts.list(Approval, Approval.status == APPROVAL_PENDING))[0]
+
+        updated = await engine.redraft(
+            ts, approval.id, instructions="make it two sentences, mention SOC2", runtime=_runtime(),
+        )
+        # Still parked for a human; payload refreshed and flagged as redrafted.
+        assert updated.status == APPROVAL_PENDING
+        assert updated.payload.get("redrafted") is True
+        assert (updated.payload.get("body") or "").strip()
+        # The blackboard draft the send tool reads is updated too.
+        assert run.blackboard["draft"]["body"] == updated.payload["body"]
+
+
+async def test_redraft_requires_instructions_and_pending_state():
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = await _seed(ts, tid)
+        engine = OrchestrationEngine()
+        run = await engine.create_run(ts, "research_account", {"account_id": acc.id})
+        await engine.execute_run(ts, run, runtime=_runtime())
+        approval = (await ts.list(Approval, Approval.status == APPROVAL_PENDING))[0]
+
+        with pytest.raises(OrchestrationError):
+            await engine.redraft(ts, approval.id, instructions="   ", runtime=_runtime())
+
+        await engine.decide(ts, approval.id, decision="approve", runtime=_runtime())
+        with pytest.raises(OrchestrationError):  # cannot redraft a decided approval
+            await engine.redraft(ts, approval.id, instructions="too late", runtime=_runtime())
+
+
+async def test_approve_with_from_account_sends_via_selected_mailbox(monkeypatch):
+    """Selecting a mailbox at the gate routes the SMTP send through that account's creds."""
+    import nexus.integrations.email_sender as es
+
+    captured: dict = {}
+
+    class _FakeSMTP:
+        def __init__(self, host, port, timeout=30):
+            captured["host"] = host
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def ehlo(self):
+            pass
+
+        def starttls(self, context=None):
+            pass
+
+        def login(self, u, p):
+            captured["login"] = (u, p)
+
+        def send_message(self, msg):
+            captured["to"] = msg["To"]
+            captured["from"] = msg["From"]
+
+    monkeypatch.setattr(es.smtplib, "SMTP", _FakeSMTP)
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = await _seed(ts, tid)
+        tenant = await ts.session.get(Tenant, tid)
+        tenant.email_settings = {
+            "accounts": [
+                {"id": "a1", "provider": "gmail", "username": "sdr@x.com", "password": "p1",
+                 "from_email": "sdr@x.com", "enabled": True, "default": True},
+                {"id": "a2", "provider": "gmail", "username": "ceo@x.com", "password": "p2",
+                 "from_email": "ceo@x.com", "enabled": True},
+            ]
+        }
+        await ts.flush()
+        engine = OrchestrationEngine()
+        run = await engine.create_run(ts, "research_account", {"account_id": acc.id})
+        await engine.execute_run(ts, run, runtime=_runtime())
+        approval = (await ts.list(Approval, Approval.status == APPROVAL_PENDING))[0]
+
+        await engine.decide(
+            ts, approval.id, decision="approve", from_account="a2", runtime=_runtime(),
+        )
+        assert approval.status == APPROVAL_APPROVED
+        assert captured["login"] == ("ceo@x.com", "p2")  # routed to the chosen mailbox
+        assert captured["to"] == "jane@acme.co"
 
 
 async def test_double_decision_rejected():

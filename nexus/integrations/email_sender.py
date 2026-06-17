@@ -46,12 +46,71 @@ def resolve_smtp(settings: dict | None) -> dict:
     }
 
 
-def is_configured(settings: dict | None) -> bool:
-    """True when the workspace has enabled SMTP and provided the essentials to send."""
-    if not settings or not settings.get("enabled"):
+# ---- multi-account model --------------------------------------------------------------
+# A workspace can register several sending mailboxes (e.g. an SDR's inbox and the founder's).
+# They live as ``email_settings["accounts"]`` — a list of account dicts. For backward
+# compatibility, a legacy single-account ``email_settings`` (top-level provider/username/…)
+# is surfaced as one implicit account so older workspaces and the existing settings API keep
+# working unchanged.
+
+
+def _normalize_account(a: dict, idx: int) -> dict:
+    """Ensure an account dict carries the identity fields the rest of the system relies on."""
+    acct = dict(a)
+    acct["id"] = acct.get("id") or f"acct-{idx}"
+    # from_email defaults to the username, mirroring resolve_smtp, so the list/select UIs
+    # always have an address to show even when from_email was never set explicitly.
+    acct["from_email"] = (acct.get("from_email") or acct.get("username") or "").strip()
+    acct["label"] = acct.get("label") or acct["from_email"] or acct.get("username") or "Mailbox"
+    acct["enabled"] = bool(acct.get("enabled", False))
+    acct["default"] = bool(acct.get("default", False))
+    return acct
+
+
+def list_accounts(settings: dict | None) -> list[dict]:
+    """All sending accounts for a workspace, newest model first, legacy as a fallback.
+
+    Returns an empty list when nothing is configured. Never raises.
+    """
+    s = dict(settings or {})
+    accts = s.get("accounts")
+    if isinstance(accts, list) and accts:
+        return [_normalize_account(a, i) for i, a in enumerate(accts)]
+    # Legacy single-account fallback: only when real fields are present.
+    if any(s.get(k) for k in ("username", "host", "from_email")):
+        legacy = _normalize_account(
+            {**s, "id": s.get("id") or "default", "label": s.get("label") or "Default",
+             "enabled": bool(s.get("enabled", False)), "default": True},
+            0,
+        )
+        legacy.pop("accounts", None)
+        return [legacy]
+    return []
+
+
+def account_is_configured(account: dict | None) -> bool:
+    """True when a single account is enabled and has the credentials to actually send."""
+    if not account or not account.get("enabled"):
         return False
-    cfg = resolve_smtp(settings)
+    cfg = resolve_smtp(account)
     return bool(cfg["host"] and cfg["from_email"] and cfg["username"] and cfg["password"])
+
+
+def resolve_account(settings: dict | None, account_id: str | None = None) -> dict | None:
+    """Pick the account to send from: the requested id, else the default, else the first."""
+    accts = list_accounts(settings)
+    if not accts:
+        return None
+    if account_id:
+        match = next((a for a in accts if a.get("id") == account_id), None)
+        if match is not None:
+            return match
+    return next((a for a in accts if a.get("default")), accts[0])
+
+
+def is_configured(settings: dict | None) -> bool:
+    """True when the workspace has at least one enabled, fully-credentialed sending account."""
+    return any(account_is_configured(a) for a in list_accounts(settings))
 
 
 def _build_message(cfg: dict, to: str, subject: str, body: str) -> EmailMessage:
