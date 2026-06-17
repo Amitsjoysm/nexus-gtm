@@ -43,6 +43,7 @@ interface Draft {
   employee_max: string;
   product_context: string;
   value_props: ValuePropDraft[];
+  weights: Record<WeightKey, number>;
 }
 
 const csv = (xs?: string[] | null) => (xs ?? []).join(", ");
@@ -52,6 +53,34 @@ const splitCsv = (s: string) =>
     .map((x) => x.trim())
     .filter(Boolean);
 const numOrNull = (s: string) => (s.trim() === "" ? null : Number(s));
+
+// The four firmographic dimensions the relevance engine blends into a fit score.
+const WEIGHT_ORDER = ["industry", "size", "geo", "tech"] as const;
+type WeightKey = (typeof WEIGHT_ORDER)[number];
+const WEIGHT_LABELS: Record<string, string> = {
+  industry: "Industry",
+  size: "Company size",
+  geo: "Geography",
+  tech: "Tech stack",
+};
+// Engine DEFAULT_WEIGHTS expressed as whole-percent slider positions (sum 100).
+const DEFAULT_WEIGHT_PCT: Record<WeightKey, number> = {
+  industry: 35,
+  size: 30,
+  geo: 15,
+  tech: 20,
+};
+const clampPct = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
+
+/** Slider positions (0–100 each) from a stored weights map of fractions, defaulting per key. */
+function weightsToPct(stored?: Record<string, number> | null): Record<WeightKey, number> {
+  return Object.fromEntries(
+    WEIGHT_ORDER.map((k) => {
+      const v = stored?.[k];
+      return [k, v != null ? clampPct(v * 100) : DEFAULT_WEIGHT_PCT[k]];
+    }),
+  ) as Record<WeightKey, number>;
+}
 
 function toDraft(p: RelevanceProfile): Draft {
   return {
@@ -69,6 +98,7 @@ function toDraft(p: RelevanceProfile): Draft {
             pains_solved: csv(v.pains_solved),
           }))
         : [{ name: "", description: "", pains_solved: "" }],
+    weights: weightsToPct(p.icp.weights),
   };
 }
 
@@ -114,19 +144,31 @@ export function RelevancePage() {
     setDraft((d) => (d ? { ...d, value_props: d.value_props.filter((_, idx) => idx !== i) } : d));
   }
 
+  function setWeight(key: WeightKey, value: number) {
+    setDraft((d) => (d ? { ...d, weights: { ...d.weights, [key]: clampPct(value) } } : d));
+  }
+
+  function resetWeights() {
+    setDraft((d) => (d ? { ...d, weights: { ...DEFAULT_WEIGHT_PCT } } : d));
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!draft || !profile.data) return;
     setSaving(true);
     try {
+      // Store weights as fractions to match the engine's DEFAULT_WEIGHTS shape. The engine
+      // re-normalizes by their sum, so the slider positions only need to be relative.
+      const weights = Object.fromEntries(
+        WEIGHT_ORDER.map((k) => [k, draft.weights[k] / 100]),
+      ) as Record<string, number>;
       const icp: IcpDefinition = {
         industries: splitCsv(draft.industries),
         countries: splitCsv(draft.countries),
         required_tech: splitCsv(draft.required_tech),
         employee_min: numOrNull(draft.employee_min),
         employee_max: numOrNull(draft.employee_max),
-        // Preserve scoring weights — they're tuned elsewhere, not in this editor.
-        weights: profile.data.icp.weights,
+        weights,
       };
       const value_props: ValueProp[] = draft.value_props
         .filter((vp) => vp.name.trim())
@@ -258,6 +300,27 @@ export function RelevancePage() {
 
               <Card padding="lg">
                 <SectionHead
+                  title="Fit weighting"
+                  description="How much each firmographic trait counts toward the fit score. Positions are relative — the engine normalizes them — so drag to emphasize what matters for your motion."
+                  action={
+                    canEdit ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        iconLeft={<Icons.RefreshIcon />}
+                        onClick={resetWeights}
+                      >
+                        Reset to defaults
+                      </Button>
+                    ) : undefined
+                  }
+                />
+                <WeightSliders weights={draft.weights} onChange={setWeight} disabled={!canEdit} />
+              </Card>
+
+              <Card padding="lg">
+                <SectionHead
                   title="Value propositions"
                   description="What you sell and the pains it solves. Agents use these to personalize outreach."
                   action={
@@ -352,13 +415,51 @@ export function RelevancePage() {
   );
 }
 
-const WEIGHT_ORDER = ["industry", "size", "geo", "tech"] as const;
-const WEIGHT_LABELS: Record<string, string> = {
-  industry: "Industry",
-  size: "Company size",
-  geo: "Geography",
-  tech: "Tech stack",
-};
+/**
+ * Editable fit-weight sliders. Each slider is a relative 0–100 position; the readout shows the
+ * normalized share (raw / sum) because that's what actually drives the engine's score.
+ */
+function WeightSliders({
+  weights,
+  onChange,
+  disabled,
+}: {
+  weights: Record<WeightKey, number>;
+  onChange: (key: WeightKey, value: number) => void;
+  disabled: boolean;
+}) {
+  const total = WEIGHT_ORDER.reduce((s, k) => s + weights[k], 0) || 1;
+  return (
+    <div className={styles.weights}>
+      {WEIGHT_ORDER.map((key) => {
+        const share = Math.round((weights[key] / total) * 100);
+        return (
+          <div key={key} className={styles.weightRow}>
+            <label className={styles.weightLabel} htmlFor={`weight-${key}`}>
+              {WEIGHT_LABELS[key]}
+            </label>
+            <input
+              id={`weight-${key}`}
+              className={styles.slider}
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={weights[key]}
+              disabled={disabled}
+              onChange={(e) => onChange(key, Number(e.target.value))}
+              aria-label={`${WEIGHT_LABELS[key]} weight`}
+              aria-valuetext={`${share}% of fit`}
+            />
+            <span className={styles.weightMeta}>
+              <span className={styles.weightValue}>{share}%</span>
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function LearnedWeightsCard() {
   const api = useApiClient();
@@ -367,8 +468,8 @@ function LearnedWeightsCard() {
   return (
     <Card padding="lg">
       <SectionHead
-        title="How fit is weighted"
-        description="The relevance score blends four firmographic signals. As you log won deals, NEXUS leans these weights toward the traits your wins share."
+        title="Auto-learned weighting"
+        description="As you log won deals, NEXUS leans the four firmographic weights toward the traits your wins share. Any positions you set above in Fit weighting take priority over what's learned here."
         action={
           weights.data ? (
             weights.data.learned ? (

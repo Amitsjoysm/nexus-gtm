@@ -57,6 +57,28 @@ def test_scoring_is_deterministic():
     assert a.score == b.score and a.breakdown == b.breakdown
 
 
+def test_explicit_icp_weights_reshape_the_score():
+    """User-set icp['weights'] (what the Relevance sliders write) re-weight the blend; the
+    engine normalizes by their sum, so positions only need to be relative."""
+    # Account matches industry but is the wrong size and geo, and lacks the required tech.
+    acc = Account(
+        tenant_id="t", name="Edge", industry="Software",
+        employee_count=5, country="DE", tech_stack=[],
+    )
+    base = ENGINE.score_icp_fit(_profile(), acc)
+
+    # Crank industry weight all the way up: only the matching dimension should count.
+    p = _profile()
+    p.icp["weights"] = {"industry": 1.0, "size": 0.0, "geo": 0.0, "tech": 0.0}
+    heavy_industry = ENGINE.score_icp_fit(p, acc)
+    assert heavy_industry.score == 100  # industry is a perfect match; nothing else dilutes it
+    assert heavy_industry.score > base.score
+
+    # Relative-only: scaling every weight by the same factor leaves the score unchanged.
+    p.icp["weights"] = {"industry": 10.0, "size": 0.0, "geo": 0.0, "tech": 0.0}
+    assert ENGINE.score_icp_fit(p, acc).score == heavy_industry.score
+
+
 def test_context_prompt_includes_grounding():
     acc = Account(tenant_id="t", name="Acme", industry="Software", employee_count=500, country="US")
     ctx = ENGINE.build_context(_profile(), acc)
