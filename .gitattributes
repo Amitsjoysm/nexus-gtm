@@ -1,0 +1,11 @@
+# Normalize line endings so the release artifact runs on Linux hosts regardless of the
+# platform it was built on. Shell scripts and container entrypoints/configs MUST be LF —
+# a CRLF shebang breaks `./deploy.sh` and the container entrypoint on Linux.
+* text=auto
+
+*.sh text eol=lf
+deploy/entrypoint.sh text eol=lf
+deploy/Caddyfile text eol=lf
+Dockerfile text eol=lf
+deploy/Dockerfile text eol=lf
+*.py text eol=lf
