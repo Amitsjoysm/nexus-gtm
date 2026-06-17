@@ -73,6 +73,8 @@ export function AccountDetailPage() {
   const { session } = useAuth();
   const [tab, setTab] = useState<Tab>("overview");
   const [running, setRunning] = useState(false);
+  const [findingContacts, setFindingContacts] = useState(false);
+  const [addingLookalike, setAddingLookalike] = useState<string | null>(null);
   const [enrichingAcct, setEnrichingAcct] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -188,11 +190,74 @@ export function AccountDetailPage() {
     }
   }
 
+  async function addLookalike(lk: Lookalike) {
+    setAddingLookalike(lk.domain || lk.name);
+    try {
+      const created = await api.addFromLookalike({
+        name: lk.name,
+        domain: lk.domain || null,
+      });
+      toast.success(
+        "Added to accounts",
+        `${created.name} is now tracked${created.fit_score != null ? ` (Fit ${created.fit_score})` : ""}.`,
+      );
+      // Mark it tracked in the current results so the button flips to "Tracked".
+      setLookalikes((s) => ({
+        ...s,
+        data: (s.data ?? []).map((x) =>
+          x.domain === lk.domain && x.name === lk.name ? { ...x, already_tracked: true } : x,
+        ),
+      }));
+    } catch (err) {
+      toast.error("Couldn't add account", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setAddingLookalike(null);
+    }
+  }
+
+  async function findContacts() {
+    setFindingContacts(true);
+    try {
+      const added = await api.sourceContacts(id, 5);
+      if (added.length > 0) {
+        toast.success(
+          "Contacts found",
+          `Added ${added.length} contact${added.length === 1 ? "" : "s"} to this account.`,
+        );
+        contacts.refetch();
+      } else {
+        toast.success(
+          "No new contacts",
+          "Couldn't source net-new people for this account right now.",
+        );
+      }
+    } catch (err) {
+      toast.error("Couldn't find contacts", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setFindingContacts(false);
+    }
+  }
+
   async function runPipeline() {
     setRunning(true);
     try {
-      await api.runPipeline(id);
-      toast.success("Pipeline complete", "Enrichment and scoring refreshed.");
+      const res = (await api.runPipeline(id)) as {
+        new_contacts?: number;
+        new_signals?: number;
+        composite_score?: number | null;
+      };
+      const parts: string[] = [];
+      if (res.new_contacts)
+        parts.push(`${res.new_contacts} contact${res.new_contacts === 1 ? "" : "s"}`);
+      if (res.new_signals)
+        parts.push(`${res.new_signals} signal${res.new_signals === 1 ? "" : "s"}`);
+      const score = res.composite_score != null ? `Fit ${res.composite_score}.` : "";
+      toast.success(
+        "Pipeline complete",
+        parts.length
+          ? `Found ${parts.join(" + ")}. Enriched + scored. ${score}`
+          : `Enriched + scored. ${score} No new contacts or signals this run.`,
+      );
       account.refetch();
       contacts.refetch();
       signals.refetch();
@@ -385,6 +450,19 @@ export function AccountDetailPage() {
 
       <TabPanel id="panel-contacts" active={tab === "contacts"}>
         <div className={styles.panel}>
+          <div className={styles.sectionBar}>
+            <span className={styles.sectionHint}>
+              Source the buying committee — net-new people with verified emails.
+            </span>
+            <Button
+              variant="secondary"
+              iconLeft={<Icons.UsersIcon />}
+              loading={findingContacts}
+              onClick={findContacts}
+            >
+              Find contacts
+            </Button>
+          </div>
           <Card padding="md">
             <DataState
               state={contacts}
@@ -395,15 +473,15 @@ export function AccountDetailPage() {
                   compact
                   icon={<Icons.UsersIcon />}
                   title="No contacts yet"
-                  description="Run the pipeline to enrich this account with decision-makers."
+                  description="Find the decision-makers at this account — sourced and email-verified."
                   action={
                     <Button
                       variant="secondary"
-                      iconLeft={<Icons.SparklesIcon />}
-                      loading={running}
-                      onClick={runPipeline}
+                      iconLeft={<Icons.UsersIcon />}
+                      loading={findingContacts}
+                      onClick={findContacts}
                     >
-                      Run pipeline
+                      Find contacts
                     </Button>
                   }
                 />
@@ -530,7 +608,11 @@ export function AccountDetailPage() {
                 {lookalikes.data ? "Refresh" : "Find lookalikes"}
               </Button>
             </div>
-            <LookalikeResult state={lookalikes} />
+            <LookalikeResult
+              state={lookalikes}
+              onAdd={addLookalike}
+              addingKey={addingLookalike}
+            />
           </Card>
         </div>
       </TabPanel>
@@ -743,7 +825,15 @@ function AgentResult({
 }
 
 /** Loading / error / empty / list states for a lookalike search. */
-function LookalikeResult({ state }: { state: LookalikeState }) {
+function LookalikeResult({
+  state,
+  onAdd,
+  addingKey,
+}: {
+  state: LookalikeState;
+  onAdd: (lk: Lookalike) => void;
+  addingKey: string | null;
+}) {
   if (state.loading) {
     return (
       <div className={styles.agentLoading}>
@@ -786,10 +876,22 @@ function LookalikeResult({ state }: { state: LookalikeState }) {
                 </span>
               </div>
               <div className={styles.recBadges}>
-                {lk.already_tracked ? <Badge tone="neutral">Tracked</Badge> : null}
                 <Badge tone={meta.tone} dot>
                   Fit {lk.score}
                 </Badge>
+                {lk.already_tracked ? (
+                  <Badge tone="neutral">Tracked</Badge>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    iconLeft={<Icons.PlusIcon />}
+                    loading={addingKey === (lk.domain || lk.name)}
+                    onClick={() => onAdd(lk)}
+                  >
+                    Add
+                  </Button>
+                )}
               </div>
             </div>
             {lk.snippet && <p className={styles.recWhy}>{lk.snippet}</p>}

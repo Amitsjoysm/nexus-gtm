@@ -244,6 +244,7 @@ class OrchestrationEngine:
         edits: dict | None = None,
         reason: str | None = None,
         from_account: str | None = None,
+        delivery_mode: str | None = None,
         decided_by: str | None = None,
         runtime: AgentRuntime | None = None,
     ) -> OrchestrationRun:
@@ -290,13 +291,15 @@ class OrchestrationEngine:
 
         # Approve: a reviewer may have edited the draft at the gate (subject/body) and/or
         # chosen which configured mailbox the message sends from.
-        if edits or from_account:
+        if edits or from_account or delivery_mode:
             draft = dict(run.blackboard.get("draft") or {})
             if edits:
                 draft.update(edits)
                 approval.edits = {**(approval.edits or {}), **edits}
             if from_account:
                 draft["from_account"] = from_account
+            if delivery_mode:
+                draft["delivery_mode"] = delivery_mode  # send | draft
             run.blackboard["draft"] = draft
             flag_modified(run, "blackboard")
         approval.status = APPROVAL_APPROVED

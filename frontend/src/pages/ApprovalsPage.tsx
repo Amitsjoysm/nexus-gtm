@@ -142,7 +142,7 @@ function ApprovalCard({
   const [redraftBusy, setRedraftBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+  const [busy, setBusy] = useState<"approve" | "reject" | "draft" | null>(null);
 
   const defaultMailbox = mailboxes.find((m) => m.default)?.id ?? mailboxes[0]?.id ?? "";
   const [fromAccount, setFromAccount] = useState("");
@@ -171,16 +171,22 @@ function ApprovalCard({
     }
   }
 
-  async function decide(decision: "approve" | "reject") {
-    setBusy(decision);
+  async function decide(decision: "approve" | "reject", mode: "send" | "draft" = "send") {
+    setBusy(decision === "approve" && mode === "draft" ? "draft" : decision);
     try {
       if (decision === "approve") {
         await api.decideApproval(approval.id, {
           decision,
           edits: editing ? { subject: subject.trim(), body: body.trim() } : undefined,
           from_account: selectedMailbox || undefined,
+          delivery_mode: mode,
         });
-        toast.success("Approved", "The message was sent to the sequence.");
+        toast.success(
+          mode === "draft" ? "Saved to drafts" : "Approved",
+          mode === "draft"
+            ? "The message is in your mailbox Drafts to review and send by hand."
+            : "The message was sent to the sequence.",
+        );
       } else {
         await api.decideApproval(approval.id, {
           decision,
@@ -363,11 +369,21 @@ function ApprovalCard({
               Reject
             </Button>
             <Button
+              variant="secondary"
+              iconLeft={<Icons.InboxIcon />}
+              loading={busy === "draft"}
+              disabled={busy !== null}
+              title="Save to your mailbox Drafts to review and send by hand"
+              onClick={() => decide("approve", "draft")}
+            >
+              Save as draft
+            </Button>
+            <Button
               iconLeft={<Icons.SendIcon />}
               loading={busy === "approve"}
               disabled={busy !== null || willBeBlocked}
               title={willBeBlocked ? "Blocked by the grounded + verified send gate" : undefined}
-              onClick={() => decide("approve")}
+              onClick={() => decide("approve", "send")}
             >
               Approve &amp; send
             </Button>

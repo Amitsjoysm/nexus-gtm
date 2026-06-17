@@ -435,6 +435,8 @@ export interface ApprovalDecisionRequest {
   edits?: Record<string, unknown>;
   /** On approve: which configured mailbox to send from (account id; default if omitted). */
   from_account?: string | null;
+  /** On approve: "send" delivers; "draft" saves to the mailbox's Drafts for manual send. */
+  delivery_mode?: "send" | "draft";
   /** On reject: why, for the audit trail. */
   reason?: string | null;
 }

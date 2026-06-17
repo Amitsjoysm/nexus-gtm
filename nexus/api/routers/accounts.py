@@ -210,6 +210,54 @@ async def find_lookalikes(
     )
 
 
+@router.post("/{account_id}/source-contacts", response_model=list[ContactOut])
+async def source_contacts(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+    limit: int = 5,
+) -> list[ContactOut]:
+    """Source the buying committee for this account (net-new people, deduped + email-verified).
+    Powers the account 'Find contacts' action; returns only the contacts newly added."""
+    account = await ts.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    from nexus.campaigns.sourcing import source_account_contacts
+
+    created = await source_account_contacts(ts, account, limit=max(1, min(limit, 25)))
+    return [_contact_out(c) for c in created]
+
+
+@router.post("/from-lookalike", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
+async def add_from_lookalike(
+    body: AccountIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> AccountOut:
+    """Add a lookalike to the tracked accounts and score it against the ICP in one step. Deduped
+    by domain (returns the existing account if already tracked)."""
+    dom = domain_from_url(body.domain) if body.domain else None
+    if dom:
+        for a in await ts.list(Account):
+            if a.domain and domain_from_url(a.domain) == dom:
+                scores = await _latest_fit_scores(ts, [a.id])
+                return _account_out(a, fit_score=scores.get(a.id))
+    account = Account(
+        tenant_id=ts.tenant_id, name=body.name, domain=body.domain, industry=body.industry,
+        employee_count=body.employee_count, country=body.country, tech_stack=body.tech_stack,
+        source="lookalike",
+    )
+    ts.add(account)
+    await ts.flush()
+    # Enrich firmographics + score so the new account lands with a Fit score (no contact sourcing
+    # here — that's an explicit follow-up action).
+    from nexus.pipeline import process_account
+
+    await process_account(ts, account)
+    scores = await _latest_fit_scores(ts, [account.id])
+    return _account_out(account, fit_score=scores.get(account.id))
+
+
 @router.post("/contacts/{contact_id}/enrich", response_model=ContactOut)
 async def enrich_contact(
     contact_id: str,

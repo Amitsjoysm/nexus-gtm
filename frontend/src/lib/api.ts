@@ -225,6 +225,20 @@ export class ApiClient {
       { method: "POST", signal },
     );
   }
+  /** Source the buying committee for an account; returns the contacts newly added. */
+  sourceContacts(accountId: string, limit = 5, signal?: AbortSignal) {
+    return this.request<Contact[]>(`/accounts/${accountId}/source-contacts?limit=${limit}`, {
+      method: "POST",
+      signal,
+    });
+  }
+  /** Add a lookalike to tracked accounts and score it against the ICP. */
+  addFromLookalike(
+    body: { name: string; domain?: string | null; industry?: string | null },
+    signal?: AbortSignal,
+  ) {
+    return this.request<Account>("/accounts/from-lookalike", { method: "POST", body, signal });
+  }
 
   // ---- agents ----
   listAgents(signal?: AbortSignal) {

@@ -119,6 +119,58 @@ def get_contact_sourcing_service() -> ContactSourcingService:
     return _service
 
 
+async def source_account_contacts(
+    ts: TenantSession, account: Account, *, limit: int = 5
+) -> list[Contact]:
+    """Source the buying committee for one account: net-new people via the contact-search
+    registry, deduped against existing contacts, persisted, and email-verified. Never raises —
+    returns the contacts created (possibly empty). Used by the account "Find contacts" action
+    and the manual Run-pipeline button (not the automated sweep, which stays cheap)."""
+    from nexus.integrations.registry import get_registry
+    from nexus.relevance.engine import get_profile
+
+    profile = await get_profile(ts)
+    icp = (getattr(profile, "icp", None) or {}) if profile else {}
+    registry = get_registry()
+
+    existing = await ts.list(Contact, Contact.account_id == account.id)
+    seen_emails = {(c.email or "").lower() for c in existing if c.email}
+    seen_names = {(c.full_name or "").lower() for c in existing if c.full_name}
+
+    try:
+        candidates = await registry.contact_search(account, icp, limit=limit)
+    except Exception as exc:  # provider hiccup must not break the button
+        logger.warning("contact_search failed for %s: %r", account.name, exc)
+        return []
+
+    created: list[Contact] = []
+    for cand in candidates:
+        if len(created) >= limit:
+            break
+        email = (cand.email or "").lower()
+        name = (cand.full_name or "").lower()
+        if (email and email in seen_emails) or (name and name in seen_names):
+            continue
+        person = Contact(
+            tenant_id=ts.tenant_id, account_id=account.id, full_name=cand.full_name,
+            title=cand.title, seniority=cand.seniority, email=cand.email,
+            enrichment_source=f"sourcing:{cand.source}",
+        )
+        ts.add(person)
+        await ts.flush()
+        if person.email:
+            try:
+                verdict = await registry.verify_email(person.email)
+                person.email_status = verdict.status
+                person.email_confidence = verdict.confidence
+            except Exception:  # verification is best-effort
+                pass
+        seen_emails.add(email)
+        seen_names.add(name)
+        created.append(person)
+    return created
+
+
 def set_contact_sourcing_service(svc: ContactSourcingService | None) -> None:
     global _service
     _service = svc

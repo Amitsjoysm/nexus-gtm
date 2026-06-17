@@ -269,6 +269,7 @@ async def decide_approval(
             edits=body.edits or None,
             reason=body.reason,
             from_account=body.from_account,
+            delivery_mode=body.delivery_mode,
             decided_by=principal.user_id,
         )
     except OrchestrationError as exc:

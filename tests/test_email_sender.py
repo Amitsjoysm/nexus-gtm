@@ -129,6 +129,43 @@ async def test_send_email_unconfigured_returns_not_ok():
     assert (await send_email({}, to="x@y.com", subject="s", body="b")).ok is False
 
 
+async def test_save_to_drafts_appends_via_imap(monkeypatch):
+    import imaplib
+
+    from nexus.integrations.email_sender import save_to_drafts
+
+    captured: dict = {}
+
+    class _FakeIMAP:
+        def __init__(self, host, port=993, ssl_context=None):
+            captured["host"] = host
+
+        def login(self, u, p):
+            captured["login"] = (u, p)
+
+        def append(self, folder, flags, date, msg_bytes):
+            captured["folder"] = folder
+            captured["bytes"] = msg_bytes
+
+        def logout(self):
+            captured["logout"] = True
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", _FakeIMAP)
+    res = await save_to_drafts(
+        {"provider": "gmail", "username": "me@gmail.com", "password": "pw", "from_name": "Me"},
+        to="x@y.com", subject="Hi", body="Body",
+    )
+    assert res.ok is True and "drafts" in res.detail
+    assert captured["host"] == "imap.gmail.com" and captured["login"] == ("me@gmail.com", "pw")
+    assert captured["folder"] == "[Gmail]/Drafts" and b"x@y.com" in captured["bytes"]
+
+
+async def test_save_to_drafts_unconfigured_returns_not_ok():
+    from nexus.integrations.email_sender import save_to_drafts
+
+    assert (await save_to_drafts({}, to="x@y.com", subject="s", body="b")).ok is False
+
+
 # ----------------------------------------------------------------- settings API
 async def test_email_settings_put_get_password_write_only(client):
     token = await signup(client, slug="mailco", email="o@mailco.x", company="Mail Co")

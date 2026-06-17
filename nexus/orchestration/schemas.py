@@ -108,6 +108,8 @@ class ApprovalDecisionRequest(BaseModel):
     edits: dict = Field(default_factory=dict)
     # On approve: which configured SMTP mailbox to send from (account id; default if omitted).
     from_account: str | None = None
+    # On approve: "send" delivers; "draft" saves to the mailbox's Drafts for manual send.
+    delivery_mode: Literal["send", "draft"] = "send"
     # On reject: why, for the audit trail and the rep who has to follow up.
     reason: str | None = Field(default=None, max_length=500)
 

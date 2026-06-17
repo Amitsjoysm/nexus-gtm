@@ -51,4 +51,15 @@ async def run_pipeline(
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
-    return await process_account(ts, account)
+    # Full manual refresh: signals + firmographic enrichment + scoring (process_account), then
+    # source the buying committee so "Run pipeline" actually populates contacts. Contact sourcing
+    # lives here (manual click), not in process_account, so the automated sweep stays cheap.
+    result = await process_account(ts, account)
+    from nexus.campaigns.sourcing import source_account_contacts
+    from nexus.core.config import get_settings
+
+    new_contacts = await source_account_contacts(
+        ts, account, limit=get_settings().discovery_contacts_per_account
+    )
+    result["new_contacts"] = len(new_contacts)
+    return result

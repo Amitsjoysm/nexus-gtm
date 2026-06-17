@@ -208,6 +208,51 @@ async def test_redraft_requires_instructions_and_pending_state():
             await engine.redraft(ts, approval.id, instructions="too late", runtime=_runtime())
 
 
+async def test_approve_as_draft_saves_to_mailbox_not_sends(monkeypatch):
+    """delivery_mode='draft' writes to the mailbox Drafts (IMAP) and does NOT send via SEP."""
+    import imaplib
+
+    captured: dict = {}
+
+    class _FakeIMAP:
+        def __init__(self, host, port=993, ssl_context=None):
+            captured["host"] = host
+
+        def login(self, u, p):
+            captured["login"] = (u, p)
+
+        def append(self, folder, flags, date, msg):
+            captured["folder"] = folder
+
+        def logout(self):
+            pass
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", _FakeIMAP)
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = await _seed(ts, tid)
+        tenant = await ts.session.get(Tenant, tid)
+        tenant.email_settings = {"accounts": [
+            {"id": "a1", "provider": "gmail", "username": "sdr@x.com", "password": "p",
+             "from_email": "sdr@x.com", "enabled": True, "default": True},
+        ]}
+        await ts.flush()
+        engine = OrchestrationEngine()
+        run = await engine.create_run(ts, "research_account", {"account_id": acc.id})
+        await engine.execute_run(ts, run, runtime=_runtime())
+        approval = (await ts.list(Approval, Approval.status == APPROVAL_PENDING))[0]
+
+        await engine.decide(
+            ts, approval.id, decision="approve", from_account="a1", delivery_mode="draft",
+            runtime=_runtime(),
+        )
+        assert approval.status == APPROVAL_APPROVED
+        assert captured.get("login") == ("sdr@x.com", "p")   # saved to the chosen mailbox Drafts
+        assert captured.get("folder") == "[Gmail]/Drafts"
+        assert sep.get_sep_connector().pushed == []           # NOT sent — it was drafted
+
+
 async def test_approve_with_from_account_sends_via_selected_mailbox(monkeypatch):
     """Selecting a mailbox at the gate routes the SMTP send through that account's creds."""
     import nexus.integrations.email_sender as es

@@ -16,7 +16,12 @@ from dataclasses import dataclass, field
 
 from nexus.agents.runtime import AgentRuntime
 from nexus.core.tenancy import TenantSession
-from nexus.integrations.email_sender import account_is_configured, resolve_account, send_email
+from nexus.integrations.email_sender import (
+    account_is_configured,
+    resolve_account,
+    save_to_drafts,
+    send_email,
+)
 from nexus.integrations.sep import get_sep_connector
 from nexus.models.account import Contact
 from nexus.models.identity import Tenant
@@ -173,19 +178,38 @@ class SendMessageTool(Tool):
         if not draft or not (draft.get("subject") or draft.get("body")):
             raise ToolError("no approved draft to send")
 
+        email = None
+        email_status = None
+        contact = None
+        contact_id = draft.get("contact_id")
+        if contact_id:
+            contact = await tc.ts.get(Contact, contact_id)
+            email = contact.email if contact else None
+
+        # Draft mode: write to the reviewer's mailbox Drafts for manual review/send instead of
+        # sending. No SEP push and no hard send gates — nothing is delivered to the prospect here,
+        # so an ungrounded/unverified draft is allowed (the human finalizes it in their mailbox).
+        if (draft.get("delivery_mode") or "send") == "draft":
+            tenant = await tc.ts.session.get(Tenant, tc.ts.tenant_id)
+            settings = (getattr(tenant, "email_settings", None) or {}) if tenant else {}
+            account = resolve_account(settings, draft.get("from_account"))
+            if account is None:
+                raise ToolError("no mailbox configured to save a draft")
+            res = await save_to_drafts(
+                account, to=email or "",
+                subject=draft.get("subject", ""), body=draft.get("body", ""),
+            )
+            if not res.ok:
+                raise ToolError(f"draft save failed: {res.detail}")
+            return {"ok": True, "drafted": True, "delivery_mode": "draft",
+                    "email": email, "from_account": account["id"]}
+
         # Grounded-send gate (Tier-1 credibility): never push an outbound message that wasn't
         # grounded in retrieved facts. A reviewer approving at the gate cannot override this —
         # an ungrounded cold email is exactly the kind of generic spam this product exists to
         # avoid sending.
         if not draft.get("grounded"):
             raise ToolError("refusing to send an ungrounded draft (no research facts)")
-
-        email = None
-        email_status = None
-        contact_id = draft.get("contact_id")
-        if contact_id:
-            contact = await tc.ts.get(Contact, contact_id)
-            email = contact.email if contact else None
 
         # Verified-send gate: a hard-invalid address never gets a send. We re-verify here
         # (cheap: the registry caches by email) so the decision is enforced at the boundary,

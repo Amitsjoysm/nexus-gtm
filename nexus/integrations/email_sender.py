@@ -17,10 +17,14 @@ from email.message import EmailMessage
 logger = logging.getLogger("nexus.integrations.email_sender")
 
 # Host/port presets so a user only needs to pick a provider + enter username + app password.
+# imap_host + drafts_folder support "save as draft" (write the message to the mailbox's Drafts).
 PROVIDER_PRESETS: dict[str, dict] = {
-    "gmail": {"host": "smtp.gmail.com", "port": 587, "use_tls": True},
-    "outlook": {"host": "smtp-mail.outlook.com", "port": 587, "use_tls": True},
-    "office365": {"host": "smtp.office365.com", "port": 587, "use_tls": True},
+    "gmail": {"host": "smtp.gmail.com", "port": 587, "use_tls": True,
+              "imap_host": "imap.gmail.com", "drafts_folder": "[Gmail]/Drafts"},
+    "outlook": {"host": "smtp-mail.outlook.com", "port": 587, "use_tls": True,
+                "imap_host": "outlook.office365.com", "drafts_folder": "Drafts"},
+    "office365": {"host": "smtp.office365.com", "port": 587, "use_tls": True,
+                  "imap_host": "outlook.office365.com", "drafts_folder": "Drafts"},
 }
 
 
@@ -43,6 +47,8 @@ def resolve_smtp(settings: dict | None) -> dict:
         "password": s.get("password") or "",
         "from_email": (s.get("from_email") or username).strip(),
         "from_name": (s.get("from_name") or "").strip(),
+        "imap_host": (s.get("imap_host") or preset.get("imap_host") or "").strip(),
+        "drafts_folder": (s.get("drafts_folder") or preset.get("drafts_folder") or "Drafts").strip(),
     }
 
 
@@ -153,3 +159,42 @@ async def send_email(settings: dict | None, *, to: str, subject: str, body: str)
     except Exception as exc:  # auth / connection / recipient — surface, don't crash the worker
         logger.warning("SMTP send to %s via %s failed: %r", to, cfg["host"], exc)
         return SendResult(False, f"smtp error: {exc}")
+
+
+def has_drafts_support(settings: dict | None) -> bool:
+    """True when the mailbox can save drafts via IMAP (host + credentials present)."""
+    cfg = resolve_smtp(settings)
+    return bool(cfg["imap_host"] and cfg["username"] and cfg["password"])
+
+
+def _save_draft_blocking(cfg: dict, to: str, subject: str, body: str) -> None:
+    import imaplib
+    import time
+
+    msg = _build_message(cfg, to, subject, body)
+    context = ssl.create_default_context()
+    imap = imaplib.IMAP4_SSL(cfg["imap_host"], 993, ssl_context=context)
+    try:
+        imap.login(cfg["username"], cfg["password"])
+        imap.append(
+            cfg["drafts_folder"], r"(\Draft)", imaplib.Time2Internaldate(time.time()), msg.as_bytes()
+        )
+    finally:
+        try:
+            imap.logout()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def save_to_drafts(settings: dict | None, *, to: str, subject: str, body: str) -> SendResult:
+    """Write the message to the mailbox's Drafts folder via IMAP, for the user to review and send
+    by hand. Never raises — returns a SendResult."""
+    cfg = resolve_smtp(settings)
+    if not cfg["imap_host"] or not cfg["username"] or not cfg["password"]:
+        return SendResult(False, "imap not configured for drafts")
+    try:
+        await asyncio.to_thread(_save_draft_blocking, cfg, to or cfg["from_email"], subject, body)
+        return SendResult(True, "saved to drafts")
+    except Exception as exc:
+        logger.warning("IMAP draft save via %s failed: %r", cfg["imap_host"], exc)
+        return SendResult(False, f"imap error: {exc}")
