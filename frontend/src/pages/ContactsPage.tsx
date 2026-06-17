@@ -86,8 +86,13 @@ export function ContactsPage() {
             <Badge tone={STATUS_TONE[c.email_status] ?? "neutral"} dot>
               {c.email_status}
             </Badge>
+          ) : c.email ? (
+            // Has an address but no verdict yet — say so (and offer "Verify"), don't show a blank.
+            <Badge tone="neutral" dot>
+              unverified
+            </Badge>
           ) : (
-            <span className={styles.muted}>—</span>
+            <span className={styles.muted}>no email</span>
           ),
       },
       {
