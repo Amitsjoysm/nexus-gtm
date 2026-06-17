@@ -30,6 +30,15 @@ if grep -q '^POSTGRES_PASSWORD=CHANGE_ME' "$ENV_FILE"; then
   say "generating POSTGRES_PASSWORD"
   sed -i.bak "s/^POSTGRES_PASSWORD=CHANGE_ME/POSTGRES_PASSWORD=$(gen)/" "$ENV_FILE"
 fi
+if grep -q '^NEXUS_APP_DB_PASSWORD=CHANGE_ME' "$ENV_FILE"; then
+  say "generating NEXUS_APP_DB_PASSWORD (least-privilege API role)"
+  sed -i.bak "s/^NEXUS_APP_DB_PASSWORD=CHANGE_ME/NEXUS_APP_DB_PASSWORD=$(gen)/" "$ENV_FILE"
+fi
+# Older .env files predate the app-role split — add the line so the API isn't left on the owner.
+if ! grep -q '^NEXUS_APP_DB_PASSWORD=' "$ENV_FILE"; then
+  say "adding NEXUS_APP_DB_PASSWORD to existing .env"
+  printf 'NEXUS_APP_DB_PASSWORD=%s\n' "$(gen)" >> "$ENV_FILE"
+fi
 if grep -q '^NEXUS_SECRET_KEY=CHANGE_ME' "$ENV_FILE"; then
   say "generating NEXUS_SECRET_KEY"
   sed -i.bak "s/^NEXUS_SECRET_KEY=CHANGE_ME/NEXUS_SECRET_KEY=$(gen)/" "$ENV_FILE"
@@ -48,13 +57,11 @@ DOMAIN="$(grep '^DOMAIN=' "$ENV_FILE" | cut -d= -f2)"
 say "building image (frontend + backend)"
 docker compose -f docker-compose.prod.yml build app
 
-say "starting postgres + valkey"
-docker compose -f docker-compose.prod.yml up -d postgres valkey
-
-say "bootstrapping database (create-or-migrate)"
-docker compose -f docker-compose.prod.yml run --rm app python scripts/bootstrap_db.py
-
-say "starting app, worker, caddy"
+# The app container's entrypoint migrates the schema AND provisions the least-privilege
+# DB role + Row-Level Security (as the owner) before it reports healthy; the worker waits
+# for that, then connects as the owner for its cross-tenant sweeps. So a single `up -d`,
+# ordered by compose health gates, brings up a fully-hardened stack.
+say "starting the stack (app migrates + provisions DB role/RLS on first boot)"
 docker compose -f docker-compose.prod.yml up -d
 
 # ---- Health gate ----------------------------------------------------------------

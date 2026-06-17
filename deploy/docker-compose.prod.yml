@@ -45,10 +45,15 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD}@postgres:5432/nexus
+      # The API serves as the least-privilege, RLS-enforced role (the user-facing surface).
+      NEXUS_DATABASE_URL: postgresql+asyncpg://nexus_app:${NEXUS_APP_DB_PASSWORD}@postgres:5432/nexus
+      # Owner connection — used only by the entrypoint for migrations + role/RLS provisioning.
+      NEXUS_DB_OWNER_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD}@postgres:5432/nexus
+      NEXUS_APP_DB_PASSWORD: ${NEXUS_APP_DB_PASSWORD}
       NEXUS_REDIS_URL: redis://valkey:6379/0
       NEXUS_QUEUE_BACKEND: redis
-      # The app container migrates the DB to head on start (the worker does not, to avoid a race).
+      # The app container migrates the DB to head + provisions the role/RLS on start (as owner);
+      # the worker does neither (to avoid a race) and connects as the owner for cross-tenant sweeps.
       NEXUS_RUN_MIGRATIONS: "1"
     depends_on:
       postgres:
@@ -68,6 +73,8 @@ services:
     command: ["python", "-m", "nexus.workers.worker"]
     env_file: .env
     environment:
+      # The worker runs trusted cross-tenant sweeps (find due accounts/cadences across all
+      # tenants), so it connects as the owner; its per-tenant processing is TenantSession-scoped.
       NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD}@postgres:5432/nexus
       NEXUS_REDIS_URL: redis://valkey:6379/0
       NEXUS_QUEUE_BACKEND: redis
@@ -75,6 +82,9 @@ services:
       postgres:
         condition: service_healthy
       valkey:
+        condition: service_healthy
+      # Wait for the app to finish migrations + role/RLS provisioning before consuming jobs.
+      app:
         condition: service_healthy
 
   caddy:

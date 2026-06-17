@@ -1,0 +1,148 @@
+"""Database-level tenant isolation: a least-privilege app role + Row-Level Security.
+
+Defense-in-depth on top of the application-layer ``TenantSession`` filtering. Run by the DB
+*owner* (set ``NEXUS_DATABASE_URL`` to the owner connection) AFTER migrations:
+
+    python scripts/apply_rls.py
+
+It is idempotent — safe to run on every deploy — and a no-op when ``NEXUS_APP_DB_PASSWORD``
+is unset (so a single-role deploy keeps working).
+
+Design
+------
+* The **API app** connects as ``nexus_app`` (``NOSUPERUSER NOBYPASSRLS``). Every tenant-scoped
+  table gets RLS with a policy keyed on ``current_setting('app.current_tenant')`` — which the
+  request/worker session layer sets via ``apply_rls()``. So even a query that forgot its
+  ``WHERE tenant_id = ...`` cannot return another tenant's rows.
+* ``memberships`` and ``workspaces`` are intentionally excluded: auth flows (login, switch,
+  signup) read/write them *without* a tenant context by design (a user's memberships span
+  tenants), so RLS there would lock users out. They remain protected by app-layer filtering.
+* The **worker** connects as the owner (it runs trusted cross-tenant sweeps to find due work),
+  so it is not constrained by RLS; its per-tenant processing is still ``TenantSession``-scoped.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+APP_ROLE = "nexus_app"
+# Auth/identity tables read or written without a tenant context — never put RLS on these.
+RLS_EXCLUDE = {"memberships", "workspaces"}
+
+
+def _tenant_tables() -> list[str]:
+    """Every tenant-scoped table (has a ``tenant_id`` column), minus the auth exclusions."""
+    import nexus.models  # noqa: F401  (populate Base.metadata with all mappers)
+    from nexus.core.db import Base
+
+    return sorted(
+        t.name
+        for t in Base.metadata.sorted_tables
+        if "tenant_id" in t.columns and t.name not in RLS_EXCLUDE
+    )
+
+
+def _owner_url() -> str:
+    """The owner connection string. The entrypoint points NEXUS_DATABASE_URL at the owner for
+    this script; fall back to the app setting for local/manual runs."""
+    url = os.environ.get("NEXUS_DB_OWNER_URL") or os.environ.get("NEXUS_DATABASE_URL")
+    if not url:
+        from nexus.core.config import get_settings
+
+        url = get_settings().database_url
+    return url
+
+
+async def main() -> None:
+    app_password = os.environ.get("NEXUS_APP_DB_PASSWORD", "").strip()
+    if not app_password:
+        print("[apply_rls] NEXUS_APP_DB_PASSWORD not set — skipping (single-role deploy).")
+        return
+
+    url = _owner_url()
+    if "+asyncpg" not in url and url.startswith("postgresql"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if not url.startswith("postgresql"):
+        print(f"[apply_rls] not a Postgres URL ({url.split('://')[0]}://…) — skipping.")
+        return
+
+    tables = _tenant_tables()
+    pw = app_password.replace("'", "''")  # escape for the SQL literal (generated pw is hex, but be safe)
+    engine = create_async_engine(url, isolation_level="AUTOCOMMIT")
+    try:
+        async with engine.connect() as conn:
+            dbname = (await conn.execute(text("SELECT current_database()"))).scalar()
+
+            # 1. Least-privilege app role (create once, then always reconcile password + flags).
+            await conn.execute(
+                text(
+                    f"DO $$ BEGIN "
+                    f"  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{APP_ROLE}') THEN "
+                    f"    CREATE ROLE {APP_ROLE} LOGIN; "
+                    f"  END IF; "
+                    f"END $$;"
+                )
+            )
+            await conn.execute(
+                text(
+                    f"ALTER ROLE {APP_ROLE} WITH LOGIN PASSWORD '{pw}' "
+                    f"NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT"
+                )
+            )
+
+            # 2. Privileges: connect + DML on existing and future objects (DDL stays with owner).
+            await conn.execute(text(f'GRANT CONNECT ON DATABASE "{dbname}" TO {APP_ROLE}'))
+            await conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {APP_ROLE}"))
+            await conn.execute(
+                text(
+                    f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public "
+                    f"TO {APP_ROLE}"
+                )
+            )
+            await conn.execute(
+                text(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE}")
+            )
+            await conn.execute(
+                text(
+                    f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+                    f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {APP_ROLE}"
+                )
+            )
+            await conn.execute(
+                text(
+                    f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+                    f"GRANT USAGE, SELECT ON SEQUENCES TO {APP_ROLE}"
+                )
+            )
+
+            # 3. RLS per tenant-scoped table. Non-FORCE: the owner (migrations, worker sweeps)
+            #    bypasses; the app role is constrained to current_setting('app.current_tenant').
+            for table in tables:
+                await conn.execute(text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))
+                await conn.execute(text(f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"'))
+                await conn.execute(
+                    text(
+                        f'CREATE POLICY tenant_isolation ON "{table}" '
+                        f"USING (tenant_id = current_setting('app.current_tenant', true)) "
+                        f"WITH CHECK (tenant_id = current_setting('app.current_tenant', true))"
+                    )
+                )
+
+            print(
+                f"[apply_rls] role '{APP_ROLE}' reconciled; RLS enforced on {len(tables)} tables "
+                f"(excluded: {', '.join(sorted(RLS_EXCLUDE))})."
+            )
+    finally:
+        await engine.dispose()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except Exception as exc:  # surface a clear failure so the deploy stops, not a silent half-apply
+        print(f"[apply_rls] FAILED: {exc!r}", file=sys.stderr)
+        raise

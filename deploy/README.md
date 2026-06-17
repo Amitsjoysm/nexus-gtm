@@ -21,11 +21,33 @@ domain, run `./deploy.sh other.domain.com` — nothing else changes.
 
 ## What deploy.sh does
 
-1. Creates `deploy/.env` from the example on first run and **generates** the Postgres
-   password and JWT secret (the app refuses to boot in `prod` with the insecure default).
+1. Creates `deploy/.env` from the example on first run and **generates** the secrets: the
+   Postgres owner password, the **least-privilege app-role password**, and the JWT signing
+   secret (the app refuses to boot in `prod` with the insecure default).
 2. Builds the production image (multi-stage: Node builds the SPA, Python serves it).
-3. Starts Postgres + Valkey, waits for health, runs `alembic upgrade head`.
-4. Starts app, worker, and Caddy; gates on the app's `/ready` (DB reachable) check.
+3. Starts the stack. The app container's entrypoint (as the DB owner) runs
+   `alembic upgrade head`, then provisions the least-privilege role + Row-Level Security
+   (see Security below) before reporting healthy.
+4. The worker waits for the app to be healthy, then Caddy starts; the script gates on the
+   app's health check.
+
+## Security (tenant isolation)
+
+Isolation is enforced in **two independent layers**, so a single missed `WHERE tenant_id`
+can never leak another customer's data:
+
+1. **Application layer** — every query runs through `TenantSession`, which filters reads and
+   validates writes against the request's tenant.
+2. **Database layer** — the **API** connects as `nexus_app`, a `NOSUPERUSER NOBYPASSRLS`
+   role, and every tenant-scoped table has **Row-Level Security** keyed on the per-request
+   `app.current_tenant` setting. Even a raw query as the API role returns zero rows without
+   the right tenant context. The DB **owner** role is used only for migrations and the
+   worker's trusted cross-tenant sweeps (finding due accounts across tenants); it is never
+   the API's connection. The `memberships`/`workspaces` identity tables are excluded from RLS
+   because auth (login, tenant switch) reads them across tenants by design.
+
+Provisioning is idempotent (`scripts/apply_rls.py`, run automatically on every deploy) and
+safe to re-run. Secrets live only in the gitignored `deploy/.env`.
 
 ## Operations
 
