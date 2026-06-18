@@ -154,12 +154,41 @@ async def test_posts_to_email_field():
     assert seen == {"to_email": "jane@acme.com"}
 
 
+async def test_sends_authorization_header_when_configured():
+    """A public HTTPS verifier endpoint can require a token; we send it as Authorization."""
+    seen = {}
+
+    def handler(req):
+        seen["auth"] = req.headers.get("authorization")
+        return _resp(SAFE_GSUITE)
+
+    v = ReacherEmailVerifier(
+        url="https://verify.test/v0/check_email", timeout=5.0,
+        transport=httpx.MockTransport(handler), auth_header="Bearer s3cr3t",
+    )
+    await v.verify_one("jane@acme.com")
+    assert seen["auth"] == "Bearer s3cr3t"
+
+
+async def test_no_authorization_header_by_default():
+    seen = {}
+
+    def handler(req):
+        seen["auth"] = req.headers.get("authorization")
+        return _resp(SAFE_GSUITE)
+
+    v = _verifier(handler)  # no auth_header
+    await v.verify_one("jane@acme.com")
+    assert seen["auth"] is None
+
+
 def test_contact_sourcing_settings_defaults():
     from nexus.core.config import Settings
 
     s = Settings()
     assert s.email_verify_provider == "stub"
     assert s.email_verify_url == "http://158.69.113.127:8080/v0/check_email"
+    assert s.email_verify_auth_header == ""  # no auth header unless configured
     assert s.email_verify_timeout_s == 20.0
     assert s.email_finder_max_candidates == 12
     assert s.contact_search_sources == "stub"

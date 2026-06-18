@@ -79,7 +79,8 @@ def build_email_verifier(name: str) -> EmailVerificationProvider:
 
         s = get_settings()
         return ReacherEmailVerifier(
-            url=s.email_verify_url, timeout=s.email_verify_timeout_s
+            url=s.email_verify_url, timeout=s.email_verify_timeout_s,
+            auth_header=s.email_verify_auth_header or None,
         )
     # Unknown keys still fail safe to the offline stub.
     return StubEmailVerificationProvider()

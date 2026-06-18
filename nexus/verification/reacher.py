@@ -61,11 +61,15 @@ class ReacherEmailVerifier(EmailVerificationProvider):
     def __init__(
         self, *, url: str, timeout: float = 20.0, transport=None,
         fail_threshold: int = 2, cooldown_s: float = 60.0,
+        auth_header: str | None = None,
     ):
         self.url = url
         self.timeout = timeout
         # ``transport`` is a test seam (httpx.MockTransport); None = real network.
         self._transport = transport
+        # Optional ``Authorization`` header so a public HTTPS verifier endpoint can require a
+        # token instead of being an open relay. None/blank = no header sent.
+        self._headers = {"Authorization": auth_header} if auth_header else None
         # Circuit breaker: a down verifier must fail FAST, not block its timeout on every
         # guessed-email permutation (which would hang contact sourcing for minutes). After
         # ``fail_threshold`` consecutive failures the circuit opens for ``cooldown_s`` and
@@ -85,7 +89,9 @@ class ReacherEmailVerifier(EmailVerificationProvider):
             async with httpx.AsyncClient(
                 timeout=timeout, transport=self._transport
             ) as client:
-                resp = await client.post(self.url, json={"to_email": email})
+                resp = await client.post(
+                    self.url, json={"to_email": email}, headers=self._headers
+                )
             if resp.status_code != 200:
                 self._note_failure()
                 return self._fail_safe(email)

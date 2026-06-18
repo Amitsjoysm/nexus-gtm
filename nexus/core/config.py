@@ -78,8 +78,15 @@ class Settings(BaseSettings):
     search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend
     email_verify_provider: str = "stub"        # email-deliverability backend
+    # Reacher verifier endpoint. In production point this at an HTTPS URL fronted by your
+    # reverse proxy (the container can reach :443 but not Reacher's raw :8080), e.g.
+    # https://verify.example.com/v0/check_email. The default is the local-only HTTP port.
     email_verify_url: str = "http://158.69.113.127:8080/v0/check_email"
     email_verify_timeout_s: float = 20.0
+    # Optional value sent as the HTTP ``Authorization`` header on every verify request, so a
+    # publicly-exposed HTTPS verifier endpoint isn't an open relay. Blank = no header (offline
+    # default). Example: "Bearer s3cr3t" or "Basic dXNlcjpwYXNz".
+    email_verify_auth_header: str = ""
     # Contact sourcing (sub-project B): net-new contact providers + the verifying email
     # finder. Defaults stay offline (stub) so CI is zero-network; activation is one env line.
     email_finder_max_candidates: int = 12       # permutation cap per contact (10 patterns + headroom)
