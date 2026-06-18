@@ -99,8 +99,12 @@ async def list_accounts(
     _: Principal = Depends(require(Permission.manage_accounts)),
     limit: int = 200,
 ) -> list[AccountOut]:
+    # Newest first so a just-added account (manual, lookalike, or discovery) always lands at the
+    # top of the list instead of in undefined order somewhere in the middle.
+    stmt = ts.select(Account).order_by(Account.created_at.desc()).limit(limit)
+    rows = list((await ts.session.scalars(stmt)).all())
     # Archived accounts (an SDR removed them as not-relevant) are hidden from the working list.
-    accounts = [a for a in await ts.list(Account, limit=limit) if not (a.custom_fields or {}).get("archived")]
+    accounts = [a for a in rows if not (a.custom_fields or {}).get("archived")]
     scores = await _latest_fit_scores(ts, [a.id for a in accounts])
     return [_account_out(a, fit_score=scores.get(a.id)) for a in accounts]
 
@@ -240,6 +244,13 @@ async def add_from_lookalike(
     if dom:
         for a in await ts.list(Account):
             if a.domain and domain_from_url(a.domain) == dom:
+                # Re-adding a company the rep previously removed must bring it back into the
+                # working list — otherwise "Add" returns a still-hidden row and looks like a no-op.
+                cf = dict(a.custom_fields or {})
+                if cf.get("archived"):
+                    cf["archived"] = False
+                    a.custom_fields = cf
+                    await ts.flush()
                 scores = await _latest_fit_scores(ts, [a.id])
                 return _account_out(a, fit_score=scores.get(a.id))
     account = Account(

@@ -44,16 +44,56 @@ class InboxService:
             composite_score=composite_score,
             age_days=age_days,
         )
+        title = f"{account.name}: {_KIND_LABEL.get(signal.kind, signal.kind)}"
+        # The raw headline becomes the supporting context, not the task title itself.
+        reason = f"{signal.title} · account score {composite_score if composite_score is not None else 'n/a'}"
+        action = suggested_action or {"type": "review_account", "account_id": account.id}
+
+        # Idempotent per signal: if this exact signal already produced a task (open OR done),
+        # never create a second one. So re-processing won't duplicate, and a signal the rep
+        # already actioned and marked complete is not re-alerted.
+        if signal.id:
+            dup = (
+                await ts.session.scalars(
+                    ts.select(InboxTask, InboxTask.signal_id == signal.id).limit(1)
+                )
+            ).first()
+            if dup is not None:
+                return dup
+
+        # One OPEN task per account: the account, not each headline, is the unit of work.
+        # Collapse multiple qualifying signals into a single inbox row and keep it pointed at the
+        # strongest signal — this is what stops the same account repeating many times.
+        open_task = (
+            await ts.session.scalars(
+                ts.select(
+                    InboxTask,
+                    InboxTask.account_id == account.id,
+                    InboxTask.status == "open",
+                )
+                .order_by(InboxTask.priority.desc())
+                .limit(1)
+            )
+        ).first()
+        if open_task is not None:
+            if priority >= open_task.priority:
+                open_task.signal_id = signal.id
+                open_task.title = title
+                open_task.reason = reason
+                open_task.priority = priority
+                open_task.suggested_action = action
+            await ts.flush()
+            return open_task
+
         task = InboxTask(
             tenant_id=ts.tenant_id,
             owner_user_id=owner_user_id,
             account_id=account.id,
             signal_id=signal.id,
-            title=f"{account.name}: {_KIND_LABEL.get(signal.kind, signal.kind)}",
-            # The raw headline becomes the supporting context, not the task title itself.
-            reason=f"{signal.title} · account score {composite_score if composite_score is not None else 'n/a'}",
+            title=title,
+            reason=reason,
             priority=priority,
-            suggested_action=suggested_action or {"type": "review_account", "account_id": account.id},
+            suggested_action=action,
         )
         ts.add(task)
         await ts.flush()

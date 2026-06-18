@@ -34,10 +34,39 @@ async def test_open_tasks_ordered_by_priority_desc():
     tid = await make_tenant()
     svc = get_inbox_service()
     async with tenant_session(tid) as ts:
+        acme = Account(tenant_id=tid, name="Acme", domain="acme.co")
+        globex = Account(tenant_id=tid, name="Globex", domain="globex.co")
+        ts.add_all([acme, globex])
+        await ts.flush()
+
+        # One signal per account (the inbox collapses to one task per account), so ordering is
+        # tested across accounts.
+        weak = SignalEvent(tenant_id=tid, account_id=acme.id, kind="news", source="t",
+                           title="minor", strength=0.2, dedupe_key="a", occurred_at=utcnow())
+        strong = SignalEvent(tenant_id=tid, account_id=globex.id, kind="g2_intent", source="t",
+                             title="hot", strength=0.95, dedupe_key="b", occurred_at=utcnow())
+        ts.add_all([weak, strong])
+        await ts.flush()
+
+        await svc.create_from_signal(ts, weak, acme, composite_score=30)
+        await svc.create_from_signal(ts, strong, globex, composite_score=90)
+
+        tasks = await svc.list_open(ts)
+        # Title is account-centric ("Acme: ...") with the headline in `reason`; the high-priority
+        # account sorts first.
+        assert [t.title for t in tasks] == ["Globex: Active buying intent", "Acme: Company news"]
+        assert [t.reason.split(" · ")[0] for t in tasks] == ["hot", "minor"]
+
+
+async def test_dedupes_to_one_open_task_per_account():
+    """Multiple qualifying signals for the same account collapse into ONE open task, kept pointed
+    at the strongest signal — so the same account never repeats in the inbox."""
+    tid = await make_tenant()
+    svc = get_inbox_service()
+    async with tenant_session(tid) as ts:
         acc = Account(tenant_id=tid, name="Acme", domain="acme.co")
         ts.add(acc)
         await ts.flush()
-
         weak = SignalEvent(tenant_id=tid, account_id=acc.id, kind="news", source="t",
                            title="minor", strength=0.2, dedupe_key="a", occurred_at=utcnow())
         strong = SignalEvent(tenant_id=tid, account_id=acc.id, kind="g2_intent", source="t",
@@ -49,10 +78,33 @@ async def test_open_tasks_ordered_by_priority_desc():
         await svc.create_from_signal(ts, strong, acc, composite_score=90)
 
         tasks = await svc.list_open(ts)
-        # Title is now account-centric ("Acme: ...") and the headline moved to `reason`; the
-        # high-priority signal still sorts first.
-        assert [t.title for t in tasks] == ["Acme: Active buying intent", "Acme: Company news"]
-        assert [t.reason.split(" · ")[0] for t in tasks] == ["hot", "minor"]
+        assert len(tasks) == 1
+        assert tasks[0].title == "Acme: Active buying intent"  # refreshed to the strongest signal
+        assert tasks[0].reason.split(" · ")[0] == "hot"
+
+
+async def test_same_signal_never_duplicates_even_after_completion():
+    """Re-processing the same signal returns the existing task; once completed it is not
+    re-alerted (stays done, no new open row)."""
+    tid = await make_tenant()
+    svc = get_inbox_service()
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.co")
+        ts.add(acc)
+        await ts.flush()
+        sig = SignalEvent(tenant_id=tid, account_id=acc.id, kind="g2_intent", source="t",
+                          title="hot", strength=0.9, dedupe_key="k", occurred_at=utcnow())
+        ts.add(sig)
+        await ts.flush()
+
+        t1 = await svc.create_from_signal(ts, sig, acc, composite_score=80)
+        t2 = await svc.create_from_signal(ts, sig, acc, composite_score=80)
+        assert t1.id == t2.id  # idempotent per signal
+
+        await svc.complete(ts, t1.id)
+        again = await svc.create_from_signal(ts, sig, acc, composite_score=80)
+        assert again.id == t1.id and again.status == "done"  # not re-alerted
+        assert await svc.list_open(ts) == []
 
 
 async def test_complete_marks_done():
