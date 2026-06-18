@@ -61,6 +61,10 @@ class WaterfallEnricher:
 
         if merged.email and merged.email_confidence >= contact.email_confidence:
             contact.email, contact.email_confidence = merged.email, merged.email_confidence
+            # Persist the deliverability verdict too — without this the verified status was
+            # computed and then thrown away, leaving every enriched contact "unverified".
+            if merged.email_status:
+                contact.email_status = merged.email_status
         if merged.phone and merged.phone_confidence >= contact.phone_confidence:
             contact.phone, contact.phone_confidence = merged.phone, merged.phone_confidence
         if merged.found:

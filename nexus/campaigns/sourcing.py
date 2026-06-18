@@ -143,10 +143,17 @@ async def source_account_contacts(
         logger.warning("contact_search failed for %s: %r", account.name, exc)
         return []
 
+    from nexus.enrichment.waterfall import get_enricher
+
+    enricher = get_enricher()
     created: list[Contact] = []
     for cand in candidates:
         if len(created) >= limit:
             break
+        # Only persist real people. The "stub" provider returns title-personas
+        # ("VP Sales" as the name) for offline/test determinism — never store those as contacts.
+        if (cand.source or "").lower() == "stub":
+            continue
         email = (cand.email or "").lower()
         name = (cand.full_name or "").lower()
         if (email and email in seen_emails) or (name and name in seen_names):
@@ -158,13 +165,12 @@ async def source_account_contacts(
         )
         ts.add(person)
         await ts.flush()
-        if person.email:
-            try:
-                verdict = await registry.verify_email(person.email)
-                person.email_status = verdict.status
-                person.email_confidence = verdict.confidence
-            except Exception:  # verification is best-effort
-                pass
+        # Guess + verify the work email (the waterfall enricher patterns first.last@domain and
+        # verifies it, persisting email + deliverability status onto the contact).
+        try:
+            await enricher.enrich_contact(ts, person, account)
+        except Exception:  # enrichment is best-effort
+            pass
         seen_emails.add(email)
         seen_names.add(name)
         created.append(person)

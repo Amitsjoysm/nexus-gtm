@@ -143,3 +143,26 @@ async def test_waterfall_pattern_fallback_after_finder_offline():
         res = await enricher.enrich_contact(ts, contact, acc)
     assert contact.email == "jane.doe@acme.com"
     assert contact.email_confidence == 0.4
+
+
+async def test_waterfall_persists_email_status_onto_contact():
+    """Regression: the verified deliverability status must land on the contact itself, not just
+    the EnrichmentResult — otherwise every enriched contact shows up 'unverified'."""
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.com")
+        ts.add(acc)
+        await ts.flush()
+        contact = Contact(tenant_id=tid, account_id=acc.id, full_name="Jane Doe")
+        ts.add(contact)
+        await ts.flush()
+        enricher = WaterfallEnricher(
+            providers=[
+                VerifyingPatternEmailProvider(
+                    verify=_fake_verify({"jane.doe@acme.com": (STATUS_VALID, 0.95, {})})
+                )
+            ]
+        )
+        await enricher.enrich_contact(ts, contact, acc)
+    assert contact.email == "jane.doe@acme.com"
+    assert contact.email_status == STATUS_VALID  # the fix: status is persisted, not dropped
