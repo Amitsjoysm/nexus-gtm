@@ -6,12 +6,28 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
 from nexus.api.deps import Principal, get_tenant_session, require
-from nexus.api.schemas import WorkspaceContactOut
+from nexus.api.schemas import ReverifyResult, WorkspaceContactOut
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Account, Contact
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
+
+
+@router.post("/reverify", response_model=ReverifyResult)
+async def reverify_contact_emails(
+    only_unverified: bool = True,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> ReverifyResult:
+    """Re-run the email verifier against contacts that already have an address but no verdict
+    (status null/blank/unknown), and persist the result. Use after the verifier was unreachable
+    so guessed addresses get their deliverability status. ``only_unverified=false`` re-checks
+    every contact with an email."""
+    from nexus.enrichment.reverify import reverify_contacts
+
+    result = await reverify_contacts(ts, only_unverified=only_unverified)
+    return ReverifyResult(**result)
 
 
 @router.get("", response_model=list[WorkspaceContactOut])

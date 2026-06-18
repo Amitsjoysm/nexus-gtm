@@ -26,6 +26,7 @@ import type {
   EmailTestResult,
   Mailbox,
   WorkspaceContact,
+  ReverifyResult,
   Cadence,
   CadenceEnrollment,
   CadenceInput,
@@ -210,6 +211,13 @@ export class ApiClient {
   enrichContact(contactId: string, signal?: AbortSignal) {
     return this.request<Contact>(`/accounts/contacts/${contactId}/enrich`, {
       method: "POST",
+      signal,
+    });
+  }
+  reverifyContacts(onlyUnverified = true, signal?: AbortSignal) {
+    return this.request<ReverifyResult>("/contacts/reverify", {
+      method: "POST",
+      query: { only_unverified: String(onlyUnverified) },
       signal,
     });
   }

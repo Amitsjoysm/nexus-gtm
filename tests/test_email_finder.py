@@ -151,6 +151,29 @@ async def test_waterfall_pattern_fallback_after_finder_offline():
     assert contact.email_confidence == 0.4
 
 
+async def test_waterfall_final_verify_scores_unverified_winner():
+    """When a non-verifying provider (search/pattern) supplies the winning email, the waterfall's
+    final verify pass must attach a deliverability verdict — otherwise it lands 'unverified'."""
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.com")
+        ts.add(acc)
+        await ts.flush()
+        contact = Contact(tenant_id=tid, account_id=acc.id, full_name="Jane Doe")
+        ts.add(contact)
+        await ts.flush()
+        # Only the blind pattern provider (0.4, no status) finds the email; inject the final
+        # verifier so the chosen address gets scored valid.
+        enricher = WaterfallEnricher(
+            providers=[PatternEmailProvider()],
+            verify=_fake_verify({"jane.doe@acme.com": (STATUS_VALID, 0.95, {})}),
+        )
+        await enricher.enrich_contact(ts, contact, acc)
+    assert contact.email == "jane.doe@acme.com"
+    assert contact.email_status == STATUS_VALID  # attached by the final verify pass
+    assert contact.email_confidence == 0.95      # lifted from the 0.4 blind guess
+
+
 async def test_waterfall_persists_email_status_onto_contact():
     """Regression: the verified deliverability status must land on the contact itself, not just
     the EnrichmentResult — otherwise every enriched contact shows up 'unverified'."""

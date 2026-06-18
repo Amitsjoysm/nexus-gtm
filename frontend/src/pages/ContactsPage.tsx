@@ -37,6 +37,7 @@ export function ContactsPage() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState(ALL);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [reverifying, setReverifying] = useState(false);
 
   const rows = contacts.data ?? [];
   const visible = useMemo(() => {
@@ -48,6 +49,28 @@ export function ContactsPage() {
       return true;
     });
   }, [rows, query, statusFilter]);
+
+  async function reverifyAll() {
+    setReverifying(true);
+    try {
+      const res = await api.reverifyContacts(true);
+      const verified = res.statuses.valid ?? 0;
+      toast.success(
+        "Re-verification complete",
+        `Checked ${res.checked}, updated ${res.updated}${verified ? ` · ${verified} valid` : ""}.`,
+      );
+      contacts.refetch();
+    } catch (err) {
+      toast.error("Re-verify failed", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setReverifying(false);
+    }
+  }
+
+  const unverifiedCount = useMemo(
+    () => rows.filter((c) => c.email && (!c.email_status || c.email_status === "unknown")).length,
+    [rows],
+  );
 
   async function verify(c: WorkspaceContact) {
     setBusyId(c.id);
@@ -168,6 +191,20 @@ export function ContactsPage() {
         <span className={styles.count}>
           {visible.length} of {rows.length}
         </span>
+        <Button
+          size="sm"
+          variant="secondary"
+          loading={reverifying}
+          disabled={unverifiedCount === 0}
+          onClick={reverifyAll}
+          title={
+            unverifiedCount === 0
+              ? "Every contact with an email already has a verdict"
+              : `Re-check ${unverifiedCount} address${unverifiedCount === 1 ? "" : "es"} against the verifier`
+          }
+        >
+          Re-verify {unverifiedCount > 0 ? `(${unverifiedCount})` : "emails"}
+        </Button>
       </div>
 
       {contacts.error && !contacts.data ? (

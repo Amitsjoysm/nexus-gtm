@@ -113,6 +113,14 @@ class WorkspaceContactOut(BaseModel):
     enrichment_source: str | None = None
 
 
+class ReverifyResult(BaseModel):
+    """Outcome of a contact-email re-verification pass over the workspace."""
+
+    checked: int
+    updated: int
+    statuses: dict[str, int] = Field(default_factory=dict)
+
+
 class LookalikeOut(BaseModel):
     name: str
     domain: str

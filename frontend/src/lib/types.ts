@@ -129,6 +129,12 @@ export interface WorkspaceContact {
   enrichment_source: string | null;
 }
 
+export interface ReverifyResult {
+  checked: number;
+  updated: number;
+  statuses: Record<string, number>;
+}
+
 export interface TriageSummary {
   signal_kind: string | null;
   signal_strength: number | null;
