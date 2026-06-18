@@ -34,12 +34,18 @@ def _fake_verify(verdicts: dict):
 async def test_finder_generates_expected_permutations():
     prov = VerifyingPatternEmailProvider(verify=_fake_verify({}))
     cands = prov._candidates("Jane Doe", "acme.com")
+    # 10 most-common corporate patterns, first.last + first leading.
     assert cands == [
         "jane.doe@acme.com",
+        "jane@acme.com",
         "janedoe@acme.com",
         "jdoe@acme.com",
-        "jane@acme.com",
+        "janed@acme.com",
         "j.doe@acme.com",
+        "jane_doe@acme.com",
+        "doe@acme.com",
+        "doe.jane@acme.com",
+        "jd@acme.com",
     ]
 
 
@@ -68,8 +74,8 @@ async def test_finder_stops_on_first_valid():
     assert res.email == "janedoe@acme.com"
     assert res.email_confidence == 0.95
     assert res.email_status == STATUS_VALID
-    # Stopped after the second candidate; never probed jdoe/jane/j.doe.
-    assert calls == ["jane.doe@acme.com", "janedoe@acme.com"]
+    # Stopped on the first valid (janedoe, the 3rd pattern); never probed the rest.
+    assert calls == ["jane.doe@acme.com", "jane@acme.com", "janedoe@acme.com"]
 
 
 async def test_finder_catch_all_short_circuits_to_canonical_risky():

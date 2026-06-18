@@ -10,6 +10,7 @@ stub is used and this module is never constructed.
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 
@@ -57,25 +58,53 @@ def _classify_provider(records: list, misc: dict) -> str | None:
 class ReacherEmailVerifier(EmailVerificationProvider):
     name = "reacher"
 
-    def __init__(self, *, url: str, timeout: float = 20.0, transport=None):
+    def __init__(
+        self, *, url: str, timeout: float = 20.0, transport=None,
+        fail_threshold: int = 2, cooldown_s: float = 60.0,
+    ):
         self.url = url
         self.timeout = timeout
         # ``transport`` is a test seam (httpx.MockTransport); None = real network.
         self._transport = transport
+        # Circuit breaker: a down verifier must fail FAST, not block its timeout on every
+        # guessed-email permutation (which would hang contact sourcing for minutes). After
+        # ``fail_threshold`` consecutive failures the circuit opens for ``cooldown_s`` and
+        # verifications return ``unknown`` instantly without touching the network.
+        self._fail_threshold = max(1, fail_threshold)
+        self._cooldown_s = cooldown_s
+        self._consecutive_failures = 0
+        self._open_until = 0.0
 
     async def verify_one(self, email: str) -> EmailVerification:
+        if time.monotonic() < self._open_until:  # circuit open: verifier is known-down
+            return self._fail_safe(email)
         try:
+            # Cap the connect phase so an unreachable host fails in seconds, not the full read
+            # timeout (which is for slow-but-up servers).
+            timeout = httpx.Timeout(self.timeout, connect=min(5.0, self.timeout))
             async with httpx.AsyncClient(
-                timeout=self.timeout, transport=self._transport
+                timeout=timeout, transport=self._transport
             ) as client:
                 resp = await client.post(self.url, json={"to_email": email})
             if resp.status_code != 200:
+                self._note_failure()
                 return self._fail_safe(email)
             data = resp.json()
         except Exception as exc:  # never raise across the boundary
             logger.warning("reacher verify failed for %r: %r", email, exc)
+            self._note_failure()
             return self._fail_safe(email)
+        self._consecutive_failures = 0  # a success closes the circuit
         return self._map(email, data)
+
+    def _note_failure(self) -> None:
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self._fail_threshold:
+            self._open_until = time.monotonic() + self._cooldown_s
+            logger.warning(
+                "reacher circuit opened for %.0fs after %d consecutive failures (%s)",
+                self._cooldown_s, self._consecutive_failures, self.url,
+            )
 
     def _fail_safe(self, email: str) -> EmailVerification:
         return EmailVerification(

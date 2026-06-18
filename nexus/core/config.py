@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     email_verify_timeout_s: float = 20.0
     # Contact sourcing (sub-project B): net-new contact providers + the verifying email
     # finder. Defaults stay offline (stub) so CI is zero-network; activation is one env line.
-    email_finder_max_candidates: int = 5        # permutation cap per contact
+    email_finder_max_candidates: int = 12       # permutation cap per contact (10 patterns + headroom)
     contact_search_sources: str = "stub"        # ordered net-new contact providers
     campaign_sourcing_enabled: bool = True       # inline auto-retry on SKIP_NO_CONTACT
     campaign_sourced_min_send_confidence: float = 0.5  # bar a sourced address must clear to send

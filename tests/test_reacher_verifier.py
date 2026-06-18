@@ -161,8 +161,28 @@ def test_contact_sourcing_settings_defaults():
     assert s.email_verify_provider == "stub"
     assert s.email_verify_url == "http://158.69.113.127:8080/v0/check_email"
     assert s.email_verify_timeout_s == 20.0
-    assert s.email_finder_max_candidates == 5
+    assert s.email_finder_max_candidates == 12
     assert s.contact_search_sources == "stub"
     assert s.campaign_sourcing_enabled is True
     assert s.campaign_sourced_min_send_confidence == 0.5
     assert s.contact_search_source_list == ["stub"]
+
+
+async def test_circuit_breaker_opens_after_consecutive_failures():
+    """A down verifier must fail fast: after the failure threshold the circuit opens and
+    further calls return 'unknown' WITHOUT touching the network (no per-call timeout stack-up)."""
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        raise httpx.ConnectError("host down")
+
+    v = ReacherEmailVerifier(
+        url="http://down.example/v0/check_email", timeout=5.0,
+        transport=httpx.MockTransport(handler), fail_threshold=2, cooldown_s=60.0,
+    )
+    r1 = await v.verify_one("a@x.com")   # failure 1 (hits transport)
+    r2 = await v.verify_one("b@x.com")   # failure 2 -> opens circuit (hits transport)
+    r3 = await v.verify_one("c@x.com")   # circuit open -> short-circuits, no transport
+    assert r1.status == STATUS_UNKNOWN and r2.status == STATUS_UNKNOWN and r3.status == STATUS_UNKNOWN
+    assert calls["n"] == 2  # the 3rd call never reached the network

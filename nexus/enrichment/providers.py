@@ -130,8 +130,21 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
         if not first or not domain:
             return []
         if last:
-            locals_ = [f"{first}.{last}", f"{first}{last}", f"{first[0]}{last}",
-                       first, f"{first[0]}.{last}"]
+            fi, li = first[0], last[0]
+            # The 10 most common corporate email patterns, in priority order. first.last and
+            # first lead (the user's most-wanted), then the next 8 by real-world frequency.
+            locals_ = [
+                f"{first}.{last}",   # jane.doe   (most common)
+                first,               # jane
+                f"{first}{last}",    # janedoe
+                f"{fi}{last}",       # jdoe
+                f"{first}{li}",      # janed
+                f"{fi}.{last}",      # j.doe
+                f"{first}_{last}",   # jane_doe
+                last,                # doe
+                f"{last}.{first}",   # doe.jane
+                f"{fi}{li}",         # jd
+            ]
         else:
             locals_ = [first]
         seen: list[str] = []
