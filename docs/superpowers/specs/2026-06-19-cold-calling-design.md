@@ -166,6 +166,34 @@ GET  /calling/contacts/{contact_id}/activities    -> call history for a contact
   hooks (recording-disclosure, AI-disclosure for tier 3, DNC list + quiet-hours guard) live inside
   the provider boundary so they can't be bypassed.
 
+## Orchestrator-driven cadence setup & decisions (added 2026-06-19)
+
+The conversational orchestrator must be able to set up and run cadences — including call steps —
+and make channel decisions automatically, not just via the UI.
+
+- New orchestration tools (`nexus/orchestration/tools.py`), registered like the existing ones:
+  - `setup_cadence` — create a multi-touch cadence from a high-level brief (e.g. "3-touch:
+    email, call day 2, email day 4"); the tool picks sensible channels/delays when unspecified.
+  - `enroll_cadence` — enroll an account/contact (or a list/segment) into a cadence.
+- The orchestrator can therefore answer "set up a cold-calling cadence for my hot accounts and
+  enroll them" end-to-end. Decisions (channel mix, who to call first) reuse account scores +
+  signals already in context. All gated by RBAC (`manage_campaigns`/`manage_accounts`) and
+  tenant-scoped; outbound still respects the existing approval gate (autonomy = gated by default),
+  so the orchestrator can *set up and queue* but human approval still governs actual sends.
+- Existing orchestrator tools/recipes are untouched; these are additive tool registrations.
+
+## Phone numbers in the Contacts list (added 2026-06-19)
+
+Numbers from data platforms (InfoJoy today; future providers) must surface so SDRs can call.
+
+- Enrichment already writes `contact.phone`/`phone_confidence` (web-search provider); the InfoJoy
+  / future data-source providers populate the same fields via the existing `DataSourceRegistry`
+  enrichment waterfall — **no new field needed**, just ensure providers map their phone into it.
+- `WorkspaceContactOut` (and the Contacts page) currently omit phone — **add `phone` /
+  `phone_confidence`** to the schema, the `/contacts` response, and a sortable "Phone" column.
+- The call queue uses `contact.phone` for click-to-dial; a contact with no number still queues
+  (the SDR can add one) but is flagged "no number."
+
 ## Testing (offline, zero-network)
 
 - `call_script` agent: deterministic stub output shape.
