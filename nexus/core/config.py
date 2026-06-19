@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-4-6"
     # Groq (OpenAI-compatible) — the fast secondary LLM, used after Anthropic.
     groq_api_key: str = ""
+    # Optional rotation pool (comma-separated). On a 429 the provider switches to the next key,
+    # so bursty LLM load rides out a single key's rate limit instead of degrading to the stub.
+    groq_api_keys: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_model: str = "llama-3.3-70b-versatile"
 
@@ -187,10 +190,9 @@ class Settings(BaseSettings):
     def contact_search_source_list(self) -> list[str]:
         return self._csv_list(self.contact_search_sources)
 
-    @property
-    def exa_api_key_list(self) -> list[str]:
+    def _key_pool(self, primary: str, pool_csv: str) -> list[str]:
         """Primary key first, then the rotation pool — deduped, blanks dropped."""
-        keys = [(self.exa_api_key or "").strip()] + self._csv_list(self.exa_api_keys)
+        keys = [(primary or "").strip()] + self._csv_list(pool_csv)
         seen: set[str] = set()
         out: list[str] = []
         for k in keys:
@@ -198,6 +200,14 @@ class Settings(BaseSettings):
                 seen.add(k)
                 out.append(k)
         return out
+
+    @property
+    def exa_api_key_list(self) -> list[str]:
+        return self._key_pool(self.exa_api_key, self.exa_api_keys)
+
+    @property
+    def groq_api_key_list(self) -> list[str]:
+        return self._key_pool(self.groq_api_key, self.groq_api_keys)
 
     @model_validator(mode="after")
     def _reject_insecure_prod(self) -> "Settings":

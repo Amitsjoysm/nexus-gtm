@@ -140,15 +140,16 @@ class StubLLMProvider(LLMProvider):
 class OpenAICompatProvider(LLMProvider):
     """Calls any OpenAI-compatible /chat/completions endpoint."""
 
-    def __init__(self, base_url: str, api_key: str, model: str):
+    def __init__(self, base_url: str, api_key: str, model: str, transport=None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self._transport = transport  # test seam (httpx.MockTransport); None = real network
         self._client: httpx.AsyncClient | None = None
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=60)
+            self._client = httpx.AsyncClient(timeout=60, transport=self._transport)
         return self._client
 
     async def complete(
@@ -178,10 +179,65 @@ class OpenAICompatProvider(LLMProvider):
 
 
 class GroqLLMProvider(OpenAICompatProvider):
-    """Groq exposes an OpenAI-compatible /chat/completions endpoint, so it's just preset URL+model."""
+    """Groq exposes an OpenAI-compatible /chat/completions endpoint (preset URL+model).
 
-    def __init__(self, api_key: str, model: str, base_url: str = "https://api.groq.com/openai/v1"):
-        super().__init__(base_url=base_url, api_key=api_key, model=model)
+    Supports a pool of API keys: on a 429 (rate limit) it rotates to the next key and retries,
+    so bursty load rides out a single key's limit. If every key is rate-limited the request
+    raises, letting :class:`FallbackLLMProvider` degrade to the next provider (ultimately the
+    stub) — completion never hard-fails.
+    """
+
+    def __init__(
+        self,
+        api_keys: str | list[str],
+        model: str,
+        base_url: str = "https://api.groq.com/openai/v1",
+        transport=None,
+    ):
+        keys = [api_keys] if isinstance(api_keys, str) else list(api_keys)
+        keys = [k.strip() for k in keys if k and k.strip()]
+        if not keys:
+            raise ValueError("GroqLLMProvider needs at least one API key")
+        super().__init__(base_url=base_url, api_key=keys[0], model=model, transport=transport)
+        self._keys = keys
+        self._idx = 0  # sticky: start each call from the last key that worked
+
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 800,
+        purpose: str | None = None,
+        variables: dict | None = None,
+    ) -> LLMResponse:
+        payload = {
+            "model": self.model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        last_resp: httpx.Response | None = None
+        for _ in range(len(self._keys)):
+            key = self._keys[self._idx]
+            resp = await self._http().post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            if resp.status_code == 429:  # rate-limited on this key -> rotate and retry
+                logger.warning("Groq key #%d rate-limited (429); rotating", self._idx)
+                self._idx = (self._idx + 1) % len(self._keys)
+                last_resp = resp
+                continue
+            resp.raise_for_status()  # other HTTP errors propagate to the fallback chain
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"]
+            tokens = data.get("usage", {}).get("total_tokens", 0)
+            return LLMResponse(text=text, tokens=tokens)
+        # Every key was rate-limited: raise so the caller can fall back.
+        last_resp.raise_for_status()  # type: ignore[union-attr]
+        raise RuntimeError("all Groq keys rate-limited")  # pragma: no cover (defensive)
 
 
 class AnthropicLLMProvider(LLMProvider):
@@ -268,8 +324,8 @@ def _build_llm_chain(s) -> LLMProvider:
     chain: list[LLMProvider] = []
     if s.anthropic_api_key:
         chain.append(AnthropicLLMProvider(s.anthropic_api_key, s.anthropic_model))
-    if s.groq_api_key:
-        chain.append(GroqLLMProvider(s.groq_api_key, s.groq_model, s.groq_base_url))
+    if s.groq_api_key_list:
+        chain.append(GroqLLMProvider(s.groq_api_key_list, s.groq_model, s.groq_base_url))
     if s.llm_api_key:
         chain.append(OpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model))
     chain.append(StubLLMProvider())
@@ -289,9 +345,9 @@ def get_llm_provider() -> LLMProvider:
             _provider = FallbackLLMProvider(
                 [AnthropicLLMProvider(s.anthropic_api_key, s.anthropic_model), StubLLMProvider()]
             )
-        elif s.llm_provider == "groq" and s.groq_api_key:
+        elif s.llm_provider == "groq" and s.groq_api_key_list:
             _provider = FallbackLLMProvider(
-                [GroqLLMProvider(s.groq_api_key, s.groq_model, s.groq_base_url), StubLLMProvider()]
+                [GroqLLMProvider(s.groq_api_key_list, s.groq_model, s.groq_base_url), StubLLMProvider()]
             )
         elif s.llm_provider == "openai_compat" and s.llm_api_key:
             _provider = OpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model)

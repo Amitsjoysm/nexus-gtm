@@ -47,11 +47,18 @@ async def test_fallback_raises_only_if_everything_fails():
 def _settings(**over):
     base = dict(
         anthropic_api_key="", anthropic_model="claude-sonnet-4-6",
-        groq_api_key="", groq_model="llama-3.3-70b-versatile",
+        groq_api_key="", groq_api_keys="", groq_model="llama-3.3-70b-versatile",
         groq_base_url="https://api.groq.com/openai/v1",
         llm_api_key="", llm_base_url="https://api.openai.com/v1", llm_model="gpt-4o-mini",
     )
     base.update(over)
+    # Mirror Settings.groq_api_key_list (primary + pool, deduped, blanks dropped).
+    pool = [base["groq_api_key"].strip()] + [k.strip() for k in base["groq_api_keys"].split(",")]
+    seen: list[str] = []
+    for k in pool:
+        if k and k not in seen:
+            seen.append(k)
+    base["groq_api_key_list"] = seen
     return SimpleNamespace(**base)
 
 
@@ -77,6 +84,49 @@ def test_groq_provider_targets_groq_endpoint():
     g = GroqLLMProvider("key", "llama-3.3-70b-versatile")
     assert g.base_url == "https://api.groq.com/openai/v1"
     assert g.model == "llama-3.3-70b-versatile"
+
+
+def test_groq_key_pool_dedup_and_order():
+    from nexus.core.config import Settings
+
+    s = Settings(groq_api_key="a", groq_api_keys="b, c, a")  # 'a' repeated -> deduped, order kept
+    assert s.groq_api_key_list == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_groq_rotates_to_next_key_on_429():
+    """A rate-limited key (429) makes the provider rotate to the next key and retry."""
+    import httpx
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("authorization", "")
+        seen.append(auth)
+        if auth == "Bearer k1":  # first key is rate-limited
+            return httpx.Response(429, json={"error": "rate_limit_exceeded"})
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "hi"}}], "usage": {"total_tokens": 5}},
+        )
+
+    g = GroqLLMProvider(["k1", "k2"], "m", transport=httpx.MockTransport(handler))
+    out = await g.complete([LLMMessage("user", "yo")])
+    assert out.text == "hi"
+    assert seen == ["Bearer k1", "Bearer k2"]  # rotated after the 429
+
+
+@pytest.mark.asyncio
+async def test_groq_raises_when_all_keys_rate_limited():
+    """If every key is 429, the request raises so FallbackLLMProvider can degrade to the stub."""
+    import httpx
+
+    g = GroqLLMProvider(
+        ["k1", "k2"], "m",
+        transport=httpx.MockTransport(lambda r: httpx.Response(429, json={})),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await g.complete([LLMMessage("user", "yo")])
 
 
 @pytest.mark.asyncio
