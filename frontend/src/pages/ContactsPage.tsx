@@ -87,23 +87,36 @@ export function ContactsPage() {
 
   const columns: Column<WorkspaceContact>[] = useMemo(
     () => [
-      { key: "full_name", header: "Name", render: (c) => <span className={styles.name}>{c.full_name}</span> },
-      { key: "title", header: "Title", render: (c) => c.title ?? <span className={styles.muted}>—</span> },
+      {
+        key: "full_name",
+        header: "Name",
+        sortValue: (c) => c.full_name,
+        render: (c) => <span className={styles.name}>{c.full_name}</span>,
+      },
+      {
+        key: "title",
+        header: "Title",
+        sortValue: (c) => c.title,
+        render: (c) => c.title ?? <span className={styles.muted}>—</span>,
+      },
       {
         key: "account_name",
         header: "Account",
+        sortValue: (c) => c.account_name,
         render: (c) => <span className={styles.account}>{c.account_name}</span>,
       },
       {
         key: "email",
         header: "Email",
         hideOnMobile: true,
+        sortValue: (c) => c.email,
         render: (c) =>
           c.email ? <span className={styles.mono}>{c.email}</span> : <span className={styles.muted}>—</span>,
       },
       {
         key: "email_status",
         header: "Status",
+        sortValue: (c) => c.email_status,
         render: (c) =>
           c.email_status ? (
             <Badge tone={STATUS_TONE[c.email_status] ?? "neutral"} dot>

@@ -86,11 +86,17 @@ export function AccountsPage() {
 
   const columns: Column<Account>[] = useMemo(
     () => [
-      { key: "name", header: "Account", render: (a) => <span className={styles.name}>{a.name}</span> },
+      {
+        key: "name",
+        header: "Account",
+        sortValue: (a) => a.name,
+        render: (a) => <span className={styles.name}>{a.name}</span>,
+      },
       {
         key: "fit_score",
         header: "Fit",
         align: "right",
+        sortValue: (a) => a.fit_score ?? null,
         render: (a) =>
           a.fit_score != null ? (
             <Badge tone={fitTone(a.fit_score)}>{a.fit_score}</Badge>
@@ -102,18 +108,21 @@ export function AccountsPage() {
         key: "industry",
         header: "Industry",
         hideOnMobile: true,
+        sortValue: (a) => a.industry,
         render: (a) => a.industry ?? <span className={styles.muted}>—</span>,
       },
       {
         key: "country",
         header: "Location",
         hideOnMobile: true,
+        sortValue: (a) => a.country,
         render: (a) => a.country ?? <span className={styles.muted}>—</span>,
       },
       {
         key: "employee_count",
         header: "Employees",
         align: "right",
+        sortValue: (a) => a.employee_count ?? null,
         render: (a) => formatNumber(a.employee_count),
       },
       {

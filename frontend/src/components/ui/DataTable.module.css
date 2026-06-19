@@ -25,6 +25,46 @@
   z-index: 1;
 }
 
+/* Sortable column header: a button that inherits the th's uppercase label styling. */
+.sortBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.sortBtnRight {
+  flex-direction: row-reverse;
+}
+.sortBtn:hover {
+  color: var(--text);
+}
+.sortBtn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.sortActive {
+  color: var(--text);
+}
+.sortIcon {
+  font-size: 0.85em;
+  line-height: 1;
+  opacity: 0.55;
+}
+.sortActive .sortIcon {
+  opacity: 1;
+  color: var(--accent);
+}
+
 .row td {
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
