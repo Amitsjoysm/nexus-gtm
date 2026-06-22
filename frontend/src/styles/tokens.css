@@ -1,5 +1,5 @@
 /*
- * NEXUS GTM — Design Tokens (single source of truth)
+ * Infojoy GTM — Design Tokens (single source of truth)
  * Consume via var(--token). Never hard-code colors/spacing in components.
  * Theming: default is dark; [data-theme="light"] overrides surfaces/text.
  */
