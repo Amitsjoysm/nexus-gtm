@@ -125,6 +125,8 @@ export interface WorkspaceContact {
   email: string | null;
   email_status: string | null;
   email_confidence: number;
+  phone: string | null;
+  phone_confidence: number;
   linkedin_url: string | null;
   enrichment_source: string | null;
 }
@@ -134,6 +136,56 @@ export interface ReverifyResult {
   updated: number;
   statuses: Record<string, number>;
 }
+
+// ---- Cold calling --------------------------------------------------------------------------
+export interface CallTask {
+  id: string;
+  account_id: string;
+  account_name: string;
+  contact_id: string | null;
+  contact_name: string | null;
+  title: string | null;
+  phone: string | null;
+  reason: string;
+  priority: number;
+  status: string;
+  source: string;
+  due_at: string | null;
+  has_script: boolean;
+}
+
+export interface CallScript {
+  opener: string;
+  hook: string;
+  value_prop: string;
+  discovery_questions: string[];
+  objections: { objection: string; response: string }[];
+  cta: string;
+  voicemail: string;
+}
+
+export interface CallActivity {
+  id: string;
+  call_task_id: string | null;
+  account_id: string;
+  contact_id: string | null;
+  disposition: string;
+  notes: string;
+  duration_s: number | null;
+  next_step: string | null;
+  occurred_at: string;
+}
+
+export const CALL_DISPOSITIONS = [
+  "connected",
+  "voicemail",
+  "no_answer",
+  "callback",
+  "meeting_booked",
+  "not_interested",
+  "bad_number",
+  "gatekeeper",
+] as const;
 
 export interface TriageSummary {
   signal_kind: string | null;

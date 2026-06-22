@@ -114,6 +114,24 @@ export function ContactsPage() {
           c.email ? <span className={styles.mono}>{c.email}</span> : <span className={styles.muted}>—</span>,
       },
       {
+        key: "phone",
+        header: "Phone",
+        hideOnMobile: true,
+        sortValue: (c) => c.phone,
+        render: (c) =>
+          c.phone ? (
+            <a
+              href={`tel:${c.phone.replace(/[^\d+]/g, "")}`}
+              className={styles.mono}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {c.phone}
+            </a>
+          ) : (
+            <span className={styles.muted}>—</span>
+          ),
+      },
+      {
         key: "email_status",
         header: "Status",
         sortValue: (c) => c.email_status,

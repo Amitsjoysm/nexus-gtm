@@ -27,6 +27,9 @@ import type {
   Mailbox,
   WorkspaceContact,
   ReverifyResult,
+  CallTask,
+  CallScript,
+  CallActivity,
   Cadence,
   CadenceEnrollment,
   CadenceInput,
@@ -220,6 +223,39 @@ export class ApiClient {
       query: { only_unverified: String(onlyUnverified) },
       signal,
     });
+  }
+  // ---- Cold calling --------------------------------------------------------------------
+  callQueue(status = "open", mine = false, signal?: AbortSignal) {
+    return this.request<CallTask[]>("/calling/queue", {
+      query: { status_: status, mine: String(mine) },
+      signal,
+    });
+  }
+  createCallTask(
+    body: { account_id: string; contact_id?: string | null; reason?: string; priority?: number },
+    signal?: AbortSignal,
+  ) {
+    return this.request<CallTask>("/calling/tasks", { method: "POST", body, signal });
+  }
+  generateCallScript(taskId: string, signal?: AbortSignal) {
+    return this.request<CallScript>(`/calling/tasks/${taskId}/script`, { method: "POST", signal });
+  }
+  logCallDisposition(
+    taskId: string,
+    body: { disposition: string; notes?: string; duration_s?: number | null; next_step?: string | null },
+    signal?: AbortSignal,
+  ) {
+    return this.request<CallActivity>(`/calling/tasks/${taskId}/disposition`, {
+      method: "POST",
+      body,
+      signal,
+    });
+  }
+  skipCallTask(taskId: string, signal?: AbortSignal) {
+    return this.request<CallTask>(`/calling/tasks/${taskId}/skip`, { method: "POST", signal });
+  }
+  contactCallActivities(contactId: string, signal?: AbortSignal) {
+    return this.request<CallActivity[]>(`/calling/contacts/${contactId}/activities`, { signal });
   }
   enrichAccount(accountId: string, signal?: AbortSignal) {
     return this.request<Account>(`/accounts/${accountId}/enrich`, { method: "POST", signal });

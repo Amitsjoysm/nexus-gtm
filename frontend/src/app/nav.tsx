@@ -8,6 +8,7 @@ import {
   InboxIcon,
   ListIcon,
   MessageIcon,
+  PhoneIcon,
   PlugIcon,
   SendIcon,
   SettingsIcon,
@@ -33,6 +34,7 @@ const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3
 export const NAV_ITEMS: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/inbox", label: "Inbox", icon: <InboxIcon /> },
+  { to: "/calls", label: "Calls", icon: <PhoneIcon /> },
   { to: "/accounts", label: "Accounts", icon: <BuildingIcon /> },
   { to: "/contacts", label: "Contacts", icon: <UsersIcon /> },
   { to: "/lists", label: "Lists", icon: <ListIcon /> },
