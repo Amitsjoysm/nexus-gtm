@@ -124,7 +124,7 @@ function ChecklistBody({ overview, onSeed, seeding, onDismiss }: ChecklistBodyPr
     {
       key: "icp",
       title: "Tune your ICP",
-      desc: "Tell NEXUS who you sell to so fit scores reflect your business.",
+      desc: "Tell Infojoy who you sell to so fit scores reflect your business.",
       done: icpTuned,
       cta: "Define ICP",
       icon: <Icons.TargetIcon />,
@@ -150,7 +150,7 @@ function ChecklistBody({ overview, onSeed, seeding, onDismiss }: ChecklistBodyPr
       <section aria-label="Setup checklist">
         <div className={styles.head}>
           <div>
-            <h2 className={styles.heading}>Finish setting up NEXUS</h2>
+            <h2 className={styles.heading}>Finish setting up Infojoy</h2>
             <p className={styles.sub}>Four steps to a working pipeline.</p>
           </div>
           <IconButton

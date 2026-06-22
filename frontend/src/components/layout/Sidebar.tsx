@@ -1,6 +1,5 @@
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
-import { LogoMark } from "@/components/ui/icons";
 import { NAV_ITEMS, canSee } from "@/app/nav";
 import { useAuth } from "@/app/AuthContext";
 import styles from "./Sidebar.module.css";
@@ -18,11 +17,9 @@ export function Sidebar({ open, onNavigate }: SidebarProps) {
   return (
     <aside className={cn(styles.sidebar, open && styles.open)} aria-label="Primary">
       <div className={styles.brand}>
-        <span className={styles.logo} aria-hidden="true">
-          <LogoMark />
-        </span>
+        <img src="/infojoy-logo.png" alt="Infojoy" className={styles.logoImg} />
         <span className={styles.brandText}>
-          NEXUS <span className={styles.brandSub}>GTM</span>
+          Infojoy <span className={styles.brandSub}>GTM</span>
         </span>
       </div>
 

@@ -31,6 +31,12 @@
   width: 20px;
   height: 20px;
 }
+.logoImg {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
 .brandText {
   font-size: var(--text-md);
   font-weight: var(--weight-bold);

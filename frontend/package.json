@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "NEXUS GTM — production React + TypeScript frontend",
+  "description": "Infojoy GTM — production React + TypeScript frontend",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

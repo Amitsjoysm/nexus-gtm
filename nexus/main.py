@@ -76,8 +76,8 @@ def _maybe_enable_metrics(app: FastAPI) -> None:
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
-        title="NEXUS GTM",
-        description="AI-powered Go-To-Market intelligence platform (Pocus-style MVP).",
+        title="Infojoy GTM",
+        description="AI-powered Go-To-Market intelligence platform.",
         version="0.1.0",
         lifespan=lifespan,
     )

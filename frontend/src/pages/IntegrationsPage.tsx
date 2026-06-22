@@ -118,7 +118,7 @@ function CrmCard() {
         <div>
           <h2 className={styles.cardTitle}>CRM import</h2>
           <p className={styles.cardDesc}>
-            Push accounts from your CRM into NEXUS. Existing accounts are matched and updated.
+            Push accounts from your CRM into Infojoy. Existing accounts are matched and updated.
           </p>
         </div>
       </div>

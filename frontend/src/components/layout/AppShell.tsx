@@ -17,7 +17,7 @@ const TITLES: Record<string, string> = {
 
 function titleFor(pathname: string): string {
   const seg = pathname.split("/").filter(Boolean)[0] ?? "dashboard";
-  return TITLES[seg] ?? "NEXUS GTM";
+  return TITLES[seg] ?? "Infojoy GTM";
 }
 
 /** Authenticated app layout: sidebar + topbar + routed content, responsive drawer. */
@@ -30,7 +30,7 @@ export function AppShell() {
   // Close the mobile drawer on route change; keep the document title in sync.
   useEffect(() => {
     setDrawerOpen(false);
-    document.title = `${title} · NEXUS GTM`;
+    document.title = `${title} · Infojoy GTM`;
   }, [location.pathname, title]);
 
   return (

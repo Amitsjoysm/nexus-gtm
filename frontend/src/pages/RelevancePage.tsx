@@ -469,7 +469,7 @@ function LearnedWeightsCard() {
     <Card padding="lg">
       <SectionHead
         title="Auto-learned weighting"
-        description="As you log won deals, NEXUS leans the four firmographic weights toward the traits your wins share. Any positions you set above in Fit weighting take priority over what's learned here."
+        description="As you log won deals, Infojoy leans the four firmographic weights toward the traits your wins share. Any positions you set above in Fit weighting take priority over what's learned here."
         action={
           weights.data ? (
             weights.data.learned ? (

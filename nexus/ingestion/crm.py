@@ -248,7 +248,7 @@ class HubSpotConnector(CRMConnector):
         desc_bits = [b for b in (
             f"Industry: {account.industry}" if account.industry else "",
             f"Tech: {tech}" if tech else "",
-            "Synced from NEXUS GTM.",
+            "Synced from Infojoy GTM.",
         ) if b]
         props = {
             "name": account.name,
@@ -340,7 +340,7 @@ class HubSpotConnector(CRMConnector):
         try:
             d = detail or {}
             body = d.get("signal") or d.get("subject") or kind
-            note_body = f"NEXUS · {kind}: {body}"
+            note_body = f"Infojoy · {kind}: {body}"
             ts_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             st, note = await self._request(
                 "POST", "/crm/v3/objects/notes",

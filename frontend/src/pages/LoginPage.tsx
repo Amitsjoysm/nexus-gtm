@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Button, Field, Input } from "@/components/ui";
-import { LogoMark, TargetIcon, SignalIcon, SparklesIcon } from "@/components/ui/icons";
+import { TargetIcon, SignalIcon, SparklesIcon } from "@/components/ui/icons";
 import { useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import styles from "./LoginPage.module.css";
@@ -75,10 +75,8 @@ export function LoginPage() {
     <div className={styles.page}>
       <section className={styles.aside} aria-hidden="true">
         <div className={styles.brand}>
-          <span className={styles.logo}>
-            <LogoMark />
-          </span>
-          <span className={styles.brandText}>NEXUS GTM</span>
+          <img src="/infojoy-logo.png" alt="Infojoy" className={styles.logoImg} />
+          <span className={styles.brandText}>Infojoy GTM</span>
         </div>
         <h2 className={styles.headline}>
           Turn buying signals into pipeline — before your competitors notice.
@@ -96,10 +94,8 @@ export function LoginPage() {
       <section className={styles.formCol}>
         <div className={styles.formCard}>
           <div className={styles.mobileBrand}>
-            <span className={styles.logoSm}>
-              <LogoMark />
-            </span>
-            <span>NEXUS GTM</span>
+            <img src="/infojoy-logo.png" alt="" className={styles.logoSmImg} />
+            <span>Infojoy GTM</span>
           </div>
 
           <h1 className={styles.title}>
@@ -198,7 +194,7 @@ export function LoginPage() {
           </form>
 
           <p className={styles.switch}>
-            {mode === "login" ? "New to NEXUS?" : "Already have a workspace?"}{" "}
+            {mode === "login" ? "New to Infojoy?" : "Already have a workspace?"}{" "}
             <button
               type="button"
               className={styles.switchBtn}
