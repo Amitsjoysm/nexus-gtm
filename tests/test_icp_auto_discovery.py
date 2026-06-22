@@ -95,3 +95,27 @@ async def test_handler_skips_when_disabled():
     # Defaults: automation_enabled and icp_discovery_enabled are both False -> no work, no network.
     res = await handle_discover_icp_accounts({})
     assert res == {"skipped": "disabled"}
+
+
+async def test_handler_no_icp_tenant_does_not_consume_daily_slot(monkeypatch):
+    """A tenant with automation on but no ICP yet is re-checked cheaply each tick (no network),
+    and its per-interval slot is NOT consumed — so discovery fires the moment an ICP is added."""
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.identity import Tenant
+
+    s = get_settings()
+    monkeypatch.setattr(s, "automation_enabled", True)
+    monkeypatch.setattr(s, "icp_discovery_enabled", True)
+
+    tid = await make_tenant()
+    async with get_sessionmaker()() as sess:
+        t = await sess.get(Tenant, tid)
+        t.automation_enabled = True  # opted in, but no RelevanceProfile/ICP defined
+        await sess.commit()
+
+    await handle_discover_icp_accounts({})
+
+    async with get_sessionmaker()() as sess:
+        t = await sess.get(Tenant, tid)
+        assert t.icp_discovery_last_run_at is None  # slot preserved (no ICP -> no run)

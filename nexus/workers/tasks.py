@@ -447,7 +447,9 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
                 min_fit=settings.icp_discovery_min_fit,
                 pool_limit=pool,
             )
-            if tenant is not None:
+            # Only consume the per-interval slot when discovery actually ran. A tenant with no ICP
+            # yet is re-checked cheaply each tick, so discovery fires the moment an ICP is added.
+            if tenant is not None and res.get("skipped") != "no_icp":
                 tenant.icp_discovery_last_run_at = now
             discovered += res.get("discovered", 0)
     return {"discovered": discovered, "tenants": len(tenant_ids)}
