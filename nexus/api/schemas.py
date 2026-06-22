@@ -109,6 +109,8 @@ class WorkspaceContactOut(BaseModel):
     email: str | None = None
     email_status: str | None = None
     email_confidence: float = 0.0
+    phone: str | None = None
+    phone_confidence: float = 0.0
     linkedin_url: str | None = None
     enrichment_source: str | None = None
 
@@ -119,6 +121,61 @@ class ReverifyResult(BaseModel):
     checked: int
     updated: int
     statuses: dict[str, int] = Field(default_factory=dict)
+
+
+# ---- Cold calling --------------------------------------------------------------------------
+class CallTaskOut(BaseModel):
+    """A queued call with its account/contact context, for the call power-list."""
+
+    id: str
+    account_id: str
+    account_name: str
+    contact_id: str | None = None
+    contact_name: str | None = None
+    title: str | None = None
+    phone: str | None = None
+    reason: str = ""
+    priority: int = 0
+    status: str = "open"
+    source: str = "manual"
+    due_at: str | None = None
+    has_script: bool = False
+
+
+class CreateCallTaskIn(BaseModel):
+    account_id: str
+    contact_id: str | None = None
+    reason: str = ""
+    priority: int = 50
+
+
+class CallScriptOut(BaseModel):
+    opener: str = ""
+    hook: str = ""
+    value_prop: str = ""
+    discovery_questions: list[str] = Field(default_factory=list)
+    objections: list[dict] = Field(default_factory=list)
+    cta: str = ""
+    voicemail: str = ""
+
+
+class DispositionIn(BaseModel):
+    disposition: str
+    notes: str = ""
+    duration_s: int | None = None
+    next_step: str | None = None
+
+
+class CallActivityOut(BaseModel):
+    id: str
+    call_task_id: str | None = None
+    account_id: str
+    contact_id: str | None = None
+    disposition: str
+    notes: str = ""
+    duration_s: int | None = None
+    next_step: str | None = None
+    occurred_at: str
 
 
 class LookalikeOut(BaseModel):
