@@ -9,15 +9,17 @@ import {
   ErrorState,
   Icons,
   Input,
+  Modal,
   Select,
   Skeleton,
   useToast,
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
+import { CallConsole } from "@/components/CallConsole";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import type { WorkspaceContact } from "@/lib/types";
+import type { CallTask, WorkspaceContact } from "@/lib/types";
 import styles from "./ContactsPage.module.css";
 
 const ALL = "__all__";
@@ -38,6 +40,25 @@ export function ContactsPage() {
   const [statusFilter, setStatusFilter] = useState(ALL);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reverifying, setReverifying] = useState(false);
+  const [callTask, setCallTask] = useState<CallTask | null>(null);
+  const [callingId, setCallingId] = useState<string | null>(null);
+
+  async function startCall(c: WorkspaceContact) {
+    setCallingId(c.id);
+    try {
+      setCallTask(
+        await api.createCallTask({
+          account_id: c.account_id,
+          contact_id: c.id,
+          reason: `Outbound call · ${c.account_name}`,
+        }),
+      );
+    } catch (err) {
+      toast.error("Couldn't start call", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setCallingId(null);
+    }
+  }
 
   const rows = contacts.data ?? [];
   const visible = useMemo(() => {
@@ -173,7 +194,7 @@ export function ContactsPage() {
         header: "",
         align: "right",
         render: (c) => (
-          <span onClick={(e) => e.stopPropagation()}>
+          <span className={styles.rowActions} onClick={(e) => e.stopPropagation()}>
             <Button
               size="sm"
               variant="ghost"
@@ -183,12 +204,22 @@ export function ContactsPage() {
             >
               Verify
             </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              iconLeft={<Icons.PhoneIcon />}
+              loading={callingId === c.id}
+              onClick={() => startCall(c)}
+              aria-label={`Call ${c.full_name}`}
+            >
+              Call
+            </Button>
           </span>
         ),
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId],
+    [busyId, callingId],
   );
 
   return (
@@ -260,6 +291,17 @@ export function ContactsPage() {
       )}
 
       {contacts.loading && !contacts.data && <Skeleton width="100%" height={48} />}
+
+      <Modal
+        open={!!callTask}
+        onClose={() => setCallTask(null)}
+        title="Call"
+        description="AI script, click-to-dial, and one-tap outcome logging."
+      >
+        {callTask && (
+          <CallConsole task={callTask} autoGenerate onLogged={() => setCallTask(null)} />
+        )}
+      </Modal>
     </div>
   );
 }

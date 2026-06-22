@@ -20,6 +20,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
+import { CallConsole } from "@/components/CallConsole";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -28,6 +29,7 @@ import { strengthMeta } from "@/lib/display";
 import type {
   AgentRunResponse,
   Account,
+  CallTask,
   Contact,
   Lookalike,
   OutcomeStage,
@@ -94,6 +96,25 @@ export function AccountDetailPage() {
 
   const account = useApi<Account>((signal) => api.getAccount(id, signal), [id]);
   const contacts = useApi<Contact[]>((signal) => api.listContacts(id, signal), [id]);
+
+  // Per-contact calling: queue a call + open the AI call console (script + dial + log) right here.
+  const [callTask, setCallTask] = useState<CallTask | null>(null);
+  const [callingId, setCallingId] = useState<string | null>(null);
+  async function startCall(c: Contact) {
+    setCallingId(c.id);
+    try {
+      const task = await api.createCallTask({
+        account_id: id,
+        contact_id: c.id,
+        reason: `Outbound call · ${account.data?.name ?? "account"}`,
+      });
+      setCallTask(task);
+    } catch (err) {
+      toast.error("Couldn't start call", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setCallingId(null);
+    }
+  }
 
   // Waterfall enrichment for one contact (email + confidence), inline from the roster.
   const [enriching, setEnriching] = useState<Record<string, boolean>>({});
@@ -505,9 +526,13 @@ export function AccountDetailPage() {
                         "—"
                       )}
                       <div>
-                        {c.email
-                          ? `${formatPercent(c.email_confidence)} confidence`
-                          : null}
+                        {c.phone ? (
+                          <a className={styles.link} href={`tel:${c.phone.replace(/[^\d+]/g, "")}`}>
+                            {c.phone}
+                          </a>
+                        ) : c.email ? (
+                          `${formatPercent(c.email_confidence)} confidence`
+                        ) : null}
                       </div>
                     </div>
                     <Button
@@ -518,6 +543,16 @@ export function AccountDetailPage() {
                       aria-label={`Enrich ${c.full_name}`}
                     >
                       Enrich
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      iconLeft={<Icons.PhoneIcon />}
+                      loading={callingId === c.id}
+                      onClick={() => startCall(c)}
+                      aria-label={`Call ${c.full_name}`}
+                    >
+                      Call
                     </Button>
                   </div>
                 ))
@@ -729,6 +764,21 @@ export function AccountDetailPage() {
             />
           </Field>
         </form>
+      </Modal>
+
+      <Modal
+        open={!!callTask}
+        onClose={() => setCallTask(null)}
+        title="Call"
+        description="AI script, click-to-dial, and one-tap outcome logging."
+      >
+        {callTask && (
+          <CallConsole
+            task={callTask}
+            autoGenerate
+            onLogged={() => setCallTask(null)}
+          />
+        )}
       </Modal>
     </div>
   );
