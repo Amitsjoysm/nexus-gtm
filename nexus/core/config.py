@@ -115,6 +115,13 @@ class Settings(BaseSettings):
     account_refresh_interval_s: int = 21600     # staleness threshold before re-processing (6h)
     account_refresh_batch_size: int = 100       # max accounts claimed per tick across tenants
 
+    # Person-level personalization (sub-project I): a social-enrichment provider that fetches a
+    # contact's posts/comments/profile (LinkedIn etc.) to deepen email/call personalization.
+    # Default stub (no-op, offline). A future Apify actor plugs in via NEXUS_PERSONALIZATION_PROVIDER
+    # — no caller change needed; fetched insights land on contact.custom_fields['personalization'].
+    personalization_provider: str = "stub"   # stub | apify | ...
+    personalization_max_posts: int = 3       # most-recent posts referenced in a message
+
     # Daily ICP Auto-Discovery (sub-project H): each interval, for opted-in tenants, discover
     # net-new companies and add ONLY strict ICP matches (icp-fit >= min_fit). OFF by default
     # (network + cost); rides the automation heartbeat + per-tenant automation_enabled.

@@ -34,12 +34,22 @@ class MessagingAgent(BaseAgent):
         vp = vps[0] if vps else {"name": "our platform", "pains_solved": []}
         pains = ", ".join(vp.get("pains_solved", [])) or "hit pipeline goals"
 
+        # Person-level personalization: write to the individual (role/seniority, a signal tied to
+        # them when available, and any social insights), not just the account.
+        from nexus.core.config import get_settings
+        from nexus.personalization.brief import build_person_brief
+
+        brief = build_person_brief(contact, ctx.account, ctx.signals) if contact else None
+        hook = brief.signal_title if (brief and brief.signal_title) else trigger
+
         angle = (ctx.inputs.get("angle") or "").strip()
         content = (
             f"Write a short, personalized cold email to "
             f"{contact.full_name if contact else 'the buyer'} at {ctx.account.name}. "
-            f"Hook: {trigger}. Lead with value prop '{vp.get('name')}'."
+            f"Hook: {hook}. Lead with value prop '{vp.get('name')}'."
         )
+        if brief is not None:
+            content += " " + brief.to_prompt(max_posts=get_settings().personalization_max_posts)
         if angle:
             # Per-touch cadence angle: shape this specific touch (e.g. a follow-up nudge,
             # a case-study share) so successive touches don't repeat the same message.

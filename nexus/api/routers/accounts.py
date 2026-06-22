@@ -279,6 +279,10 @@ async def enrich_contact(
     if contact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
     await get_enricher().enrich_contact(ts, contact)
+    # Social insights for person-level personalization (no-op under the stub; lights up with Apify).
+    from nexus.personalization.provider import refresh_person_insights
+
+    await refresh_person_insights(ts, contact)
     return _contact_out(contact)
 
 

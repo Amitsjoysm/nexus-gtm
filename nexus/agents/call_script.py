@@ -62,10 +62,21 @@ class CallScriptAgent(BaseAgent):
         vp = vps[0] if vps else {"name": "our platform", "pains_solved": []}
         pains = ", ".join(vp.get("pains_solved", [])) or "hit pipeline goals"
 
+        # Person-level personalization: shape the talk track to this individual (role/seniority,
+        # a signal tied to them when available, social insights), not just the account.
+        from nexus.core.config import get_settings
+        from nexus.personalization.brief import build_person_brief
+
+        brief = build_person_brief(contact, ctx.account, ctx.signals) if contact else None
+        hook = brief.signal_title if (brief and brief.signal_title) else trigger
+        person_block = (
+            " " + brief.to_prompt(max_posts=get_settings().personalization_max_posts)
+            if brief is not None else ""
+        )
         content = (
             f"Write a cold-call talk track for an SDR calling "
             f"{contact_name} ({contact.title if contact and contact.title else 'a buyer'}) "
-            f"at {ctx.account.name}. Hook: {trigger}. Lead value prop: '{vp.get('name')}'. "
+            f"at {ctx.account.name}. Hook: {hook}. Lead value prop: '{vp.get('name')}'.{person_block} "
             "Return ONLY a JSON object with keys: opener, hook, value_prop, "
             "discovery_questions (array of strings), objections (array of {objection, response}), "
             "cta, voicemail. Keep it concise and natural to say out loud."
