@@ -70,7 +70,15 @@ def _ensure_agents_loaded() -> None:
     if _loaded:
         return
     # Import for side-effect registration. Done lazily to avoid an import cycle.
-    from nexus.agents import contact_rec, discovery, messaging, qa, research, scoring  # noqa: F401
+    from nexus.agents import (  # noqa: F401
+        call_script,
+        contact_rec,
+        discovery,
+        messaging,
+        qa,
+        research,
+        scoring,
+    )
 
     _loaded = True
 

@@ -87,6 +87,34 @@ class StubLLMProvider(LLMProvider):
                 f"Hi {contact}, noticed {trigger}. Teams like {account} use {vp} to "
                 f"{v.get('pain', 'hit their goals faster')}. Worth a 15-min look?\n\nBest,\nYour AE"
             )
+        if purpose == "call_script":
+            import json as _json
+
+            contact = v.get("contact", "there")
+            vp = v.get("value_prop", "our platform")
+            trigger = v.get("trigger", "your current priorities")
+            pain = v.get("pain", "hit pipeline goals")
+            return _json.dumps({
+                "opener": f"Hi {contact}, this is <your name> from <your company>. "
+                          f"Did I catch you at an okay time for 30 seconds?",
+                "hook": f"I noticed {trigger} at {account} — that's usually when teams look at {vp}.",
+                "value_prop": f"{vp} helps teams {pain}.",
+                "discovery_questions": [
+                    f"How are you handling {pain} today?",
+                    "What's driving the priority on this right now?",
+                    "Who else would be involved in evaluating something like this?",
+                ],
+                "objections": [
+                    {"objection": "We're not looking right now.",
+                     "response": f"Totally fair — most teams aren't until {trigger}. "
+                                 "Worth 15 minutes to benchmark?"},
+                    {"objection": "Send me an email.",
+                     "response": "Happy to — what's the best address, and what should I focus it on?"},
+                ],
+                "cta": "Would you be open to a 15-minute call later this week?",
+                "voicemail": f"Hi {contact}, calling about {trigger} at {account}. "
+                             "I'll follow up by email — talk soon.",
+            })
         if purpose == "contact_rationale":
             return (
                 f"{v.get('contact', 'This person')} ({v.get('title', 'n/a')}) is a strong entry "

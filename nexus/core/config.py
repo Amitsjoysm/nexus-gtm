@@ -115,6 +115,15 @@ class Settings(BaseSettings):
     account_refresh_interval_s: int = 21600     # staleness threshold before re-processing (6h)
     account_refresh_batch_size: int = 100       # max accounts claimed per tick across tenants
 
+    # Cold Calling (sub-project G): AI call scripts + a call queue + dispositions + cadence
+    # "call" touches. The workflow is offline-safe (no telephony in v1), so it's on by default.
+    # Real dialing/recording is opt-in via ``telephony_provider`` (stub until a deployment sets it),
+    # mirroring email_verify_provider / crm_provider — no infra needed for v1.
+    calling_enabled: bool = True
+    telephony_provider: str = "stub"        # stub | twilio | ...  (tier 2)
+    telephony_from_number: str = ""         # caller ID used when a real provider is enabled
+    call_queue_default_limit: int = 50      # default page size for the call queue
+
     # CRM Auto-Sync (sub-project E): continuously push account state to the configured CRM.
     # OFF by default (safe opt-in, like automation_enabled) so the suite is deterministic and
     # zero-network (tests use the recording stub connector). Change-aware via Account.crm_synced_at,
