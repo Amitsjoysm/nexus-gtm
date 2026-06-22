@@ -16,6 +16,7 @@ from nexus.core.config import get_settings
 from nexus.workers.queue import TaskQueue, get_task_queue
 from nexus.workers.tasks import (
     enqueue_advance_cadences,
+    enqueue_discover_icp_accounts,
     enqueue_refresh_due_accounts,
     enqueue_send_daily_digests,
     enqueue_sync_crm_due_accounts,
@@ -38,7 +39,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
         # Digest rides the automation switch; its handler is idempotent per interval, so
         # enqueueing every tick costs one cheap timestamp check per tenant.
         await enqueue_send_daily_digests(queue=queue)
-        count += 3
+        # Daily ICP auto-discovery: idempotent per interval (Tenant.icp_discovery_last_run_at);
+        # the handler also no-ops unless icp_discovery_enabled, so this is a cheap pre-filter.
+        await enqueue_discover_icp_accounts(queue=queue)
+        count += 4
     if settings.crm_sync_enabled:
         await enqueue_sync_crm_due_accounts(queue=queue)
         count += 1

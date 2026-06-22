@@ -180,10 +180,10 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", True)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    assert count == 3
+    assert count == 4
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
-        "advance_cadences", "refresh_due_accounts", "send_daily_digests",
+        "advance_cadences", "refresh_due_accounts", "send_daily_digests", "discover_icp_accounts",
     }
 
 

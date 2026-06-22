@@ -115,6 +115,15 @@ class Settings(BaseSettings):
     account_refresh_interval_s: int = 21600     # staleness threshold before re-processing (6h)
     account_refresh_batch_size: int = 100       # max accounts claimed per tick across tenants
 
+    # Daily ICP Auto-Discovery (sub-project H): each interval, for opted-in tenants, discover
+    # net-new companies and add ONLY strict ICP matches (icp-fit >= min_fit). OFF by default
+    # (network + cost); rides the automation heartbeat + per-tenant automation_enabled.
+    icp_discovery_enabled: bool = False
+    icp_discovery_daily_count: int = 10        # target net-new strict matches per interval
+    icp_discovery_min_fit: int = 70            # strict ICP-fit threshold 0-100; below = discarded
+    icp_discovery_interval_hours: int = 24     # once per day per tenant
+    icp_discovery_pool_multiplier: int = 5     # search pool = daily_count * this (headroom to filter)
+
     # Cold Calling (sub-project G): AI call scripts + a call queue + dispositions + cadence
     # "call" touches. The workflow is offline-safe (no telephony in v1), so it's on by default.
     # Real dialing/recording is opt-in via ``telephony_provider`` (stub until a deployment sets it),

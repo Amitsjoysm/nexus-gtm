@@ -379,7 +379,7 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
     jobs = await _drain(q)
     assert "sync_crm_due_accounts" not in {j.name for j in jobs}
     assert {j.name for j in jobs} == {
-        "advance_cadences", "refresh_due_accounts", "send_daily_digests",
+        "advance_cadences", "refresh_due_accounts", "send_daily_digests", "discover_icp_accounts",
     }
 
 

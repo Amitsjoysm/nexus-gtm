@@ -1,7 +1,9 @@
 """Identity & access: tenants, workspaces, users, memberships."""
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, ForeignKey, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from nexus.core.db import Base, IdMixin, TimestampMixin
@@ -18,6 +20,11 @@ class Tenant(IdMixin, TimestampMixin, Base):
     # Continuous Automation opt-in: when True (and the global automation_enabled master
     # switch is on), this tenant's accounts/cadences are driven autonomously by the heartbeat.
     automation_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Daily ICP Auto-Discovery (sub-project H): last time the discovery driver ran for this
+    # tenant — the per-interval idempotency gate so the heartbeat doesn't re-run within the day.
+    icp_discovery_last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Per-workspace outbound email (SMTP) config so cadences send from the customer's own
     # Gmail/Outlook mailbox. Shape: {provider, host, port, username, from_email, from_name,
     # password, use_tls, enabled, verified_at}. The password is write-only — never serialized

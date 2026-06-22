@@ -399,6 +399,60 @@ async def handle_send_daily_digests(payload: dict) -> dict:
     return {"digests": sent, "tenants": len(tenant_ids)}
 
 
+async def handle_discover_icp_accounts(payload: dict) -> dict:
+    """Daily ICP auto-discovery: for each opted-in tenant, add net-new accounts that strictly
+    match the saved ICP. Idempotent per interval via ``Tenant.icp_discovery_last_run_at`` so the
+    heartbeat can enqueue it every tick. ``now`` is overridable via payload['now_iso'] for tests."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from nexus.core.config import get_settings
+    from nexus.core.db import ensure_aware
+    from nexus.discovery.auto import auto_discover_for_tenant
+    from nexus.models.identity import Tenant
+
+    settings = get_settings()
+    if not (settings.automation_enabled and settings.icp_discovery_enabled):
+        return {"skipped": "disabled"}
+
+    now = (
+        datetime.fromisoformat(payload["now_iso"])
+        if payload.get("now_iso")
+        else datetime.now(timezone.utc)
+    )
+    interval = timedelta(hours=settings.icp_discovery_interval_hours)
+    pool = max(
+        settings.icp_discovery_daily_count * settings.icp_discovery_pool_multiplier,
+        settings.icp_discovery_daily_count,
+    )
+
+    async with get_sessionmaker()() as session:
+        tenant_ids = (
+            await session.scalars(
+                select(Tenant.id).where(Tenant.automation_enabled == True)  # noqa: E712
+            )
+        ).all()
+
+    discovered = 0
+    for tid in tenant_ids:
+        async with tenant_session(tid) as ts:
+            tenant = await ts.session.get(Tenant, tid)
+            last = tenant.icp_discovery_last_run_at if tenant else None
+            if last is not None and ensure_aware(last) > now - interval:
+                continue  # already ran this interval
+            res = await auto_discover_for_tenant(
+                ts,
+                target_count=settings.icp_discovery_daily_count,
+                min_fit=settings.icp_discovery_min_fit,
+                pool_limit=pool,
+            )
+            if tenant is not None:
+                tenant.icp_discovery_last_run_at = now
+            discovered += res.get("discovered", 0)
+    return {"discovered": discovered, "tenants": len(tenant_ids)}
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
@@ -408,6 +462,7 @@ HANDLERS: dict[str, Handler] = {
     "sync_crm_account": handle_sync_crm_account,
     "sync_crm_due_accounts": handle_sync_crm_due_accounts,
     "send_daily_digests": handle_send_daily_digests,
+    "discover_icp_accounts": handle_discover_icp_accounts,
 }
 
 
@@ -468,6 +523,11 @@ async def enqueue_sync_crm_due_accounts(*, queue: TaskQueue | None = None) -> No
 async def enqueue_send_daily_digests(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="send_daily_digests", payload={}))
+
+
+async def enqueue_discover_icp_accounts(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="discover_icp_accounts", payload={}))
 
 
 async def dispatch(job: Job) -> dict:
