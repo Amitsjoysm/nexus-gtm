@@ -80,8 +80,8 @@ class CadenceService:
         await ts.flush()
         for i, spec in enumerate(steps):
             channel = spec.get("channel", "email")
-            if channel != "email":
-                raise CadenceError(f"v1 supports email only, got channel={channel!r}")
+            if channel not in ("email", "call"):
+                raise CadenceError(f"unsupported channel={channel!r} (email or call)")
             delay = int(spec.get("delay_days", 0))
             if delay < 0:
                 raise CadenceError("delay_days must be >= 0")
@@ -92,7 +92,7 @@ class CadenceService:
                     step_index=i,
                     delay_days=delay,
                     angle=spec.get("angle", "") or "",
-                    channel="email",
+                    channel=channel,
                 )
             )
         await ts.flush()
@@ -224,6 +224,31 @@ class CadenceService:
             CadenceTouch.step_index == e.current_step_index,
         )
         if existing is not None and existing.status == TOUCH_SENT:
+            return ("advance",)
+
+        # Call step: queue a CallTask for the SDR instead of composing/sending. Fire-and-continue
+        # — the sequence advances on schedule like an email send; the SDR works the call queue and
+        # logs the outcome separately (it never blocks the cadence). Email steps are unaffected.
+        if step.channel == "call":
+            from nexus.calling.service import get_call_queue_service
+
+            await get_call_queue_service().enqueue(
+                ts,
+                account_id=e.account_id,
+                contact_id=e.contact_id,
+                reason=(f"Cadence call · step {e.current_step_index + 1}"
+                        + (f" · {step.angle}" if step.angle else "")),
+                source="cadence",
+                cadence_enrollment_id=e.id,
+                cadence_step_index=e.current_step_index,
+            )
+            touch = existing or CadenceTouch(
+                tenant_id=ts.tenant_id, enrollment_id=e.id,
+                step_index=e.current_step_index, run_id=None, draft={},
+            )
+            touch.status = TOUCH_SENT
+            ts.add(touch)
+            await ts.flush()
             return ("advance",)
 
         run, draft = await self._compose(ts, e, step, now=now)

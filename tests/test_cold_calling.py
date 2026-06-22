@@ -97,6 +97,49 @@ async def test_disposition_terminal_closes_requeue_keeps_open():
         assert len(await svc.list_activities(ts, contact_id=c.id)) == 2
 
 
+def test_setup_cadence_goal_is_registered():
+    from nexus.orchestration.planner import available_goals
+
+    assert "setup_cadence" in available_goals()
+
+
+async def _run_setup_cadence(ts, goal_input):
+    from types import SimpleNamespace
+
+    from nexus.orchestration.tools import SetupCadenceTool, ToolContext
+
+    run = SimpleNamespace(goal_input=goal_input, blackboard={},
+                          created_by_user_id=None, account_id=None)
+    tc = ToolContext(ts=ts, runtime=None, run=run, inputs={})
+    return await SetupCadenceTool().run(tc)
+
+
+async def test_orchestrator_sets_up_call_cadence_from_steps():
+    from nexus.cadences.service import get_cadence_service
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        out = await _run_setup_cadence(ts, {
+            "cadence_name": "Cold Call Seq",
+            "steps": [{"channel": "email", "delay_days": 0},
+                      {"channel": "call", "delay_days": 2}],
+        })
+        assert out["name"] == "Cold Call Seq"
+        steps = await get_cadence_service().list_steps(ts, out["cadence_id"])
+        assert [s.channel for s in steps] == ["email", "call"]
+
+
+async def test_orchestrator_defaults_to_cold_calling_3touch():
+    """No steps given -> the orchestrator picks a sensible email -> call -> email sequence."""
+    from nexus.cadences.service import get_cadence_service
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        out = await _run_setup_cadence(ts, {})
+        steps = await get_cadence_service().list_steps(ts, out["cadence_id"])
+        assert [s.channel for s in steps] == ["email", "call", "email"]
+
+
 def test_stub_call_provider_returns_tel_link():
     import asyncio
 

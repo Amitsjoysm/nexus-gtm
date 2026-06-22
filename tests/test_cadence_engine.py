@@ -613,3 +613,33 @@ async def test_null_cadence_campaign_uses_single_send_path(ts):
         CadenceEnrollment, CadenceEnrollment.campaign_id == campaign.id
     )
     assert enrollments == []
+
+
+# ---- Cold calling: call channel + cadence call steps ---------------------------------------
+async def test_create_cadence_allows_call_channel(ts):
+    cad = await _make_cadence(ts, [
+        {"delay_days": 0, "channel": "email", "angle": "intro"},
+        {"delay_days": 2, "channel": "call", "angle": "call"},
+    ])
+    steps = await get_cadence_service().list_steps(ts, cad.id)
+    assert [s.channel for s in steps] == ["email", "call"]
+
+
+async def test_cadence_call_step_queues_call_task_and_advances(ts):
+    """A call step queues a CallTask for the SDR (fire-and-continue) instead of sending email."""
+    from nexus.calling.service import get_call_queue_service
+
+    svc = get_cadence_service()
+    _, e, acc, contact = await _enrollable(
+        ts, NOW, steps=[{"delay_days": 0, "channel": "call", "angle": "intro call"}]
+    )
+    assert await svc.advance_due_for_tenant(ts, now=NOW, limit=100) == 1
+
+    queue = await get_call_queue_service().list_queue(ts)
+    assert len(queue) == 1
+    task = queue[0]
+    assert task.contact_id == contact.id
+    assert task.account_id == acc.id
+    assert task.source == "cadence"
+    assert task.cadence_enrollment_id == e.id
+    assert task.cadence_step_index == 0

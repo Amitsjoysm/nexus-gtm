@@ -286,6 +286,55 @@ class DiscoveryTool(_AgentTool):
         return result.output
 
 
+_DEFAULT_CADENCE_STEPS = [
+    {"channel": "email", "delay_days": 0, "angle": "intro + signal hook"},
+    {"channel": "call", "delay_days": 2, "angle": "reference the email; quick value pitch"},
+    {"channel": "email", "delay_days": 4, "angle": "bump with a case study / social proof"},
+]
+
+
+class SetupCadenceTool(Tool):
+    """Let the orchestrator define a multi-touch cadence (email + call steps) on its own.
+
+    Reads ``cadence_name`` / ``steps`` / ``description`` from the run's goal_input; when steps
+    aren't specified it picks a sensible cold-calling 3-touch (email -> call -> email). Creating a
+    cadence definition is not outbound, so no approval gate — actual sends/calls still flow through
+    the campaign launch + approval gate."""
+
+    name = "setup_cadence"
+    description = "Create a multi-touch cadence (email and/or call steps) from a brief."
+    requires_approval = False
+
+    async def run(self, tc: ToolContext) -> dict:
+        from nexus.cadences.service import CadenceError, get_cadence_service
+
+        gi = {**(tc.run.goal_input or {}), **(tc.inputs or {})}
+        steps = gi.get("steps") or _DEFAULT_CADENCE_STEPS
+        name = gi.get("cadence_name") or gi.get("name") or "AI cadence"
+        try:
+            cadence = await get_cadence_service().create_cadence(
+                tc.ts,
+                name=name,
+                description=gi.get("description"),
+                steps=steps,
+                created_by_user_id=getattr(tc.run, "created_by_user_id", None),
+            )
+        except CadenceError as exc:
+            raise ToolError(str(exc))
+        out = {
+            "cadence_id": cadence.id,
+            "name": cadence.name,
+            "steps": [
+                {"channel": s.get("channel", "email"),
+                 "delay_days": int(s.get("delay_days", 0)),
+                 "angle": s.get("angle", "")}
+                for s in steps
+            ],
+        }
+        tc.blackboard["cadence"] = out
+        return out
+
+
 # Registry ---------------------------------------------------------------------------
 
 _REGISTRY: dict[str, Tool] = {}
@@ -303,5 +352,6 @@ def available_tools() -> list[str]:
     return sorted(_REGISTRY)
 
 
-for _t in (ResearchTool(), ScoringTool(), ComposeMessageTool(), SendMessageTool(), DiscoveryTool()):
+for _t in (ResearchTool(), ScoringTool(), ComposeMessageTool(), SendMessageTool(),
+           DiscoveryTool(), SetupCadenceTool()):
     register_tool(_t)

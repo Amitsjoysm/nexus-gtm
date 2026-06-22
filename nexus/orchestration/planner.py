@@ -110,11 +110,18 @@ def _discover_plan(goal_input: dict) -> list[PlanStep]:
     return [PlanStep(idx=0, tool="discovery", depends_on=[], requires_approval=False)]
 
 
+def _setup_cadence_plan(goal_input: dict) -> list[PlanStep]:
+    """Define a multi-touch cadence (email/call). cadence_name/steps/description ride on
+    run.goal_input, which SetupCadenceTool reads. Creating a definition is not outbound — no gate."""
+    return [PlanStep(idx=0, tool="setup_cadence", depends_on=[], requires_approval=False)]
+
+
 _RECIPES = {
     "research_account": _research_account_plan,
     "research_only": _research_only_plan,
     "research_compose": _research_compose_plan,
     "discover": _discover_plan,
+    "setup_cadence": _setup_cadence_plan,
 }
 
 
