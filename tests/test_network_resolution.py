@@ -45,3 +45,34 @@ def test_models_are_registered():
 
     for name in ("NetworkSourceAccount", "NetworkPerson", "NetworkIdentity", "NetworkEdge"):
         assert hasattr(m, name), f"{name} not exported from nexus.models"
+
+
+async def test_resolution_dedupes_by_email_and_creates_on_miss():
+    from nexus.models.network import NetworkPerson
+    from nexus.network.resolution import resolution_key, resolve_person
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        # case-insensitive email dedupe → same person
+        p1 = await resolve_person(ts, email="Ann@Acme.com", name="Ann Lee", title="CTO",
+                                  company="Acme")
+        p2 = await resolve_person(ts, email="ann@acme.com", name="A. Lee", title="Chief Tech",
+                                  company="Acme")
+        assert p1.id == p2.id
+        assert p1.primary_email == "ann@acme.com"
+
+        # no email: name+company dedupe
+        q1 = await resolve_person(ts, email=None, name="Bob Roy", title="VP", company="Globex")
+        q2 = await resolve_person(ts, email=None, name="bob roy", title="VP Sales",
+                                  company="globex")
+        assert q1.id == q2.id
+
+        # different person, same company → NOT merged (conservative)
+        r = await resolve_person(ts, email=None, name="Carol Diaz", title="VP", company="Globex")
+        assert r.id != q1.id
+
+        assert len(await ts.list(NetworkPerson)) == 3
+
+    # resolution_key is the normalized email when present, else a name|company hash
+    assert resolution_key(email="A@B.com", name="x", company="y") == "a@b.com"
+    assert resolution_key(email=None, name="A", company="B").startswith("h:")
