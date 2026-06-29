@@ -1,14 +1,14 @@
-# NEXUS GTM — SDR Handbook
+# Infojoy GTM — SDR Handbook
 
-*The practical guide to running your day on NEXUS. Read once end-to-end, then keep it open as a reference.*
+*The practical guide to running your day on Infojoy. Read once end-to-end, then keep it open as a reference.*
 
 ---
 
-## 1. What NEXUS does for you
+## 1. What Infojoy does for you
 
-NEXUS is an AI Go‑To‑Market workbench. Instead of you hunting through tabs — CRM, LinkedIn, news, a sequencer, a spreadsheet of ICP rules — NEXUS watches your territory, scores every account against *your* ideal customer profile, turns fresh buying signals into a prioritized **daily task list**, drafts grounded outreach with AI, and (after your one‑click approval) sends it from your own mailbox and logs it to your CRM.
+Infojoy is an AI Go‑To‑Market workbench. Instead of you hunting through tabs — CRM, LinkedIn, news, a sequencer, a spreadsheet of ICP rules — Infojoy watches your territory, surfaces **net‑new ICP accounts every morning**, scores every account against *your* ideal customer profile, turns fresh buying signals into a prioritized **daily task list**, drafts grounded outreach with AI for **email *and* the phone**, and (after your one‑click approval) sends it from your own mailbox / hands you a researched call, then logs it to your CRM.
 
-You stay in control of three things that matter: **who** you target, **what** the message says, and **whether** it sends. NEXUS does the research, scoring, drafting, sequencing, and busywork around those decisions.
+You stay in control of three things that matter: **who** you target, **what** the message says, and **whether** it sends. Infojoy does the research, scoring, drafting, sequencing, and busywork around those decisions.
 
 **The loop you'll live in:** Signal → Fit score → Inbox task → AI draft → Approve → Send → CRM sync → Outcome → smarter scoring.
 
@@ -16,7 +16,7 @@ You stay in control of three things that matter: **who** you target, **what** th
 
 ## 2. First 15 minutes (one‑time setup)
 
-1. **Sign in** and confirm you're in the right **workspace** (top‑left switcher). Each workspace is a fully isolated book of business — accounts, contacts, and signals never leak between them.
+1. **Sign in.** New workspaces use **two‑step sign‑up**: enter your details, then the **6‑digit code** we email you (it expires in ~10 minutes — hit *Resend* if needed). Forgot your password later? Use **Forgot password?** on the sign‑in screen for a one‑time reset link. Then confirm you're in the right **workspace** (top‑left switcher). Each workspace is a fully isolated book of business — accounts, contacts, and signals never leak between them.
 2. **Define your ICP** under **Relevance** (Section 8). This is the single most important setup step: it drives every Fit score.
 3. **Connect a sending mailbox** under **Settings → Sending mailboxes** (Section 11). Add your Gmail/Outlook with an app password and send a test. Nothing sends until you do this *and* approve each message.
 4. (If you're an admin) confirm **CRM auto‑sync** is on under **Settings → CRM auto‑sync** so won accounts and activity flow to HubSpot automatically.
@@ -31,6 +31,7 @@ You stay in control of three things that matter: **who** you target, **what** th
 | Start of day | **Inbox** | Clear the prioritized task list (signals that fired overnight). Triage with the keyboard. |
 | Mid‑morning | **Accounts** | Work your highest‑Fit accounts; run AI research + draft outreach. |
 | Throughout | **Approvals** | Review, redraft, and approve AI‑drafted sends. |
+| Power hour | **Calls** | Work your call queue: read the pre‑call brief, dial, log the disposition. |
 | As needed | **Orchestrator** | Kick off discovery (find net‑new accounts/contacts) or a multi‑step AI run. |
 | End of day | **Dashboard / Cadences** | Check what advanced, what's awaiting you, log outcomes. |
 
@@ -58,8 +59,8 @@ The **Accounts** table is your territory, enriched and scored.
 
 - **Columns:** Fit score (0–100, color‑coded), Industry, Location, Employees, LinkedIn, and row actions.
 - **Filters:** narrow by industry, location, source, and minimum Fit. Search by name/domain.
-- **Row actions:** **Push to CRM** (sync this account + contacts to HubSpot now) and **Remove** (archive it out of your working list).
-- **Add accounts** manually, or let the **Orchestrator** discover them for you.
+- **Row actions:** **Push to CRM** (sync this account + contacts to HubSpot now) and **Remove** (archive it out of your working list). On a contact you'll also see **Call** (queue a call + open the dialer) and **Enrich**.
+- **Add accounts** manually, let the **Orchestrator** discover them — or just check back tomorrow: **daily ICP auto‑discovery** drops fresh, strictly‑matched accounts into your list each morning (look for `source: auto‑discovery`).
 
 ### Account 360 (click any account)
 - **Overview:** firmographics, Fit breakdown, recent signals, contacts.
@@ -75,6 +76,26 @@ The **Accounts** table is your territory, enriched and scored.
 
 ---
 
+## 5b. Calls — your dialer + pre‑call research brief
+
+The **Calls** screen is your prioritized call list — the phone equivalent of the Inbox. Calls land here from **cadence call‑steps** or the **Call** button on any contact (in an account or the Contacts list).
+
+**Open a call and you get a full workspace — read top to bottom before you dial:**
+- **Pre‑call research brief** (loads automatically) so you're never cold:
+  - **Talking points** — grounded openers derived from real data (their role angle, the timely signal, the ICP‑fit rationale, relevant tech).
+  - **Person** — what they care about (role angle), title/seniority, email + deliverability, LinkedIn.
+  - **Company** — industry, size, country, domain, tech stack, and the **ICP Fit score + the reason** the engine scored it that way.
+  - **Social insights** — headline, recent posts, interests (when an Apify source is connected).
+  - **Why now — signals** — the buying events, each tagged "About them" if it's personal, **with a clickable source link** so you can cite it on the call.
+  - Every block shows its **source**, so you can trust and reference it live.
+- **AI call script** — a natural talk track for this persona: opener, hook, value prop, discovery questions, objection handling, the ask (CTA), and a voicemail. Hit **Regenerate** to refresh it.
+- **Click‑to‑dial** — tap the number to dial from your phone/softphone.
+- **Log the outcome** — jot notes + a next step, then one‑tap a **disposition**: *Connected, Voicemail, No answer, Callback, Meeting booked, Not interested, Bad number, Gatekeeper.* *No answer / Callback / Gatekeeper* keep the call open so you can try again; the rest close it. Everything feeds your call history and analytics.
+
+> Calls and emails live in the same cadences: a sequence can be *email → wait → **call** → email*. The cadence advances on schedule; logging a call never blocks it.
+
+---
+
 ## 6. Contacts — the people
 
 The **Contacts** screen lists every person across the workspace with their account context.
@@ -87,11 +108,11 @@ The **Contacts** screen lists every person across the workspace with their accou
 
 ## 7. Signals — why now
 
-**Signals** is the raw feed of buying events NEXUS detected on your accounts (funding, hiring, product news, etc.), each with a strength and source. Signals are what create Inbox tasks and re‑score accounts. You'll mostly consume signals through the Inbox, but the feed is here when you want the full picture.
+**Signals** is the raw feed of buying events Infojoy detected on your accounts (funding, hiring, product news, etc.), each with a strength and source. Signals are what create Inbox tasks and re‑score accounts. You'll mostly consume signals through the Inbox, but the feed is here when you want the full picture.
 
 ---
 
-## 8. Relevance — teach NEXUS your ICP
+## 8. Relevance — teach Infojoy your ICP
 
 **Relevance** is where you define what a good account looks like. It drives every Fit score and grounds every AI message.
 
@@ -99,7 +120,7 @@ The **Contacts** screen lists every person across the workspace with their accou
 - **Value propositions:** what you sell and the pains it solves — the AI uses these to personalize outreach.
 - **Product context:** background the agents reference when researching and writing.
 - **Fit weighting (sliders):** dial how much **Industry / Company size / Geography / Tech stack** each count toward the score. Positions are relative; the readout shows each dimension's share. Hit **Reset to defaults** to return to 35/30/15/20. Experiment here when scores don't match your gut.
-- **Auto‑learned weighting:** as you log won deals, NEXUS nudges the weights toward the traits your wins share. Your explicit slider settings always take priority.
+- **Auto‑learned weighting:** as you log won deals, Infojoy nudges the weights toward the traits your wins share. Your explicit slider settings always take priority.
 
 > If your Inbox feels off (wrong accounts surfacing), tune Relevance first — it's the lever behind everything.
 
@@ -109,7 +130,7 @@ The **Contacts** screen lists every person across the workspace with their accou
 
 The **Orchestrator** runs multi‑step AI workflows as a planned sequence of agents (research → scoring → compose → send), pausing at the **approval gate** before anything leaves.
 
-- **Discovery:** describe an ICP and let NEXUS surface net‑new **companies** or **contacts** that match — then add them to your accounts in one step.
+- **Discovery:** describe an ICP and let Infojoy surface net‑new **companies** or **contacts** that match — then add them to your accounts in one step.
 - **Chat:** converse with the orchestrator to scope a run.
 - **CSV import:** bulk‑load accounts/contacts.
 - **Run console:** watch a run progress live; results stream in.
@@ -144,8 +165,8 @@ Two hard gates protect your reputation: an **ungrounded** draft or an **undelive
 
 ## 12. Campaigns & Cadences — outreach at scale
 
-- **Campaigns:** select a set of accounts, NEXUS drafts personalized outreach for each, you approve, and it sends — with live progress.
-- **Cadences:** multi‑touch sequences. Enroll contacts, and the engine advances each touch on schedule (with stop conditions). Turn on **review each touch** to keep the approval gate on every step, or let approved cadences run.
+- **Campaigns:** select a set of accounts, Infojoy drafts personalized outreach for each, you approve, and it sends — with live progress.
+- **Cadences:** multi‑touch sequences that mix **email and call** steps. Enroll contacts, and the engine advances each touch on schedule (with stop conditions) — a call step drops a task into your **Calls** queue. Turn on **review each touch** to keep the approval gate on every step, or let approved cadences run.
 
 ---
 
@@ -167,6 +188,7 @@ The top‑left switcher moves you between **workspaces (tenants)**. Each is a ha
 ## 15. Quick reference — keyboard & gotchas
 
 - **Inbox:** `J/K` move · `E` complete/reopen · `D`/`Enter` open account.
+- **Calls:** open a queued call → **read the pre‑call brief** (sources!) → dial → log a disposition. New calls come from cadence call‑steps or the **Call** button on a contact.
 - **Nothing sends without (a) a connected mailbox and (b) your approval.** If a "send" seems to do nothing, check Settings → Sending mailboxes.
 - **A draft won't approve?** It's ungrounded or the email is undeliverable — run research / fix the contact, or reject.
 - **Wrong accounts in your Inbox?** Tune **Relevance** (ICP + Fit sliders).
@@ -175,4 +197,4 @@ The top‑left switcher moves you between **workspaces (tenants)**. Each is a ha
 
 ---
 
-*You bring judgment on who, what, and whether. NEXUS brings the research, scoring, drafting, and the busywork in between. Run your Inbox to zero, keep Relevance sharp, and let the approvals gate protect your name.*
+*You bring judgment on who, what, and whether. Infojoy brings the research, scoring, drafting, and the busywork in between — for email **and** the phone. Run your Inbox to zero, clear your call queue with the pre‑call brief open, keep Relevance sharp, and let the approvals gate protect your name.*

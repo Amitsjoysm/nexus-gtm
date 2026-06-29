@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars (gitignored) OR let deploy.sh pass these.
+# Secrets are NOT here — deploy.sh injects them via TF_VAR_secrets from deploy/.env.
+
+region            = "us-east-1"
+project           = "nexus"
+env               = "prod"
+domain            = "app.example.com"
+route53_zone_name = "example.com"
+alarm_email       = "ops@example.com"
+
+# Sizing (raise as you grow)
+app_desired = 2
+app_min     = 2
+app_max     = 10

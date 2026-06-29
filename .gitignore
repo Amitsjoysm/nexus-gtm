@@ -22,3 +22,18 @@ node_modules/
 # Deployment secrets + release artifacts (never committed)
 deploy/.env
 release/
+
+# Terraform (cloud deploy) — never commit state or per-env secrets
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# Local agent / editor tooling — machine-specific, may hold local API keys (never committed)
+.claude/
+.qoder/
+.opencode.json
+.mcp.json

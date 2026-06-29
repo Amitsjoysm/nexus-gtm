@@ -53,7 +53,7 @@ def test_migration_0008_chains_from_0007():
 
 from datetime import datetime, timedelta, timezone
 
-from nexus.workers.queue import InMemoryTaskQueue, set_task_queue, get_task_queue
+from nexus.workers.queue import InMemoryTaskQueue, set_task_queue
 from nexus.workers.tasks import handle_refresh_due_accounts
 
 

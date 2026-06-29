@@ -26,6 +26,19 @@ export interface LoginRequest {
   tenant_slug?: string | null;
 }
 
+/** Step 1 of OTP registration — a verification code was emailed; no account exists yet. */
+export interface RegisterStartResponse {
+  email: string;
+  expires_in_s: number;
+  resend_in_s: number;
+  message: string;
+}
+
+/** Generic acknowledgement (forgot/reset password) — never reveals whether an account exists. */
+export interface MessageResponse {
+  message: string;
+}
+
 export interface Account {
   id: string;
   name: string;
@@ -60,6 +73,24 @@ export interface LookalikeResponse {
   seed_account_id: string;
   seed_domain: string | null;
   lookalikes: Lookalike[];
+}
+
+export interface ContactLookalike {
+  contact_id: string;
+  full_name: string;
+  account_id: string;
+  account_name: string;
+  title: string | null;
+  seniority: string | null;
+  email: string | null;
+  linkedin_url: string | null;
+  score: number;
+  reasons: string[];
+}
+
+export interface ContactLookalikeResponse {
+  seed_contact_id: string;
+  lookalikes: ContactLookalike[];
 }
 
 // ---- outcome-feedback loop ----
@@ -162,6 +193,59 @@ export interface CallScript {
   objections: { objection: string; response: string }[];
   cta: string;
   voicemail: string;
+}
+
+export interface CallBriefContact {
+  name: string;
+  title: string | null;
+  seniority: string | null;
+  email: string | null;
+  email_status: string | null;
+  phone: string | null;
+  linkedin_url: string | null;
+  role_angle: string;
+  source: string | null;
+}
+
+export interface CallBriefAccount {
+  name: string;
+  domain: string | null;
+  industry: string | null;
+  employee_count: number | null;
+  country: string | null;
+  tech_stack: string[];
+  fit_score: number | null;
+  fit_rationale: string;
+  source: string | null;
+}
+
+export interface CallBriefInsights {
+  headline: string;
+  summary: string;
+  recent_posts: string[];
+  interests: string[];
+  source: string;
+  fetched_at: string | null;
+}
+
+export interface CallBriefSignal {
+  title: string;
+  body: string;
+  kind: string;
+  source: string;
+  url: string | null;
+  strength: number;
+  occurred_at: string;
+  is_personal: boolean;
+}
+
+/** The pre-call research dossier — person + company + signals, every block sourced. */
+export interface CallBrief {
+  contact: CallBriefContact | null;
+  account: CallBriefAccount | null;
+  insights: CallBriefInsights | null;
+  signals: CallBriefSignal[];
+  talking_points: string[];
 }
 
 export interface CallActivity {

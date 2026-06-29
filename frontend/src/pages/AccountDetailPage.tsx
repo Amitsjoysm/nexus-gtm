@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -31,6 +31,7 @@ import type {
   Account,
   CallTask,
   Contact,
+  ContactLookalike,
   Lookalike,
   OutcomeStage,
   Role,
@@ -91,6 +92,12 @@ export function AccountDetailPage() {
   const [outcomeStage, setOutcomeStage] = useState<OutcomeStage>("won");
   const [outcomeNote, setOutcomeNote] = useState("");
   const [recording, setRecording] = useState(false);
+  // "Find similar people" — per-contact look-alike results, expanded inline below the row.
+  const [similarPeople, setSimilarPeople] = useState<{
+    contactId: string;
+    loading: boolean;
+    data: ContactLookalike[] | null;
+  } | null>(null);
 
   const canOrchestrate = session ? ROLE_RANK[session.role] >= ROLE_RANK.manager : false;
 
@@ -137,6 +144,33 @@ export function AccountDetailPage() {
       });
     }
   }
+
+  // "Find similar people" — rank the workspace's other contacts by resemblance to this one
+  // (role / seniority / department + company similarity). Toggles the inline panel.
+  async function findSimilarPeople(c: Contact) {
+    if (similarPeople?.contactId === c.id) {
+      setSimilarPeople(null); // clicking again collapses
+      return;
+    }
+    setSimilarPeople({ contactId: c.id, loading: true, data: null });
+    try {
+      const res = await api.findContactLookalikes(c.id, 10);
+      setSimilarPeople({ contactId: c.id, loading: false, data: res.lookalikes });
+      if (res.lookalikes.length === 0)
+        toast.toast({
+          tone: "info",
+          title: "No similar people",
+          description: "Add more contacts to your workspace to compare against.",
+        });
+    } catch (err) {
+      setSimilarPeople(null);
+      toast.error(
+        "Couldn't find similar people",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    }
+  }
+
   const signals = useApi<SignalEvent[]>(
     (signal) => api.listSignals({ account_id: id, limit: 50 }, signal),
     [id],
@@ -510,51 +544,74 @@ export function AccountDetailPage() {
             >
               {(rows) =>
                 rows.map((c) => (
-                  <div key={c.id} className={styles.contact}>
-                    <div className={styles.contactBody}>
-                      <div className={styles.contactName}>{c.full_name}</div>
-                      <div className={styles.contactMeta}>
-                        {[c.title, c.seniority].filter(Boolean).join(" · ") || "—"}
+                  <Fragment key={c.id}>
+                    <div className={styles.contact}>
+                      <div className={styles.contactBody}>
+                        <div className={styles.contactName}>{c.full_name}</div>
+                        <div className={styles.contactMeta}>
+                          {[c.title, c.seniority].filter(Boolean).join(" · ") || "—"}
+                        </div>
                       </div>
-                    </div>
-                    <div className={styles.contactRight}>
-                      {c.email ? (
-                        <a className={styles.link} href={`mailto:${c.email}`}>
-                          {c.email}
-                        </a>
-                      ) : (
-                        "—"
-                      )}
-                      <div>
-                        {c.phone ? (
-                          <a className={styles.link} href={`tel:${c.phone.replace(/[^\d+]/g, "")}`}>
-                            {c.phone}
+                      <div className={styles.contactRight}>
+                        {c.email ? (
+                          <a className={styles.link} href={`mailto:${c.email}`}>
+                            {c.email}
                           </a>
-                        ) : c.email ? (
-                          `${formatPercent(c.email_confidence)} confidence`
-                        ) : null}
+                        ) : (
+                          "—"
+                        )}
+                        <div>
+                          {c.phone ? (
+                            <a
+                              className={styles.link}
+                              href={`tel:${c.phone.replace(/[^\d+]/g, "")}`}
+                            >
+                              {c.phone}
+                            </a>
+                          ) : c.email ? (
+                            `${formatPercent(c.email_confidence)} confidence`
+                          ) : null}
+                        </div>
                       </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={enriching[c.id]}
+                        onClick={() => enrichOne(c)}
+                        aria-label={`Enrich ${c.full_name}`}
+                      >
+                        Enrich
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        iconLeft={<Icons.UsersIcon />}
+                        loading={similarPeople?.contactId === c.id && similarPeople.loading}
+                        aria-expanded={similarPeople?.contactId === c.id}
+                        onClick={() => findSimilarPeople(c)}
+                        aria-label={`Find people similar to ${c.full_name}`}
+                      >
+                        Similar people
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        iconLeft={<Icons.PhoneIcon />}
+                        loading={callingId === c.id}
+                        onClick={() => startCall(c)}
+                        aria-label={`Call ${c.full_name}`}
+                      >
+                        Call
+                      </Button>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={enriching[c.id]}
-                      onClick={() => enrichOne(c)}
-                      aria-label={`Enrich ${c.full_name}`}
-                    >
-                      Enrich
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      iconLeft={<Icons.PhoneIcon />}
-                      loading={callingId === c.id}
-                      onClick={() => startCall(c)}
-                      aria-label={`Call ${c.full_name}`}
-                    >
-                      Call
-                    </Button>
-                  </div>
+                    {similarPeople?.contactId === c.id && similarPeople.data && (
+                      <SimilarPeoplePanel
+                        seedName={c.full_name}
+                        people={similarPeople.data}
+                        onOpenAccount={(accountId) => navigate(`/accounts/${accountId}`)}
+                      />
+                    )}
+                  </Fragment>
                 ))
               }
             </DataState>
@@ -949,6 +1006,63 @@ function LookalikeResult({
         );
       })}
     </ul>
+  );
+}
+
+/** Inline "people like this contact" results, shown directly under a contact row. */
+function SimilarPeoplePanel({
+  seedName,
+  people,
+  onOpenAccount,
+}: {
+  seedName: string;
+  people: ContactLookalike[];
+  onOpenAccount: (accountId: string) => void;
+}) {
+  return (
+    <div className={styles.similarPanel}>
+      {people.length === 0 ? (
+        <p className={styles.agentNote}>
+          No similar people in your workspace yet. Source more contacts to compare against{" "}
+          {seedName}.
+        </p>
+      ) : (
+        <ul className={styles.recList}>
+          {people.map((p) => {
+            const meta = strengthMeta(p.score / 100);
+            return (
+              <li key={p.contact_id} className={styles.rec}>
+                <div className={styles.recTop}>
+                  <div>
+                    <span className={styles.recName}>{p.full_name}</span>
+                    <span className={styles.recTitle}>
+                      {[p.title, p.account_name].filter(Boolean).join(" · ") || "—"}
+                    </span>
+                  </div>
+                  <div className={styles.recBadges}>
+                    <Badge tone={meta.tone} dot>
+                      Match {p.score}
+                    </Badge>
+                    {p.account_id && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onOpenAccount(p.account_id)}
+                      >
+                        View account
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                {p.reasons.length > 0 && (
+                  <p className={styles.recWhy}>{p.reasons.join(" · ")}</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 

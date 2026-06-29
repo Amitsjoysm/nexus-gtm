@@ -1,14 +1,14 @@
-# NEXUS GTM — Product Requirements Document (PRD)
+# Infojoy GTM — Product Requirements Document (PRD)
 
-**Status:** Production · **Owner:** Product · **Last updated:** 2026‑06‑17
+**Status:** Production · **Owner:** Product · **Last updated:** 2026‑06‑24
 
 ---
 
 ## 1. Overview
 
-NEXUS GTM is a multi‑tenant, AI‑powered Go‑To‑Market intelligence platform (a Pocus/Clay‑class product). It ingests buying signals, scores accounts against each customer's ICP, runs AI agents (research, messaging, enrichment, discovery), and drives the full rep workflow (inbox, lists, plays, cadences, approvals, CRM sync) — with a human approval gate before any outbound message sends.
+Infojoy GTM is a multi‑tenant, AI‑powered Go‑To‑Market intelligence platform (a Pocus/Clay‑class product). It ingests buying signals, scores accounts against each customer's ICP, runs AI agents (research, messaging, enrichment, discovery), and drives the full rep workflow (inbox, lists, plays, cadences, approvals, CRM sync) — with a human approval gate before any outbound message sends.
 
-**One‑line:** *Turn buying signals into approved, grounded, sent outreach — and keep your CRM in sync — without the SDR busywork.*
+**One‑line:** *Turn buying signals into approved, grounded outreach — by email **and** cold call — surface net‑new ICP accounts every morning, and keep your CRM in sync, without the SDR busywork.*
 
 ---
 
@@ -22,7 +22,7 @@ NEXUS GTM is a multi‑tenant, AI‑powered Go‑To‑Market intelligence platfo
 - G5. Run **fully offline/deterministically** for tests and pilots (no key required), and switch to real providers with one env change.
 
 ### Non‑goals
-- Replacing the rep's judgment on targeting and messaging (NEXUS assists; the human decides).
+- Replacing the rep's judgment on targeting and messaging (Infojoy assists; the human decides).
 - Being a full CRM (it *syncs to* the customer's CRM, system of record stays theirs).
 - Sending without human approval (the approval gate is a product principle, not a toggle to remove).
 
@@ -100,6 +100,22 @@ NEXUS GTM is a multi‑tenant, AI‑powered Go‑To‑Market intelligence platfo
 ### 5.9 Identity, teams, multi‑tenancy
 - Email/password auth (JWT); workspaces; RBAC roles **owner > admin > manager > rep**; member invite/role management; last‑owner protection.
 - Workspace switcher; create new workspaces.
+- **Two‑step OTP registration** (optional gate): sign‑up requires an emailed 6‑digit code; the code is CSPRNG‑generated, **HMAC‑hashed at rest** (never stored or emailed in reverse‑able form), constant‑time verified, expiring, with attempt caps + resend cooldown. The password is bcrypt‑hashed before the pending row is written.
+- **Forgot / reset password:** a single‑use, time‑boxed, HMAC‑hashed reset link emailed to the verified account holder; generic responses prevent email enumeration.
+- **Auth abuse protection:** per‑client‑IP rate limiting on login / register / reset endpoints (config‑gated); register/start is enumeration‑resistant.
+
+### 5.10 Cold calling (SDR dialer workflow)
+- A prioritized **call queue** (per account/contact) populated from cadence call‑steps or a one‑click "Call" on any contact; idempotent (no duplicate open calls per contact).
+- **AI call scripts** grounded in the account's ICP + strongest signal + the person's role (opener, hook, value prop, discovery questions, objection handling, CTA, voicemail).
+- **Pre‑call research brief** surfaced before dialing: the person (role, what they care about, email/LinkedIn), their company (firmographics, ICP fit + the relevance engine's rationale), social insights, and the buying **signals — each with its source/link** — plus grounded talking points. So the SDR is fully researched and can cite sources on the call.
+- **Click‑to‑dial** (`tel:`), one‑tap **disposition** logging (connected / voicemail / meeting‑booked / callback / …), and a per‑contact call history feeding analytics. Telephony is provider‑pluggable (`stub` default; Twilio‑class opt‑in) so the queue + scripts work offline.
+- Cadences can mix email and **call** steps; a call step queues a task and the sequence advances on schedule (logging the outcome never blocks the cadence).
+
+### 5.11 Daily ICP auto‑discovery
+- A daily driver auto‑surfaces **N net‑new, ICP‑matching accounts** each morning for opted‑in tenants: strict size‑band + Fit‑threshold match, deduped by domain, persisted with a Fit score and `source=auto_discovery`. Per‑interval idempotent; consumes no slot when a tenant has no ICP yet.
+
+### 5.12 Person‑level hyper‑personalization
+- Email and call drafting are personalized to the **individual** (role angle, seniority, a signal tied to them when available), not just the account. An **Apify provider seam** ingests a person's social posts/headline/interests into the contact and folds them into the brief automatically when configured.
 
 ---
 
@@ -108,8 +124,9 @@ NEXUS GTM is a multi‑tenant, AI‑powered Go‑To‑Market intelligence platfo
 - **Security / isolation:** two‑layer tenant isolation — application `TenantSession` scoping **and** Postgres Row‑Level Security; the API connects as a **least‑privilege, non‑superuser** role; RBAC on every endpoint; production rejects the insecure default JWT secret; secrets only in gitignored env.
 - **Reliability:** durable run state; idempotent CRM sync and approvals; connectors never raise across the boundary (a flaky CRM can't break a send); self‑healing sweeps (failed pushes stay due).
 - **Scalability:** Valkey‑backed work queue; app and worker scale independently; change‑aware sweeps avoid full scans; SSE for live progress.
-- **Performance:** bulk/aggregate queries on hot paths (counts, steps) instead of N+1.
-- **Portability:** runs fully offline (SQLite + deterministic stub LLM + in‑memory queue) for tests/pilots; single‑command Docker deploy to any domain with automatic HTTPS.
+- **Performance:** hot read paths are bounded — SQL‑side pagination/filtering (no full‑table loads), a window‑function "latest fit score per account" (O(accounts), not O(score history)), and supporting composite indexes — sized for large multi‑tenant workspaces.
+- **Portability & deployment:** runs fully offline (SQLite + deterministic stub LLM + in‑memory queue) for tests/pilots; **single‑command deploy** to a VM (Docker Compose + Caddy auto‑HTTPS) **or to the cloud** — AWS **ECS Fargate** (Terraform; self‑hosted data, with a one‑variable upgrade to managed **RDS Multi‑AZ + ElastiCache**) or **Azure Container Apps** (managed Postgres Flexible Server + Azure Cache). The same image runs API and worker.
+- **Delivery (CI/CD) with quality gates:** GitHub Actions enforces lint (ruff), strict typecheck, the full test suite **+ coverage threshold**, secret scanning (gitleaks), and a container scan (Trivy) before an image ships; deploys are OIDC‑keyless, health‑gated (`services‑stable`), and run a post‑deploy smoke test with rollback on failure.
 - **Accessibility:** semantic HTML, labelled controls, full keyboard support, visible focus, reduced‑motion fallbacks; contrast ≥ 4.5:1.
 - **Observability:** activity feed, CRM sync status, run event log.
 
@@ -120,7 +137,9 @@ NEXUS GTM is a multi‑tenant, AI‑powered Go‑To‑Market intelligence platfo
 - **Backend:** Python 3.11, FastAPI, async SQLAlchemy 2.0, Pydantic v2, Alembic. In‑process EventBus; Valkey/Redis queue; worker process for automation heartbeat + jobs.
 - **Frontend:** React 18 + TypeScript (strict) + Vite; CSS‑token design system; owned component library; SPA served by FastAPI.
 - **Data:** Postgres 16 (prod) / SQLite (offline tests). RLS on all tenant‑scoped tables.
-- **Integrations:** LLM (Anthropic/Groq/OpenAI‑compat/stub), Exa search, Reacher email verification, HubSpot CRM, SMTP send (Gmail/Outlook), Caddy TLS.
+- **Auth & calling modules:** `nexus/auth/` (OTP registration, password reset, OTP crypto), `nexus/core/ratelimit.py`; `nexus/calling/` (call queue + AI scripts + dispositions) with a pre‑call brief composer; `nexus/discovery/auto.py` (daily ICP discovery); `nexus/personalization/` (person brief + Apify seam).
+- **Integrations:** LLM (Anthropic/Groq/OpenAI‑compat/stub), Exa search, Reacher email verification, HubSpot CRM, SMTP send (per‑tenant Gmail/Outlook) + a system transactional mailbox (OTP/reset email), telephony (`stub`/Twilio‑class), Apify (social personalization), Caddy TLS.
+- **Cloud targets:** AWS ECS Fargate + Azure Container Apps (Terraform IaC under `deploy/cloud/`); single‑VM Docker Compose under `deploy/`.
 
 ---
 
@@ -130,11 +149,13 @@ NEXUS GTM is a multi‑tenant, AI‑powered Go‑To‑Market intelligence platfo
 - [x] No fabricated data in production paths; real providers selected via env (LLM, search, verify, CRM); demo signals off.
 - [x] Approval gate enforced; ungrounded/undeliverable sends refused.
 - [x] HubSpot sync verified against a live portal (companies + contacts + associations, idempotent).
-- [x] Full automated test suite green (offline, deterministic).
-- [x] Single‑command deploy to any domain with HTTPS; secrets generated, never committed.
+- [x] Full automated test suite green (offline, deterministic), run in CI behind quality gates (lint + typecheck + coverage + secret/container scan).
+- [x] Single‑command deploy to a VM or the cloud (AWS Fargate / Azure Container Apps); secrets generated, never committed.
+- [x] Self‑serve onboarding secured: two‑step OTP registration, forgot/reset password, and per‑IP auth rate limiting (enumeration‑resistant).
+- [x] SDR calling shipped: prioritized call queue, AI scripts, and a sourced pre‑call research brief; telephony provider‑pluggable (offline‑safe).
 
 ---
 
 ## 9. Out of scope / future
 
-- Additional CRM adapters (Salesforce interface exists, adapter to be completed), inbound‑reply handling and meeting booking, dialer/voice, advanced sequence branching, deeper analytics/forecasting, SSO/SCIM.
+- Additional CRM adapters (Salesforce interface exists, adapter to be completed); inbound‑reply handling and meeting booking; live telephony provider (Twilio) past the offline‑safe seam + call recording/transcription; advanced sequence branching; deeper analytics/forecasting; SSO/SCIM; Key‑Vault/SSM‑backed secret refs and managed‑data variants productionized further.

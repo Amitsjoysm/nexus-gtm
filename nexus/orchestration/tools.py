@@ -12,7 +12,7 @@ tests/CI, so the whole orchestration is exercisable without network or API keys.
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from nexus.agents.runtime import AgentRuntime
 from nexus.core.tenancy import TenantSession

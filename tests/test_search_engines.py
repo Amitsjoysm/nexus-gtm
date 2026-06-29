@@ -67,6 +67,35 @@ def _patch(monkeypatch, responses):
     return client
 
 
+def test_exa_num_results_clamps_to_100():
+    # Exa 400s on numResults > 100; the helper must clamp so a big pool never fails the whole call.
+    from nexus.integrations.search.engines import _exa_num_results
+
+    assert _exa_num_results(5) == 5
+    assert _exa_num_results(100) == 100
+    assert _exa_num_results(160) == 100  # the bug: 160 used to reach Exa and 400
+    assert _exa_num_results(0) == 1
+
+
+async def test_exa_request_clamps_numresults_on_the_wire(monkeypatch):
+    """Over-eager limit (e.g. a 160-deep discovery pool) must go out as numResults=100, not 160."""
+    captured: dict = {}
+
+    class _CapturingClient(_FakeClient):
+        async def post(self, *a, **k):
+            captured.update(k.get("json") or {})
+            return await super().post(*a, **k)
+
+    from nexus.integrations.search import engines
+
+    monkeypatch.setattr(engines.httpx, "AsyncClient",
+                        lambda *a, **k: _CapturingClient([_FakeResp(200, {"results": []})]))
+    await ExaSearchProvider("k").search_companies("b2b saas", limit=160, exclude_domains=["x.com"])
+    assert captured["numResults"] == 100
+    assert captured["category"] == "company"
+    assert captured["excludeDomains"] == ["x.com"]
+
+
 async def test_exa_retries_on_429_then_succeeds(monkeypatch):
     ok = {"results": [{"title": "Acme", "url": "https://acme.com", "text": "logistics"}]}
     client = _patch(monkeypatch, [_FakeResp(429), _FakeResp(200, ok)])

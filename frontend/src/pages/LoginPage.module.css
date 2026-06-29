@@ -155,12 +155,25 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+.notice {
+  font-size: var(--text-sm);
+  color: var(--accent);
+  background: var(--accent-quiet);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
 .switchBtn {
   color: var(--accent);
   font-weight: var(--weight-semibold);
 }
 .switchBtn:hover {
   text-decoration: underline;
+}
+.switchBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  text-decoration: none;
 }
 
 @media (max-width: 880px) {

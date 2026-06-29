@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nexus.core.db import Base, IdMixin, TimestampMixin, utcnow
@@ -12,8 +12,13 @@ from nexus.core.tenancy import TenantScoped
 
 class AccountScore(IdMixin, TimestampMixin, TenantScoped, Base):
     __tablename__ = "account_scores"
-    # Backs the activity feed's "newest scores for this tenant" read.
-    __table_args__ = (Index("ix_score_tenant_computed", "tenant_id", "computed_at"),)
+    __table_args__ = (
+        # Backs the activity feed's "newest scores for this tenant" read.
+        Index("ix_score_tenant_computed", "tenant_id", "computed_at"),
+        # Backs the latest-composite-per-account window query (Accounts list / detail / Fit
+        # column), so it stays O(accounts) as score history grows under continuous automation.
+        Index("ix_score_tenant_account_computed", "tenant_id", "account_id", "computed_at"),
+    )
 
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     icp_fit: Mapped[int] = mapped_column(Integer, default=0)      # 0..100

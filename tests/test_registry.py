@@ -42,7 +42,7 @@ class FakeCompanySearch(CompanySearchProvider):
         self.name = name
         self._candidates = candidates
 
-    async def search(self, icp, *, limit=25):
+    async def search(self, icp, *, limit=25, exclude_domains=None):
         return list(self._candidates)[:limit]
 
 
@@ -53,7 +53,7 @@ class BoomCompanySearch(CompanySearchProvider):
         self.name = name
         self.calls = 0
 
-    async def search(self, icp, *, limit=25):
+    async def search(self, icp, *, limit=25, exclude_domains=None):
         self.calls += 1
         raise RuntimeError("nope")
 

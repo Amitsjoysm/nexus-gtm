@@ -1,15 +1,30 @@
 """Shared test fixtures. Everything runs offline: SQLite + stub LLM + demo signals."""
 from __future__ import annotations
 
+import asyncio
 import os
+import sys
 import tempfile
 
 import pytest
 import pytest_asyncio
 
+# Windows-only: use the Selector event loop, not the default Proactor loop. The Proactor loop's
+# IOCP poller (``_poll``/``GetQueuedCompletionStatus``) can wedge a fresh loop on the first
+# in-process httpx-ASGI test and block forever — the exact cause of the suite "hanging" locally on
+# Windows. Linux/CI uses the selector loop already, so this just makes the dev box match prod. Must
+# run at import time, before pytest-asyncio creates any loop.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # Point the DB at a temp file and force test env BEFORE importing app config (lru_cache).
 _TMPDIR = tempfile.mkdtemp(prefix="nexus_test_")
-os.environ["NEXUS_DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMPDIR}/test.db"
+# Per-xdist-worker DB file so `pytest -n auto` is safe: each worker is its own process that drops
+# and recreates every table before each test (see ``fresh_db``), so a shared SQLite file would let
+# one worker wipe another's tables mid-test. ``PYTEST_XDIST_WORKER`` is unset on a serial run →
+# a single "test_main.db"; under xdist each worker gets "test_gw0.db", "test_gw1.db", ….
+_WORKER_ID = os.environ.get("PYTEST_XDIST_WORKER", "main")
+os.environ["NEXUS_DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMPDIR}/test_{_WORKER_ID}.db"
 os.environ["NEXUS_ENV"] = "test"
 os.environ["NEXUS_LLM_PROVIDER"] = "stub"
 # Hermetic offline guarantee: pin the web-search backend to keyless DuckDuckGo (which, in tests,

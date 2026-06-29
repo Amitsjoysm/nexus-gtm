@@ -30,6 +30,7 @@ import type {
   CallTask,
   CallScript,
   CallActivity,
+  CallBrief,
   Cadence,
   CadenceEnrollment,
   CadenceInput,
@@ -47,6 +48,7 @@ import type {
   CreateSessionRequest,
   LaunchFromSelectionInput,
   LookalikeResponse,
+  ContactLookalikeResponse,
   CRMPushResponse,
   CRMSyncRequest,
   CRMSyncResponse,
@@ -77,6 +79,8 @@ import type {
   RunStreamEvent,
   SaveIcpResponse,
   SEPPushRequest,
+  MessageResponse,
+  RegisterStartResponse,
   SEPPushResponse,
   SignalEvent,
   SignupRequest,
@@ -188,8 +192,39 @@ export class ApiClient {
   signup(body: SignupRequest, signal?: AbortSignal) {
     return this.request<TokenResponse>("/auth/signup", { method: "POST", body, signal });
   }
+  /** Step 1 of OTP registration: validate + email a code (no account created yet). */
+  registerStart(body: SignupRequest, signal?: AbortSignal) {
+    return this.request<RegisterStartResponse>("/auth/register/start", {
+      method: "POST",
+      body,
+      signal,
+    });
+  }
+  /** Re-send the verification code for an in-flight registration (cooldown-limited). */
+  registerResend(body: { email: string }, signal?: AbortSignal) {
+    return this.request<RegisterStartResponse>("/auth/register/resend", {
+      method: "POST",
+      body,
+      signal,
+    });
+  }
+  /** Step 2 of OTP registration: verify the code and provision the account. */
+  registerVerify(body: { email: string; code: string }, signal?: AbortSignal) {
+    return this.request<TokenResponse>("/auth/register/verify", { method: "POST", body, signal });
+  }
   login(body: LoginRequest, signal?: AbortSignal) {
     return this.request<TokenResponse>("/auth/login", { method: "POST", body, signal });
+  }
+  /** Request a password-reset link (generic response — never reveals if the email exists). */
+  forgotPassword(body: { email: string }, signal?: AbortSignal) {
+    return this.request<MessageResponse>("/auth/forgot-password", { method: "POST", body, signal });
+  }
+  /** Complete a password reset with the emailed token. */
+  resetPassword(
+    body: { email: string; token: string; new_password: string },
+    signal?: AbortSignal,
+  ) {
+    return this.request<MessageResponse>("/auth/reset-password", { method: "POST", body, signal });
   }
 
   // ---- accounts ----
@@ -240,6 +275,9 @@ export class ApiClient {
   generateCallScript(taskId: string, signal?: AbortSignal) {
     return this.request<CallScript>(`/calling/tasks/${taskId}/script`, { method: "POST", signal });
   }
+  callBrief(taskId: string, signal?: AbortSignal) {
+    return this.request<CallBrief>(`/calling/tasks/${taskId}/brief`, { signal });
+  }
   logCallDisposition(
     taskId: string,
     body: { disposition: string; notes?: string; duration_s?: number | null; next_step?: string | null },
@@ -266,6 +304,13 @@ export class ApiClient {
   findLookalikes(accountId: string, limit = 10, signal?: AbortSignal) {
     return this.request<LookalikeResponse>(
       `/accounts/${accountId}/lookalikes?limit=${limit}`,
+      { method: "POST", signal },
+    );
+  }
+  /** Find people in the workspace who resemble this contact (role/seniority/dept + company). */
+  findContactLookalikes(contactId: string, limit = 10, signal?: AbortSignal) {
+    return this.request<ContactLookalikeResponse>(
+      `/accounts/contacts/${contactId}/lookalikes?limit=${limit}`,
       { method: "POST", signal },
     );
   }

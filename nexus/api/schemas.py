@@ -15,6 +15,49 @@ class SignupRequest(BaseModel):
     password: str = Field(min_length=8)
 
 
+class RegisterStartRequest(BaseModel):
+    """Step 1 of OTP registration — same fields as SignupRequest; a code is emailed, no account
+    is created yet."""
+
+    company_name: str
+    company_slug: str = Field(pattern=r"^[a-z0-9][a-z0-9\-]{1,79}$")
+    email: EmailStr
+    full_name: str
+    password: str = Field(min_length=8)
+
+
+class RegisterStartResponse(BaseModel):
+    email: str
+    expires_in_s: int          # how long the code is valid
+    resend_in_s: int           # cooldown before another code can be requested
+    message: str = "Verification code sent to your email."
+
+
+class RegisterVerifyRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=4, max_length=12)
+
+
+class RegisterResendRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    token: str = Field(min_length=16)
+    new_password: str = Field(min_length=8)
+
+
+class MessageResponse(BaseModel):
+    """Generic, enumeration-safe acknowledgement for forgot/reset flows."""
+
+    message: str
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
@@ -178,6 +221,63 @@ class CallActivityOut(BaseModel):
     occurred_at: str
 
 
+class CallBriefContact(BaseModel):
+    name: str
+    title: str | None = None
+    seniority: str | None = None
+    email: str | None = None
+    email_status: str | None = None
+    phone: str | None = None
+    linkedin_url: str | None = None
+    role_angle: str = ""
+    source: str | None = None       # enrichment provenance (where the contact came from)
+
+
+class CallBriefAccount(BaseModel):
+    name: str
+    domain: str | None = None
+    industry: str | None = None
+    employee_count: int | None = None
+    country: str | None = None
+    tech_stack: list[str] = Field(default_factory=list)
+    fit_score: int | None = None    # latest ICP composite (0..100)
+    fit_rationale: str = ""         # the relevance engine's reasoning (a citable source)
+    source: str | None = None       # where the firmographics came from
+
+
+class CallBriefInsights(BaseModel):
+    """Person-level social insights (Apify et al.), surfaced with their source."""
+
+    headline: str = ""
+    summary: str = ""
+    recent_posts: list[str] = Field(default_factory=list)
+    interests: list[str] = Field(default_factory=list)
+    source: str = ""
+    fetched_at: str | None = None
+
+
+class CallBriefSignal(BaseModel):
+    title: str
+    body: str = ""
+    kind: str = ""
+    source: str = ""
+    url: str | None = None
+    strength: float = 0.0
+    occurred_at: str = ""
+    is_personal: bool = False       # tied to this contact (vs. account-level)
+
+
+class CallBriefOut(BaseModel):
+    """The pre-call research dossier: who they are, their company, signals, and talking points —
+    every block sourced, so the SDR is well-researched before dialing."""
+
+    contact: CallBriefContact | None = None
+    account: CallBriefAccount | None = None
+    insights: CallBriefInsights | None = None
+    signals: list[CallBriefSignal] = Field(default_factory=list)
+    talking_points: list[str] = Field(default_factory=list)
+
+
 class LookalikeOut(BaseModel):
     name: str
     domain: str
@@ -193,6 +293,24 @@ class LookalikeResponse(BaseModel):
     seed_account_id: str
     seed_domain: str | None = None
     lookalikes: list[LookalikeOut] = Field(default_factory=list)
+
+
+class ContactLookalikeOut(BaseModel):
+    contact_id: str
+    full_name: str
+    account_id: str
+    account_name: str = ""
+    title: str | None = None
+    seniority: str | None = None
+    email: str | None = None
+    linkedin_url: str | None = None
+    score: int
+    reasons: list[str] = Field(default_factory=list)
+
+
+class ContactLookalikeResponse(BaseModel):
+    seed_contact_id: str
+    lookalikes: list[ContactLookalikeOut] = Field(default_factory=list)
 
 
 # ---- outcomes (feedback loop) ----

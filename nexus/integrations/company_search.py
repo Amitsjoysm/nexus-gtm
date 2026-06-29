@@ -159,7 +159,13 @@ class CompanySearchProvider(abc.ABC):
     name: str
 
     @abc.abstractmethod
-    async def search(self, icp: dict, *, limit: int = 25) -> list[CompanyCandidate]: ...
+    async def search(
+        self, icp: dict, *, limit: int = 25, exclude_domains: list[str] | None = None
+    ) -> list[CompanyCandidate]:
+        """Find companies matching the ICP. ``exclude_domains`` lets the caller skip companies it
+        already tracks, so repeated runs reach *new* companies instead of re-finding the same top-N
+        (the cause of daily auto-discovery drying up after a few runs)."""
+        ...
 
 
 class StubCompanySearchProvider(CompanySearchProvider):
@@ -167,7 +173,9 @@ class StubCompanySearchProvider(CompanySearchProvider):
 
     name = "stub"
 
-    async def search(self, icp: dict, *, limit: int = 25) -> list[CompanyCandidate]:
+    async def search(
+        self, icp: dict, *, limit: int = 25, exclude_domains: list[str] | None = None
+    ) -> list[CompanyCandidate]:
         return []
 
 
@@ -184,10 +192,21 @@ class SearchBackedCompanySearchProvider(CompanySearchProvider):
         self.search_provider = search
         self.confidence = confidence
 
-    async def search(self, icp: dict, *, limit: int = 25) -> list[CompanyCandidate]:
+    async def search(
+        self, icp: dict, *, limit: int = 25, exclude_domains: list[str] | None = None
+    ) -> list[CompanyCandidate]:
         query = icp_to_query(icp)
         try:
-            hits = await self.search_provider.search(query, limit=limit)
+            # Prefer the company-biased endpoint (Exa category=company) when the backend has it: it
+            # returns real businesses (not directories/news) AND honors excludeDomains, so repeated
+            # discovery runs reach NEW companies. Fall back to plain web search (keyless DDG) where
+            # there's no company endpoint — exclusion isn't available there, but the local dedup is.
+            if hasattr(self.search_provider, "search_companies"):
+                hits = await self.search_provider.search_companies(
+                    query, limit=limit, exclude_domains=exclude_domains
+                )
+            else:
+                hits = await self.search_provider.search(query, limit=limit)
         except Exception as exc:  # provider isolation
             logger.warning("company search via %s failed: %r", self.name, exc)
             return []

@@ -13,10 +13,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from sqlalchemy import select
+
 from nexus.core.config import get_settings
 from nexus.core.tenancy import TenantSession
 from nexus.integrations.company_search import clean_company_name, domain_from_url, looks_like_company
 from nexus.integrations.search.provider import get_search_provider
+from nexus.lookalike.similarity import company_similarity, prepare_company
 from nexus.models.account import Account
 from nexus.outcomes.service import get_outcome_service
 from nexus.relevance.engine import get_profile, get_relevance_engine
@@ -103,19 +106,23 @@ class LookalikeService:
         if not hits:
             return []
 
-        # Dedup against the seed and anything already in the book; flag known domains.
-        tracked = {
-            (a.domain or "").lower()
-            for a in await ts.list(Account)
-            if a.domain
-        }
+        # Dedup against the seed and anything already in the book; flag known domains. Project the
+        # domain column only — hydrating every Account ORM object just to read one string is wasteful
+        # for a large book (and the dominant memory cost on this path).
+        domain_stmt = select(Account.domain).where(
+            Account.tenant_id == ts.tenant_id, Account.domain.isnot(None)
+        )
+        tracked = {d.lower() for d in (await ts.session.scalars(domain_stmt)).all() if d}
         profile = await get_profile(ts)
         engine = get_relevance_engine()
         # Lean candidate scoring toward whatever firmographics this tenant's wins share.
         learned = (await get_outcome_service().learned_weights(ts)).weights
 
+        # 3) Build distinct, plausible candidate companies (transient — never persisted). Seed the
+        #    keyword/SEO dimension with the search snippet so there's signal even pre-enrichment.
+        candidates: list[tuple[Account, object]] = []
         seen: set[str] = set()
-        out: list[Lookalike] = []
+        cap = max(limit * 3, 15)
         for hit in hits:
             domain = domain_from_url(getattr(hit, "url", None))
             if not domain or domain == seed_domain or domain in seen:
@@ -126,25 +133,70 @@ class LookalikeService:
             if not looks_like_company(domain, title):
                 continue
             seen.add(domain)
-            # Transient (un-persisted) account so the relevance engine can score the candidate
-            # from whatever firmographics we have; never added to the session.
             candidate = Account(tenant_id=ts.tenant_id, name=title, domain=domain)
+            snippet = getattr(hit, "snippet", "") or ""
+            if snippet:
+                candidate.custom_fields = {"description": snippet[:500]}
+            candidates.append((candidate, hit))
+            if len(candidates) >= cap:
+                break
+        if not candidates:
+            return []
+
+        # 4) Enrich the top candidates (bounded, concurrent, best-effort) so similarity can be
+        #    scored on real firmographics — industry/size/geo/revenue/tech — not just snippet text.
+        enrich = settings.lookalike_enrich_candidates
+        if enrich is None:
+            enrich = settings.account_enrich_enabled
+        if enrich:
+            await self._enrich_candidates(
+                [c for c, _ in candidates[: settings.lookalike_enrich_max]], settings
+            )
+
+        # 5) Rank by RESEMBLANCE TO THE SEED (the actual lookalike signal), lightly blended with
+        #    ICP fit so results are both close to the seed *and* good for this tenant. Extract the
+        #    seed's similarity features ONCE here (post-enrichment) and reuse for every candidate.
+        w = max(0.0, min(1.0, settings.lookalike_similarity_weight))
+        seed_feat = prepare_company(account)
+        out: list[Lookalike] = []
+        for candidate, hit in candidates:
+            sim = company_similarity(account, candidate, seed_features=seed_feat)
             fit = engine.score_icp_fit(profile, candidate, learned_weights=learned)
+            score = round(w * sim.score + (1.0 - w) * fit.score)
             out.append(
                 Lookalike(
-                    name=title,
-                    domain=domain,
+                    name=candidate.name,
+                    domain=candidate.domain,
                     url=getattr(hit, "url", None),
                     snippet=getattr(hit, "snippet", "") or "",
-                    score=fit.score,
-                    reasons=fit.reasons,
+                    score=score,
+                    reasons=sim.reasons[:5] or ["Surfaced as a similar company"],
                     source=getattr(hit, "source", "") or "",
-                    already_tracked=domain in tracked,
+                    already_tracked=candidate.domain in tracked,
                 )
             )
 
         out.sort(key=lambda lk: lk.score, reverse=True)
         return out[:limit]
+
+    async def _enrich_candidates(self, candidates: list[Account], settings) -> None:
+        """Enrich candidate companies in place, concurrently and best-effort. The enricher already
+        isolates failures (returns [] on any error), so one bad candidate never sinks the batch."""
+        import asyncio
+
+        from nexus.enrichment.account import get_account_enricher
+
+        enricher = get_account_enricher()
+        sem = asyncio.Semaphore(max(1, settings.lookalike_enrich_concurrency))
+
+        async def _one(c: Account) -> None:
+            async with sem:
+                try:
+                    await enricher.enrich(c)
+                except Exception:  # belt-and-suspenders; enrich already swallows its own errors
+                    pass
+
+        await asyncio.gather(*(_one(c) for c in candidates))
 
 
 _service: LookalikeService | None = None

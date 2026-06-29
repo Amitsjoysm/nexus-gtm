@@ -1,0 +1,83 @@
+name: CD (deploy to AWS ECS)
+
+# Deploys on a version tag (vX.Y.Z) or manual dispatch. Infra (Terraform) is applied separately
+# via deploy/cloud/deploy.sh; this workflow only ships a new image to the existing ECS services.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy"
+        required: false
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false # never interrupt an in-flight production deploy
+
+permissions:
+  id-token: write # OIDC: assume the AWS deploy role with no long-lived keys
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }} # e.g. nexus-gtm
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}       # e.g. nexus
+  APP_URL: ${{ vars.APP_URL }}               # e.g. https://app.example.com (for the smoke test)
+
+jobs:
+  deploy:
+    name: Build, push, roll out
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production # add required reviewers here for a manual approval gate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Roll out app + worker (force new deployment)
+        run: |
+          for svc in nexus-app nexus-worker; do
+            aws ecs update-service --cluster "$ECS_CLUSTER" --service "$svc" --force-new-deployment >/dev/null
+          done
+
+      - name: Wait for services to stabilize
+        run: |
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services nexus-app nexus-worker
+          echo "Deploy of ${{ github.sha }} is stable."
+
+      - name: Post-deploy smoke test (gates the release)
+        if: ${{ vars.APP_URL != '' }}
+        run: |
+          for p in /health /ready; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --retry 6 --retry-delay 5 --retry-all-errors "${APP_URL}${p}")
+            echo "GET ${p} -> ${code}"
+            [ "$code" = "200" ] || { echo "::error::smoke test failed on ${p}"; exit 1; }
+          done
+          echo "Smoke test passed — release is live and healthy."
+      # On failure the workflow stops; the previous ECS task-def revision is intact for rollback:
+      #   aws ecs update-service --cluster $ECS_CLUSTER --service nexus-app --task-definition <prev-arn>

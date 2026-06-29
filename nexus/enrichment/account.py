@@ -67,11 +67,15 @@ class SearchBackedAccountEnricher:
                                "Use only facts present in the snippets; never invent."),
                     LLMMessage("user", f"Company: {label} ({account.domain or 'unknown domain'}).\n"
                                f"Snippets:\n{blob}\n\n"
-                               'Return JSON with keys: "industry" (string), "employee_count" '
-                               '(integer or null), "country" (string), "description" (one '
-                               'sentence), "tech_stack" (array of strings), "linkedin_url" (the '
-                               "company's LinkedIn page URL if present, else \"\"). Use null/\"\"/[] "
-                               "when unknown. JSON only, no prose."),
+                               'Return JSON with keys: "industry" (string), "sub_industry" (a more '
+                               'specific niche/sub-category, string), "employee_count" '
+                               '(integer or null), "revenue" (annual revenue as a short string like '
+                               '"$10M-$50M" or "", best estimate), "country" (string), "region" '
+                               '(state/province/region, string), "city" (string), "description" (one '
+                               'sentence), "tech_stack" (array of strings), "keywords" (array of 3-8 '
+                               'short focus/SEO keywords describing what they do), "linkedin_url" '
+                               "(the company's LinkedIn page URL if present, else \"\"). Use "
+                               "null/\"\"/[] when unknown. JSON only, no prose."),
                 ],
                 temperature=0.0, max_tokens=400, purpose="account_enrich",
             )
@@ -115,6 +119,20 @@ class SearchBackedAccountEnricher:
             cf["linkedin_url"] = linkedin[:300]
             cf_changed = True
             filled.append("linkedin_url")
+        # Extra look-alike dimensions (no dedicated columns) — blank-only string/array fields.
+        for key, cap in (("sub_industry", 120), ("revenue", 60), ("region", 80), ("city", 80)):
+            val = (data.get(key) or "").strip()
+            if val and not cf.get(key):
+                cf[key] = val[:cap]
+                cf_changed = True
+                filled.append(key)
+        kw = data.get("keywords")
+        if isinstance(kw, list) and kw and not cf.get("keywords"):
+            cleaned = [str(k).strip()[:40].lower() for k in kw if str(k).strip()][:8]
+            if cleaned:
+                cf["keywords"] = cleaned
+                cf_changed = True
+                filled.append("keywords")
         if cf_changed:
             account.custom_fields = cf
         return filled

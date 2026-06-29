@@ -38,7 +38,6 @@ def test_as_dict_includes_new_fields():
 
 
 import httpx
-import pytest
 
 from nexus.verification import STATUS_INVALID, STATUS_VALID
 from nexus.verification.reacher import ReacherEmailVerifier

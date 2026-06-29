@@ -23,6 +23,65 @@ async def test_accounts_list_includes_fit_score(client):
     assert rows[0]["source"] is None  # passthrough field present
 
 
+async def test_accounts_list_fit_score_uses_latest_score(client):
+    """Fit must reflect the NEWEST score for the account, not an arbitrary historical row — the
+    latest-per-account composite is resolved in SQL via a window function over the score history."""
+    from datetime import timedelta
+
+    from nexus.core.db import utcnow
+
+    token = await signup(client, slug="latest", email="o@latest.x", company="Latest")
+    tid = decode_access_token(token)["tid"]
+    base = utcnow()
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.co")
+        ts.add(acc)
+        await ts.flush()
+        ts.add(AccountScore(tenant_id=tid, account_id=acc.id, composite=40,
+                            computed_at=base - timedelta(hours=2)))
+        ts.add(AccountScore(tenant_id=tid, account_id=acc.id, composite=91, computed_at=base))
+        await ts.flush()
+
+    rows = (await client.get("/api/accounts", headers=auth(token))).json()
+    assert rows[0]["fit_score"] == 91  # newest score wins, not the older 40
+
+
+async def test_contacts_list_search_and_pagination_in_sql(client):
+    """Search (q) and pagination (limit/offset) are applied in SQL and ordered newest-first, so a
+    large workspace serves one page from the DB instead of loading its whole contact book."""
+    from datetime import timedelta
+
+    from nexus.core.db import utcnow
+
+    token = await signup(client, slug="pag", email="o@pag.x", company="Pag")
+    tid = decode_access_token(token)["tid"]
+    base = utcnow()
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.co")
+        ts.add(acc)
+        await ts.flush()
+        for i in range(5):
+            ts.add(Contact(tenant_id=tid, account_id=acc.id, full_name=f"Person {i}",
+                           email=f"p{i}@acme.co", created_at=base + timedelta(minutes=i)))
+        ts.add(Contact(tenant_id=tid, account_id=acc.id, full_name="Zane Special",
+                       title="Head of RevOps", email="zane@acme.co",
+                       created_at=base + timedelta(minutes=10)))
+        await ts.flush()
+
+    # Newest-first, first page of 2.
+    page1 = (await client.get("/api/contacts?limit=2", headers=auth(token))).json()
+    assert [c["full_name"] for c in page1] == ["Zane Special", "Person 4"]
+    # Offset pages to the next slice (still newest-first).
+    page2 = (await client.get("/api/contacts?limit=2&offset=2", headers=auth(token))).json()
+    assert [c["full_name"] for c in page2] == ["Person 3", "Person 2"]
+    # Search narrows case-insensitively across name/title...
+    found = (await client.get("/api/contacts?q=revops", headers=auth(token))).json()
+    assert [c["full_name"] for c in found] == ["Zane Special"]
+    # ...and across email.
+    by_email = (await client.get("/api/contacts?q=p3@acme", headers=auth(token))).json()
+    assert [c["full_name"] for c in by_email] == ["Person 3"]
+
+
 async def test_archive_hides_account_from_list_and_unarchive_restores(client):
     token = await signup(client, slug="arch", email="o@arch.x", company="Arch")
     tid = decode_access_token(token)["tid"]

@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, Session, mapped_column
 from sqlalchemy.sql import Select
 
-from nexus.core.db import Base
 
 _current_tenant: ContextVar[str | None] = ContextVar("current_tenant", default=None)
 

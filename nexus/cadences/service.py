@@ -44,7 +44,7 @@ from nexus.models.campaign import (
     SKIP_UNDELIVERABLE,
     SKIP_UNGROUNDED,
 )
-from nexus.models.orchestration import OrchestrationRun, RUN_COMPLETED
+from nexus.models.orchestration import OrchestrationRun
 from nexus.models.outcome import Outcome
 from nexus.orchestration.engine import get_orchestration_engine
 from nexus.orchestration.tools import SendMessageTool, ToolContext, ToolError

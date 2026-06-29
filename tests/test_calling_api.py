@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from nexus.core.security import decode_access_token
 from nexus.models.account import Account, Contact
+from nexus.models.intelligence import AccountScore
+from nexus.models.signal import SignalEvent
 from tests.conftest import auth, signup, tenant_session
 
 
@@ -66,6 +68,59 @@ async def test_call_queue_is_tenant_isolated(client):
                       json={"account_id": acc1, "contact_id": c1})
     # Tenant 2's queue must not see tenant 1's task.
     assert (await client.get("/api/calling/queue", headers=auth(t2))).json() == []
+
+
+async def test_call_brief_returns_sourced_research(client):
+    token = await signup(client, slug="callbrief", email="o@callbrief.x", company="Callbrief")
+    tid = decode_access_token(token)["tid"]
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.co", industry="SaaS",
+                      employee_count=200, country="US", tech_stack=["Salesforce", "Segment"])
+        ts.add(acc)
+        await ts.flush()
+        c = Contact(tenant_id=tid, account_id=acc.id, full_name="Jane Doe", title="VP RevOps",
+                    seniority="vp", phone="+15551234567", email="jane@acme.co",
+                    email_status="valid", enrichment_source="apollo")
+        ts.add(c)
+        await ts.flush()
+        # One signal tied to the person, one to the company — both with a source.
+        ts.add(SignalEvent(tenant_id=tid, account_id=acc.id, contact_id=c.id, kind="job_switch",
+                           source="LinkedIn", title="Jane started as VP RevOps", strength=0.9,
+                           dedupe_key="s-personal", url="https://example.com/jane"))
+        ts.add(SignalEvent(tenant_id=tid, account_id=acc.id, kind="funding", source="Crunchbase",
+                           title="Acme raised $20M Series B", strength=0.8, dedupe_key="s-account"))
+        ts.add(AccountScore(tenant_id=tid, account_id=acc.id, icp_fit=82, composite=82,
+                            rationale="Strong size + tech-stack match."))
+        await ts.flush()
+        acc_id, c_id = acc.id, c.id
+
+    h = auth(token)
+    task_id = (await client.post("/api/calling/tasks", headers=h,
+                                 json={"account_id": acc_id, "contact_id": c_id})).json()["id"]
+    b = (await client.get(f"/api/calling/tasks/{task_id}/brief", headers=h)).json()
+
+    # Person block: identity, a role-aware angle, and the enrichment source.
+    assert b["contact"]["name"] == "Jane Doe"
+    assert b["contact"]["role_angle"]
+    assert b["contact"]["source"] == "apollo"
+    # Company block: firmographics + ICP fit + a provenance label.
+    assert b["account"]["industry"] == "SaaS" and b["account"]["fit_score"] == 82
+    assert "Salesforce" in b["account"]["tech_stack"] and b["account"]["source"]
+    # Signals carry source/url; the person-tied one ranks first.
+    assert b["signals"][0]["is_personal"] is True and b["signals"][0]["source"] == "LinkedIn"
+    assert any(s["title"].startswith("Acme raised") for s in b["signals"])
+    # Talking points are grounded in the data (fit score appears).
+    assert any("ICP fit 82" in tp for tp in b["talking_points"])
+
+
+async def test_call_brief_is_tenant_isolated(client):
+    t1, acc1, c1 = await _seed(client, "briefiso1")
+    t2 = await signup(client, slug="briefiso2", email="o@briefiso2.x", company="Briefiso2")
+    task_id = (await client.post("/api/calling/tasks", headers=auth(t1),
+                                 json={"account_id": acc1, "contact_id": c1})).json()["id"]
+    # Tenant 2 cannot read tenant 1's call brief.
+    r = await client.get(f"/api/calling/tasks/{task_id}/brief", headers=auth(t2))
+    assert r.status_code == 404
 
 
 async def test_contacts_list_includes_phone(client):

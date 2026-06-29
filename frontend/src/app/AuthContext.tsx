@@ -9,7 +9,13 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { ApiClient } from "@/lib/api";
-import type { LoginRequest, NewWorkspaceRequest, Role, SignupRequest } from "@/lib/types";
+import type {
+  LoginRequest,
+  NewWorkspaceRequest,
+  RegisterStartResponse,
+  Role,
+  SignupRequest,
+} from "@/lib/types";
 
 interface Session {
   token: string;
@@ -24,6 +30,16 @@ interface AuthApi {
   isAuthed: boolean;
   login: (body: LoginRequest) => Promise<void>;
   signup: (body: SignupRequest) => Promise<void>;
+  /** Step 1 of OTP registration: emails a code, returns the start metadata (no session yet). */
+  registerStart: (body: SignupRequest) => Promise<RegisterStartResponse>;
+  /** Re-send the verification code for an in-flight registration. */
+  registerResend: (email: string) => Promise<RegisterStartResponse>;
+  /** Step 2 of OTP registration: verify the code and establish the session. */
+  registerVerify: (email: string, code: string) => Promise<void>;
+  /** Request a password-reset email (generic response). */
+  forgotPassword: (email: string) => Promise<void>;
+  /** Complete a password reset with the emailed token. */
+  resetPassword: (email: string, token: string, newPassword: string) => Promise<void>;
   logout: () => void;
   /** Re-issue a JWT for another tenant the user belongs to, then swap + refetch. */
   switchTenant: (tenantId: string) => Promise<void>;
@@ -103,6 +119,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [api],
   );
 
+  const registerStart = useCallback((body: SignupRequest) => api.registerStart(body), [api]);
+  const registerResend = useCallback((email: string) => api.registerResend({ email }), [api]);
+  const registerVerify = useCallback(
+    async (email: string, code: string) => {
+      const res = await api.registerVerify({ email, code });
+      setSession({ token: res.access_token, role: res.role, tenantId: res.tenant_id });
+    },
+    [api],
+  );
+
+  const forgotPassword = useCallback(
+    async (email: string) => {
+      await api.forgotPassword({ email });
+    },
+    [api],
+  );
+  const resetPassword = useCallback(
+    async (email: string, token: string, newPassword: string) => {
+      await api.resetPassword({ email, token, new_password: newPassword });
+    },
+    [api],
+  );
+
   const logout = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
     setSession(null);
@@ -127,8 +166,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AuthApi>(
-    () => ({ api, session, isAuthed: !!session, login, signup, logout, switchTenant, createWorkspace, tenantEpoch }),
-    [api, session, login, signup, logout, switchTenant, createWorkspace, tenantEpoch],
+    () => ({
+      api, session, isAuthed: !!session, login, signup,
+      registerStart, registerResend, registerVerify,
+      forgotPassword, resetPassword,
+      logout, switchTenant, createWorkspace, tenantEpoch,
+    }),
+    [api, session, login, signup, registerStart, registerResend, registerVerify,
+     forgotPassword, resetPassword,
+     logout, switchTenant, createWorkspace, tenantEpoch],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

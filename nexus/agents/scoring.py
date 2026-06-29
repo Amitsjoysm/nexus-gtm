@@ -1,7 +1,6 @@
 """Scoring Agent — deterministic ICP-fit / intent / health, with an LLM-written rationale."""
 from __future__ import annotations
 
-from datetime import timedelta
 
 from nexus.agents.llm import LLMMessage
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent

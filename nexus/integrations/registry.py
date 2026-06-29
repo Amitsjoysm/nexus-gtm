@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from nexus.integrations.company_search import (
     CompanyCandidate,
@@ -178,9 +178,18 @@ class DataSourceRegistry:
         return hits
 
     # ---------------------------------------------------------- company_search
-    async def company_search(self, icp: dict, *, limit: int = 25) -> list[CompanyCandidate]:
-        """Waterfall every company source in priority order, merging by normalized domain."""
-        key = _norm_key("company_search", icp, limit)
+    async def company_search(
+        self, icp: dict, *, limit: int = 25, exclude_domains: list[str] | None = None
+    ) -> list[CompanyCandidate]:
+        """Waterfall every company source in priority order, merging by normalized domain.
+
+        ``exclude_domains`` is forwarded to each provider (e.g. Exa ``excludeDomains``) so a caller
+        that already tracks some companies reaches NEW ones on each run. It's part of the cache key
+        so a different exclusion set isn't served a stale, pre-exclusion result.
+        """
+        # Sorted so the key is stable regardless of caller ordering.
+        excl = sorted({d for d in (exclude_domains or []) if d}) or None
+        key = _norm_key("company_search", icp, limit, excl)
         if self._cache_enabled and key in self._cache:
             return list(self._cache[key])  # type: ignore[arg-type]
 
@@ -188,7 +197,8 @@ class DataSourceRegistry:
         order: list[str] = []
         for provider in self.company_search_providers:
             found = await self._policy.call(
-                provider.name, lambda p=provider: p.search(icp, limit=limit)
+                provider.name,
+                lambda p=provider: p.search(icp, limit=limit, exclude_domains=excl),
             )
             for cand in found or []:
                 domain = (cand.domain or "").lower()

@@ -3,7 +3,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from nexus.core.db import Base, IdMixin, TimestampMixin, TZDateTime
@@ -45,6 +53,8 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
 
 class Contact(IdMixin, TimestampMixin, TenantScoped, Base):
     __tablename__ = "contacts"
+    # Backs the workspace Contacts list: tenant-scoped, newest-first, SQL-paginated.
+    __table_args__ = (Index("ix_contact_tenant_created", "tenant_id", "created_at"),)
 
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     full_name: Mapped[str] = mapped_column(String(200))

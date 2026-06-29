@@ -17,9 +17,14 @@ _ICP = {
 }
 
 
-def _searcher(candidates):
-    async def _search(icp, *, limit):
-        return candidates[:limit]
+def _searcher(candidates, *, seen: list | None = None):
+    """A fake company search. Records the ``exclude_domains`` it was called with (when ``seen`` is
+    given) so a test can assert the driver pushes already-tracked domains to the backend."""
+    async def _search(icp, *, limit, exclude_domains=None):
+        if seen is not None:
+            seen.append(exclude_domains)
+        excl = {d.lower() for d in (exclude_domains or [])}
+        return [c for c in candidates if (c.domain or "").lower() not in excl][:limit]
 
     return _search
 
@@ -67,6 +72,37 @@ async def test_dedupes_existing_domain():
     assert res["discovered"] == 0  # the existing domain is never re-surfaced
 
 
+async def test_excludes_tracked_domains_so_repeat_runs_find_new_companies():
+    """Regression for daily discovery drying up: the driver must tell the search backend which
+    domains it already tracks (exclude_domains) so each run reaches NET-NEW companies."""
+    tid = await make_tenant()
+    pool = [
+        CompanyCandidate(name=f"Co{i}", domain=f"co{i}.com", industry="SaaS",
+                         country="United States", employee_count=100)
+        for i in range(5)
+    ]
+    seen_exclusions: list = []
+    async with tenant_session(tid) as ts:
+        await _with_profile(ts, tid)
+        # Run 1: nothing tracked yet -> adds the first two.
+        r1 = await auto_discover_for_tenant(
+            ts, target_count=2, min_fit=60, pool_limit=50,
+            search=_searcher(pool, seen=seen_exclusions),
+        )
+        # Run 2: the two added are now tracked -> must be excluded, so we get the NEXT two.
+        r2 = await auto_discover_for_tenant(
+            ts, target_count=2, min_fit=60, pool_limit=50,
+            search=_searcher(pool, seen=seen_exclusions),
+        )
+        domains = sorted(a.domain for a in await ts.list(Account))
+
+    assert r1["discovered"] == 2 and r2["discovered"] == 2
+    assert domains == ["co0.com", "co1.com", "co2.com", "co3.com"]  # run 2 found new, not dupes
+    # Run 1 saw no exclusions; run 2 was told about run 1's domains.
+    assert seen_exclusions[0] in (None, [])
+    assert set(seen_exclusions[1] or []) >= {"co0.com", "co1.com"}
+
+
 async def test_respects_target_count_cap():
     tid = await make_tenant()
     async with tenant_session(tid) as ts:
@@ -79,6 +115,45 @@ async def test_respects_target_count_cap():
             ts, target_count=1, min_fit=60, pool_limit=50, search=_searcher(cands)
         )
     assert res["discovered"] == 1  # stopped at the daily cap
+
+
+async def test_enriches_candidates_before_scoring(monkeypatch):
+    """Search returns sparse firmographics (no headcount/tech); our crawler must fill them BEFORE
+    scoring so a candidate that would miss the bar un-enriched clears it once enriched."""
+    from nexus.core.config import get_settings
+    from nexus.enrichment.account import set_account_enricher
+
+    icp = {"industries": ["saas"], "employee_min": 50, "employee_max": 5000,
+           "countries": ["united states"], "required_tech": ["aws"]}
+
+    class _FakeEnricher:  # stands in for the web crawler — fills the blanks search left
+        async def enrich(self, account):
+            account.employee_count = 200
+            account.tech_stack = ["aws"]
+            return ["employee_count", "tech_stack"]
+
+    s = get_settings()
+    monkeypatch.setattr(s, "icp_discovery_enrich_candidates", True)
+    set_account_enricher(_FakeEnricher())
+    try:
+        tid = await make_tenant()
+        async with tenant_session(tid) as ts:
+            ts.add(RelevanceProfile(tenant_id=tid, icp=icp, value_props=[], product_context=""))
+            await ts.flush()
+            # Sparse candidate: right industry/geo but no headcount, no tech → ~63 un-enriched (< 70).
+            cand = CompanyCandidate(name="Sparse", domain="sparse.com", industry="SaaS",
+                                    country="United States", employee_count=None)
+            res = await auto_discover_for_tenant(
+                ts, target_count=5, min_fit=70, pool_limit=50, search=_searcher([cand])
+            )
+            accts = await ts.list(Account)
+            scores = await ts.list(AccountScore)
+    finally:
+        set_account_enricher(None)
+
+    assert res["discovered"] == 1  # crawled headcount + tech pushed it over min_fit
+    assert accts[0].employee_count == 200 and accts[0].tech_stack == ["aws"]
+    assert scores[0].composite >= 70
 
 
 async def test_no_icp_is_a_noop():

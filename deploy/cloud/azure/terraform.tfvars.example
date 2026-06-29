@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (gitignored) OR let deploy.sh pass these. Secrets come via TF_VAR_secrets.
+location      = "eastus"
+project       = "nexus"
+env           = "prod"
+domain        = "app.example.com"
+alarm_email   = "ops@example.com"
+
+# Data tier (managed)
+pg_sku        = "GP_Standard_D2ds_v5"
+pg_ha_enabled = true
+redis_sku     = "Standard"
+
+# App sizing
+app_min = 2
+app_max = 10

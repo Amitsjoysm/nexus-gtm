@@ -11,6 +11,7 @@ from sqlalchemy import select
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
     CallActivityOut,
+    CallBriefOut,
     CallScriptOut,
     CallTaskOut,
     CreateCallTaskIn,
@@ -105,6 +106,22 @@ async def generate_call_script(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Call task not found")
     script = await get_call_queue_service().generate_script(ts, task)
     return CallScriptOut(**{k: script.get(k) for k in CallScriptOut.model_fields if script.get(k) is not None})
+
+
+@router.get("/tasks/{task_id}/brief", response_model=CallBriefOut)
+async def call_brief(
+    task_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> CallBriefOut:
+    """The pre-call research dossier for this task: the person, their company, the buying signals
+    (each with its source), social insights, and grounded talking points — so the SDR is fully
+    researched before dialing. Read-only; composes data that already exists."""
+    task = await ts.get(CallTask, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Call task not found")
+    data = await get_call_queue_service().build_brief(ts, task)
+    return CallBriefOut(**data)
 
 
 @router.post("/tasks/{task_id}/disposition", response_model=CallActivityOut)

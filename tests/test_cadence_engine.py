@@ -93,7 +93,6 @@ def test_research_compose_without_angle_unchanged():
 from nexus.cadences.service import CadenceError, get_cadence_service
 from nexus.models.account import Account
 from nexus.models.campaign import (
-    Campaign,
     CampaignTarget,
     CAMP_AWAITING_APPROVAL,
     CAMP_SENDING,

@@ -1,15 +1,16 @@
 """Accounts & contacts: CRUD plus waterfall contact enrichment."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
     AccountIn,
     AccountOut,
     ContactIn,
+    ContactLookalikeOut,
+    ContactLookalikeResponse,
     ContactOut,
     LookalikeOut,
     LookalikeResponse,
@@ -23,8 +24,6 @@ from nexus.models.account import Account, Contact
 from nexus.models.intelligence import AccountScore
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
-
-_MIN_DT = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _account_out(a: Account, *, fit_score: int | None = None) -> AccountOut:
@@ -83,14 +82,34 @@ async def create_account(
 
 
 async def _latest_fit_scores(ts: TenantSession, account_ids: list[str]) -> dict[str, int]:
-    """Latest composite (0..100) per account, batch-loaded to avoid N+1."""
+    """Latest composite (0..100) per account.
+
+    Resolved entirely in SQL with a window function: we transfer exactly one row per account
+    (its newest score) instead of loading the account's full score history and sorting in
+    Python. Backed by ``ix_score_tenant_account_computed`` so it stays O(accounts), not
+    O(accounts × score history), as the scoring history grows under continuous automation."""
     if not account_ids:
         return {}
-    rows = await ts.list(AccountScore, AccountScore.account_id.in_(account_ids))
-    out: dict[str, int] = {}
-    for s in sorted(rows, key=lambda r: r.created_at or _MIN_DT):  # ascending → latest wins
-        out[s.account_id] = s.composite
-    return out
+    ranked = (
+        select(
+            AccountScore.account_id.label("account_id"),
+            AccountScore.composite.label("composite"),
+            func.row_number()
+            .over(
+                partition_by=AccountScore.account_id,
+                order_by=(AccountScore.computed_at.desc(), AccountScore.id.desc()),
+            )
+            .label("rn"),
+        )
+        .where(
+            AccountScore.tenant_id == ts.tenant_id,
+            AccountScore.account_id.in_(account_ids),
+        )
+        .subquery()
+    )
+    stmt = select(ranked.c.account_id, ranked.c.composite).where(ranked.c.rn == 1)
+    rows = (await ts.session.execute(stmt)).all()
+    return {account_id: composite for account_id, composite in rows}
 
 
 @router.get("", response_model=list[AccountOut])
@@ -214,6 +233,27 @@ async def find_lookalikes(
     )
 
 
+@router.post("/contacts/{contact_id}/lookalikes", response_model=ContactLookalikeResponse)
+async def find_contact_lookalikes(
+    contact_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+    limit: int = 10,
+) -> ContactLookalikeResponse:
+    """Find people in the workspace who resemble this contact — similar role/seniority/department at
+    a similar company. Ranks existing contacts (deterministic, offline-safe)."""
+    contact = await ts.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    from nexus.lookalike.contacts import get_contact_lookalike_service
+
+    found = await get_contact_lookalike_service().find(ts, contact, limit=max(1, min(limit, 50)))
+    return ContactLookalikeResponse(
+        seed_contact_id=contact.id,
+        lookalikes=[ContactLookalikeOut(**lk.as_dict()) for lk in found],
+    )
+
+
 @router.post("/{account_id}/source-contacts", response_model=list[ContactOut])
 async def source_contacts(
     account_id: str,
@@ -242,7 +282,12 @@ async def add_from_lookalike(
     by domain (returns the existing account if already tracked)."""
     dom = domain_from_url(body.domain) if body.domain else None
     if dom:
-        for a in await ts.list(Account):
+        # Narrow to candidate rows in SQL (domain contains the registrable domain) instead of
+        # loading the tenant's entire account book to normalize-compare in Python. The exact
+        # normalized match below is still the authority; the LIKE is just a cheap prefilter.
+        esc = dom.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        candidates = await ts.list(Account, Account.domain.ilike(f"%{esc}%", escape="\\"))
+        for a in candidates:
             if a.domain and domain_from_url(a.domain) == dom:
                 # Re-adding a company the rep previously removed must bring it back into the
                 # working list — otherwise "Add" returns a still-hidden row and looks like a no-op.

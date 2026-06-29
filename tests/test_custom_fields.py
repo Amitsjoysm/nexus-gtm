@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from nexus.models.account import Account, Contact
+from nexus.models.account import Account
 from nexus.workers.tasks import tenant_session
 from tests.conftest import auth, principal_from_token, signup
 

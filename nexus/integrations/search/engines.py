@@ -44,6 +44,14 @@ logger = logging.getLogger("nexus.integrations.search.engines")
 _TIMEOUT = 15.0
 _SNIPPET_CAP = 320
 _TAG = re.compile(r"<[^>]+>")
+# Exa rejects numResults > 100 with a 400 (the whole request fails → 0 results). Clamp every
+# request so an over-eager caller (e.g. a big discovery pool, or lookalike's limit*3 over-fetch)
+# degrades to "as many as Exa allows" instead of silently returning nothing.
+_EXA_MAX_RESULTS = 100
+
+
+def _exa_num_results(limit: int) -> int:
+    return max(1, min(int(limit), _EXA_MAX_RESULTS))
 
 
 def _strip_tags(text: str) -> str:
@@ -75,7 +83,7 @@ class ExaSearchProvider(SearchProvider):
             return []
         payload = {
             "query": query,
-            "numResults": limit,
+            "numResults": _exa_num_results(limit),
             # Ask for a short text excerpt so hits carry a usable snippet.
             "contents": {"text": {"maxCharacters": _SNIPPET_CAP}},
         }
@@ -91,7 +99,7 @@ class ExaSearchProvider(SearchProvider):
             return []
         payload: dict = {
             "query": query,
-            "numResults": limit,
+            "numResults": _exa_num_results(limit),
             "category": "company",
             "contents": {"text": {"maxCharacters": _SNIPPET_CAP}},
         }
@@ -110,7 +118,7 @@ class ExaSearchProvider(SearchProvider):
             return []
         # Over-fetch so that, after the caller collapses multiple pages per competitor down to
         # one domain, we still surface ~limit distinct companies.
-        n = max(limit * 3, 15)
+        n = _exa_num_results(max(limit * 3, 15))
         payload = {
             "url": url,
             # Exclude the seed's own domain — otherwise findSimilar returns the company's own

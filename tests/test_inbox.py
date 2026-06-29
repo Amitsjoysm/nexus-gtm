@@ -1,7 +1,6 @@
 """Inbox prioritization and task creation/ordering."""
 from __future__ import annotations
 
-from datetime import timedelta
 
 from nexus.core.db import utcnow
 from nexus.inbox.prioritizer import compute_priority

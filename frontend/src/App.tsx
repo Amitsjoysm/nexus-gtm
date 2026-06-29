@@ -7,6 +7,7 @@ import { ToastProvider } from "@/components/ui";
 import { AppShell } from "@/components/layout/AppShell";
 import { RouteFallback } from "@/components/layout/RouteFallback";
 import { LoginPage } from "@/pages/LoginPage";
+import { ResetPasswordPage } from "@/pages/ResetPasswordPage";
 import type { Role } from "@/lib/types";
 
 /**
@@ -91,6 +92,9 @@ export function App() {
                   </RequireAnon>
                 }
               />
+
+              {/* Public: a password-reset link works whether or not the user is signed in. */}
+              <Route path="/reset-password" element={<ResetPasswordPage />} />
 
               <Route
                 element={

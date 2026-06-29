@@ -8,21 +8,108 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus.api.deps import Principal, get_db_session, get_principal
 from nexus.api.schemas import (
+    ForgotPasswordRequest,
     LoginRequest,
+    MessageResponse,
     NewWorkspaceRequest,
+    RegisterResendRequest,
+    RegisterStartRequest,
+    RegisterStartResponse,
+    RegisterVerifyRequest,
+    ResetPasswordRequest,
     SignupRequest,
     SwitchTenantRequest,
     TenantOut,
     TokenResponse,
 )
+from nexus.auth.password_reset import request_password_reset, reset_password
+from nexus.auth.registration import (
+    RegistrationError,
+    resend_otp,
+    start_registration,
+    verify_and_create,
+)
+from nexus.core.config import get_settings
+from nexus.core.ratelimit import rate_limit
 from nexus.core.security import create_access_token, hash_password, verify_password
 from nexus.models.identity import Membership, Tenant, User, Workspace
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Generic acknowledgement reused by the forgot/reset flows so responses never reveal whether an
+# email is registered.
+_RESET_ACK = "If an account exists for that email, a password-reset link has been sent."
+
+
+@router.post(
+    "/register/start", response_model=RegisterStartResponse, status_code=status.HTTP_202_ACCEPTED
+)
+async def register_start(
+    req: RegisterStartRequest,
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("register_start")),
+) -> RegisterStartResponse:
+    """Step 1: validate the signup and email a one-time code. No account is created yet."""
+    try:
+        result = await start_registration(
+            db,
+            company_name=req.company_name,
+            company_slug=req.company_slug,
+            full_name=req.full_name,
+            email=req.email,
+            password=req.password,
+        )
+    except RegistrationError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+    return RegisterStartResponse(
+        email=result.email, expires_in_s=result.expires_in_s, resend_in_s=result.resend_in_s
+    )
+
+
+@router.post(
+    "/register/resend", response_model=RegisterStartResponse, status_code=status.HTTP_202_ACCEPTED
+)
+async def register_resend(
+    req: RegisterResendRequest,
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("register_resend")),
+) -> RegisterStartResponse:
+    """Re-send the verification code for an in-flight registration (cooldown-limited)."""
+    try:
+        result = await resend_otp(db, email=req.email)
+    except RegistrationError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+    return RegisterStartResponse(
+        email=result.email, expires_in_s=result.expires_in_s, resend_in_s=result.resend_in_s
+    )
+
+
+@router.post(
+    "/register/verify", response_model=TokenResponse, status_code=status.HTTP_201_CREATED
+)
+async def register_verify(
+    req: RegisterVerifyRequest,
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("register_verify")),
+) -> TokenResponse:
+    """Step 2: verify the code and provision the tenant + owner. Returns a session token."""
+    try:
+        user, tenant = await verify_and_create(db, email=req.email, code=req.code)
+    except RegistrationError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+    token = create_access_token(user_id=user.id, tenant_id=tenant.id, role="owner")
+    return TokenResponse(access_token=token, tenant_id=tenant.id, role="owner")
+
 
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db_session)) -> TokenResponse:
+    # When OTP registration is enabled, direct single-step signup is closed: clients must go
+    # through /auth/register/start -> /auth/register/verify so every account is email-verified.
+    if get_settings().otp_registration_enabled:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Email verification required. Use /auth/register/start to receive a code.",
+        )
     if (await db.scalars(select(Tenant).where(Tenant.slug == req.company_slug))).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "Company slug already taken")
     if (await db.scalars(select(User).where(User.email == req.email))).first():
@@ -64,7 +151,11 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db_session))
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db_session)) -> TokenResponse:
+async def login(
+    req: LoginRequest,
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("login")),
+) -> TokenResponse:
     user = (await db.scalars(select(User).where(User.email == req.email))).first()
     if user is None or not verify_password(req.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
@@ -86,6 +177,32 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db_session)) -
         user_id=user.id, tenant_id=membership.tenant_id, role=membership.role
     )
     return TokenResponse(access_token=token, tenant_id=membership.tenant_id, role=membership.role)
+
+
+@router.post("/forgot-password", response_model=MessageResponse, status_code=status.HTTP_202_ACCEPTED)
+async def forgot_password(
+    req: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("forgot_password")),
+) -> MessageResponse:
+    """Email a single-use password-reset link to the account holder. Always returns the same
+    generic acknowledgement so it can't be used to discover which emails are registered."""
+    await request_password_reset(db, email=req.email)
+    return MessageResponse(message=_RESET_ACK)
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password_endpoint(
+    req: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("reset_password")),
+) -> MessageResponse:
+    """Complete a password reset using the emailed token. The token is single-use and time-boxed."""
+    try:
+        await reset_password(db, email=req.email, token=req.token, new_password=req.new_password)
+    except RegistrationError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+    return MessageResponse(message="Your password has been reset. You can now sign in.")
 
 
 async def _resolve_membership(

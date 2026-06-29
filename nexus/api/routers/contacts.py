@@ -3,7 +3,7 @@ and a free-text filter. (Per-account contacts live under /accounts/{id}/contacts
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import ReverifyResult, WorkspaceContactOut
@@ -40,7 +40,10 @@ async def list_contacts(
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> list[WorkspaceContactOut]:
     """All contacts in the workspace (joined to their account), newest first. ``q`` filters on
-    name / title / email / account name; ``account_id`` scopes to one account."""
+    name / title / email / account name; ``account_id`` scopes to one account.
+
+    Filtering and pagination are pushed into SQL: a large workspace returns one page from the
+    database instead of loading its entire contact book into memory and slicing in Python."""
     # Tenant scoping is enforced in the query (the only reliable layer — RLS is defense-in-depth
     # and may be bypassed by the DB role). Filter Contact.tenant_id AND Account.tenant_id so a
     # cross-tenant join can never surface another workspace's people.
@@ -48,38 +51,47 @@ async def list_contacts(
         select(Contact, Account.name, Account.domain)
         .join(Account, Account.id == Contact.account_id)
         .where(Contact.tenant_id == ts.tenant_id, Account.tenant_id == ts.tenant_id)
-        .order_by(Contact.created_at.desc())
     )
     if account_id:
         stmt = stmt.where(Contact.account_id == account_id)
-    rows = (await ts.session.execute(stmt)).all()
 
     needle = (q or "").strip().lower()
-    out: list[WorkspaceContactOut] = []
-    for contact, acc_name, acc_domain in rows:
-        if needle:
-            hay = " ".join(
-                str(v or "")
-                for v in (contact.full_name, contact.title, contact.email, acc_name)
-            ).lower()
-            if needle not in hay:
-                continue
-        out.append(
-            WorkspaceContactOut(
-                id=contact.id,
-                account_id=contact.account_id,
-                account_name=acc_name,
-                account_domain=acc_domain,
-                full_name=contact.full_name,
-                title=contact.title,
-                seniority=contact.seniority,
-                email=contact.email,
-                email_status=contact.email_status,
-                email_confidence=contact.email_confidence,
-                phone=contact.phone,
-                phone_confidence=contact.phone_confidence,
-                linkedin_url=contact.linkedin_url,
-                enrichment_source=contact.enrichment_source,
+    if needle:
+        # Escape LIKE wildcards so a literal % or _ in the query is matched as text, not a pattern.
+        esc = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{esc}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(Contact.full_name).like(like, escape="\\"),
+                func.lower(func.coalesce(Contact.title, "")).like(like, escape="\\"),
+                func.lower(func.coalesce(Contact.email, "")).like(like, escape="\\"),
+                func.lower(Account.name).like(like, escape="\\"),
             )
         )
-    return out[offset : offset + limit] if limit > 0 else out[offset:]
+
+    stmt = stmt.order_by(Contact.created_at.desc())
+    if offset > 0:
+        stmt = stmt.offset(offset)
+    if limit > 0:
+        stmt = stmt.limit(limit)
+
+    rows = (await ts.session.execute(stmt)).all()
+    return [
+        WorkspaceContactOut(
+            id=contact.id,
+            account_id=contact.account_id,
+            account_name=acc_name,
+            account_domain=acc_domain,
+            full_name=contact.full_name,
+            title=contact.title,
+            seniority=contact.seniority,
+            email=contact.email,
+            email_status=contact.email_status,
+            email_confidence=contact.email_confidence,
+            phone=contact.phone,
+            phone_confidence=contact.phone_confidence,
+            linkedin_url=contact.linkedin_url,
+            enrichment_source=contact.enrichment_source,
+        )
+        for (contact, acc_name, acc_domain) in rows
+    ]

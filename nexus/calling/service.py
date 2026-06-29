@@ -95,6 +95,110 @@ class CallQueueService:
         await ts.flush()
         return script
 
+    async def build_brief(self, ts: TenantSession, task: CallTask) -> dict:
+        """Assemble a pre-call research dossier for a call task: who the person is, their company,
+        the buying signals (each with its own source), social insights, and grounded talking
+        points — so the SDR walks in already researched. Read-only: it composes data that already
+        exists (firmographics, signals, the ICP score's rationale, person personalization), and
+        every block carries a source so the rep can trust and cite it on the call."""
+        from nexus.models.account import Account, Contact
+        from nexus.models.intelligence import AccountScore
+        from nexus.models.signal import SignalEvent
+        from nexus.personalization.brief import build_person_brief
+
+        account = await ts.get(Account, task.account_id)
+        contact = await ts.get(Contact, task.contact_id) if task.contact_id else None
+        cid = contact.id if contact else None
+
+        # Signals for the account (newest first), then ranked for THIS call: a signal tied to the
+        # person leads, then by intrinsic strength. Each row carries its own source + url.
+        raw_signals = list(
+            (
+                await ts.session.scalars(
+                    ts.select(SignalEvent, SignalEvent.account_id == task.account_id)
+                    .order_by(SignalEvent.occurred_at.desc())
+                    .limit(25)
+                )
+            ).all()
+        )
+        ranked = sorted(
+            raw_signals, key=lambda s: (s.contact_id == cid, s.strength), reverse=True
+        )
+        signals = [
+            {
+                "title": s.title,
+                "body": s.body or "",
+                "kind": s.kind,
+                "source": s.source,
+                "url": s.url,
+                "strength": s.strength,
+                "occurred_at": s.occurred_at.isoformat() if s.occurred_at else "",
+                "is_personal": bool(cid and s.contact_id == cid),
+            }
+            for s in ranked[:6]
+        ]
+
+        # Latest ICP fit (the relevance engine's verdict + rationale is itself a citable source).
+        score = (
+            await ts.session.scalars(
+                ts.select(AccountScore, AccountScore.account_id == task.account_id)
+                .order_by(AccountScore.computed_at.desc())
+                .limit(1)
+            )
+        ).first()
+
+        account_block = None
+        if account is not None:
+            account_block = {
+                "name": account.name,
+                "domain": account.domain,
+                "industry": account.industry,
+                "employee_count": account.employee_count,
+                "country": account.country,
+                "tech_stack": list(account.tech_stack or []),
+                "fit_score": score.composite if score else None,
+                "fit_rationale": (score.rationale if score else "") or "",
+                "source": _account_source_label(account),
+            }
+
+        person = build_person_brief(contact, account, raw_signals) if contact else None
+
+        insights = None
+        raw_ins = (contact.custom_fields or {}).get("personalization") if contact else None
+        if isinstance(raw_ins, dict) and any(
+            raw_ins.get(k) for k in ("headline", "summary", "recent_posts", "interests")
+        ):
+            insights = {
+                "headline": raw_ins.get("headline", "") or "",
+                "summary": raw_ins.get("summary", "") or "",
+                "recent_posts": list(raw_ins.get("recent_posts") or []),
+                "interests": list(raw_ins.get("interests") or []),
+                "source": raw_ins.get("source", "") or "",
+                "fetched_at": raw_ins.get("fetched_at"),
+            }
+
+        contact_block = None
+        if contact is not None:
+            contact_block = {
+                "name": contact.full_name,
+                "title": contact.title,
+                "seniority": contact.seniority,
+                "email": contact.email,
+                "email_status": contact.email_status,
+                "phone": contact.phone,
+                "linkedin_url": contact.linkedin_url,
+                "role_angle": person.role_angle if person else "",
+                "source": contact.enrichment_source,
+            }
+
+        return {
+            "contact": contact_block,
+            "account": account_block,
+            "insights": insights,
+            "signals": signals,
+            "talking_points": _talking_points(person, score, account),
+        }
+
     async def log_disposition(
         self,
         ts: TenantSession,
@@ -144,6 +248,33 @@ class CallQueueService:
             .limit(limit)
         )
         return list((await ts.session.scalars(stmt)).all())
+
+
+def _account_source_label(account) -> str:
+    """A human label for where the company's firmographics came from (the brief's provenance)."""
+    if account.crm_source:
+        return f"{account.crm_source.title()} (CRM)"
+    src = (account.source or "").strip().lower()
+    return {
+        "auto_discovery": "ICP auto-discovery",
+        "discovery": "Web discovery",
+    }.get(src, src.replace("_", " ").title() if src else "Web enrichment")
+
+
+def _talking_points(person, score, account) -> list[str]:
+    """Grounded, citable openers for the call — built only from real data, never invented."""
+    points: list[str] = []
+    if person is not None and person.role_angle:
+        points.append(f"Lead with what they care about: {person.role_angle}.")
+    if person is not None and person.signal_title:
+        whose = "they personally" if person.signal_is_personal else "their company"
+        points.append(f"Open on what's timely — {whose}: {person.signal_title}.")
+    if score is not None and score.composite:
+        why = (score.rationale or "").strip()
+        points.append(f"ICP fit {score.composite}/100" + (f" — {why}." if why else "."))
+    if account is not None and account.tech_stack:
+        points.append("Relevant tech in their stack: " + ", ".join(list(account.tech_stack)[:5]) + ".")
+    return points
 
 
 _service = CallQueueService()

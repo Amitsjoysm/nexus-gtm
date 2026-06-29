@@ -24,7 +24,6 @@ from nexus.models.orchestration import (
     STEP_AWAITING_APPROVAL,
     STEP_COMPLETED,
     STEP_REJECTED,
-    STEP_SKIPPED,
 )
 from nexus.models.relevance import RelevanceProfile
 from nexus.orchestration.engine import OrchestrationEngine, OrchestrationError

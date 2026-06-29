@@ -1,20 +1,30 @@
 """Daily ICP Auto-Discovery driver.
 
-For one tenant, find net-new companies via the company-search waterfall and add ONLY the ones
-that **strictly** match the saved ICP: a hard size-band filter, then an ICP-fit score that must
-clear ``min_fit``. Sub-threshold candidates are never persisted, so the SDR's list fills with
-high-fit accounts and nothing else. Dedup is by domain across all accounts (incl. archived), so a
-company is never surfaced twice.
+For one tenant, find net-new companies via the company-search waterfall, **crawl their firmographics
+from the web**, then add ONLY the ones that **strictly** match the saved ICP: a hard size-band
+filter, then an ICP-fit score that must clear ``min_fit``. Sub-threshold candidates are never
+persisted, so the SDR's list fills with high-fit accounts and nothing else. Dedup is by domain
+across all accounts (incl. archived), so a company is never surfaced twice.
 
-The heavy network bits (company search) are injectable, so the strict-matching logic is fully
-unit-tested offline. Scored accounts land with an ICP-fit ``AccountScore`` so the Accounts list
-shows a Fit badge immediately; the regular account-refresh tick later deepens them (signals/intent).
+Pipeline: search (Exa) → build transient candidates → **enrich (our web crawler)** → score → keep.
+Enrichment matters because search returns domain/industry/geo but not headcount/tech/revenue, so
+without it every candidate scores identically; crawling fills those blanks so the score actually
+ranks. It's gated + bounded + best-effort, so offline/CI it's a no-op and a crawl outage can't block
+discovery.
+
+The heavy network bits (company search + enrichment) are injectable/gated, so the strict-matching
+logic is fully unit-tested offline. Scored accounts land with an ICP-fit ``AccountScore`` so the
+Accounts list shows a Fit badge immediately; the regular account-refresh tick later deepens them.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Awaitable, Callable
 
+from sqlalchemy import select
+
+from nexus.core.config import get_settings
 from nexus.core.tenancy import TenantSession
 from nexus.integrations.company_search import CompanyCandidate
 from nexus.models.account import Account
@@ -25,6 +35,29 @@ from nexus.relevance.engine import get_profile
 logger = logging.getLogger("nexus.discovery.auto")
 
 Search = Callable[..., Awaitable[list[CompanyCandidate]]]
+
+# Cap the excludeDomains list sent to the search backend (Exa caps the request size). The local
+# domain dedup below is the backstop for anything beyond the cap, so correctness never depends on it.
+_EXCLUDE_CAP = 256
+
+
+async def _enrich_candidates(accounts: list[Account], *, concurrency: int) -> None:
+    """Crawl the web to fill each candidate's blank firmographics (industry/headcount/geo/tech) so
+    scoring can differentiate them. Concurrent, bounded, best-effort — the enricher already isolates
+    its own failures (returns [] on any error), so one bad candidate never sinks the run."""
+    from nexus.enrichment.account import get_account_enricher
+
+    enricher = get_account_enricher()
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def _one(acc: Account) -> None:
+        async with sem:
+            try:
+                await enricher.enrich(acc)
+            except Exception:  # belt-and-suspenders; enrich already swallows its own errors
+                pass
+
+    await asyncio.gather(*(_one(a) for a in accounts))
 
 
 def _profile_to_search_icp(profile) -> dict:
@@ -71,39 +104,77 @@ async def auto_discover_for_tenant(
 
         search = build_registry_from_settings().company_search
 
+    # Tell the search backend which companies we already track so it returns NET-NEW ones instead of
+    # re-surfacing the same top-N every run (the reason daily discovery dried up after a few days).
+    # Column-projected (no ORM hydration) and capped to stay within the backend's request limit.
+    tracked = {
+        d.lower()
+        for d in (
+            await ts.session.scalars(
+                select(Account.domain).where(
+                    Account.tenant_id == ts.tenant_id, Account.domain.isnot(None)
+                )
+            )
+        ).all()
+        if d
+    }
+    exclude = sorted(tracked)[:_EXCLUDE_CAP] if tracked else None
+
     icp = _profile_to_search_icp(profile)
     try:
-        candidates = await search(icp, limit=pool_limit)
+        candidates = await search(icp, limit=pool_limit, exclude_domains=exclude)
     except Exception as exc:  # a search outage must not crash the heartbeat
         logger.warning("icp auto-discovery search failed: %r", exc)
         candidates = []
 
     relevance = get_relevance_engine()
+    settings = get_settings()
     fallback_industry = icp["industries"][0] if icp["industries"] else None
     fallback_country = icp["geo"][0] if icp["geo"] else None
 
+    # 1) Build distinct, net-new candidate accounts (transient — not persisted yet). Dedup in-memory
+    #    against everything we already track (the `tracked` set) + within-run dups, so a company is
+    #    never re-surfaced. Building is cheap, so we build the whole pool; cost is bounded at enrich.
+    built: list[Account] = []
+    seen: set[str] = set()
+    for cand in candidates:
+        domain = (cand.domain or "").strip().lower()
+        if not domain or domain in tracked or domain in seen:
+            continue
+        seen.add(domain)
+        built.append(
+            Account(
+                tenant_id=ts.tenant_id,
+                name=(cand.name or domain).strip(),
+                domain=domain,
+                industry=cand.industry or fallback_industry,
+                country=cand.country or fallback_country,
+                employee_count=cand.employee_count,
+                source="auto_discovery",
+            )
+        )
+
+    # 2) Crawl firmographics for the top candidates BEFORE scoring so the ICP-fit score can actually
+    #    rank them (search gives industry/geo but not headcount/tech). Gated + bounded + best-effort;
+    #    offline/CI it's a no-op, so the strict-match logic below is unchanged.
+    enrich = settings.icp_discovery_enrich_candidates
+    if enrich is None:
+        enrich = settings.account_enrich_enabled
+    if enrich and built:
+        await _enrich_candidates(
+            built[: settings.icp_discovery_enrich_max],
+            concurrency=settings.icp_discovery_enrich_concurrency,
+        )
+
+    # 3) Hard size-band gate (now using crawled headcount) + strict ICP-fit; persist the matches up
+    #    to target_count. Sub-threshold candidates are never persisted.
     account_ids: list[str] = []
     screened = 0
-    for cand in candidates:
+    for account in built:
         if len(account_ids) >= target_count:
             break
-        domain = (cand.domain or "").strip().lower()
-        if not domain:
+        if not _within_size_band(account.employee_count, profile.icp):
             continue
-        # Dedup across ALL accounts (incl. archived) so a company is never re-surfaced.
-        if await ts.first(Account, Account.domain == domain) is not None:
-            continue
-        if not _within_size_band(cand.employee_count, profile.icp):
-            continue
-        account = Account(
-            tenant_id=ts.tenant_id,
-            name=(cand.name or domain).strip(),
-            domain=domain,
-            industry=cand.industry or fallback_industry,
-            country=cand.country or fallback_country,
-            employee_count=cand.employee_count,
-            source="auto_discovery",
-        )
         fit = relevance.score_icp_fit(profile, account)
         screened += 1
         if fit.score < min_fit:

@@ -12,6 +12,7 @@ import {
   Modal,
   Select,
   Skeleton,
+  Spinner,
   useToast,
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
@@ -19,7 +20,8 @@ import { CallConsole } from "@/components/CallConsole";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import type { CallTask, WorkspaceContact } from "@/lib/types";
+import { strengthMeta } from "@/lib/display";
+import type { CallTask, ContactLookalike, WorkspaceContact } from "@/lib/types";
 import styles from "./ContactsPage.module.css";
 
 const ALL = "__all__";
@@ -42,6 +44,28 @@ export function ContactsPage() {
   const [reverifying, setReverifying] = useState(false);
   const [callTask, setCallTask] = useState<CallTask | null>(null);
   const [callingId, setCallingId] = useState<string | null>(null);
+  // "Similar people" — opens a modal ranking the workspace's other contacts against this one.
+  const [similarFor, setSimilarFor] = useState<WorkspaceContact | null>(null);
+  const [similarLoading, setSimilarLoading] = useState(false);
+  const [similarData, setSimilarData] = useState<ContactLookalike[] | null>(null);
+  const [similarId, setSimilarId] = useState<string | null>(null);
+
+  async function findSimilar(c: WorkspaceContact) {
+    setSimilarId(c.id);
+    setSimilarFor(c);
+    setSimilarData(null);
+    setSimilarLoading(true);
+    try {
+      const res = await api.findContactLookalikes(c.id, 10);
+      setSimilarData(res.lookalikes);
+    } catch (err) {
+      setSimilarFor(null);
+      toast.error("Couldn't find similar people", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setSimilarLoading(false);
+      setSimilarId(null);
+    }
+  }
 
   async function startCall(c: WorkspaceContact) {
     setCallingId(c.id);
@@ -206,6 +230,16 @@ export function ContactsPage() {
             </Button>
             <Button
               size="sm"
+              variant="ghost"
+              iconLeft={<Icons.UsersIcon />}
+              loading={similarId === c.id}
+              onClick={() => findSimilar(c)}
+              aria-label={`Find people similar to ${c.full_name}`}
+            >
+              Similar
+            </Button>
+            <Button
+              size="sm"
               variant="secondary"
               iconLeft={<Icons.PhoneIcon />}
               loading={callingId === c.id}
@@ -219,7 +253,7 @@ export function ContactsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId, callingId],
+    [busyId, callingId, similarId],
   );
 
   return (
@@ -300,6 +334,57 @@ export function ContactsPage() {
       >
         {callTask && (
           <CallConsole task={callTask} autoGenerate onLogged={() => setCallTask(null)} />
+        )}
+      </Modal>
+
+      <Modal
+        open={!!similarFor}
+        onClose={() => setSimilarFor(null)}
+        title={similarFor ? `People like ${similarFor.full_name}` : "Similar people"}
+        description="Ranked by role, seniority, function, and how similar their company is."
+      >
+        {similarLoading ? (
+          <div className={styles.similarLoading}>
+            <Spinner size={16} /> Finding similar people…
+          </div>
+        ) : similarData && similarData.length > 0 ? (
+          <ul className={styles.similarList}>
+            {similarData.map((p) => {
+              const meta = strengthMeta(p.score / 100);
+              return (
+                <li key={p.contact_id} className={styles.similarItem}>
+                  <button
+                    type="button"
+                    className={styles.similarRow}
+                    onClick={() => {
+                      setSimilarFor(null);
+                      navigate(`/accounts/${p.account_id}`);
+                    }}
+                  >
+                    <span className={styles.similarMain}>
+                      <span className={styles.name}>{p.full_name}</span>
+                      <span className={styles.muted}>
+                        {[p.title, p.account_name].filter(Boolean).join(" · ") || "—"}
+                      </span>
+                      {p.reasons.length > 0 && (
+                        <span className={styles.similarWhy}>{p.reasons.join(" · ")}</span>
+                      )}
+                    </span>
+                    <Badge tone={meta.tone} dot>
+                      Match {p.score}
+                    </Badge>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <EmptyState
+            compact
+            icon={<Icons.UsersIcon />}
+            title="No similar people yet"
+            description="Add more contacts to your workspace to compare against."
+          />
         )}
       </Modal>
     </div>

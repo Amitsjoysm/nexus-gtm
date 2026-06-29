@@ -3,10 +3,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from nexus.core.db import Base, IdMixin, TimestampMixin
+from nexus.core.db import Base, IdMixin, TimestampMixin, TZDateTime
 from nexus.core.tenancy import TenantScoped
 
 
@@ -40,6 +48,43 @@ class User(IdMixin, TimestampMixin, Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(String(255))
+
+
+class PendingRegistration(IdMixin, TimestampMixin, Base):
+    """A signup awaiting email-OTP verification (two-step registration).
+
+    Holds the already-bcrypt-hashed password and a one-way HMAC hash of the OTP — never the
+    plaintext code. On successful verification it is converted into a real Tenant + User +
+    Workspace + owner Membership and deleted. Not tenant-scoped: no tenant exists yet. One row
+    per email (re-requesting overwrites it), so a stale attempt can't block a fresh one."""
+
+    __tablename__ = "pending_registrations"
+
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    full_name: Mapped[str] = mapped_column(String(200))
+    company_name: Mapped[str] = mapped_column(String(200))
+    company_slug: Mapped[str] = mapped_column(String(80))
+    password_hash: Mapped[str] = mapped_column(String(255))
+    otp_hash: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime())
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    resends: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_sent_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+
+
+class PasswordReset(IdMixin, TimestampMixin, Base):
+    """A pending 'forgot password' request: a single-use, time-boxed reset token (stored only as
+    an HMAC hash) bound to a user. Verifying the token lets the holder set a new password. One row
+    per email (a new request overwrites the old). Not tenant-scoped — reset is account-level."""
+
+    __tablename__ = "password_resets"
+
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime())
+    used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_sent_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
 
 
 class Workspace(IdMixin, TimestampMixin, TenantScoped, Base):

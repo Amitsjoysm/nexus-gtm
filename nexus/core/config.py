@@ -4,7 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _INSECURE_SECRET = "dev-insecure-secret-change-me-please-32chars"
@@ -21,6 +21,42 @@ class Settings(BaseSettings):
     secret_key: str = _INSECURE_SECRET
     access_token_ttl_min: int = 60
     jwt_algorithm: str = "HS256"
+
+    # System transactional email (OTP / verification), distinct from per-tenant cadence SMTP.
+    # A single system mailbox sends signup codes. Credentials come from env (NEXUS_SYSTEM_SMTP_*)
+    # and live only in the gitignored deploy/.env — never in source. Empty = OTP email is a no-op.
+    system_smtp_provider: str = "gmail"     # preset host/port (see email_sender.PROVIDER_PRESETS)
+    system_smtp_username: str = ""
+    system_smtp_password: str = ""          # app password; env/secret only
+    system_smtp_from: str = ""              # defaults to the username
+    system_smtp_from_name: str = "Infojoy GTM"
+
+    # Two-step OTP registration. When enabled, /auth/signup is gated behind email verification:
+    # the client calls /auth/register/start -> /auth/register/verify. Off by default so local/dev
+    # and the offline test suite keep the single-step path. The OTP is stored only as an
+    # HMAC-SHA256 hash (one-way), keyed by ``otp_secret`` (falls back to ``secret_key``).
+    otp_registration_enabled: bool = False
+    otp_length: int = 6
+    otp_ttl_s: int = 600                     # code lifetime (10 min)
+    otp_max_attempts: int = 5                # wrong tries before the pending registration is voided
+    otp_resend_cooldown_s: int = 60          # min seconds between code emails for one registration
+    otp_secret: str = ""                     # HMAC key for hashing OTPs; falls back to secret_key
+
+    # Auth abuse protection. Off by default so local/dev and the offline test suite (which make
+    # many rapid signup/login calls) are unaffected; enable in production. A per-client-IP
+    # sliding window over the auth endpoints (login / register / password reset). Caddy + Valkey
+    # provide the stronger, cross-process layer in production; this is in-process defense-in-depth.
+    auth_rate_limit_enabled: bool = False
+    auth_rate_limit_max: int = 10            # max attempts per window per IP per bucket
+    auth_rate_limit_window_s: int = 60
+
+    # Password reset (forgot password). A single-use, URL-safe token, stored only as an HMAC hash,
+    # emailed as a link to the verified account holder. Generic responses prevent email enumeration.
+    password_reset_ttl_s: int = 3600         # link lifetime (1 hour)
+    password_reset_cooldown_s: int = 60      # min seconds between reset emails for one account
+    # Public base URL for building links in transactional email (e.g. https://app.infojoy.com).
+    # Empty falls back to a relative path; set in production.
+    app_base_url: str = ""
 
     # CORS — comma-separated origins (e.g. a Chrome extension or external SPA). Empty = same-origin.
     cors_origins: str = ""
@@ -73,6 +109,14 @@ class Settings(BaseSettings):
     # (Exa→DuckDuckGo + LLM) when no premium data provider is configured. Off by default so CI
     # stays zero-network; the pipeline only enriches accounts that are missing firmographics.
     account_enrich_enabled: bool = False
+    # Look-alike finder: enrich candidate companies (bounded, concurrent, best-effort) so similarity
+    # can be scored on real firmographics (industry/size/geo/revenue/tech), not just snippet text.
+    # Defaults to following account_enrich_enabled (set explicitly to override); CI stays offline.
+    lookalike_enrich_candidates: bool | None = None
+    lookalike_enrich_max: int = 8              # max candidates to enrich per find (latency bound)
+    lookalike_enrich_concurrency: int = 5      # concurrent enrichments
+    # Blend: final look-alike score = w·similarity-to-seed + (1-w)·ICP-fit. Seed resemblance leads.
+    lookalike_similarity_weight: float = 0.8
     # Minimum signal strength (0..1) that creates an Inbox task. Weaker signals (e.g. a generic
     # press mention, 0.4) still persist to the account timeline and feed Plays, but don't clutter
     # the rep's daily task list — only meaningful events (funding/hiring/intent) become tasks.
@@ -126,10 +170,17 @@ class Settings(BaseSettings):
     # net-new companies and add ONLY strict ICP matches (icp-fit >= min_fit). OFF by default
     # (network + cost); rides the automation heartbeat + per-tenant automation_enabled.
     icp_discovery_enabled: bool = False
-    icp_discovery_daily_count: int = 10        # target net-new strict matches per interval
+    icp_discovery_daily_count: int = 20        # target net-new strict matches per interval (SDR feed)
     icp_discovery_min_fit: int = 70            # strict ICP-fit threshold 0-100; below = discarded
     icp_discovery_interval_hours: int = 24     # once per day per tenant
-    icp_discovery_pool_multiplier: int = 5     # search pool = daily_count * this (headroom to filter)
+    icp_discovery_pool_multiplier: int = 5     # search pool = daily_count * this (capped at Exa's 100)
+    # Crawl candidates' firmographics (headcount/tech/revenue) AFTER search, BEFORE scoring, so the
+    # ICP-fit score can differentiate them (Exa returns domain/industry/geo but not headcount/tech →
+    # otherwise every candidate scores the same). None → follows account_enrich_enabled. Bounded so
+    # the daily crawl cost per tenant is capped; best-effort, so a crawl failure never blocks discovery.
+    icp_discovery_enrich_candidates: bool | None = None
+    icp_discovery_enrich_max: int = 40         # max candidates to web-enrich per run (cost bound)
+    icp_discovery_enrich_concurrency: int = 5  # concurrent enrichments
 
     # Cold Calling (sub-project G): AI call scripts + a call queue + dispositions + cadence
     # "call" touches. The workflow is offline-safe (no telephony in v1), so it's on by default.

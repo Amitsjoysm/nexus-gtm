@@ -56,6 +56,10 @@ class _FlakyQueue(TaskQueue):
         return None
 
 
+# pytest-timeout's only Windows-compatible method ("thread") deadlocks against this test's own
+# long-lived run_worker task; the test is already self-bounded by the wait_for(timeout=10) guards
+# below, so opt it out of the global timeout (0 = disabled for this test).
+@pytest.mark.timeout(0)
 @pytest.mark.asyncio
 async def test_worker_loop_survives_queue_outage(monkeypatch):
     from nexus.workers import queue as queue_mod
@@ -77,6 +81,9 @@ class _BrokenEnqueueQueue(InMemoryTaskQueue):
         raise ConnectionError("queue connection lost")
 
 
+# Same as above: its own long-lived run_scheduler task is incompatible with the thread-based
+# timeout watcher; the test self-bounds via sleep(0.1) + wait_for(timeout=10).
+@pytest.mark.timeout(0)
 @pytest.mark.asyncio
 async def test_scheduler_heartbeat_survives_enqueue_failure(monkeypatch):
     from nexus.workers.scheduler import run_scheduler
@@ -94,7 +101,6 @@ async def test_scheduler_heartbeat_survives_enqueue_failure(monkeypatch):
 def test_default_ingestion_excludes_demo_signals_when_disabled(monkeypatch):
     """Production must never fabricate signals: with NEXUS_DEMO_SIGNALS_ENABLED=false the
     default ingestion pipeline contains only real sources."""
-    from nexus.ingestion import service as svc_mod
     from nexus.ingestion.service import get_ingestion_service, set_ingestion_service
     from nexus.ingestion.sources import DemoSignalSource
 
