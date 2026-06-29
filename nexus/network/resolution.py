@@ -38,7 +38,9 @@ def resolution_key(*, email: str | None, name: str | None, company: str | None) 
 
 
 def search_text_for(name: str, title: str, company: str) -> str:
-    return " ".join(p for p in (name.strip(), title.strip(), company.strip()) if p).lower()
+    # Cap at NetworkPerson.search_text width (600) so real-world provider strings can never
+    # overflow the VARCHAR on Postgres (SQLite doesn't enforce it, but prod does).
+    return " ".join(p for p in (name.strip(), title.strip(), company.strip()) if p).lower()[:600]
 
 
 async def resolve_person(
