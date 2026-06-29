@@ -71,12 +71,15 @@ async def resolve_person(
             if _norm(cand.full_name) == name_n and _norm(cand.company) == company_n:
                 return cand
 
+    # Clamp to NetworkPerson column widths here so EVERY caller is safe (ingest also pre-clamps,
+    # but a future direct caller — e.g. a manual "add contact" endpoint — must not be able to
+    # overflow the VARCHARs). search_text_for already caps at 600.
     person = NetworkPerson(
-        primary_email=email_n or None,
-        full_name=name or "",
-        title=title or "",
-        company=company or "",
-        company_domain=_domain_of(email),
+        primary_email=(email_n[:255] or None) if email_n else None,
+        full_name=(name or "")[:200],
+        title=(title or "")[:200],
+        company=(company or "")[:200],
+        company_domain=_domain_of(email)[:200],
         search_text=search_text_for(name or "", title or "", company or ""),
     )
     ts.add(person)
