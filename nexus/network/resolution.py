@@ -58,6 +58,11 @@ async def resolve_person(
         if hit is not None:
             return hit
     elif name_n:
+        # Emailless dedup — the conservative, uncommon path: reuse a prior emailless person with the
+        # same normalized name AND company. Bounded scan: 500 is a generous cap for one tenant's
+        # no-email backlog; past it an identity silently falls through to "create new" (under-dedup,
+        # never an error). Company-only (no name) is intentionally NOT deduped — matching on company
+        # alone would wrongly merge distinct colleagues.
         for cand in await ts.list(
             NetworkPerson, NetworkPerson.primary_email.is_(None), limit=500
         ):
