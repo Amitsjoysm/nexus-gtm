@@ -31,6 +31,8 @@ _STOP = frozenset({
 @dataclass(slots=True)
 class NetworkQuery:
     keywords: list[str] = field(default_factory=list)
+    # `titles` are parsed for a future LLM-parser/title-weighting pass; A1 MVP ranks on `keywords`
+    # only (a title token like "cto" is already a keyword, so it's not ignored — just not weighted).
     titles: list[str] = field(default_factory=list)
 
 
@@ -68,6 +70,9 @@ async def search_network(
             select(NetworkEdge.person_id).where(NetworkEdge.tenant_id == ts.tenant_id, visible)
         )
     )
+    # Leading-wildcard LIKE can't use a btree index, but it runs only within the already-bounded
+    # visible-edge candidate set (capped at 500 below). Prod swaps this for a GIN/trigram index on
+    # search_text (deferred to a later perf phase); SQLite dev scans the small set.
     if q.keywords:
         stmt = stmt.where(
             or_(*[NetworkPerson.search_text.like(f"%{k}%") for k in q.keywords[:8]])
@@ -75,6 +80,8 @@ async def search_network(
     people = list((await ts.session.scalars(stmt.limit(500))).all())
 
     hits: list[SearchHit] = []
+    # Per-person visible-edge fetch (bounded by the 500-row candidate cap above). The Redis graph
+    # projection that would collapse this to one pass is an explicit later perf task — see the plan.
     for p in people:
         edges = list(
             (await ts.session.scalars(
