@@ -455,6 +455,30 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
     return {"discovered": discovered, "tenants": len(tenant_ids)}
 
 
+async def handle_sync_network_account(payload: dict) -> dict:
+    """Pull a member's network source via its connector and fold the batch into the graph.
+    Idempotent: re-running re-upserts identities/edges and advances the sync cursor."""
+    from nexus.models.network import NetworkSourceAccount
+    from nexus.network.connectors.base import SourceAccountRef
+    from nexus.network.connectors.registry import get_network_connector
+    from nexus.network.service import ingest_batch
+
+    tid = payload["tenant_id"]
+    account_id = payload["account_id"]
+    async with tenant_session(tid) as ts:
+        acc = await ts.get(NetworkSourceAccount, account_id)
+        if acc is None:
+            return {"error": "account_not_found", "account_id": account_id}
+        connector = get_network_connector(acc.provider)
+        ref = SourceAccountRef(
+            id=acc.id, provider=acc.provider,
+            external_account_id=acc.external_account_id, oauth=acc.oauth,
+        )
+        batch = await connector.fetch(ref, acc.sync_cursor)
+        res = await ingest_batch(ts, acc, batch)
+    return {"account_id": account_id, **res}
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
@@ -465,6 +489,7 @@ HANDLERS: dict[str, Handler] = {
     "sync_crm_due_accounts": handle_sync_crm_due_accounts,
     "send_daily_digests": handle_send_daily_digests,
     "discover_icp_accounts": handle_discover_icp_accounts,
+    "sync_network_account": handle_sync_network_account,
 }
 
 
@@ -530,6 +555,16 @@ async def enqueue_send_daily_digests(*, queue: TaskQueue | None = None) -> None:
 async def enqueue_discover_icp_accounts(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="discover_icp_accounts", payload={}))
+
+
+async def enqueue_sync_network_account(
+    tenant_id: str, account_id: str, *, queue: TaskQueue | None = None
+) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(
+        Job(name="sync_network_account",
+            payload={"tenant_id": tenant_id, "account_id": account_id})
+    )
 
 
 async def dispatch(job: Job) -> dict:
