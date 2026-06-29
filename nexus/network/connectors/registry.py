@@ -5,6 +5,9 @@ from __future__ import annotations
 from nexus.network.connectors.base import NetworkConnector
 from nexus.network.connectors.fixture import FixtureConnector
 
+# Two slots by design: `_REGISTRY` maps a provider key -> connector class (multi-provider, like
+# integrations/search/provider.py), while `_override` is a test-only short-circuit that returns one
+# connector for ANY provider so the sync-job path can be exercised offline without real adapters.
 _REGISTRY: dict[str, type] = {"fixture": FixtureConnector}
 _override: NetworkConnector | None = None
 

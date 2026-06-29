@@ -7,7 +7,7 @@ implement the same surface — only the bodies differ, so the graph never change
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -20,7 +20,10 @@ class RawIdentity(BaseModel):
     company: str | None = None
     handle: str | None = None
     relation: str = "contact"  # contact | email | calendar | linkedin_1st | follower
-    raw: dict = Field(default_factory=dict)
+    # Provider-specific payload. String fields above are length-clamped at the ingest
+    # boundary (nexus/network/service.ingest_batch), NOT rejected here — a single oversized
+    # field must never fail a whole sync batch (mirrors nexus/ingestion/service clamping).
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
 class Touchpoint(BaseModel):
@@ -51,10 +54,11 @@ class SourceAccountRef(BaseModel):
     id: str
     provider: str
     external_account_id: str
-    oauth: dict = Field(default_factory=dict)
+    oauth: dict[str, Any] = Field(default_factory=dict)
 
 
-@runtime_checkable
+# Protocol (not abc.ABC) so a real google.py / microsoft.py adapter can satisfy this seam by
+# structural typing without importing or subclassing base.py.
 class NetworkConnector(Protocol):
     provider: str
 
