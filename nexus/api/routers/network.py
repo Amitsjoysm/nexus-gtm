@@ -22,6 +22,7 @@ from nexus.network.schemas import (
     PersonOut,
     SearchHitOut,
     SearchRequest,
+    SyncEnqueuedOut,
 )
 from nexus.network.search import search_network
 from nexus.network.service import ingest_batch, set_pooling
@@ -121,16 +122,16 @@ async def import_batch(
     return IngestResultOut(**res)
 
 
-@router.post("/accounts/{account_id}/sync")
+@router.post("/accounts/{account_id}/sync", response_model=SyncEnqueuedOut)
 async def sync_account(
     account_id: str,
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.run_agents)),
-) -> dict:
+) -> SyncEnqueuedOut:
     member = await _member(ts, principal)
     acc = await _owned_account(ts, member, account_id)
     await enqueue_sync_network_account(ts.tenant_id, acc.id)
-    return {"enqueued": True, "account_id": acc.id}
+    return SyncEnqueuedOut(enqueued=True, account_id=acc.id)
 
 
 @router.post("/search", response_model=list[SearchHitOut])
@@ -160,7 +161,8 @@ async def get_person(
     person = await ts.get(NetworkPerson, person_id)
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "person not found")
-    # only surface a person the member can actually see (owns or pooled edge)
+    # Only surface a person the member can actually see (owns or pooled edge). Return 404 (not 403)
+    # for an invisible-but-existing person so we never reveal that the person id exists at all.
     paths = await intro_paths(ts, person_id=person_id, member_id=member.id)
     if not paths:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "person not found")

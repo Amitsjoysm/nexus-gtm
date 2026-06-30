@@ -1,6 +1,8 @@
 """Request/response models for the /network router. OAuth is never exposed."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from nexus.network.connectors.base import RawIdentity, Touchpoint
@@ -14,7 +16,7 @@ class ConnectRequest(BaseModel):
 
 class PatchAccountRequest(BaseModel):
     pooling_enabled: bool | None = None
-    status: str | None = None
+    status: Literal["connected", "error", "disconnected"] | None = None
 
 
 class NetworkAccountOut(BaseModel):
@@ -39,6 +41,11 @@ class IngestResultOut(BaseModel):
     new_edges: int
 
 
+class SyncEnqueuedOut(BaseModel):
+    enqueued: bool
+    account_id: str
+
+
 class PersonOut(BaseModel):
     id: str
     primary_email: str | None
@@ -49,7 +56,7 @@ class PersonOut(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1)
     limit: int = Field(default=20, ge=1, le=100)
 
 
