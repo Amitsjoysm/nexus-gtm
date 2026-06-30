@@ -307,6 +307,20 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_token_enc_key(self) -> "Settings":
+        key = (self.network_token_enc_key or "").strip()
+        if key:
+            from cryptography.fernet import Fernet
+
+            try:
+                Fernet(key.encode())
+            except Exception as exc:  # malformed key must fail loudly at startup, not silently at runtime
+                raise ValueError(
+                    "NEXUS_NETWORK_TOKEN_ENC_KEY must be a valid urlsafe-base64 32-byte Fernet key"
+                ) from exc
+        return self
+
 
 @lru_cache
 def get_settings() -> Settings:

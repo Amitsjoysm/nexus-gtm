@@ -35,6 +35,8 @@ def sign_state(
 ) -> str:
     s = get_settings()
     now = utcnow()
+    # Stateless by design (no jti / server-side store): the bound authorization code is single-use at
+    # the provider's token endpoint, so a replayed state carrying a consumed code fails there.
     payload = {
         "typ": _STATE_TYP, "mid": member_id, "tid": tenant_id, "prov": provider, "pkce": verifier,
         "iat": int(now.timestamp()), "exp": int((now + timedelta(seconds=ttl_s)).timestamp()),

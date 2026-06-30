@@ -18,9 +18,10 @@ from nexus.core.config import get_settings
 
 
 def _fernet() -> Fernet:
-    key = (get_settings().network_token_enc_key or "").strip()
+    s = get_settings()
+    key = (s.network_token_enc_key or "").strip()
     if not key:
-        digest = hashlib.sha256(get_settings().secret_key.encode()).digest()
+        digest = hashlib.sha256(s.secret_key.encode()).digest()
         key = base64.urlsafe_b64encode(digest).decode()
     return Fernet(key.encode())
 

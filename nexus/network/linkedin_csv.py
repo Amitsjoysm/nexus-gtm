@@ -13,6 +13,7 @@ import io
 from nexus.network.connectors.base import RawIdentity
 
 _REQUIRED = {"First Name", "Last Name", "Company", "Position"}
+_MAX_BYTES = 10 * 1024 * 1024  # 10 MB — a real Connections export is far smaller; cap misuse/DoS.
 
 
 class LinkedInCsvError(ValueError):
@@ -29,11 +30,13 @@ def _decode(content: bytes) -> str:
 
 
 def parse_linkedin_csv(content: bytes) -> list[RawIdentity]:
+    if len(content) > _MAX_BYTES:
+        raise LinkedInCsvError("file too large (max 10 MB)")
     text = _decode(content)
     lines = text.splitlines()
     # Find the header row (LinkedIn prepends a Notes preamble + a blank line).
     header_idx = next(
-        (i for i, ln in enumerate(lines) if ln.startswith("First Name,")), None
+        (i for i, ln in enumerate(lines) if ln.startswith("First Name,Last Name,")), None
     )
     if header_idx is None:
         raise LinkedInCsvError("not a LinkedIn Connections export (missing header row)")
