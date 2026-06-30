@@ -215,6 +215,20 @@ class Settings(BaseSettings):
     # with compatible pinned versions and a scraper in front.
     metrics_enabled: bool = False
 
+    # Relationship-graph network connectors (real OAuth + token encryption). Empty default →
+    # the provider is inert (its /oauth/start returns 400) — never a fake-data fallback.
+    network_google_client_id: str = ""
+    network_google_client_secret: str = ""
+    network_microsoft_client_id: str = ""
+    network_microsoft_client_secret: str = ""
+    network_microsoft_tenant: str = "common"   # Azure tenant id, or "common" (work + personal)
+    # Base URL the OAuth provider redirects back to, e.g. https://app.example.com. The callback
+    # path (/api/network/oauth/{provider}/callback) is appended; never client-supplied.
+    network_oauth_redirect_base: str = ""
+    # Fernet key (urlsafe-b64, 32 bytes) for encrypting stored OAuth tokens. Empty → derived
+    # deterministically from secret_key, so tokens are always encrypted with no extra secret.
+    network_token_enc_key: str = ""
+
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
     # A selected engine with no key degrades to keyless DuckDuckGo so search keeps working.
