@@ -87,6 +87,12 @@ import type {
   TenantSummary,
   TokenResponse,
   Workspace,
+  NetworkAccount,
+  NetworkSearchHit,
+  NetworkIntroPath,
+  NetworkIngestResult,
+  NetworkImportIdentity,
+  NetworkImportTouchpoint,
 } from "./types";
 
 export class ApiError extends Error {
@@ -758,6 +764,59 @@ export class ApiClient {
   }
   createWorkspace(body: NewWorkspaceRequest, signal?: AbortSignal) {
     return this.request<TokenResponse>("/auth/workspaces", { method: "POST", body, signal });
+  }
+
+  // ---- network (relationship graph) ----
+  listNetworkAccounts(signal?: AbortSignal) {
+    return this.request<NetworkAccount[]>("/network/accounts", { signal });
+  }
+  connectNetworkAccount(
+    body: { provider: string; external_account_id: string; display_email?: string },
+    signal?: AbortSignal,
+  ) {
+    return this.request<NetworkAccount>("/network/accounts", { method: "POST", body, signal });
+  }
+  patchNetworkAccount(
+    id: string,
+    body: { pooling_enabled?: boolean; status?: string },
+    signal?: AbortSignal,
+  ) {
+    return this.request<NetworkAccount>(`/network/accounts/${id}`, {
+      method: "PATCH",
+      body,
+      signal,
+    });
+  }
+  syncNetworkAccount(id: string, signal?: AbortSignal) {
+    return this.request<{ enqueued: boolean; account_id: string }>(
+      `/network/accounts/${id}/sync`,
+      { method: "POST", signal },
+    );
+  }
+  importNetworkBatch(
+    id: string,
+    body: {
+      identities: NetworkImportIdentity[];
+      touchpoints?: NetworkImportTouchpoint[];
+      next_cursor?: string | null;
+    },
+    signal?: AbortSignal,
+  ) {
+    return this.request<NetworkIngestResult>(`/network/accounts/${id}/import`, {
+      method: "POST",
+      body,
+      signal,
+    });
+  }
+  searchNetwork(query: string, limit = 20, signal?: AbortSignal) {
+    return this.request<NetworkSearchHit[]>("/network/search", {
+      method: "POST",
+      body: { query, limit },
+      signal,
+    });
+  }
+  networkIntroPaths(personId: string, signal?: AbortSignal) {
+    return this.request<NetworkIntroPath[]>(`/network/people/${personId}/intro-paths`, { signal });
   }
 
   /**
