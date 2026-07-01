@@ -235,3 +235,53 @@ async def test_sync_refreshes_expired_token_and_records_errors():
 
     assert FakeOAuth.refreshed is True
     assert res["new_persons"] == 1
+
+
+async def test_sync_marks_account_error_on_fetch_failure():
+    from nexus.models.network import NetworkSourceAccount
+    from nexus.network.connectors.base import NetworkSyncBatch, SourceAccountRef  # noqa: F401
+    from nexus.network.connectors.oauthbase import OAuthConnector
+    from nexus.network.connectors.registry import set_network_connector
+    from nexus.network.crypto import seal_tokens
+    from nexus.workers.tasks import handle_sync_network_account
+
+    class BoomOAuth(OAuthConnector):
+        provider = "google"
+
+        async def fetch(self, account, since):
+            raise RuntimeError("api exploded")
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = await _seed_account(ts)
+        acc.provider = "google"
+        acc.oauth = seal_tokens({"access_token": "AT", "refresh_token": "RT"})  # no expiry → not expired
+        await ts.flush()
+        acc_id = acc.id
+
+    set_network_connector(BoomOAuth(client_id="x", client_secret="y", redirect_uri="https://x/cb"))
+    try:
+        res = await handle_sync_network_account({"tenant_id": tid, "account_id": acc_id})
+    finally:
+        set_network_connector(None)
+
+    assert res["error"] == "fetch_failed"
+    async with tenant_session(tid) as ts:
+        acc2 = await ts.get(NetworkSourceAccount, acc_id)
+        assert acc2.status == "error"
+        assert "sync failed" in (acc2.last_error or "")
+
+
+async def test_sync_skips_manual_source():
+    from nexus.workers.tasks import handle_sync_network_account
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = await _seed_account(ts)
+        acc.provider = "linkedin"  # upload-only, no live connector
+        await ts.flush()
+        acc_id = acc.id
+
+    # no override → registry raises ValueError for linkedin → worker skips gracefully
+    res = await handle_sync_network_account({"tenant_id": tid, "account_id": acc_id})
+    assert res.get("skipped") == "manual_source"

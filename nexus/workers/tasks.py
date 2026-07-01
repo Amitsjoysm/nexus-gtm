@@ -478,11 +478,16 @@ async def handle_sync_network_account(payload: dict) -> dict:
         acc = await ts.get(NetworkSourceAccount, account_id)
         if acc is None:
             return {"error": "account_not_found", "account_id": account_id}
-        connector = get_network_connector(acc.provider)
+        try:
+            connector = get_network_connector(acc.provider)
+        except ValueError:
+            # Upload-only / manual source (e.g. linkedin) — no live connector to sync from.
+            return {"skipped": "manual_source", "account_id": account_id}
 
         oauth_for_fetch: dict = {}
         if isinstance(connector, OAuthConnector):
             bundle = unseal_tokens(acc.oauth)
+            # No usable token at all (never connected, or fully revoked) — user must reconnect.
             if not bundle.get("access_token") and not bundle.get("refresh_token"):
                 acc.status = "error"
                 acc.last_error = "not connected (no token) — reconnect required"
@@ -512,6 +517,7 @@ async def handle_sync_network_account(payload: dict) -> dict:
             acc.status = "error"
             acc.last_error = f"sync failed: {type(exc).__name__}: {str(exc)[:200]}"
             return {"error": "fetch_failed", "account_id": account_id}
+        acc.status = "connected"
         acc.last_error = None
         res = await ingest_batch(ts, acc, batch)
     return {"account_id": account_id, **res}
