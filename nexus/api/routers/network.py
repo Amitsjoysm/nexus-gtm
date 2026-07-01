@@ -3,6 +3,8 @@ sync its contacts, then search the deduped graph and map warm intros. Tenant-sco
 is never serialized out; cross-member reads pass the pooling visibility predicate."""
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import RedirectResponse
 
@@ -14,7 +16,6 @@ from nexus.models.identity import Membership
 from nexus.models.network import NetworkPerson, NetworkSourceAccount
 from nexus.network import oauth as network_oauth
 from nexus.network.connectors.base import NetworkSyncBatch
-from nexus.network.connectors.oauthbase import OAuthConnector  # noqa: F401
 from nexus.network.connectors.registry import (
     get_network_connector,
     provider_configured,
@@ -37,7 +38,7 @@ from nexus.network.schemas import (
 )
 from nexus.network.search import search_network
 from nexus.network.service import ingest_batch, set_pooling
-from nexus.workers.tasks import enqueue_sync_network_account
+from nexus.workers.tasks import enqueue_sync_network_account, tenant_session
 
 router = APIRouter(prefix="/network", tags=["network"])
 
@@ -80,7 +81,7 @@ async def connect_account(
     principal: Principal = Depends(require(Permission.run_agents)),
 ) -> NetworkAccountOut:
     # OAuth providers must go through the consent flow (/oauth/{provider}/start), not a bare create.
-    if body.provider in ("google", "microsoft"):
+    if body.provider.lower() in ("google", "microsoft"):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"connect {body.provider} via /network/oauth/{body.provider}/start",
@@ -233,51 +234,57 @@ async def oauth_callback(
     state: str | None = None,
     error: str | None = None,
 ):
-    """Provider redirect target. Validates state, exchanges the code, stores encrypted tokens, and
-    bounces the browser back to the SPA. No auth dependency: the signed ``state`` is the credential."""
+    """Provider redirect target. Validates the signed state, exchanges the code, stores encrypted
+    tokens, and bounces the browser back to the SPA. No auth dependency: the signed ``state`` is the
+    credential. Every failure path is a safe redirect (never a 500 that leaks a trace)."""
     base = get_settings().network_oauth_redirect_base.rstrip("/")
+
+    def _to(query: str) -> RedirectResponse:
+        return RedirectResponse(f"{base}/network?{query}", status_code=302)
+
     if error or not code or not state:
-        return RedirectResponse(f"{base}/network?error={error or 'oauth_failed'}")
+        return _to(f"error={error or 'oauth_failed'}")
     claims = network_oauth.verify_state(state)
     if not claims or claims.get("prov") != provider:
-        return RedirectResponse(f"{base}/network?error=bad_state")
+        return _to("error=bad_state")
+    verifier = claims.get("pkce")
+    tid, member_id = claims.get("tid"), claims.get("mid")
+    if not verifier or not tid or not member_id:
+        return _to("error=bad_state")
 
-    connector = get_network_connector(provider)
     try:
-        tokens = await connector.exchange_code(code=code, code_verifier=claims["pkce"])
+        connector = get_network_connector(provider)
+        tokens = await connector.exchange_code(code=code, code_verifier=verifier)
     except Exception:
-        return RedirectResponse(f"{base}/network?error=exchange_failed")
-
-    import time as _time
+        return _to("error=exchange_failed")
 
     bundle = {
         "access_token": tokens.get("access_token", ""),
         "refresh_token": tokens.get("refresh_token", ""),
-        "expires_at": int(_time.time()) + int(tokens.get("expires_in", 3600)),
+        "expires_at": int(time.time()) + int(tokens.get("expires_in", 3600)),
     }
-    tid, member_id = claims["tid"], claims["mid"]
-    # Bind the tenant the same way the request pipeline does (callback has no Principal).
-    from nexus.workers.tasks import tenant_session as _tenant_session
-
-    async with _tenant_session(tid) as ts:
-        existing = await ts.first(
-            NetworkSourceAccount,
-            NetworkSourceAccount.member_id == member_id,
-            NetworkSourceAccount.provider == provider,
-        )
-        if existing is None:
-            existing = NetworkSourceAccount(
-                member_id=member_id, user_id=claims.get("uid", member_id), provider=provider,
-                external_account_id=f"{provider}:{member_id}",
-                display_email=f"{provider.title()} account",
+    try:
+        async with tenant_session(tid) as ts:
+            existing = await ts.first(
+                NetworkSourceAccount,
+                NetworkSourceAccount.member_id == member_id,
+                NetworkSourceAccount.provider == provider,
             )
-            ts.add(existing)
-        existing.oauth = seal_tokens(bundle)
-        existing.status = "connected"
-        existing.last_error = None
-        await ts.flush()
-        await enqueue_sync_network_account(tid, existing.id)
-    return RedirectResponse(f"{base}/network?connected={provider}")
+            if existing is None:
+                existing = NetworkSourceAccount(
+                    member_id=member_id, user_id=claims.get("uid", member_id), provider=provider,
+                    external_account_id=f"{provider}:{member_id}",
+                    display_email=f"{provider.title()} account",
+                )
+                ts.add(existing)
+            existing.oauth = seal_tokens(bundle)
+            existing.status = "connected"
+            existing.last_error = None
+            await ts.flush()
+            await enqueue_sync_network_account(tid, existing.id)
+    except Exception:
+        return _to("error=save_failed")
+    return _to(f"connected={provider}")
 
 
 @router.post("/accounts/{account_id}/import-linkedin", response_model=IngestResultOut)
@@ -290,12 +297,13 @@ async def import_linkedin(
     member = await _member(ts, principal)
     acc = await _owned_account(ts, member, account_id)
     content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "file too large (max 10 MB)"
+        )
     try:
         identities = parse_linkedin_csv(content)
     except LinkedInCsvError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
-    from nexus.network.connectors.base import NetworkSyncBatch
-    from nexus.network.service import ingest_batch
-
     res = await ingest_batch(ts, acc, NetworkSyncBatch(identities=identities))
     return IngestResultOut(**res)
