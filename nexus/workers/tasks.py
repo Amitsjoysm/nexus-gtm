@@ -457,10 +457,19 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
 
 async def handle_sync_network_account(payload: dict) -> dict:
     """Pull a member's network source via its connector and fold the batch into the graph.
-    Idempotent: re-running re-upserts identities/edges and advances the sync cursor."""
+
+    OAuth providers: decrypt the stored token bundle, refresh it if the access token is expired
+    (persisting the rotated bundle), then fetch with a valid access token. Connector/API failures
+    are captured on the account (status=error, last_error) and surfaced in the UI, not swallowed.
+    Idempotent: re-running re-upserts identities/edges and advances the sync cursor.
+    """
+    import time
+
     from nexus.models.network import NetworkSourceAccount
     from nexus.network.connectors.base import SourceAccountRef
+    from nexus.network.connectors.oauthbase import OAuthConnector
     from nexus.network.connectors.registry import get_network_connector
+    from nexus.network.crypto import seal_tokens, unseal_tokens
     from nexus.network.service import ingest_batch
 
     tid = payload["tenant_id"]
@@ -470,13 +479,48 @@ async def handle_sync_network_account(payload: dict) -> dict:
         if acc is None:
             return {"error": "account_not_found", "account_id": account_id}
         connector = get_network_connector(acc.provider)
+
+        oauth_for_fetch: dict = {}
+        if isinstance(connector, OAuthConnector):
+            bundle = unseal_tokens(acc.oauth)
+            if not bundle.get("access_token") and not bundle.get("refresh_token"):
+                acc.status = "error"
+                acc.last_error = "not connected (no token) — reconnect required"
+                return {"error": "not_connected", "account_id": account_id}
+            if _token_expired(bundle, now=int(time.time())) and bundle.get("refresh_token"):
+                try:
+                    new = await connector.refresh(bundle["refresh_token"])
+                except Exception as exc:  # refresh failed → user must reconnect
+                    acc.status = "error"
+                    acc.last_error = f"token refresh failed: {type(exc).__name__}"
+                    return {"error": "refresh_failed", "account_id": account_id}
+                bundle["access_token"] = new.get("access_token", bundle.get("access_token"))
+                if new.get("refresh_token"):
+                    bundle["refresh_token"] = new["refresh_token"]
+                if new.get("expires_in"):
+                    bundle["expires_at"] = int(time.time()) + int(new["expires_in"])
+                acc.oauth = seal_tokens(bundle)
+            oauth_for_fetch = {"access_token": bundle.get("access_token", "")}
+
         ref = SourceAccountRef(
             id=acc.id, provider=acc.provider,
-            external_account_id=acc.external_account_id, oauth=acc.oauth,
+            external_account_id=acc.external_account_id, oauth=oauth_for_fetch,
         )
-        batch = await connector.fetch(ref, acc.sync_cursor)
+        try:
+            batch = await connector.fetch(ref, acc.sync_cursor)
+        except Exception as exc:
+            acc.status = "error"
+            acc.last_error = f"sync failed: {type(exc).__name__}: {str(exc)[:200]}"
+            return {"error": "fetch_failed", "account_id": account_id}
+        acc.last_error = None
         res = await ingest_batch(ts, acc, batch)
     return {"account_id": account_id, **res}
+
+
+def _token_expired(bundle: dict, *, now: int, skew_s: int = 60) -> bool:
+    """True when there's an expiry and it's within ``skew_s`` of now (refresh proactively)."""
+    exp = bundle.get("expires_at")
+    return exp is not None and int(exp) <= now + skew_s
 
 
 HANDLERS: dict[str, Handler] = {

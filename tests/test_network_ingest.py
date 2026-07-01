@@ -193,3 +193,45 @@ def test_registry_builds_configured_providers(monkeypatch):
         assert get_network_connector("fixture").provider == "fixture"
     finally:
         get_settings.cache_clear()
+
+
+async def test_sync_refreshes_expired_token_and_records_errors():
+    import time
+
+    from nexus.models.network import NetworkSourceAccount
+    from nexus.network.connectors.base import NetworkSyncBatch, RawIdentity, SourceAccountRef
+    from nexus.network.connectors.oauthbase import OAuthConnector
+    from nexus.network.crypto import seal_tokens
+    from nexus.network.connectors.registry import set_network_connector
+    from nexus.workers.tasks import handle_sync_network_account
+
+    class FakeOAuth(OAuthConnector):
+        provider = "google"
+        refreshed = False
+
+        async def refresh(self, refresh_token):
+            FakeOAuth.refreshed = True
+            return {"access_token": "AT-NEW", "expires_in": 3600}
+
+        async def fetch(self, account: SourceAccountRef, since):
+            assert account.oauth["access_token"] == "AT-NEW"  # used the refreshed token
+            return NetworkSyncBatch(identities=[RawIdentity(external_id="g1", email="z@a.com",
+                                                            name="Zed")])
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = await _seed_account(ts)
+        acc.provider = "google"
+        acc.oauth = seal_tokens({"access_token": "AT-OLD", "refresh_token": "RT",
+                                 "expires_at": int(time.time()) - 10})  # expired
+        await ts.flush()
+        acc_id = acc.id
+
+    set_network_connector(FakeOAuth(client_id="x", client_secret="y", redirect_uri="https://x/cb"))
+    try:
+        res = await handle_sync_network_account({"tenant_id": tid, "account_id": acc_id})
+    finally:
+        set_network_connector(None)
+
+    assert FakeOAuth.refreshed is True
+    assert res["new_persons"] == 1
