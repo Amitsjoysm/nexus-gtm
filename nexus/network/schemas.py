@@ -46,6 +46,10 @@ class SyncEnqueuedOut(BaseModel):
     account_id: str
 
 
+class OAuthStartOut(BaseModel):
+    authorize_url: str
+
+
 class PersonOut(BaseModel):
     id: str
     primary_email: str | None
