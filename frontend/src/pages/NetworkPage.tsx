@@ -87,7 +87,6 @@ export function NetworkPage() {
     }
   }
 
-  const [linkedInAccountId, setLinkedInAccountId] = useState<string | null>(null);
   async function ensureLinkedInSource(): Promise<string> {
     const existing = (sources.data ?? []).find((a) => a.provider === "linkedin");
     if (existing) return existing.id;
@@ -101,7 +100,7 @@ export function NetworkPage() {
   async function onLinkedInFile(file: File) {
     setConnecting("linkedin");
     try {
-      const id = linkedInAccountId ?? (await ensureLinkedInSource());
+      const id = await ensureLinkedInSource();
       const res = await api.importLinkedInCsv(id, file);
       toast.success("LinkedIn import complete", `Added ${res.new_persons} connections.`);
       sources.refetch();
@@ -154,7 +153,6 @@ export function NetworkPage() {
 
   const srcRows = sources.data ?? [];
   const hasSources = srcRows.length > 0;
-  void linkedInAccountId; void setLinkedInAccountId;
 
   return (
     <div>

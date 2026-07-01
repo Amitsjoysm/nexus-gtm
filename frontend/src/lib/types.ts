@@ -333,7 +333,7 @@ export interface Member {
 }
 
 // ---- Relationship Graph (network) — mirrors nexus/network/schemas.py ----
-export type NetworkProvider = "google" | "microsoft" | "linkedin" | "fixture";
+export type NetworkProvider = "google" | "microsoft" | "linkedin";
 
 /** A member's connected source account. OAuth is never sent to the client. */
 export interface NetworkAccount {
@@ -382,22 +382,6 @@ export interface NetworkIngestResult {
 
 export interface NetworkOAuthStart {
   authorize_url: string;
-}
-
-export interface NetworkImportIdentity {
-  external_id: string;
-  email?: string | null;
-  name?: string | null;
-  title?: string | null;
-  company?: string | null;
-  handle?: string | null;
-  relation?: string;
-}
-
-export interface NetworkImportTouchpoint {
-  person_external_id: string;
-  kind: string;
-  at: string;
 }
 
 export interface Workspace {
