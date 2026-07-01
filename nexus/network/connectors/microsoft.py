@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import httpx
-
 from nexus.network.connectors.base import NetworkSyncBatch, RawIdentity, SourceAccountRef, Touchpoint
 from nexus.network.connectors.oauthbase import OAuthConnector
 
