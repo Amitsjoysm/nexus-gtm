@@ -13,7 +13,8 @@ from nexus.network.connectors.base import NetworkSyncBatch, RawIdentity, SourceA
 from nexus.network.connectors.oauthbase import OAuthConnector
 
 _CONTACTS = "https://graph.microsoft.com/v1.0/me/contacts"
-_EVENTS = "https://graph.microsoft.com/v1.0/me/events"
+_CALENDAR_VIEW = "https://graph.microsoft.com/v1.0/me/calendarView"
+_MAX_PAGES = 500
 
 
 class MicrosoftConnector(OAuthConnector):
@@ -48,25 +49,33 @@ class MicrosoftConnector(OAuthConnector):
             return cur["external_id"]
 
         async with self._client() as c:
-            resp = await self._get_json(
-                c, _CONTACTS, token=token,
-                params={"$select": "displayName,emailAddresses,companyName,jobTitle", "$top": 200},
-            )
-            if resp.status_code < 400:
-                for ct in resp.json().get("value", []):
+            url: str | None = _CONTACTS
+            params: dict | None = {
+                "$select": "displayName,emailAddresses,companyName,jobTitle", "$top": 200
+            }
+            for _ in range(_MAX_PAGES):
+                resp = await self._get_json(c, url, token=token, params=params)
+                if resp.status_code >= 400:
+                    break
+                data = resp.json()
+                for ct in data.get("value", []):
                     email = _first_email(ct.get("emailAddresses"))
                     key = (email or "").lower() or ct.get("id", "")
                     upsert(key, email=(email.lower() if email else None),
                            name=ct.get("displayName"), company=ct.get("companyName"),
                            title=ct.get("jobTitle"), relation="contact")
+                url = data.get("@odata.nextLink")
+                if not url:
+                    break
+                params = None  # nextLink already encodes the query
 
-            time_min = (datetime.now(timezone.utc) - timedelta(days=365)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            )
+            now = datetime.now(timezone.utc)
+            time_min = (now - timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            time_max = now.strftime("%Y-%m-%dT%H:%M:%SZ")
             ev_resp = await self._get_json(
-                c, _EVENTS, token=token,
-                params={"$select": "start,attendees", "$top": 250,
-                        "$filter": f"start/dateTime ge '{time_min}'"},
+                c, _CALENDAR_VIEW, token=token,
+                params={"startDateTime": time_min, "endDateTime": time_max,
+                        "$select": "start,attendees", "$top": 250},
             )
             if ev_resp.status_code < 400:
                 for ev in ev_resp.json().get("value", []):
@@ -103,6 +112,7 @@ def _parse_dt(value: str | None):
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "").split(".")[0] + "+00:00")
+        dt = datetime.fromisoformat(value.split(".")[0].replace("Z", "+00:00"))
     except ValueError:
         return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)

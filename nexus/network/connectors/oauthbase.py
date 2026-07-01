@@ -8,6 +8,7 @@ the suite never touches the network.
 from __future__ import annotations
 
 import asyncio
+from typing import ClassVar
 from urllib.parse import urlencode
 
 import httpx
@@ -22,8 +23,8 @@ class OAuthConnector:
     provider: str = ""
     authorize_url: str = ""
     token_url: str = ""
-    scopes: list[str] = []
-    extra_authorize_params: dict[str, str] = {}
+    scopes: ClassVar[list[str]] = []
+    extra_authorize_params: ClassVar[dict[str, str]] = {}
 
     def __init__(
         self,
@@ -81,7 +82,7 @@ class OAuthConnector:
     async def _get_json(
         self, client: httpx.AsyncClient, url: str, *, token: str, params: dict | None = None
     ) -> httpx.Response:
-        """GET with bearer auth + up to 3 bounded retries on 429/5xx."""
+        """GET with bearer auth + up to 3 bounded retries on 429/5xx, honouring Retry-After."""
         last: httpx.Response | None = None
         for attempt in range(3):
             resp = await client.get(
@@ -90,7 +91,11 @@ class OAuthConnector:
             if resp.status_code not in _RETRY_STATUS:
                 return resp
             last = resp
-            await asyncio.sleep(0.5 * (2**attempt))
+            try:
+                retry_after = float(resp.headers.get("Retry-After", 0) or 0)
+            except ValueError:
+                retry_after = 0.0
+            await asyncio.sleep(min(120.0, max(retry_after, 0.5 * (2**attempt))))
         return last  # type: ignore[return-value]
 
     # ---- contract ----

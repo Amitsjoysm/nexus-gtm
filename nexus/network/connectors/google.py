@@ -17,6 +17,7 @@ from nexus.network.connectors.oauthbase import OAuthConnector
 _PEOPLE = "https://people.googleapis.com/v1/people/me/connections"
 _CALENDAR = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 _PERSON_FIELDS = "names,emailAddresses,organizations,metadata"
+_MAX_PAGES = 500  # 100k contacts at pageSize 200 — bound an unbounded nextPageToken
 
 
 class GoogleConnector(OAuthConnector):
@@ -64,10 +65,10 @@ class GoogleConnector(OAuthConnector):
         return NetworkSyncBatch(identities=identities, touchpoints=touchpoints,
                                 next_cursor=next_cursor)
 
-    async def _load_contacts(self, c, token, since, upsert) -> str | None:
+    async def _load_contacts(self, c: httpx.AsyncClient, token: str, since: str | None, upsert) -> str | None:
         next_cursor: str | None = None
         page: str | None = None
-        while True:
+        for _ in range(_MAX_PAGES):
             params = {"personFields": _PERSON_FIELDS, "pageSize": 200}
             if since:
                 params["syncToken"] = since
