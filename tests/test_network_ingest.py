@@ -172,3 +172,24 @@ async def test_sync_job_pulls_from_connector_and_ingests():
     assert res["new_persons"] == 1
     async with tenant_session(tid) as ts:
         assert len(await ts.list(NetworkPerson)) == 1
+
+
+def test_registry_builds_configured_providers(monkeypatch):
+    from nexus.core.config import get_settings
+    from nexus.network.connectors.registry import get_network_connector, provider_configured
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("NEXUS_NETWORK_GOOGLE_CLIENT_ID", "gid")
+    monkeypatch.setenv("NEXUS_NETWORK_GOOGLE_CLIENT_SECRET", "gsec")
+    monkeypatch.setenv("NEXUS_NETWORK_OAUTH_REDIRECT_BASE", "https://app.example.com")
+    get_settings.cache_clear()
+    try:
+        assert provider_configured("google") is True
+        assert provider_configured("microsoft") is False
+        g = get_network_connector("google")
+        assert g.provider == "google" and g.client_id == "gid"
+        assert g.redirect_uri == "https://app.example.com/api/network/oauth/google/callback"
+        # fixture still available for the offline suite
+        assert get_network_connector("fixture").provider == "fixture"
+    finally:
+        get_settings.cache_clear()
