@@ -380,6 +380,10 @@ export interface NetworkIngestResult {
   new_edges: number;
 }
 
+export interface NetworkOAuthStart {
+  authorize_url: string;
+}
+
 export interface NetworkImportIdentity {
   external_id: string;
   email?: string | null;

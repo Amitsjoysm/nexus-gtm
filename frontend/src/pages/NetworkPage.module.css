@@ -330,3 +330,20 @@
     transition: none;
   }
 }
+
+.uploadBtn {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.uploadBtn:hover { background: var(--surface-3); }
+.uploadBtn:focus-within { outline: 2px solid var(--ring); outline-offset: 2px; }

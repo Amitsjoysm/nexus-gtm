@@ -91,8 +91,7 @@ import type {
   NetworkSearchHit,
   NetworkIntroPath,
   NetworkIngestResult,
-  NetworkImportIdentity,
-  NetworkImportTouchpoint,
+  NetworkOAuthStart,
 } from "./types";
 
 export class ApiError extends Error {
@@ -793,20 +792,14 @@ export class ApiClient {
       { method: "POST", signal },
     );
   }
-  importNetworkBatch(
-    id: string,
-    body: {
-      identities: NetworkImportIdentity[];
-      touchpoints?: NetworkImportTouchpoint[];
-      next_cursor?: string | null;
-    },
-    signal?: AbortSignal,
-  ) {
-    return this.request<NetworkIngestResult>(`/network/accounts/${id}/import`, {
-      method: "POST",
-      body,
-      signal,
-    });
+  networkOAuthStart(provider: "google" | "microsoft", signal?: AbortSignal) {
+    return this.request<NetworkOAuthStart>(`/network/oauth/${provider}/start`, { signal });
+  }
+  importLinkedInCsv(accountId: string, file: File, signal?: AbortSignal) {
+    const form = new FormData();
+    form.set("file", file);
+    return this.requestForm<NetworkIngestResult>(
+      `/network/accounts/${accountId}/import-linkedin`, form, signal);
   }
   searchNetwork(query: string, limit = 20, signal?: AbortSignal) {
     return this.request<NetworkSearchHit[]>("/network/search", {
