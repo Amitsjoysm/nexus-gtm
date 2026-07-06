@@ -153,6 +153,8 @@ class WebNewsSource(SignalSource):
 
         out: list[RawSignal] = []
         seen: set[str] = set()
+        now = utcnow()
+        anchor = (account.domain or account.name or "").strip().lower().replace(" ", "")
         for h in hits:
             title = (h.get("title") or "").strip()
             snippet = (h.get("snippet") or "").strip()
@@ -162,11 +164,25 @@ class WebNewsSource(SignalSource):
             # ("Banking News and Analysis | Banking Dive") — the exact junk that polluted the inbox.
             if not any(k in hay for k in keys):
                 continue
-            dedupe_key = f"news:{url or title}"
-            if not title or dedupe_key in seen:
+            if not title:
+                continue
+            kind, strength = _classify_news(f"{title} {snippet}")
+            # Event-bucketed dedupe, NOT per-URL: the same funding round gets re-covered by many
+            # outlets under fresh URLs for weeks, and per-URL keys re-alerted completed accounts on
+            # every refresh (observed: 9 distinct "funding" URLs for one account in two weeks). One
+            # event-class alert per account per window: funding/hiring monthly, other news weekly.
+            # The URL still lands on the signal itself for the timeline.
+            if kind in ("funding", "hiring"):
+                dedupe_key = f"{kind}:{anchor}:{now:%Y-%m}"
+            else:
+                # Separate buckets for real events (acquires/partners/launches, >=0.5) vs weak
+                # mentions, so a Monday press mention can't shadow a Wednesday acquisition.
+                iso = now.isocalendar()
+                tier = "evt" if strength >= 0.5 else "mention"
+                dedupe_key = f"news:{anchor}:{iso[0]}-W{iso[1]:02d}:{tier}"
+            if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
-            kind, strength = _classify_news(f"{title} {snippet}")
             out.append(
                 RawSignal(
                     kind=kind,

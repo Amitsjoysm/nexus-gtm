@@ -422,10 +422,6 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
         else datetime.now(timezone.utc)
     )
     interval = timedelta(hours=settings.icp_discovery_interval_hours)
-    pool = max(
-        settings.icp_discovery_daily_count * settings.icp_discovery_pool_multiplier,
-        settings.icp_discovery_daily_count,
-    )
 
     async with get_sessionmaker()() as session:
         tenant_ids = (
@@ -441,16 +437,29 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
             last = tenant.icp_discovery_last_run_at if tenant else None
             if last is not None and ensure_aware(last) > now - interval:
                 continue  # already ran this interval
+            # Per-workspace daily target (SDR-selectable in Settings); NULL -> platform default.
+            target = (
+                tenant.icp_daily_count
+                if tenant is not None and tenant.icp_daily_count
+                else settings.icp_discovery_daily_count
+            )
+            pool = max(target * settings.icp_discovery_pool_multiplier, target)
             res = await auto_discover_for_tenant(
                 ts,
-                target_count=settings.icp_discovery_daily_count,
+                target_count=target,
                 min_fit=settings.icp_discovery_min_fit,
                 pool_limit=pool,
             )
             # Only consume the per-interval slot when discovery actually ran. A tenant with no ICP
             # yet is re-checked cheaply each tick, so discovery fires the moment an ICP is added.
-            if tenant is not None and res.get("skipped") != "no_icp":
-                tenant.icp_discovery_last_run_at = now
+            if res.get("skipped") == "no_icp":
+                # Surface the paused state in-app instead of skipping silently — the #1 reason
+                # "no new accounts are showing up" reports reach support.
+                await _ensure_icp_paused_alert(ts)
+            else:
+                if tenant is not None:
+                    tenant.icp_discovery_last_run_at = now
+                await _resolve_icp_paused_alert(ts)
             discovered += res.get("discovered", 0)
     return {"discovered": discovered, "tenants": len(tenant_ids)}
 
@@ -527,6 +536,44 @@ def _token_expired(bundle: dict, *, now: int, skew_s: int = 60) -> bool:
     """True when there's an expiry and it's within ``skew_s`` of now (refresh proactively)."""
     exp = bundle.get("expires_at")
     return exp is not None and int(exp) <= now + skew_s
+
+
+async def _ensure_icp_paused_alert(ts) -> None:
+    """One standing in-app alert while daily discovery is paused for lack of an ICP.
+
+    Idempotent: created only when no open one exists, so the heartbeat can call this every
+    tick without spamming the Alerts feed."""
+    from nexus.models.alerts import Alert
+
+    existing = await ts.first(Alert, Alert.source == "icp_discovery", Alert.status == "open")
+    if existing is not None:
+        return
+    ts.add(
+        Alert(
+            tenant_id=ts.tenant_id,
+            title="Daily account discovery is paused — no ICP defined",
+            body=(
+                "Automation is on, but this workspace has no Ideal Customer Profile, so the "
+                "daily net-new account discovery has nothing to match against. Define your "
+                "industries, company-size band, and geography on the Relevance page and "
+                "discovery starts on the next daily run."
+            ),
+            severity="warning",
+            channel="in_app",
+            source="icp_discovery",
+        )
+    )
+
+
+async def _resolve_icp_paused_alert(ts) -> None:
+    """Auto-ack the standing paused alert once discovery actually runs (ICP was defined)."""
+    from nexus.core.db import utcnow as _utcnow
+    from nexus.models.alerts import Alert
+
+    existing = await ts.first(Alert, Alert.source == "icp_discovery", Alert.status == "open")
+    if existing is not None:
+        existing.status = "acked"
+        existing.acked_at = _utcnow()
 
 
 HANDLERS: dict[str, Handler] = {

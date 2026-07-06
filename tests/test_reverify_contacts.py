@@ -91,3 +91,47 @@ async def test_reverify_contacts_all_includes_verified():
 
     assert result["checked"] == 1
     assert c.email_status == STATUS_INVALID  # re-checked even though it had a verdict
+
+
+async def test_reverify_stamps_checked_at_even_when_status_unchanged():
+    """unknown -> unknown used to look like a no-op to the SDR; the check time is now recorded."""
+    c = Contact(tenant_id="t", account_id="a", full_name="U", email="u@x.com",
+                email_status=STATUS_UNKNOWN)
+    changed = await reverify_contact(c, _verify({}))  # fake returns unknown again
+    assert changed is False
+    assert c.email_checked_at is not None
+
+
+async def test_full_pass_skips_fresh_valid_addresses():
+    """A confirmed-valid address checked within the 30-day cool-down is not re-probed on a full
+    pass; stale-valid and unknown addresses still are."""
+    from datetime import timedelta
+
+    from nexus.core.db import utcnow
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="A", domain="a.co")
+        ts.add(acc)
+        await ts.flush()
+        fresh = Contact(tenant_id=tid, account_id=acc.id, full_name="F", email="f@a.co",
+                        email_status=STATUS_VALID, email_checked_at=utcnow())
+        stale = Contact(tenant_id=tid, account_id=acc.id, full_name="S", email="s@a.co",
+                        email_status=STATUS_VALID,
+                        email_checked_at=utcnow() - timedelta(days=45))
+        unk = Contact(tenant_id=tid, account_id=acc.id, full_name="U", email="u@a.co",
+                      email_status=STATUS_UNKNOWN)
+        ts.add_all([fresh, stale, unk])
+        await ts.flush()
+
+        seen: list[str] = []
+
+        async def verify(email: str) -> EmailVerification:
+            seen.append(email)
+            return EmailVerification(email=email, status=STATUS_VALID, confidence=0.9,
+                                     source="fake")
+
+        res = await reverify_contacts(ts, verify=verify, only_unverified=False)
+        assert "f@a.co" not in seen                 # fresh valid skipped (cool-down)
+        assert {"s@a.co", "u@a.co"} <= set(seen)    # stale valid + unknown re-checked
+        assert res["checked"] == 2

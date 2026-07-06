@@ -33,6 +33,9 @@ class Tenant(IdMixin, TimestampMixin, Base):
     icp_discovery_last_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Per-workspace target for net-new strict-ICP accounts per day (SDR-selectable in Settings).
+    # NULL → the platform default (NEXUS_ICP_DISCOVERY_DAILY_COUNT, 20).
+    icp_daily_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Per-workspace outbound email (SMTP) config so cadences send from the customer's own
     # Gmail/Outlook mailbox. Shape: {provider, host, port, username, from_email, from_name,
     # password, use_tls, enabled, verified_at}. The password is write-only — never serialized

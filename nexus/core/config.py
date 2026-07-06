@@ -121,6 +121,14 @@ class Settings(BaseSettings):
     # press mention, 0.4) still persist to the account timeline and feed Plays, but don't clutter
     # the rep's daily task list — only meaningful events (funding/hiring/intent) become tasks.
     inbox_min_signal_strength: float = 0.5
+    # Post-completion re-alert cool-down: after a rep marks an account's task done, a NEW inbox
+    # task for that account is suppressed for this many days (news churn re-covers the same event
+    # under fresh URLs). New signals still land on the timeline and feed Plays; only the Inbox
+    # re-alert is held back. 0 disables the cool-down.
+    inbox_realert_cooldown_days: int = 7
+    # Once an address is verified 'valid', re-verification of that email is allowed only after
+    # this many days — a confirmed verdict doesn't decay faster, and repeat checks burn quota.
+    email_reverify_cooldown_days: int = 30
     signal_sources: str = "demo"               # ordered signal sources
     search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend

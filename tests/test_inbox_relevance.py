@@ -69,3 +69,29 @@ async def test_inbox_reopen_round_trips():
         reopened = await svc.reopen(ts, task.id)
         assert reopened.status == "open"
         assert len(await svc.list_tasks(ts, status="open")) == 1
+
+
+async def test_web_news_dedupes_by_event_bucket_not_url():
+    """Two funding stories under different URLs are ONE monthly funding signal; a classified
+    event and a weak mention keep separate weekly buckets (the mention can't shadow the event)."""
+    from nexus.ingestion.sources import WebNewsSource
+    from nexus.models.account import Account
+
+    class FakeBrowser:
+        async def search(self, query, limit=6):
+            return [
+                {"title": "Pluto raises $30M Series B", "snippet": "", "url": "https://a.com/1"},
+                {"title": "Pluto raised a new funding round", "snippet": "", "url": "https://b.com/2"},
+                {"title": "Pluto launches a new product", "snippet": "", "url": "https://c.com/3"},
+                {"title": "Pluto covered in the market roundup", "snippet": "", "url": "https://d.com/4"},
+            ]
+
+    acc = Account(tenant_id="t", name="Pluto", domain="pluto.co")
+    out = await WebNewsSource(FakeBrowser()).fetch(acc)
+
+    kinds = [s.kind for s in out]
+    assert kinds.count("funding") == 1  # both funding URLs collapsed into one event signal
+    keys = {s.dedupe_key for s in out}
+    assert any(k.startswith("funding:pluto.co:") for k in keys)  # monthly bucket
+    assert any(k.startswith("news:pluto.co:") and k.endswith(":evt") for k in keys)
+    assert any(k.endswith(":mention") for k in keys)  # weak mention keeps its own bucket

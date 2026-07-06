@@ -88,6 +88,9 @@ async def list_contacts(
             email=contact.email,
             email_status=contact.email_status,
             email_confidence=contact.email_confidence,
+            email_checked_at=(
+                contact.email_checked_at.isoformat() if contact.email_checked_at else None
+            ),
             phone=contact.phone,
             phone_confidence=contact.phone_confidence,
             linkedin_url=contact.linkedin_url,

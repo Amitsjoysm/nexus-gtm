@@ -194,3 +194,79 @@ async def test_handler_no_icp_tenant_does_not_consume_daily_slot(monkeypatch):
     async with get_sessionmaker()() as sess:
         t = await sess.get(Tenant, tid)
         assert t.icp_discovery_last_run_at is None  # slot preserved (no ICP -> no run)
+
+
+async def test_handler_uses_per_tenant_daily_count(monkeypatch):
+    """The SDR-selected per-workspace daily target overrides the platform default."""
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.identity import Tenant
+
+    s = get_settings()
+    monkeypatch.setattr(s, "automation_enabled", True)
+    monkeypatch.setattr(s, "icp_discovery_enabled", True)
+
+    tid = await make_tenant()
+    async with get_sessionmaker()() as sess:
+        t = await sess.get(Tenant, tid)
+        t.automation_enabled = True
+        t.icp_daily_count = 5
+        await sess.commit()
+    async with tenant_session(tid) as ts:
+        await _with_profile(ts, tid)
+
+    calls: list[dict] = []
+
+    async def fake_discover(ts, *, target_count, min_fit, pool_limit, search=None):
+        calls.append({"target": target_count, "pool": pool_limit})
+        return {"discovered": 0, "screened": 0, "account_ids": []}
+
+    import nexus.discovery.auto as auto_mod
+
+    monkeypatch.setattr(auto_mod, "auto_discover_for_tenant", fake_discover)
+    await handle_discover_icp_accounts({})
+
+    assert calls and calls[0]["target"] == 5
+    assert calls[0]["pool"] == 5 * s.icp_discovery_pool_multiplier
+
+
+async def test_handler_raises_paused_alert_once_for_no_icp_tenant(monkeypatch):
+    """A no-ICP tenant gets ONE standing in-app alert (not one per tick), and it auto-acks
+    once discovery actually runs."""
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.alerts import Alert
+    from nexus.models.identity import Tenant
+
+    s = get_settings()
+    monkeypatch.setattr(s, "automation_enabled", True)
+    monkeypatch.setattr(s, "icp_discovery_enabled", True)
+
+    tid = await make_tenant()
+    async with get_sessionmaker()() as sess:
+        t = await sess.get(Tenant, tid)
+        t.automation_enabled = True  # opted in, no ICP defined
+        await sess.commit()
+
+    await handle_discover_icp_accounts({})
+    await handle_discover_icp_accounts({})  # second tick must not duplicate
+
+    async with tenant_session(tid) as ts:
+        alerts = await ts.list(Alert, Alert.source == "icp_discovery", Alert.status == "open")
+        assert len(alerts) == 1
+        assert "no ICP" in alerts[0].title
+
+    # Define the ICP -> next run resolves the standing alert.
+    async with tenant_session(tid) as ts:
+        await _with_profile(ts, tid)
+
+    async def fake_discover(ts, *, target_count, min_fit, pool_limit, search=None):
+        return {"discovered": 0, "screened": 0, "account_ids": []}
+
+    import nexus.discovery.auto as auto_mod
+
+    monkeypatch.setattr(auto_mod, "auto_discover_for_tenant", fake_discover)
+    await handle_discover_icp_accounts({})
+
+    async with tenant_session(tid) as ts:
+        assert await ts.list(Alert, Alert.source == "icp_discovery", Alert.status == "open") == []
