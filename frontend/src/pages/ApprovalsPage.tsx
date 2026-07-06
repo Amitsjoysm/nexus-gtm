@@ -49,6 +49,16 @@ export function ApprovalsPage() {
         description="The human gate before any AI-drafted message leaves the building. Review, redraft, and approve or reject each send."
       />
 
+      {!mailboxes.loading && (mailboxes.data ?? []).length === 0 && (
+        <div className={styles.warning} role="alert">
+          <Icons.AlertTriangleIcon />
+          <span>
+            No sending mailbox is connected, so approving records the send without delivering an
+            email. Ask an admin to add one under Settings → Sending mailboxes.
+          </span>
+        </div>
+      )}
+
       <Tabs
         aria-label="Approval status"
         value={status}

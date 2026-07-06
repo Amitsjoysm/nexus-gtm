@@ -577,6 +577,14 @@ export class ApiClient {
       signal,
     });
   }
+  /** How many net-new strict-ICP accounts discovery should add per day for this workspace. */
+  setIcpDailyCount(count: number, signal?: AbortSignal) {
+    return this.request<AutomationSettings>("/workspace/automation", {
+      method: "PATCH",
+      body: { icp_daily_count: count },
+      signal,
+    });
+  }
   getEmailSettings(signal?: AbortSignal) {
     return this.request<EmailSettings>("/workspace/email", { signal });
   }

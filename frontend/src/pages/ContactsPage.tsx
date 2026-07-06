@@ -21,6 +21,7 @@ import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { strengthMeta } from "@/lib/display";
+import { timeAgo } from "@/lib/format";
 import type { CallTask, ContactLookalike, WorkspaceContact } from "@/lib/types";
 import styles from "./ContactsPage.module.css";
 
@@ -32,6 +33,18 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> 
   unknown: "neutral",
   invalid: "danger",
 };
+
+// Mirrors NEXUS_EMAIL_REVERIFY_COOLDOWN_DAYS: a confirmed-valid address is re-checkable only
+// after this window (the backend enforces it with a 429; this just saves the click).
+const REVERIFY_COOLDOWN_DAYS = 30;
+const verifiedFresh = (c: WorkspaceContact): boolean =>
+  c.email_status === "valid" &&
+  !!c.email_checked_at &&
+  Date.now() - Date.parse(c.email_checked_at) < REVERIFY_COOLDOWN_DAYS * 86_400_000;
+const reverifyDueDate = (c: WorkspaceContact): string =>
+  new Date(
+    Date.parse(c.email_checked_at as string) + REVERIFY_COOLDOWN_DAYS * 86_400_000,
+  ).toLocaleDateString();
 
 export function ContactsPage() {
   const api = useApiClient();
@@ -195,6 +208,20 @@ export function ContactsPage() {
           ),
       },
       {
+        key: "email_checked_at",
+        header: "Checked",
+        hideOnMobile: true,
+        sortValue: (c) => c.email_checked_at,
+        render: (c) =>
+          c.email_checked_at ? (
+            <span className={styles.muted} title={new Date(c.email_checked_at).toLocaleString()}>
+              {timeAgo(c.email_checked_at)}
+            </span>
+          ) : (
+            <span className={styles.muted}>never</span>
+          ),
+      },
+      {
         key: "linkedin_url",
         header: "LinkedIn",
         hideOnMobile: true,
@@ -223,6 +250,12 @@ export function ContactsPage() {
               size="sm"
               variant="ghost"
               loading={busyId === c.id}
+              disabled={verifiedFresh(c)}
+              title={
+                verifiedFresh(c)
+                  ? `Verified valid ${timeAgo(c.email_checked_at as string)} — re-verification opens ${reverifyDueDate(c)}`
+                  : undefined
+              }
               onClick={() => verify(c)}
               aria-label={`Verify ${c.full_name}'s email`}
             >

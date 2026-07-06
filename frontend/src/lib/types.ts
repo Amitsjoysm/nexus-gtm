@@ -156,6 +156,8 @@ export interface WorkspaceContact {
   email: string | null;
   email_status: string | null;
   email_confidence: number;
+  /** ISO timestamp of the last deliverability check (any verdict). null = never checked. */
+  email_checked_at: string | null;
   phone: string | null;
   phone_confidence: number;
   linkedin_url: string | null;
@@ -941,6 +943,9 @@ export interface CadenceReport {
 // ---- automation + CRM sync (settings) ----
 export interface AutomationSettings {
   automation_enabled: boolean;
+  /** Per-workspace daily target for net-new ICP accounts. null = platform default. */
+  icp_daily_count: number | null;
+  icp_daily_default: number;
 }
 
 export interface EmailSettings {
