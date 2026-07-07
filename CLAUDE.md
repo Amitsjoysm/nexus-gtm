@@ -23,6 +23,36 @@ real app used by millions."
 - Reduce external dependencies. Prefer the standard library and what's already vendored.
 - Every endpoint is tenant-scoped and RBAC-gated. Never bypass `TenantSession`.
 
+## Relationship Graph (`nexus/network/`)
+
+A tenant-scoped, deduped graph of each rep's real network (contacts + calendar), used for
+NL "who do we know" search (A1) and warm-intro path mapping (A4). Additive subsystem — never
+touches Account/Contact/Inbox/Cadence.
+
+- **Ingestion is provider-based**: `nexus/network/connectors/` — `google.py` / `microsoft.py`
+  are real OAuth connectors (Contacts + Calendar, incremental sync, token refresh);
+  `fixture.py` is the **offline test double only**, never user-selectable in the product.
+  LinkedIn has no compliant live API — it ingests via a member-supplied `Connections.csv`
+  export (`nexus/network/linkedin_csv.py`).
+- **OAuth security**: `nexus/network/oauth.py` (PKCE + signed short-TTL state JWT) and
+  `nexus/network/crypto.py` (Fernet token-at-rest encryption, key derived from `secret_key`
+  unless `NEXUS_NETWORK_TOKEN_ENC_KEY` is set). Tokens are never serialized to the client.
+- **Resolution/scoring are deterministic, no LLM**: `resolution.py` (identity dedupe by
+  normalized email, else name+company) and `strength.py` (0–100 connection strength from
+  relationship tier + recency + frequency + reciprocity).
+- **Privacy**: pooling is private-by-default per source account; `service.visible_edges_where`
+  is the single predicate gating all cross-member reads (search, intro-paths, person lookup).
+- API: `nexus/api/routers/network.py` (`/network/...`). Frontend: `frontend/src/pages/NetworkPage.tsx`.
+- New provider credentials go in `NEXUS_NETWORK_*` env vars — inert (clear 400) until set,
+  never a fake fallback.
+
+## Migrations
+
+Alembic under `migrations/versions/`. Latest: `0019_verification_icp_controls` (contact
+verification timestamp + per-tenant ICP daily-discovery count) on top of
+`0018_relationship_graph` (the Network tables above). Every tenant-scoped table automatically
+gets RLS via `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
+
 ## Frontend skills — USE THESE for any UI work
 
 Four design/frontend skills are installed in `~/.claude/skills/`. Invoke them via the `Skill`
