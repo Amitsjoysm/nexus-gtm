@@ -1,6 +1,9 @@
 """Intelligent Inbox service: turn signals into prioritized, actionable tasks."""
 from __future__ import annotations
 
+from datetime import timedelta
+
+from nexus.core.config import get_settings
 from nexus.core.db import ensure_aware, utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.inbox.prioritizer import compute_priority
@@ -84,6 +87,28 @@ class InboxService:
                 open_task.suggested_action = action
             await ts.flush()
             return open_task
+
+        # Post-completion cool-down: if the rep completed this account's work recently, a fresh
+        # headline (usually the same event re-covered under a new URL) must not resurrect it the
+        # same week. The signal still lands on the timeline and feeds Plays — only the re-alert
+        # is held back. The rep can always reopen a done task by hand.
+        cooldown_days = get_settings().inbox_realert_cooldown_days
+        if cooldown_days > 0:
+            recent_done = (
+                await ts.session.scalars(
+                    ts.select(
+                        InboxTask,
+                        InboxTask.account_id == account.id,
+                        InboxTask.status == "done",
+                    )
+                    .order_by(InboxTask.updated_at.desc())
+                    .limit(1)
+                )
+            ).first()
+            if recent_done is not None:
+                done_at = ensure_aware(recent_done.updated_at)
+                if done_at is not None and utcnow() - done_at < timedelta(days=cooldown_days):
+                    return recent_done
 
         task = InboxTask(
             tenant_id=ts.tenant_id,

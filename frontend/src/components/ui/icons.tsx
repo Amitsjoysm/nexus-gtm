@@ -272,3 +272,12 @@ export const TrophyIcon = (props: SVGProps<SVGSVGElement>) => (
     <path d="M12 13v3M9 20h6M10 16h4l.5 4h-5l.5-4Z" />
   </Svg>
 );
+
+export const NetworkIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <circle cx="6" cy="6" r="2.3" />
+    <circle cx="18" cy="6" r="2.3" />
+    <circle cx="12" cy="18" r="2.3" />
+    <path d="M8 6.4h8M7.4 7.9 10.8 16M16.6 7.9 13.2 16" />
+  </Svg>
+);

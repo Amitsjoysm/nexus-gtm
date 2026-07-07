@@ -122,3 +122,45 @@ async def test_complete_marks_done():
         done = await svc.complete(ts, task.id)
         assert done.status == "done"
         assert await svc.list_open(ts) == []
+
+
+async def test_completed_account_not_realerted_within_cooldown(monkeypatch):
+    """A fresh signal (same event, new URL) must not resurrect an account the rep completed this
+    week. With the cool-down disabled, the same new signal alerts again — proving the suppression
+    is the cool-down, not the per-signal dedupe."""
+    from nexus.core.config import get_settings
+
+    tid = await make_tenant()
+    svc = get_inbox_service()
+    async with tenant_session(tid) as ts:
+        pluto = Account(tenant_id=tid, name="Pluto", domain="pluto.co")
+        ts.add(pluto)
+        await ts.flush()
+
+        s1 = SignalEvent(tenant_id=tid, account_id=pluto.id, kind="funding", source="t",
+                         title="Pluto raises $30M", strength=0.85, dedupe_key="f1",
+                         occurred_at=utcnow())
+        ts.add(s1)
+        await ts.flush()
+        t1 = await svc.create_from_signal(ts, s1, pluto, composite_score=80)
+        await svc.complete(ts, t1.id)
+
+        # A DIFFERENT signal lands hours later (another outlet covering the same round).
+        s2 = SignalEvent(tenant_id=tid, account_id=pluto.id, kind="funding", source="t",
+                         title="Pluto secures Series B", strength=0.85, dedupe_key="f2",
+                         occurred_at=utcnow())
+        ts.add(s2)
+        await ts.flush()
+        res = await svc.create_from_signal(ts, s2, pluto, composite_score=80)
+        assert res.id == t1.id and res.status == "done"  # suppressed, not resurrected
+        assert await svc.list_open(ts) == []
+
+        # Cool-down off -> the next new signal creates a fresh open task again.
+        s3 = SignalEvent(tenant_id=tid, account_id=pluto.id, kind="funding", source="t",
+                         title="Pluto funding follow-up", strength=0.85, dedupe_key="f3",
+                         occurred_at=utcnow())
+        ts.add(s3)
+        await ts.flush()
+        monkeypatch.setattr(get_settings(), "inbox_realert_cooldown_days", 0)
+        res3 = await svc.create_from_signal(ts, s3, pluto, composite_score=80)
+        assert res3.id != t1.id and res3.status == "open"

@@ -41,6 +41,7 @@ const InboxPage = lazyPage(() => import("@/pages/InboxPage"), "InboxPage");
 const AccountsPage = lazyPage(() => import("@/pages/AccountsPage"), "AccountsPage");
 const AccountDetailPage = lazyPage(() => import("@/pages/AccountDetailPage"), "AccountDetailPage");
 const ContactsPage = lazyPage(() => import("@/pages/ContactsPage"), "ContactsPage");
+const NetworkPage = lazyPage(() => import("@/pages/NetworkPage"), "NetworkPage");
 const CallsPage = lazyPage(() => import("@/pages/CallsPage"), "CallsPage");
 const SignalsPage = lazyPage(() => import("@/pages/SignalsPage"), "SignalsPage");
 const AlertsPage = lazyPage(() => import("@/pages/AlertsPage"), "AlertsPage");
@@ -108,6 +109,7 @@ export function App() {
                 <Route path="/accounts" element={<AccountsPage />} />
                 <Route path="/accounts/:id" element={<AccountDetailPage />} />
                 <Route path="/contacts" element={<ContactsPage />} />
+                <Route path="/network" element={<NetworkPage />} />
                 <Route path="/calls" element={<CallsPage />} />
                 <Route path="/lists" element={<ListsPage />} />
                 <Route

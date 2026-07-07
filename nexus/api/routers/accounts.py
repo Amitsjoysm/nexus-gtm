@@ -323,6 +323,22 @@ async def enrich_contact(
     contact = await ts.get(Contact, contact_id)
     if contact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    # Re-verification cool-down: a confirmed-valid address doesn't decay in 30 days, and repeat
+    # clicks must not burn verifier quota. 429 tells the SDR exactly when the next check is due.
+    from datetime import timedelta
+
+    from nexus.core.config import get_settings
+    from nexus.core.db import ensure_aware, utcnow
+
+    checked = ensure_aware(contact.email_checked_at)
+    cooldown = timedelta(days=get_settings().email_reverify_cooldown_days)
+    if contact.email_status == "valid" and checked is not None and utcnow() - checked < cooldown:
+        next_due = checked + cooldown
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"This email was verified valid on {checked:%d %b %Y}; "
+            f"re-verification is available on {next_due:%d %b %Y}.",
+        )
     await get_enricher().enrich_contact(ts, contact)
     # Social insights for person-level personalization (no-op under the stub; lights up with Apify).
     from nexus.personalization.provider import refresh_person_insights

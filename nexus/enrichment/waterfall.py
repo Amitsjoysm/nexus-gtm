@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 
+from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.enrichment.providers import (
     EnrichmentProvider,
@@ -99,6 +100,7 @@ class WaterfallEnricher:
             # computed and then thrown away, leaving every enriched contact "unverified".
             if merged.email_status:
                 contact.email_status = merged.email_status
+                contact.email_checked_at = utcnow()
         if merged.phone and merged.phone_confidence >= contact.phone_confidence:
             contact.phone, contact.phone_confidence = merged.phone, merged.phone_confidence
         if merged.found:

@@ -87,6 +87,11 @@ import type {
   TenantSummary,
   TokenResponse,
   Workspace,
+  NetworkAccount,
+  NetworkSearchHit,
+  NetworkIntroPath,
+  NetworkIngestResult,
+  NetworkOAuthStart,
 } from "./types";
 
 export class ApiError extends Error {
@@ -572,6 +577,14 @@ export class ApiClient {
       signal,
     });
   }
+  /** How many net-new strict-ICP accounts discovery should add per day for this workspace. */
+  setIcpDailyCount(count: number, signal?: AbortSignal) {
+    return this.request<AutomationSettings>("/workspace/automation", {
+      method: "PATCH",
+      body: { icp_daily_count: count },
+      signal,
+    });
+  }
   getEmailSettings(signal?: AbortSignal) {
     return this.request<EmailSettings>("/workspace/email", { signal });
   }
@@ -758,6 +771,53 @@ export class ApiClient {
   }
   createWorkspace(body: NewWorkspaceRequest, signal?: AbortSignal) {
     return this.request<TokenResponse>("/auth/workspaces", { method: "POST", body, signal });
+  }
+
+  // ---- network (relationship graph) ----
+  listNetworkAccounts(signal?: AbortSignal) {
+    return this.request<NetworkAccount[]>("/network/accounts", { signal });
+  }
+  connectNetworkAccount(
+    body: { provider: string; external_account_id: string; display_email?: string },
+    signal?: AbortSignal,
+  ) {
+    return this.request<NetworkAccount>("/network/accounts", { method: "POST", body, signal });
+  }
+  patchNetworkAccount(
+    id: string,
+    body: { pooling_enabled?: boolean; status?: string },
+    signal?: AbortSignal,
+  ) {
+    return this.request<NetworkAccount>(`/network/accounts/${id}`, {
+      method: "PATCH",
+      body,
+      signal,
+    });
+  }
+  syncNetworkAccount(id: string, signal?: AbortSignal) {
+    return this.request<{ enqueued: boolean; account_id: string }>(
+      `/network/accounts/${id}/sync`,
+      { method: "POST", signal },
+    );
+  }
+  networkOAuthStart(provider: "google" | "microsoft", signal?: AbortSignal) {
+    return this.request<NetworkOAuthStart>(`/network/oauth/${provider}/start`, { signal });
+  }
+  importLinkedInCsv(accountId: string, file: File, signal?: AbortSignal) {
+    const form = new FormData();
+    form.set("file", file);
+    return this.requestForm<NetworkIngestResult>(
+      `/network/accounts/${accountId}/import-linkedin`, form, signal);
+  }
+  searchNetwork(query: string, limit = 20, signal?: AbortSignal) {
+    return this.request<NetworkSearchHit[]>("/network/search", {
+      method: "POST",
+      body: { query, limit },
+      signal,
+    });
+  }
+  networkIntroPaths(personId: string, signal?: AbortSignal) {
+    return this.request<NetworkIntroPath[]>(`/network/people/${personId}/intro-paths`, { signal });
   }
 
   /**

@@ -121,6 +121,14 @@ class Settings(BaseSettings):
     # press mention, 0.4) still persist to the account timeline and feed Plays, but don't clutter
     # the rep's daily task list — only meaningful events (funding/hiring/intent) become tasks.
     inbox_min_signal_strength: float = 0.5
+    # Post-completion re-alert cool-down: after a rep marks an account's task done, a NEW inbox
+    # task for that account is suppressed for this many days (news churn re-covers the same event
+    # under fresh URLs). New signals still land on the timeline and feed Plays; only the Inbox
+    # re-alert is held back. 0 disables the cool-down.
+    inbox_realert_cooldown_days: int = 7
+    # Once an address is verified 'valid', re-verification of that email is allowed only after
+    # this many days — a confirmed verdict doesn't decay faster, and repeat checks burn quota.
+    email_reverify_cooldown_days: int = 30
     signal_sources: str = "demo"               # ordered signal sources
     search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend
@@ -215,6 +223,20 @@ class Settings(BaseSettings):
     # with compatible pinned versions and a scraper in front.
     metrics_enabled: bool = False
 
+    # Relationship-graph network connectors (real OAuth + token encryption). Empty default →
+    # the provider is inert (its /oauth/start returns 400) — never a fake-data fallback.
+    network_google_client_id: str = ""
+    network_google_client_secret: str = ""
+    network_microsoft_client_id: str = ""
+    network_microsoft_client_secret: str = ""
+    network_microsoft_tenant: str = "common"   # Azure tenant id, or "common" (work + personal)
+    # Base URL the OAuth provider redirects back to, e.g. https://app.example.com. The callback
+    # path (/api/network/oauth/{provider}/callback) is appended; never client-supplied.
+    network_oauth_redirect_base: str = ""
+    # Fernet key (urlsafe-b64, 32 bytes) for encrypting stored OAuth tokens. Empty → derived
+    # deterministically from secret_key, so tokens are always encrypted with no extra secret.
+    network_token_enc_key: str = ""
+
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
     # A selected engine with no key degrades to keyless DuckDuckGo so search keeps working.
@@ -291,6 +313,20 @@ class Settings(BaseSettings):
             raise ValueError(
                 "NEXUS_SECRET_KEY must be set to a strong value outside local/test"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_token_enc_key(self) -> "Settings":
+        key = (self.network_token_enc_key or "").strip()
+        if key:
+            from cryptography.fernet import Fernet
+
+            try:
+                Fernet(key.encode())
+            except Exception as exc:  # malformed key must fail loudly at startup, not silently at runtime
+                raise ValueError(
+                    "NEXUS_NETWORK_TOKEN_ENC_KEY must be a valid urlsafe-base64 32-byte Fernet key"
+                ) from exc
         return self
 
 

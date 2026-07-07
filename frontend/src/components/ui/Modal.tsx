@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
@@ -32,12 +32,23 @@ export function Modal({ open, onClose, title, description, children, footer, siz
   const titleId = useId();
   const descId = useId();
 
-  // Trap focus and handle keyboard while open.
-  const onKeyDown = useCallback(
-    (e: KeyboardEvent) => {
+  // The latest onClose lives in a ref so the trap effect depends ONLY on `open`. Callers pass
+  // inline arrows for onClose; if the effect depended on it, any parent re-render while the
+  // dialog is open (every keystroke when form state lives in the parent, poll ticks, toasts)
+  // tore the trap down and re-ran it — the cleanup restored focus OUTSIDE the dialog and the
+  // re-run refocused the close button, which made typing in Cadences/Plays impossible.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    restoreRef.current = document.activeElement as HTMLElement;
+
+    // Trap focus and handle keyboard while open (reads the DOM live; identity-stable).
+    const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -56,20 +67,20 @@ export function Modal({ open, onClose, title, description, children, footer, siz
         e.preventDefault();
         first.focus();
       }
-    },
-    [onClose],
-  );
+    };
 
-  useEffect(() => {
-    if (!open) return;
-    restoreRef.current = document.activeElement as HTMLElement;
     document.addEventListener("keydown", onKeyDown, true);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    // Focus the first focusable element (or the dialog) once mounted.
+    // Initial focus: prefer the first focusable in the BODY (a form's first input), so a dialog
+    // opens ready to type instead of focusing the header's close button.
     const t = window.setTimeout(() => {
       const root = dialogRef.current;
-      const target = root?.querySelector<HTMLElement>(FOCUSABLE) ?? root;
+      const body = root?.querySelector<HTMLElement>("[data-modal-body]");
+      const target =
+        body?.querySelector<HTMLElement>(FOCUSABLE) ??
+        root?.querySelector<HTMLElement>(FOCUSABLE) ??
+        root;
       target?.focus();
     }, 20);
     return () => {
@@ -78,7 +89,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
       window.clearTimeout(t);
       restoreRef.current?.focus?.();
     };
-  }, [open, onKeyDown]);
+  }, [open]);
 
   return createPortal(
     <AnimatePresence>
@@ -112,7 +123,9 @@ export function Modal({ open, onClose, title, description, children, footer, siz
               </div>
               <IconButton label="Close dialog" icon={<XIcon />} onClick={onClose} />
             </div>
-            <div className={styles.body}>{children}</div>
+            <div className={styles.body} data-modal-body>
+              {children}
+            </div>
             {footer && <div className={styles.footer}>{footer}</div>}
           </motion.div>
         </div>

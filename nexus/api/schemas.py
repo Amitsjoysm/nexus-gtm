@@ -152,6 +152,8 @@ class WorkspaceContactOut(BaseModel):
     email: str | None = None
     email_status: str | None = None
     email_confidence: float = 0.0
+    # ISO timestamp of the last deliverability check (any verdict). None = never checked.
+    email_checked_at: str | None = None
     phone: str | None = None
     phone_confidence: float = 0.0
     linkedin_url: str | None = None
@@ -417,11 +419,18 @@ class WorkspaceOut(BaseModel):
 
 
 class AutomationSettingsIn(BaseModel):
-    automation_enabled: bool
+    """Partial update: omitted fields keep their stored value."""
+
+    automation_enabled: bool | None = None
+    # Net-new strict-ICP accounts to discover per day for this workspace (SDR-selectable).
+    icp_daily_count: int | None = Field(default=None, ge=5, le=100)
 
 
 class AutomationSettingsOut(BaseModel):
     automation_enabled: bool
+    # None -> the platform default applies (shown via icp_daily_default).
+    icp_daily_count: int | None = None
+    icp_daily_default: int = 20
 
 
 class EmailSettingsIn(BaseModel):

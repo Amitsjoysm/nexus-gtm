@@ -156,6 +156,8 @@ export interface WorkspaceContact {
   email: string | null;
   email_status: string | null;
   email_confidence: number;
+  /** ISO timestamp of the last deliverability check (any verdict). null = never checked. */
+  email_checked_at: string | null;
   phone: string | null;
   phone_confidence: number;
   linkedin_url: string | null;
@@ -330,6 +332,58 @@ export interface Member {
   full_name: string;
   role: Role;
   workspace_id: string | null;
+}
+
+// ---- Relationship Graph (network) — mirrors nexus/network/schemas.py ----
+export type NetworkProvider = "google" | "microsoft" | "linkedin";
+
+/** A member's connected source account. OAuth is never sent to the client. */
+export interface NetworkAccount {
+  id: string;
+  provider: string;
+  external_account_id: string;
+  display_email: string;
+  status: string;
+  pooling_enabled: boolean;
+  last_synced_at: string | null;
+}
+
+/** A resolved person in the deduped graph (search/intro projection). */
+export interface NetworkPersonSummary {
+  id: string;
+  primary_email: string | null;
+  full_name: string;
+  title: string;
+  company: string;
+  location: string;
+}
+
+/** One NL-search result: a known person ranked by match × best visible connection strength. */
+export interface NetworkSearchHit {
+  person: NetworkPersonSummary;
+  score: number;
+  best_strength: number;
+  broker_member_ids: string[];
+}
+
+/** A warm-intro path: which teammate can broker the intro, how, and how strongly. */
+export interface NetworkIntroPath {
+  broker_member_id: string;
+  broker_user_id: string;
+  relation: string;
+  strength: number;
+  last_touch_at: string | null;
+  provider: string;
+}
+
+export interface NetworkIngestResult {
+  identities: number;
+  new_persons: number;
+  new_edges: number;
+}
+
+export interface NetworkOAuthStart {
+  authorize_url: string;
 }
 
 export interface Workspace {
@@ -889,6 +943,9 @@ export interface CadenceReport {
 // ---- automation + CRM sync (settings) ----
 export interface AutomationSettings {
   automation_enabled: boolean;
+  /** Per-workspace daily target for net-new ICP accounts. null = platform default. */
+  icp_daily_count: number | null;
+  icp_daily_default: number;
 }
 
 export interface EmailSettings {

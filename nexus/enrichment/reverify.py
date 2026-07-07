@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
 from typing import Awaitable, Callable
 
 from sqlalchemy import or_, select
 
+from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Contact
 from nexus.verification import STATUS_UNKNOWN, STATUS_VALID, EmailVerification
@@ -55,6 +57,9 @@ async def reverify_contact(contact: Contact, verify: Verify) -> bool:
         return False
     changed = verdict.status != contact.email_status
     contact.email_status = verdict.status
+    # Stamp the check time even when the verdict didn't move (unknown→unknown): the SDR sees
+    # "Checked <date>" instead of an apparent no-op, and the cool-down has an anchor.
+    contact.email_checked_at = utcnow()
     if verdict.status == STATUS_VALID and verdict.confidence > (contact.email_confidence or 0.0):
         contact.email_confidence = verdict.confidence
         changed = True
@@ -76,6 +81,20 @@ async def reverify_contacts(
                 Contact.email_status.is_(None),
                 Contact.email_status == "",
                 Contact.email_status == STATUS_UNKNOWN,
+            )
+        )
+    else:
+        # Full pass still honours the cool-down: a confirmed-valid address checked within the
+        # window is skipped (its verdict can't have decayed; re-probing just burns quota).
+        from nexus.core.config import get_settings
+
+        cutoff = utcnow() - timedelta(days=get_settings().email_reverify_cooldown_days)
+        stmt = stmt.where(
+            or_(
+                Contact.email_status.is_(None),
+                Contact.email_status != STATUS_VALID,
+                Contact.email_checked_at.is_(None),
+                Contact.email_checked_at < cutoff,
             )
         )
     contacts = (await ts.session.execute(stmt)).scalars().all()

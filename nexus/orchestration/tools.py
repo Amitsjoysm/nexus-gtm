@@ -15,6 +15,7 @@ import abc
 from dataclasses import dataclass
 
 from nexus.agents.runtime import AgentRuntime
+from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.integrations.email_sender import (
     account_is_configured,
@@ -141,6 +142,7 @@ class ComposeMessageTool(_AgentTool):
                 # Persist the verdict so the inbox can show deliverability without
                 # re-verifying (and so a verdict survives beyond this run).
                 contact.email_status = verdict.status
+                contact.email_checked_at = utcnow()
 
         tc.blackboard["draft"] = {
             "contact_id": contact_id,
@@ -220,6 +222,7 @@ class SendMessageTool(Tool):
             email_status = verdict.status
             if contact is not None:
                 contact.email_status = verdict.status
+                contact.email_checked_at = utcnow()
             if verdict.status == STATUS_INVALID:
                 raise ToolError(f"refusing to send to an undeliverable address ({email})")
 

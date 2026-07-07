@@ -67,6 +67,9 @@ class Contact(IdMixin, TimestampMixin, TenantScoped, Base):
     # Last email-verification verdict ("valid"|"unknown"|"invalid"), stamped whenever the
     # orchestrator verifies this contact. ``None`` = never verified. Drives inbox triage.
     email_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # When the verdict was last refreshed (any status, incl. unknown→unknown re-checks). Shown to
+    # the SDR as "Checked <date>" and drives the re-verification cool-down for valid addresses.
+    email_checked_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     phone_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     enrichment_source: Mapped[str | None] = mapped_column(String(60), nullable=True)
     # Proprietary per-tenant columns (see CustomFieldDef).

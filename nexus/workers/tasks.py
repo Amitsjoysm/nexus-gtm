@@ -422,10 +422,6 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
         else datetime.now(timezone.utc)
     )
     interval = timedelta(hours=settings.icp_discovery_interval_hours)
-    pool = max(
-        settings.icp_discovery_daily_count * settings.icp_discovery_pool_multiplier,
-        settings.icp_discovery_daily_count,
-    )
 
     async with get_sessionmaker()() as session:
         tenant_ids = (
@@ -441,18 +437,143 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
             last = tenant.icp_discovery_last_run_at if tenant else None
             if last is not None and ensure_aware(last) > now - interval:
                 continue  # already ran this interval
+            # Per-workspace daily target (SDR-selectable in Settings); NULL -> platform default.
+            target = (
+                tenant.icp_daily_count
+                if tenant is not None and tenant.icp_daily_count
+                else settings.icp_discovery_daily_count
+            )
+            pool = max(target * settings.icp_discovery_pool_multiplier, target)
             res = await auto_discover_for_tenant(
                 ts,
-                target_count=settings.icp_discovery_daily_count,
+                target_count=target,
                 min_fit=settings.icp_discovery_min_fit,
                 pool_limit=pool,
             )
             # Only consume the per-interval slot when discovery actually ran. A tenant with no ICP
             # yet is re-checked cheaply each tick, so discovery fires the moment an ICP is added.
-            if tenant is not None and res.get("skipped") != "no_icp":
-                tenant.icp_discovery_last_run_at = now
+            if res.get("skipped") == "no_icp":
+                # Surface the paused state in-app instead of skipping silently — the #1 reason
+                # "no new accounts are showing up" reports reach support.
+                await _ensure_icp_paused_alert(ts)
+            else:
+                if tenant is not None:
+                    tenant.icp_discovery_last_run_at = now
+                await _resolve_icp_paused_alert(ts)
             discovered += res.get("discovered", 0)
     return {"discovered": discovered, "tenants": len(tenant_ids)}
+
+
+async def handle_sync_network_account(payload: dict) -> dict:
+    """Pull a member's network source via its connector and fold the batch into the graph.
+
+    OAuth providers: decrypt the stored token bundle, refresh it if the access token is expired
+    (persisting the rotated bundle), then fetch with a valid access token. Connector/API failures
+    are captured on the account (status=error, last_error) and surfaced in the UI, not swallowed.
+    Idempotent: re-running re-upserts identities/edges and advances the sync cursor.
+    """
+    import time
+
+    from nexus.models.network import NetworkSourceAccount
+    from nexus.network.connectors.base import SourceAccountRef
+    from nexus.network.connectors.oauthbase import OAuthConnector
+    from nexus.network.connectors.registry import get_network_connector
+    from nexus.network.crypto import seal_tokens, unseal_tokens
+    from nexus.network.service import ingest_batch
+
+    tid = payload["tenant_id"]
+    account_id = payload["account_id"]
+    async with tenant_session(tid) as ts:
+        acc = await ts.get(NetworkSourceAccount, account_id)
+        if acc is None:
+            return {"error": "account_not_found", "account_id": account_id}
+        try:
+            connector = get_network_connector(acc.provider)
+        except ValueError:
+            # Upload-only / manual source (e.g. linkedin) — no live connector to sync from.
+            return {"skipped": "manual_source", "account_id": account_id}
+
+        oauth_for_fetch: dict = {}
+        if isinstance(connector, OAuthConnector):
+            bundle = unseal_tokens(acc.oauth)
+            # No usable token at all (never connected, or fully revoked) — user must reconnect.
+            if not bundle.get("access_token") and not bundle.get("refresh_token"):
+                acc.status = "error"
+                acc.last_error = "not connected (no token) — reconnect required"
+                return {"error": "not_connected", "account_id": account_id}
+            if _token_expired(bundle, now=int(time.time())) and bundle.get("refresh_token"):
+                try:
+                    new = await connector.refresh(bundle["refresh_token"])
+                except Exception as exc:  # refresh failed → user must reconnect
+                    acc.status = "error"
+                    acc.last_error = f"token refresh failed: {type(exc).__name__}"
+                    return {"error": "refresh_failed", "account_id": account_id}
+                bundle["access_token"] = new.get("access_token", bundle.get("access_token"))
+                if new.get("refresh_token"):
+                    bundle["refresh_token"] = new["refresh_token"]
+                if new.get("expires_in"):
+                    bundle["expires_at"] = int(time.time()) + int(new["expires_in"])
+                acc.oauth = seal_tokens(bundle)
+            oauth_for_fetch = {"access_token": bundle.get("access_token", "")}
+
+        ref = SourceAccountRef(
+            id=acc.id, provider=acc.provider,
+            external_account_id=acc.external_account_id, oauth=oauth_for_fetch,
+        )
+        try:
+            batch = await connector.fetch(ref, acc.sync_cursor)
+        except Exception as exc:
+            acc.status = "error"
+            acc.last_error = f"sync failed: {type(exc).__name__}: {str(exc)[:200]}"
+            return {"error": "fetch_failed", "account_id": account_id}
+        acc.status = "connected"
+        acc.last_error = None
+        res = await ingest_batch(ts, acc, batch)
+    return {"account_id": account_id, **res}
+
+
+def _token_expired(bundle: dict, *, now: int, skew_s: int = 60) -> bool:
+    """True when there's an expiry and it's within ``skew_s`` of now (refresh proactively)."""
+    exp = bundle.get("expires_at")
+    return exp is not None and int(exp) <= now + skew_s
+
+
+async def _ensure_icp_paused_alert(ts) -> None:
+    """One standing in-app alert while daily discovery is paused for lack of an ICP.
+
+    Idempotent: created only when no open one exists, so the heartbeat can call this every
+    tick without spamming the Alerts feed."""
+    from nexus.models.alerts import Alert
+
+    existing = await ts.first(Alert, Alert.source == "icp_discovery", Alert.status == "open")
+    if existing is not None:
+        return
+    ts.add(
+        Alert(
+            tenant_id=ts.tenant_id,
+            title="Daily account discovery is paused — no ICP defined",
+            body=(
+                "Automation is on, but this workspace has no Ideal Customer Profile, so the "
+                "daily net-new account discovery has nothing to match against. Define your "
+                "industries, company-size band, and geography on the Relevance page and "
+                "discovery starts on the next daily run."
+            ),
+            severity="warning",
+            channel="in_app",
+            source="icp_discovery",
+        )
+    )
+
+
+async def _resolve_icp_paused_alert(ts) -> None:
+    """Auto-ack the standing paused alert once discovery actually runs (ICP was defined)."""
+    from nexus.core.db import utcnow as _utcnow
+    from nexus.models.alerts import Alert
+
+    existing = await ts.first(Alert, Alert.source == "icp_discovery", Alert.status == "open")
+    if existing is not None:
+        existing.status = "acked"
+        existing.acked_at = _utcnow()
 
 
 HANDLERS: dict[str, Handler] = {
@@ -465,6 +586,7 @@ HANDLERS: dict[str, Handler] = {
     "sync_crm_due_accounts": handle_sync_crm_due_accounts,
     "send_daily_digests": handle_send_daily_digests,
     "discover_icp_accounts": handle_discover_icp_accounts,
+    "sync_network_account": handle_sync_network_account,
 }
 
 
@@ -530,6 +652,16 @@ async def enqueue_send_daily_digests(*, queue: TaskQueue | None = None) -> None:
 async def enqueue_discover_icp_accounts(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="discover_icp_accounts", payload={}))
+
+
+async def enqueue_sync_network_account(
+    tenant_id: str, account_id: str, *, queue: TaskQueue | None = None
+) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(
+        Job(name="sync_network_account",
+            payload={"tenant_id": tenant_id, "account_id": account_id})
+    )
 
 
 async def dispatch(job: Job) -> dict:

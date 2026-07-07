@@ -69,23 +69,29 @@ export function SettingsPage() {
             skeleton={<Skeleton width="100%" height={64} />}
           >
             {(data) => (
-              <div className={styles.control}>
-                <div className={styles.controlText}>
-                  <span className={styles.controlLabel}>
-                    Automation is {data.automation_enabled ? "on" : "off"}
-                  </span>
-                  <span className={styles.controlHint}>
-                    When on, the worker re-scores stale accounts and advances cadences each tick.
-                    When off, everything waits for a manual run.
-                  </span>
+              <>
+                <div className={styles.control}>
+                  <div className={styles.controlText}>
+                    <span className={styles.controlLabel}>
+                      Automation is {data.automation_enabled ? "on" : "off"}
+                    </span>
+                    <span className={styles.controlHint}>
+                      When on, the worker re-scores stale accounts and advances cadences each tick.
+                      When off, everything waits for a manual run.
+                    </span>
+                  </div>
+                  <Switch
+                    checked={data.automation_enabled}
+                    disabled={saving}
+                    label="Continuous automation"
+                    onChange={toggleAutomation}
+                  />
                 </div>
-                <Switch
-                  checked={data.automation_enabled}
-                  disabled={saving}
-                  label="Continuous automation"
-                  onChange={toggleAutomation}
+                <IcpDailyCountControl
+                  settings={data}
+                  onSaved={(res) => automation.setData(res)}
                 />
-              </div>
+              </>
             )}
           </DataState>
         </Card>
@@ -437,6 +443,65 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "su
       <span className={styles.statValue} data-tone={tone}>
         {formatNumber(value)}
       </span>
+    </div>
+  );
+}
+
+function IcpDailyCountControl({
+  settings,
+  onSaved,
+}: {
+  settings: AutomationSettings;
+  onSaved: (s: AutomationSettings) => void;
+}) {
+  const api = useApiClient();
+  const toast = useToast();
+  const [value, setValue] = useState(String(settings.icp_daily_count ?? ""));
+  const [saving, setSaving] = useState(false);
+  const effective = settings.icp_daily_count ?? settings.icp_daily_default;
+
+  async function save() {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 5 || n > 100) {
+      toast.error("Pick a value between 5 and 100");
+      return;
+    }
+    setSaving(true);
+    try {
+      onSaved(await api.setIcpDailyCount(n));
+      toast.success("Daily discovery target saved", `Up to ${n} net-new ICP accounts per day.`);
+    } catch (err) {
+      toast.error("Couldn't save", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className={styles.control}>
+      <div className={styles.controlText}>
+        <span className={styles.controlLabel}>New ICP accounts per day</span>
+        <span className={styles.controlHint}>
+          How many net-new accounts that strictly match your ICP the daily discovery adds
+          (currently {effective}/day). Needs automation on and an ICP defined on the Relevance
+          page.
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+        <Input
+          type="number"
+          min={5}
+          max={100}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={String(settings.icp_daily_default)}
+          aria-label="New ICP accounts per day"
+          style={{ width: 96 }}
+        />
+        <Button size="sm" variant="secondary" loading={saving} onClick={save}>
+          Save
+        </Button>
+      </div>
     </div>
   );
 }

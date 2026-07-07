@@ -77,8 +77,14 @@ async def get_automation(
     _: Principal = Depends(require(Permission.manage_workspace)),
 ) -> AutomationSettingsOut:
     # Tenant is the isolation boundary itself (not TenantScoped); load via the raw session.
+    from nexus.core.config import get_settings
+
     tenant = await ts.session.get(Tenant, ts.tenant_id)
-    return AutomationSettingsOut(automation_enabled=bool(tenant.automation_enabled))
+    return AutomationSettingsOut(
+        automation_enabled=bool(tenant.automation_enabled),
+        icp_daily_count=tenant.icp_daily_count,
+        icp_daily_default=get_settings().icp_discovery_daily_count,
+    )
 
 
 @router.patch("/automation", response_model=AutomationSettingsOut)
@@ -87,10 +93,20 @@ async def set_automation(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_workspace)),
 ) -> AutomationSettingsOut:
+    from nexus.core.config import get_settings
+
     tenant = await ts.session.get(Tenant, ts.tenant_id)
-    tenant.automation_enabled = body.automation_enabled
+    # Partial update: only fields present in the PATCH body change.
+    if body.automation_enabled is not None:
+        tenant.automation_enabled = body.automation_enabled
+    if body.icp_daily_count is not None:
+        tenant.icp_daily_count = body.icp_daily_count
     await ts.flush()
-    return AutomationSettingsOut(automation_enabled=tenant.automation_enabled)
+    return AutomationSettingsOut(
+        automation_enabled=tenant.automation_enabled,
+        icp_daily_count=tenant.icp_daily_count,
+        icp_daily_default=get_settings().icp_discovery_daily_count,
+    )
 
 
 # ---- outbound email (per-workspace SMTP: Gmail / Outlook) ----
