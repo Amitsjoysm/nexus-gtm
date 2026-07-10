@@ -753,7 +753,8 @@ export function AccountDetailPage() {
                 <div>
                   <h3 className={styles.actionTitle}>Ask about this account</h3>
                   <p className={styles.actionDesc}>
-                    Get a grounded answer from signals, contacts, and firmographics.
+                    Grounded in your signals, contacts, and firmographics — plus live web
+                    research run at ask time.
                   </p>
                 </div>
               </div>
@@ -1175,11 +1176,22 @@ function ContactRecResult({ output }: { output: Record<string, unknown> }) {
 function QAResult({ output }: { output: Record<string, unknown> }) {
   const answer = typeof output.answer === "string" ? output.answer : "";
   const grounded = typeof output.grounded_on === "number" ? output.grounded_on : 0;
+  const sources = Array.isArray(output.sources)
+    ? (output.sources as { title?: string; url?: string }[]).filter((s) => s.url).slice(0, 3)
+    : [];
   if (!answer) return null;
   return (
     <div className={styles.resultStack}>
       <p className={styles.briefText}>{answer}</p>
-      <span className={styles.agentNote}>Grounded on {grounded} fact{grounded === 1 ? "" : "s"}.</span>
+      <span className={styles.agentNote}>
+        Grounded on {grounded} fact{grounded === 1 ? "" : "s"}
+        {sources.length > 0 ? " · sources: " : "."}
+        {sources.map((s, i) => (
+          <a key={i} href={s.url} target="_blank" rel="noreferrer noopener">
+            [{i + 1}]{i < sources.length - 1 ? " " : ""}
+          </a>
+        ))}
+      </span>
     </div>
   );
 }
