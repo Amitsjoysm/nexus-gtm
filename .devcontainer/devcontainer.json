@@ -1,0 +1,15 @@
+{
+  "name": "InfoJoy GTM (Docker Hub)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": { "label": "InfoJoy GTM", "onAutoForward": "openPreview" }
+  },
+  "hostRequirements": { "cpus": 4, "memory": "8gb" },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postStartCommand": "docker compose -f docker-compose.hub.yml up -d",
+  "remoteUser": "vscode"
+}

@@ -1,0 +1,76 @@
+# Deploy from the PUBLISHED Docker Hub images (no local build) — used by Codespaces and any host:
+#   docker compose -f docker-compose.hub.yml up -d
+#
+# Provider keys + automation switches come from .env (see .env.example). The environment blocks
+# below override DB/queue to the in-stack services and mirror the tuned local stack exactly.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+      POSTGRES_DB: nexus
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes: ["valkeydata:/data"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    image: ronsmithz/nexus-gtm-api:latest
+    pull_policy: always
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:nexus@db:5432/nexus
+      NEXUS_QUEUE_BACKEND: redis
+      NEXUS_REDIS_URL: redis://valkey:6379/0
+      NEXUS_RUN_MIGRATIONS: "1"
+      NEXUS_AUTH_RATE_LIMIT_ENABLED: "true"
+      NEXUS_IDEMPOTENCY_ENABLED: "true"
+      NEXUS_MAX_REQUEST_BODY_BYTES: "10000000"
+      # Email deliverability: Reacher (real SMTP) primary + free DNS/MX fallback.
+      NEXUS_EMAIL_VERIFY_PROVIDER: "reacher,dns"
+      NEXUS_EMAIL_VERIFY_URL: "http://158.69.113.127:8080/v0/check_email"
+    ports: ["8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    image: ronsmithz/nexus-gtm-worker:latest
+    pull_policy: always
+    restart: unless-stopped
+    command: ["python", "-m", "nexus.workers.worker"]
+    env_file: .env
+    environment:
+      NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:nexus@db:5432/nexus
+      NEXUS_QUEUE_BACKEND: redis
+      NEXUS_REDIS_URL: redis://valkey:6379/0
+    depends_on:
+      db: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+      api: {condition: service_healthy}
+
+volumes:
+  pgdata:
+  valkeydata:
