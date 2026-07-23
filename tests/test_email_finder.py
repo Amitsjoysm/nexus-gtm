@@ -117,6 +117,48 @@ async def test_finder_degrades_to_best_unknown_when_no_valid():
     assert res.found is True
 
 
+async def test_finder_skips_invalid_canonical_returns_best_candidate():
+    """Regression: when first.last verifies INVALID but a later pattern is risky, return the
+    risky candidate with its own verdict — never the invalid canonical mislabeled as risky."""
+
+    async def verify(email):
+        if email == "jdoe@acme.com":
+            return EmailVerification(email=email, status="risky", confidence=0.5)
+        # first.last and everything else -> invalid
+        return EmailVerification(email=email, status=STATUS_INVALID, confidence=0.9)
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.com")
+        ts.add(acc)
+        await ts.flush()
+        contact = Contact(tenant_id=tid, account_id=acc.id, full_name="Jane Doe")
+        res = await VerifyingPatternEmailProvider(verify=verify).enrich(acc, contact)
+    assert res.email == "jdoe@acme.com"        # not the invalid jane.doe
+    assert res.email_status == "risky"
+    assert res.email_confidence == 0.5
+
+
+async def test_finder_prefers_canonical_on_verdict_tie():
+    """When first.last and another pattern share the best verdict (tie), the earliest/highest-
+    frequency pattern (first.last) still wins — determinism preserved."""
+
+    async def verify(email):
+        # Both jane.doe and jdoe come back 'risky' (tie); jane.doe is earlier -> should win.
+        if email in ("jane.doe@acme.com", "jdoe@acme.com"):
+            return EmailVerification(email=email, status="risky", confidence=0.5)
+        return EmailVerification(email=email, status=STATUS_INVALID, confidence=0.9)
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.com")
+        ts.add(acc)
+        await ts.flush()
+        contact = Contact(tenant_id=tid, account_id=acc.id, full_name="Jane Doe")
+        res = await VerifyingPatternEmailProvider(verify=verify).enrich(acc, contact)
+    assert res.email == "jane.doe@acme.com"    # canonical wins the tie
+
+
 async def test_finder_not_found_when_no_domain():
     prov = VerifyingPatternEmailProvider(verify=_fake_verify({}))
 

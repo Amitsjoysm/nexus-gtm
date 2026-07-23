@@ -196,11 +196,15 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
                     best = (rank, email, verdict)
 
         if best is None:
-            return EnrichmentResult()  # everything invalid
-        _, _, verdict = best
-        # Return the canonical guess (deterministic) at the best non-invalid verdict.
+            return EnrichmentResult()  # every candidate verified invalid
+        _, best_email, verdict = best
+        # Return the candidate that earned the best non-invalid verdict, paired with THAT verdict.
+        # Ties keep the earliest (highest-frequency) pattern — first.last — via the strict `>`
+        # above, so the common degraded case still yields the canonical guess. Crucially we never
+        # return an address that verified `invalid` (those are excluded from `best`), and we never
+        # pair an email with a different candidate's verdict.
         return EnrichmentResult(
-            found=True, email=canonical, email_confidence=verdict.confidence,
+            found=True, email=best_email, email_confidence=verdict.confidence,
             email_status=verdict.status, provider_type=verdict.provider_type,
             source=self.name,
         )
