@@ -166,8 +166,14 @@ async def test_no_icp_is_a_noop():
     assert res["discovered"] == 0 and res.get("skipped") == "no_icp"
 
 
-async def test_handler_skips_when_disabled():
-    # Defaults: automation_enabled and icp_discovery_enabled are both False -> no work, no network.
+async def test_handler_skips_when_disabled(monkeypatch):
+    # Explicitly off (don't rely on ambient .env, where these switches may be enabled):
+    # with either flag False the handler must do no work and touch no network.
+    from nexus.core.config import get_settings
+
+    s = get_settings()
+    monkeypatch.setattr(s, "automation_enabled", False)
+    monkeypatch.setattr(s, "icp_discovery_enabled", False)
     res = await handle_discover_icp_accounts({})
     assert res == {"skipped": "disabled"}
 
@@ -270,3 +276,71 @@ async def test_handler_raises_paused_alert_once_for_no_icp_tenant(monkeypatch):
 
     async with tenant_session(tid) as ts:
         assert await ts.list(Alert, Alert.source == "icp_discovery", Alert.status == "open") == []
+
+
+# ---- post-enrichment ICP re-screen (pipeline calls this after the crawler fills headcount) ----
+
+async def _discovered_account(ts, tid, *, employee_count=None, source="auto_discovery"):
+    acc = Account(
+        tenant_id=tid, name="Screened Co", domain="screened.example",
+        industry="SaaS", employee_count=employee_count, source=source,
+    )
+    ts.add(acc)
+    await ts.flush()
+    return acc
+
+
+async def test_rescreen_archives_out_of_band_discovered_account():
+    from nexus.discovery.auto import rescreen_discovered_account
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        await _with_profile(ts, tid)
+        acc = await _discovered_account(ts, tid, employee_count=8)  # band is 50-5000
+        assert await rescreen_discovered_account(ts, acc) is True
+        cf = acc.custom_fields or {}
+        assert cf.get("archived") is True
+        assert cf.get("archived_reason") == "icp_size_band"
+        # Idempotent: already archived -> no second action.
+        assert await rescreen_discovered_account(ts, acc) is False
+
+
+async def test_rescreen_keeps_in_band_and_unknown_headcount():
+    from nexus.discovery.auto import rescreen_discovered_account
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        await _with_profile(ts, tid)
+        in_band = await _discovered_account(ts, tid, employee_count=200)
+        assert await rescreen_discovered_account(ts, in_band) is False
+        unknown = Account(tenant_id=tid, name="U", domain="u.example",
+                          source="auto_discovery", employee_count=None)
+        ts.add(unknown)
+        await ts.flush()
+        assert await rescreen_discovered_account(ts, unknown) is False
+        assert not (in_band.custom_fields or {}).get("archived")
+
+
+async def test_rescreen_never_touches_manual_accounts():
+    from nexus.discovery.auto import rescreen_discovered_account
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        await _with_profile(ts, tid)
+        manual = await _discovered_account(ts, tid, employee_count=8, source=None)
+        assert await rescreen_discovered_account(ts, manual) is False
+        assert not (manual.custom_fields or {}).get("archived")
+
+
+async def test_rescreen_spares_engaged_accounts():
+    from nexus.discovery.auto import rescreen_discovered_account
+    from nexus.models.account import Contact
+
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        await _with_profile(ts, tid)
+        acc = await _discovered_account(ts, tid, employee_count=8)
+        ts.add(Contact(tenant_id=tid, account_id=acc.id, full_name="Working Rep Contact"))
+        await ts.flush()
+        assert await rescreen_discovered_account(ts, acc) is False
+        assert not (acc.custom_fields or {}).get("archived")

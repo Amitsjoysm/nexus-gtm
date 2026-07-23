@@ -1,10 +1,111 @@
-# NEXUS GTM — Project Guide for Claude
+# NEXUS GTM — AI-Powered GTM Intelligence Platform
 
-NEXUS GTM is an AI-powered Go-To-Market intelligence platform (a Pocus.com-class product):
-multi-tenant SaaS that ingests buying signals, scores account relevance, runs AI agents
-(research / messaging / enrichment), and drives a rep workflow (inbox, lists, plays, alerts).
-All work is reviewed by Codex and must be production-grade — "built like it's going into a
-real app used by millions."
+## 🎯 What We're Building
+
+**NEXUS GTM** is an AI-powered Go-To-Market intelligence platform (a [Pocus.com](https://pocus.com)-class product):
+a multi-tenant SaaS for B2B revenue teams that:
+
+1. **Ingests buying signals** — funding rounds, hiring, tech stack changes, news mentions
+2. **Scores account relevance** — deterministic ICP-fit using Relevance Engine (no LLM)
+3. **Runs AI agents** — research, messaging, enrichment, contact recommendations
+4. **Automates rep workflows** — prioritized inbox, saved lists, signal-triggered plays, alerts
+
+**Key principle**: Signal → Action in one move. Reps triage dozens of accounts daily; speed matters.
+
+**Users**:
+- **Sales Reps** — work prioritized inbox, research accounts, draft outreach
+- **Sales Managers** — build lists, create automated plays, track analytics
+- **Admins** — manage team, roles, integrations (CRM, sales engagement platform)
+
+**Tech**: FastAPI backend + React/TypeScript frontend, multi-tenant (Postgres RLS), 
+RBAC (owner → admin → manager → rep). Runs fully offline in dev (SQLite + stub LLM).
+
+---
+
+## 🚀 Every New Task: Reference the Code-Review-Graph & Superpowers
+
+**This project has comprehensive analysis ready. Before starting any work:**
+
+1. **Use the code-review-graph** to understand scope and impact:
+   ```bash
+   code-review-graph search "YourSymbol"              # Find functions/classes
+   code-review-graph detect-changes --brief           # See what changed (before review)
+   ```
+   Open the interactive visualization: `.code-review-graph/graph.html`
+
+2. **Reference superpowers analysis** (generated in scratchpad):
+   - **SUPERPOWERS-ANALYSIS.md** — Complete architecture deep-dive + code review methodology
+   - **NEXUS-GTM-QUICK-START.md** — Quick commands and project structure
+   - Use `/code-review` command — automatically uses graph for focused analysis
+
+3. **Read CLAUDE.md, PRODUCT.md, DESIGN.md** — Grounding for every decision
+
+4. **For architecture questions**: Check code-review-graph, then read relevant SUPERPOWERS-ANALYSIS section
+
+**Why?** The graph cuts code-review token usage by 90% (only affected symbols, not full files).
+Superpowers analysis summarizes all major systems so you don't re-derive architecture every task.
+
+## 🛠️ Development Workflow (Using Code-Review-Graph & Superpowers)
+
+### Adding a Feature
+
+1. **Understand the system** (5 min):
+   ```bash
+   open .code-review-graph/graph.html    # Visualize architecture
+   # Read: SUPERPOWERS-ANALYSIS.md (relevant section)
+   # Read: PRODUCT.md (requirements)
+   ```
+
+2. **Find related code** (2 min):
+   ```bash
+   code-review-graph search "RelevantComponent"
+   # or in Claude: /code-review medium
+   ```
+
+3. **Implement** — follow conventions below
+
+4. **Review yourself** (2 min):
+   ```bash
+   /code-review    # Graph-assisted focused review
+   ```
+
+5. **Run tests**: `pytest tests/ -v`
+
+### Fixing a Bug
+
+1. **Reproduce & locate**:
+   ```bash
+   code-review-graph search "BuggyFunction"
+   # Read SUPERPOWERS-ANALYSIS.md risk areas section
+   ```
+
+2. **Write a test** that fails
+
+3. **Fix** — verify test passes
+
+4. **Check for ripples**:
+   ```bash
+   /code-review    # Graph shows all callers/dependents
+   ```
+
+### Code Review (Every PR)
+
+1. Use `/code-review` — automatically leverages graph
+2. Read SUPERPOWERS-ANALYSIS.md (review checklist + risk areas)
+3. Check the summary:
+   - Is this security-critical? (multi-tenancy, auth, agents)
+   - Does it touch data model? (migrations OK?)
+   - Performance impact? (N+1 queries, timeouts?)
+
+### Security & Architecture Review
+
+**Before approving ANY change** to these areas, read the relevant section in SUPERPOWERS-ANALYSIS.md:
+- Multi-tenancy (line ~150)
+- Agent system (line ~250)
+- API authentication (line ~350)
+- Database migrations (line ~400)
+
+---
 
 ## Repository layout
 
@@ -85,20 +186,48 @@ Grounding docs for the design skills:
 When you touch UI, invoke `impeccable` (and `ui-ux-pro-max` for visual/UX decisions,
 `framer-motion` for animation) before writing code, and follow `DESIGN.md`.
 
-## Code navigation — use code-review-graph to save tokens
+## 🔍 Code Navigation & Analysis — Code-Review-Graph & Superpowers
 
-This repo is indexed by **code-review-graph** (a Tree-sitter knowledge graph stored in the
-gitignored `.code-review-graph/`). It is registered as an MCP server for this project. Prefer
-its tools over reading whole files when you need to understand impact, find callers, or get
-review context — they return scoped slices instead of full files, cutting token use by ~90%.
+This repo is indexed by **code-review-graph** (a Tree-sitter knowledge graph in `.code-review-graph/`).
+It is registered as an MCP server and cuts code-review token use by ~90% (returns scoped slices
+instead of full files).
 
-- **Before reviewing a change:** call the `get_review_context_tool` / `detect_changes_tool`
-  MCP tools (or run `code-review-graph detect-changes --brief`) to get only the affected
-  symbols and their blast radius, rather than re-reading the touched files end-to-end.
-- **To trace impact / callers:** use `get_impact_radius_tool` and the graph's semantic search
-  instead of grepping the whole tree.
-- **Keep the graph fresh:** after pulling or making structural changes, run
-  `code-review-graph update` (incremental) or `code-review-graph build` (full re-index).
-  The index lives in `.code-review-graph/` and must never be committed (already gitignored).
-- If the MCP tools aren't visible, the AI tool needs a restart to load the server; fall back to
-  normal reads until then.
+### How to Use Code-Review-Graph for Every Task
+
+**Before implementing or reviewing:**
+```bash
+# Find where a function/class is defined and what calls it
+code-review-graph search "TenantSession"
+
+# See what changed (for code review context)
+code-review-graph detect-changes --brief
+
+# View the interactive graph (start here!)
+open .code-review-graph/graph.html
+# or on Windows:
+start .code-review-graph/graph.html
+```
+
+**In Claude** (automatic):
+- `/code-review` — automatically uses graph to focus on affected files only
+- `/code-review medium` — medium effort (less token use, uses graph)
+- `/code-review ultra` — deep review (multi-agent, still uses graph for context)
+
+### Superpowers Analysis — Always Available
+
+Three comprehensive guides were generated and are always available for reference:
+
+| File | What It Contains | Use When |
+|------|------------------|----------|
+| **SUPERPOWERS-ANALYSIS.md** | Complete system architecture, all 6 subsystems, security review, code review methodology, risk areas | Understanding any part of the system; before major changes |
+| **NEXUS-GTM-QUICK-START.md** | Commands, structure, environment setup, testing, Docker, code quality standards | Quick reference, local dev setup, running tests |
+| **nexus-gtm-code-review-setup.md** | Graph statistics, initialization details, MCP config, entry points | Understanding graph setup; API entry points |
+
+**Read these first** before implementing or reviewing — saves re-deriving architecture.
+
+### Graph Maintenance
+
+- **After pulling code**: `code-review-graph update` (incremental re-index)
+- **After major refactoring**: `code-review-graph build` (full re-index)
+- The `.code-review-graph/` directory is gitignored; never commit it.
+- If MCP tools aren't visible, restart Claude to load the server.

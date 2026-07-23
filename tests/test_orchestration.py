@@ -21,6 +21,7 @@ from nexus.models.orchestration import (
     RunEvent,
     RUN_AWAITING_APPROVAL,
     RUN_COMPLETED,
+    RUN_FAILED,
     STEP_AWAITING_APPROVAL,
     STEP_COMPLETED,
     STEP_REJECTED,
@@ -380,3 +381,24 @@ def test_research_compose_omits_contact_id_when_absent():
     plan = get_planner().plan("research_compose", {})
     compose = next(s for s in plan if s["tool"] == "compose_message")
     assert "contact_id" not in compose["inputs"]
+
+
+async def test_runaway_guard_fails_run_instead_of_hanging(monkeypatch):
+    """Regression (M-2): if a step never leaves PENDING (a hypothetical bug), _next_runnable would
+    return it forever. The iteration cap must fail the run cleanly rather than wedge the worker."""
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        acc = await _seed(ts, tid)
+        engine = OrchestrationEngine()
+        run = await engine.create_run(ts, "research_account", {"account_id": acc.id})
+
+        # Simulate a stuck step: report success but never transition it out of PENDING.
+        async def _stuck_run_step(self, ts_, run_, step_, *, runtime):  # noqa: ANN001
+            return True
+
+        monkeypatch.setattr(OrchestrationEngine, "_run_step", _stuck_run_step, raising=True)
+
+        # Must return (not hang) and end failed with the runaway marker.
+        await engine.execute_run(ts, run, runtime=_runtime())
+        assert run.status == RUN_FAILED
+        assert run.error and "runaway_guard" in run.error

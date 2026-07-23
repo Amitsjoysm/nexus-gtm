@@ -53,8 +53,11 @@ export function ResetPasswordPage() {
       <section className={styles.formCol}>
         <div className={styles.formCard}>
           <div className={styles.mobileBrand}>
-            <img src="/infojoy-logo.png" alt="" className={styles.logoSmImg} />
-            <span>Infojoy GTM</span>
+            <img src="/infojoy-mark.png" alt="" className={styles.logoSmImg} />
+            <span>
+              <span className={styles.brandInfo}>Info</span>
+              <span className={styles.brandJoy}>Joy</span> GTM
+            </span>
           </div>
 
           <h1 className={styles.title}>Choose a new password</h1>

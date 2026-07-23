@@ -12,16 +12,19 @@ import {
 import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
+import { useSignalWindow } from "@/app/SignalWindowContext";
 import { humanize, timeAgo } from "@/lib/format";
-import { strengthMeta } from "@/lib/display";
+import { signalSourceMeta, strengthMeta } from "@/lib/display";
 import type { SignalEvent } from "@/lib/types";
 import styles from "./SignalsPage.module.css";
 
 export function SignalsPage() {
   const api = useApiClient();
+  const { windowDays } = useSignalWindow();
   const signals = useApi<SignalEvent[]>(
-    (signal) => api.listSignals({ limit: 100 }, signal),
-    [],
+    (signal) =>
+      api.listSignals({ limit: 100, max_age_days: windowDays ?? undefined }, signal),
+    [windowDays],
   );
   const [kind, setKind] = useState("");
 
@@ -63,8 +66,12 @@ export function SignalsPage() {
         empty={
           <EmptyState
             icon={<Icons.SignalIcon />}
-            title="No signals yet"
-            description="As soon as we detect buying intent on your accounts, it shows up here."
+            title={windowDays !== null ? `No signals in the last ${windowDays} days` : "No signals yet"}
+            description={
+              windowDays !== null
+                ? "Widen the signal window in the top bar to see older activity."
+                : "As soon as we detect buying intent on your accounts, it shows up here."
+            }
           />
         }
       >
@@ -86,6 +93,7 @@ export function SignalsPage() {
                 </div>
                 <span className={styles.count}>
                   {visible.length} signal{visible.length === 1 ? "" : "s"}
+                  {windowDays !== null && ` · last ${windowDays} days`}
                 </span>
               </div>
 
@@ -101,6 +109,7 @@ export function SignalsPage() {
                   <div className={styles.list}>
                     {visible.map((sig) => {
                       const meta = strengthMeta(sig.strength);
+                      const src = signalSourceMeta(sig);
                       return (
                         <div key={sig.id} className={styles.signal}>
                           <Badge tone={meta.tone} dot>
@@ -112,22 +121,22 @@ export function SignalsPage() {
                             <div className={styles.meta}>
                               <span>{humanize(sig.kind)}</span>
                               <span>·</span>
-                              <span>{sig.source}</span>
+                              <span title={src.hint}>
+                                {src.label}
+                                {src.isSynthetic && " (sample)"}
+                              </span>
                               <span>·</span>
                               <span>{timeAgo(sig.occurred_at)}</span>
-                              {sig.url && (
-                                <>
-                                  <span>·</span>
-                                  <a
-                                    className={styles.link}
-                                    href={sig.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    Source
-                                  </a>
-                                </>
-                              )}
+                              <span>·</span>
+                              <a
+                                className={styles.link}
+                                href={src.href}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={src.hint}
+                              >
+                                {src.linkLabel} ↗
+                              </a>
                             </div>
                           </div>
                         </div>

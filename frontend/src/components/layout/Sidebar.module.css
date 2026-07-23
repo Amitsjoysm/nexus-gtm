@@ -42,6 +42,13 @@
   font-weight: var(--weight-bold);
   letter-spacing: var(--tracking-wide);
 }
+/* Two-tone brand lockup per the InfoJoy logo: indigo "Info", ruby "Joy". */
+.brandInfo {
+  color: var(--brand-info);
+}
+.brandJoy {
+  color: var(--brand-joy);
+}
 .brandSub {
   color: var(--text-subtle);
   font-weight: var(--weight-medium);

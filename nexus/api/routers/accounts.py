@@ -1,7 +1,7 @@
 """Accounts & contacts: CRUD plus waterfall contact enrichment."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -39,6 +39,11 @@ def _account_out(a: Account, *, fit_score: int | None = None) -> AccountOut:
         fit_score=fit_score,
         linkedin_url=cf.get("linkedin_url"),
         description=cf.get("description"),
+        sub_industry=cf.get("sub_industry"),
+        revenue=cf.get("revenue"),
+        region=cf.get("region"),
+        city=cf.get("city"),
+        keywords=cf.get("keywords") or [],
         source=a.source,
         crm_source=a.crm_source,
         crm_synced_at=a.crm_synced_at.isoformat() if a.crm_synced_at else None,
@@ -55,7 +60,9 @@ def _contact_out(c: Contact) -> ContactOut:
         email=c.email,
         phone=c.phone,
         linkedin_url=c.linkedin_url,
+        email_status=c.email_status,
         email_confidence=c.email_confidence,
+        email_checked_at=(c.email_checked_at.isoformat() if c.email_checked_at else None),
         phone_confidence=c.phone_confidence,
         enrichment_source=c.enrichment_source,
     )
@@ -114,18 +121,26 @@ async def _latest_fit_scores(ts: TenantSession, account_ids: list[str]) -> dict[
 
 @router.get("", response_model=list[AccountOut])
 async def list_accounts(
+    response: Response,
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
-    limit: int = 200,
+    limit: int = Query(default=200, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ) -> list[AccountOut]:
-    # Newest first so a just-added account (manual, lookalike, or discovery) always lands at the
-    # top of the list instead of in undefined order somewhere in the middle.
-    stmt = ts.select(Account).order_by(Account.created_at.desc()).limit(limit)
+    """Active (non-archived) accounts, newest first, paginated in SQL.
+
+    The archived filter is applied in the query — not by dropping rows from a fetched page in
+    Python, which silently returned fewer than ``limit`` results. ``X-Total-Count`` reports the
+    full active count so a client can page through all of them (``offset`` is additive; default
+    behavior — first 200, no offset — is unchanged for existing callers such as the SPA).
+    """
+    active = ts.select(Account).where(Account.archived_at.is_(None))
+    total = await ts.session.scalar(select(func.count()).select_from(active.subquery()))
+    response.headers["X-Total-Count"] = str(total or 0)
+    stmt = active.order_by(Account.created_at.desc()).limit(limit).offset(offset)
     rows = list((await ts.session.scalars(stmt)).all())
-    # Archived accounts (an SDR removed them as not-relevant) are hidden from the working list.
-    accounts = [a for a in rows if not (a.custom_fields or {}).get("archived")]
-    scores = await _latest_fit_scores(ts, [a.id for a in accounts])
-    return [_account_out(a, fit_score=scores.get(a.id)) for a in accounts]
+    scores = await _latest_fit_scores(ts, [a.id for a in rows])
+    return [_account_out(a, fit_score=scores.get(a.id)) for a in rows]
 
 
 @router.get("/{account_id}", response_model=AccountOut)
@@ -145,9 +160,7 @@ async def _set_archived(ts: TenantSession, account_id: str, archived: bool) -> A
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
-    cf = dict(account.custom_fields or {})
-    cf["archived"] = archived
-    account.custom_fields = cf
+    account.set_archived(archived)  # dual-writes archived_at column + legacy JSON mirror
     await ts.flush()
     scores = await _latest_fit_scores(ts, [account.id])
     return _account_out(account, fit_score=scores.get(account.id))
@@ -291,10 +304,8 @@ async def add_from_lookalike(
             if a.domain and domain_from_url(a.domain) == dom:
                 # Re-adding a company the rep previously removed must bring it back into the
                 # working list — otherwise "Add" returns a still-hidden row and looks like a no-op.
-                cf = dict(a.custom_fields or {})
-                if cf.get("archived"):
-                    cf["archived"] = False
-                    a.custom_fields = cf
+                if a.is_archived:
+                    a.set_archived(False)  # clears archived_at + legacy JSON mirror
                     await ts.flush()
                 scores = await _latest_fit_scores(ts, [a.id])
                 return _account_out(a, fit_score=scores.get(a.id))
@@ -340,6 +351,10 @@ async def enrich_contact(
             f"re-verification is available on {next_due:%d %b %Y}.",
         )
     await get_enricher().enrich_contact(ts, contact)
+    # Fill the LinkedIn profile URL from web search (Exa) when blank — additive, never overwrites.
+    from nexus.enrichment.linkedin import enrich_contact_linkedin
+
+    await enrich_contact_linkedin(ts, contact)
     # Social insights for person-level personalization (no-op under the stub; lights up with Apify).
     from nexus.personalization.provider import refresh_person_insights
 
@@ -350,16 +365,21 @@ async def enrich_contact(
 @router.post("/{account_id}/enrich", response_model=AccountOut)
 async def enrich_account(
     account_id: str,
+    response: Response,
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> AccountOut:
-    """Fill blank firmographics (industry/size/country/tech/description) from the web on demand.
-    Uses Exa when keyed, else DuckDuckGo, then the LLM; existing values are never overwritten."""
+    """Fill blank firmographics/technographics (industry, size, country, tech, sub-industry,
+    revenue, HQ region/city, description, LinkedIn, keywords) from the web on demand. Uses Exa when
+    keyed, else DuckDuckGo, then the LLM; existing values are never overwritten. The list of fields
+    actually filled is returned in the ``X-Enriched-Fields`` header so the UI can report honestly
+    ("Added revenue, keywords" vs "No new public data found") instead of a blanket success."""
     from nexus.enrichment.account import get_account_enricher
 
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
-    await get_account_enricher().enrich(account)
+    filled = await get_account_enricher().enrich(account)
     await ts.flush()
+    response.headers["X-Enriched-Fields"] = ",".join(filled)
     return _account_out(account)

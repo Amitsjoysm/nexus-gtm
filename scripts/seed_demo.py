@@ -78,6 +78,31 @@ ACCOUNTS = [
 ]
 
 
+# The tenant's Relevance Engine profile (ICP + value props + product context). Without this the
+# fit score has nothing to score against — every account lands on the same neutral number. It is
+# set BEFORE the pipeline runs so the accounts score correctly on their first pass. Chosen to give
+# the demo accounts a realistic spread (in-band FinServ/Manufacturing high; wrong-geo/-industry low).
+RELEVANCE_PROFILE = {
+    "icp": {
+        "industries": ["Financial Services", "Manufacturing", "Retail", "Healthcare",
+                        "SaaS", "Software"],
+        "employee_min": 200,
+        "employee_max": 2000,
+        "countries": ["United States", "United Kingdom", "Singapore"],
+        "required_tech": ["Snowflake", "Salesforce", "Segment", "Stripe", "Looker"],
+    },
+    "value_props": [
+        {"name": "Faster GTM",
+         "description": "Turn buying signals into pipeline before competitors notice.",
+         "pains_solved": ["slow pipeline", "missed intent"]},
+        {"name": "ICP focus",
+         "description": "Score every account against your ICP automatically.",
+         "pains_solved": ["wasted rep time", "low win rate"]},
+    ],
+    "product_context": "NEXUS GTM — AI go-to-market intelligence for B2B revenue teams.",
+}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:9000")
@@ -90,7 +115,12 @@ def main() -> int:
     token = signup_or_login(client)
     auth = {"Authorization": f"Bearer {token}"}
 
-    # 2) Ensure alert-generating plays exist BEFORE any pipeline runs.
+    # 2) Set the Relevance Engine profile (ICP) BEFORE scoring, so fit scores are meaningful.
+    r = client.put("/relevance/profile", headers=auth, json=RELEVANCE_PROFILE)
+    if r.status_code >= 400:
+        print(f"  ! relevance profile failed: {r.status_code} {r.text}", file=sys.stderr)
+
+    # 3) Ensure alert-generating plays exist BEFORE any pipeline runs.
     existing_plays = {p["name"] for p in client.get("/plays", headers=auth).json()}
     for play in PLAYS:
         if play["name"] in existing_plays:
@@ -99,7 +129,7 @@ def main() -> int:
         if r.status_code >= 400:
             print(f"  ! play '{play['name']}' failed: {r.status_code} {r.text}", file=sys.stderr)
 
-    # 3) Ensure accounts exist (match by name to stay idempotent).
+    # 4) Ensure accounts exist (match by name to stay idempotent).
     existing = {a["name"]: a for a in client.get("/accounts", headers=auth).json()}
     created = 0
     account_ids = []
@@ -113,13 +143,13 @@ def main() -> int:
         account_ids.append(r.json()["id"])
         created += 1
 
-    # 4) Run the pipeline on each account (enrich + score + generate signals/tasks/alerts).
+    # 5) Run the pipeline on each account (enrich + score + generate signals/tasks/alerts).
     for aid in account_ids:
         r = client.post(f"/agents/pipeline/{aid}", headers=auth)
         if r.status_code >= 400:
             print(f"  ! pipeline failed for {aid}: {r.status_code} {r.text}", file=sys.stderr)
 
-    # 5) Invite teammates (ignore conflicts on re-run).
+    # 6) Invite teammates (ignore conflicts on re-run).
     invited = 0
     for mate in TEAMMATES:
         r = client.post("/workspace/members", headers=auth, json=mate)
@@ -129,7 +159,7 @@ def main() -> int:
             print(f"  ! invite failed for {mate['email']}: {r.status_code} {r.text}",
                   file=sys.stderr)
 
-    # 6) Summarize.
+    # 7) Summarize.
     overview = client.get("/analytics/overview", headers=auth).json()
     inbox = client.get("/inbox", headers=auth).json()
     signals = client.get("/signals", headers=auth).json()

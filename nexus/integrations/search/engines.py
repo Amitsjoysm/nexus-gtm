@@ -42,7 +42,11 @@ from nexus.integrations.search.provider import (
 logger = logging.getLogger("nexus.integrations.search.engines")
 
 _TIMEOUT = 15.0
-_SNIPPET_CAP = 320
+# Per-result page-text budget requested from the provider (Exa maxCharacters) and kept after.
+# Larger than a one-line teaser so a fact stated further down a page — "privately held", a funding
+# round, a headquarters — actually reaches the LLM (Ask-about-account, firmographic extraction),
+# instead of being truncated away. Still bounded to keep token cost/latency in check.
+_SNIPPET_CAP = 1000
 _TAG = re.compile(r"<[^>]+>")
 # Exa rejects numResults > 100 with a 400 (the whole request fails → 0 results). Clamp every
 # request so an over-eager caller (e.g. a big discovery pool, or lookalike's limit*3 over-fetch)

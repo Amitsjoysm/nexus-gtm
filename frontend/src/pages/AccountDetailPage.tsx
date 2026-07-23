@@ -23,9 +23,10 @@ import { DataState } from "@/components/DataState";
 import { CallConsole } from "@/components/CallConsole";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
+import { useSignalWindow } from "@/app/SignalWindowContext";
 import { ApiError } from "@/lib/api";
 import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
-import { strengthMeta } from "@/lib/display";
+import { emailStatusMeta, signalSourceMeta, strengthMeta } from "@/lib/display";
 import type {
   AgentRunResponse,
   Account,
@@ -74,6 +75,7 @@ export function AccountDetailPage() {
   const toast = useToast();
   const navigate = useNavigate();
   const { session } = useAuth();
+  const { windowDays } = useSignalWindow();
   const [tab, setTab] = useState<Tab>("overview");
   const [running, setRunning] = useState(false);
   const [findingContacts, setFindingContacts] = useState(false);
@@ -123,14 +125,22 @@ export function AccountDetailPage() {
     }
   }
 
-  // Waterfall enrichment for one contact (email + confidence), inline from the roster.
+  // Waterfall enrichment for one contact (email + verify + LinkedIn), inline from the roster.
   const [enriching, setEnriching] = useState<Record<string, boolean>>({});
   async function enrichOne(c: Contact) {
     setEnriching((p) => ({ ...p, [c.id]: true }));
     try {
       const updated = await api.enrichContact(c.id);
       contacts.setData((prev) => (prev ?? []).map((x) => (x.id === updated.id ? updated : x)));
-      toast.success("Contact enriched", updated.email ?? updated.full_name);
+      // Call out the concrete wins so "enriched" isn't a black box: a verified email verdict
+      // and/or a freshly-found LinkedIn profile.
+      const wins: string[] = [];
+      if (updated.email_status) wins.push(`email ${updated.email_status}`);
+      if (!c.linkedin_url && updated.linkedin_url) wins.push("LinkedIn found");
+      toast.success(
+        "Contact enriched",
+        wins.length ? `${updated.full_name} · ${wins.join(" · ")}` : (updated.email ?? updated.full_name),
+      );
     } catch (err) {
       toast.error(
         "Couldn't enrich contact",
@@ -172,8 +182,12 @@ export function AccountDetailPage() {
   }
 
   const signals = useApi<SignalEvent[]>(
-    (signal) => api.listSignals({ account_id: id, limit: 50 }, signal),
-    [id],
+    (signal) =>
+      api.listSignals(
+        { account_id: id, limit: 50, max_age_days: windowDays ?? undefined },
+        signal,
+      ),
+    [id, windowDays],
   );
 
   async function runAgent(name: string, inputs: Record<string, unknown> = {}) {
@@ -329,9 +343,21 @@ export function AccountDetailPage() {
   async function runEnrich() {
     setEnrichingAcct(true);
     try {
-      await api.enrichAccount(id);
-      toast.success("Account enriched", "Pulled firmographics from the web.");
-      account.refetch();
+      const { filled } = await api.enrichAccount(id);
+      if (filled.length > 0) {
+        const labels = filled.map((f) => f.replace(/_/g, " ")).join(", ");
+        toast.success(`Enriched ${filled.length} field${filled.length === 1 ? "" : "s"}`, labels);
+        account.refetch();
+      } else {
+        // Honest: nothing was filled — the account is already complete, or nothing was found
+        // online (e.g. a placeholder/private company with no public web presence).
+        toast.toast({
+          tone: "info",
+          title: "No new data found",
+          description:
+            "Existing fields are kept as-is; nothing new was available from the web for this company.",
+        });
+      }
     } catch (err) {
       toast.error("Enrichment failed", err instanceof ApiError ? err.detail : "Please try again.");
     } finally {
@@ -476,29 +502,68 @@ export function AccountDetailPage() {
               </Card>
             }
           >
-            {(acc) => (
-              <Card padding="lg">
-                <div className={styles.facts}>
-                  <Fact label="Industry" value={acc.industry ?? "—"} />
-                  <Fact label="Employees" value={formatNumber(acc.employee_count)} />
-                  <Fact label="Country" value={acc.country ?? "—"} />
-                  <Fact label="Domain" value={acc.domain ?? "—"} />
-                </div>
-                {acc.tech_stack.length > 0 && (
-                  <>
-                    <div style={{ height: "var(--space-5)" }} />
-                    <div className={styles.factLabel}>Tech stack</div>
-                    <div className={styles.tech}>
-                      {acc.tech_stack.map((t) => (
-                        <Badge key={t} tone="neutral">
-                          {t}
-                        </Badge>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </Card>
-            )}
+            {(acc) => {
+              const hq = [acc.city, acc.region].filter(Boolean).join(", ");
+              return (
+                <Card padding="lg">
+                  {acc.description && (
+                    <p style={{ marginBottom: "var(--space-5)", color: "var(--text)" }}>
+                      {acc.description}
+                    </p>
+                  )}
+                  <div className={styles.factLabel}>Firmographics</div>
+                  <div style={{ height: "var(--space-2)" }} />
+                  <div className={styles.facts}>
+                    <Fact label="Industry" value={acc.industry ?? "—"} />
+                    {acc.sub_industry && <Fact label="Sub-industry" value={acc.sub_industry} />}
+                    <Fact label="Employees" value={formatNumber(acc.employee_count)} />
+                    {acc.revenue && <Fact label="Est. revenue" value={acc.revenue} />}
+                    <Fact label="Country" value={acc.country ?? "—"} />
+                    {hq && <Fact label="Headquarters" value={hq} />}
+                    <Fact label="Domain" value={acc.domain ?? "—"} />
+                    {typeof acc.fit_score === "number" && (
+                      <Fact label="ICP fit" value={String(acc.fit_score)} />
+                    )}
+                    {acc.linkedin_url && (
+                      <Fact
+                        label="LinkedIn"
+                        value={
+                          <a href={acc.linkedin_url} target="_blank" rel="noreferrer noopener">
+                            View profile ↗
+                          </a>
+                        }
+                      />
+                    )}
+                  </div>
+                  {acc.tech_stack.length > 0 && (
+                    <>
+                      <div style={{ height: "var(--space-5)" }} />
+                      <div className={styles.factLabel}>Tech stack</div>
+                      <div className={styles.tech}>
+                        {acc.tech_stack.map((t) => (
+                          <Badge key={t} tone="neutral">
+                            {t}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {acc.keywords && acc.keywords.length > 0 && (
+                    <>
+                      <div style={{ height: "var(--space-5)" }} />
+                      <div className={styles.factLabel}>Focus areas</div>
+                      <div className={styles.tech}>
+                        {acc.keywords.map((k) => (
+                          <Badge key={k} tone="info">
+                            {k}
+                          </Badge>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </Card>
+              );
+            }}
           </DataState>
         </div>
       </TabPanel>
@@ -560,17 +625,35 @@ export function AccountDetailPage() {
                         ) : (
                           "—"
                         )}
-                        <div>
-                          {c.phone ? (
+                        <div className={styles.contactSub}>
+                          {c.email && (
+                            <>
+                              <Badge tone={emailStatusMeta(c.email_status).tone} dot>
+                                {emailStatusMeta(c.email_status).label}
+                              </Badge>
+                              <span className={styles.muted}>
+                                {formatPercent(c.email_confidence)}
+                              </span>
+                            </>
+                          )}
+                          {c.phone && (
                             <a
                               className={styles.link}
                               href={`tel:${c.phone.replace(/[^\d+]/g, "")}`}
                             >
                               {c.phone}
                             </a>
-                          ) : c.email ? (
-                            `${formatPercent(c.email_confidence)} confidence`
-                          ) : null}
+                          )}
+                          {c.linkedin_url && (
+                            <a
+                              className={styles.link}
+                              href={c.linkedin_url}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                            >
+                              LinkedIn ↗
+                            </a>
+                          )}
                         </div>
                       </div>
                       <Button
@@ -638,6 +721,7 @@ export function AccountDetailPage() {
               {(rows) =>
                 rows.map((sig) => {
                   const meta = strengthMeta(sig.strength);
+                  const src = signalSourceMeta(sig);
                   return (
                     <div key={sig.id} className={styles.signal}>
                       <Badge tone={meta.tone} dot>
@@ -649,22 +733,22 @@ export function AccountDetailPage() {
                         <div className={styles.signalMeta}>
                           <span>{humanize(sig.kind)}</span>
                           <span>·</span>
-                          <span>{sig.source}</span>
+                          <span title={src.hint}>
+                            {src.label}
+                            {src.isSynthetic && " (sample)"}
+                          </span>
                           <span>·</span>
                           <span>{timeAgo(sig.occurred_at)}</span>
-                          {sig.url && (
-                            <>
-                              <span>·</span>
-                              <a
-                                className={styles.link}
-                                href={sig.url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Source
-                              </a>
-                            </>
-                          )}
+                          <span>·</span>
+                          <a
+                            className={styles.link}
+                            href={src.href}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={src.hint}
+                          >
+                            {src.linkLabel} ↗
+                          </a>
                         </div>
                       </div>
                     </div>
@@ -842,7 +926,7 @@ export function AccountDetailPage() {
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
+function Fact({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className={styles.fact}>
       <span className={styles.factLabel}>{label}</span>
@@ -1173,15 +1257,31 @@ function ContactRecResult({ output }: { output: Record<string, unknown> }) {
   );
 }
 
+const QA_CONFIDENCE_META: Record<
+  string,
+  { tone: "success" | "warning" | "danger"; label: string }
+> = {
+  high: { tone: "success", label: "High confidence" },
+  medium: { tone: "warning", label: "Medium confidence" },
+  low: { tone: "danger", label: "Low confidence — verify before using" },
+};
+
 function QAResult({ output }: { output: Record<string, unknown> }) {
   const answer = typeof output.answer === "string" ? output.answer : "";
   const grounded = typeof output.grounded_on === "number" ? output.grounded_on : 0;
+  const confidence =
+    typeof output.confidence === "string" ? QA_CONFIDENCE_META[output.confidence] : undefined;
   const sources = Array.isArray(output.sources)
     ? (output.sources as { title?: string; url?: string }[]).filter((s) => s.url).slice(0, 3)
     : [];
   if (!answer) return null;
   return (
     <div className={styles.resultStack}>
+      {confidence && (
+        <Badge tone={confidence.tone} dot>
+          {confidence.label}
+        </Badge>
+      )}
       <p className={styles.briefText}>{answer}</p>
       <span className={styles.agentNote}>
         Grounded on {grounded} fact{grounded === 1 ? "" : "s"}

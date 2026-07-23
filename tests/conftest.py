@@ -35,8 +35,19 @@ os.environ["NEXUS_SEARCH_PROVIDER"] = "duckduckgo"
 # .env can never be picked up by ``get_settings()`` and turn a "keyless -> DuckDuckGo fallback"
 # assertion into a live ExaSearchProvider. An empty env var outranks the .env value.
 os.environ["NEXUS_EXA_API_KEY"] = ""
+os.environ["NEXUS_EXA_API_KEYS"] = ""
 os.environ["NEXUS_BRAVE_API_KEY"] = ""
 os.environ["NEXUS_SERPER_API_KEY"] = ""
+os.environ["NEXUS_GROQ_API_KEY"] = ""
+os.environ["NEXUS_GROQ_API_KEYS"] = ""
+# Pin the offline defaults for the provider/automation switches too: a developer's local .env
+# (which enables the live app — real contact search, web enrichment, the automation heartbeat and
+# daily ICP discovery) must never flip the suite's assumed-default behaviour. These assert the
+# shipped defaults, so tests that check "default is stub / automation off" stay deterministic.
+os.environ["NEXUS_CONTACT_SEARCH_SOURCES"] = "stub"
+os.environ["NEXUS_ACCOUNT_ENRICH_ENABLED"] = "false"
+os.environ["NEXUS_AUTOMATION_ENABLED"] = "false"
+os.environ["NEXUS_ICP_DISCOVERY_ENABLED"] = "false"
 
 from nexus.core.db import Base, get_engine  # noqa: E402
 from nexus.core.tenancy import TenantSession  # noqa: E402

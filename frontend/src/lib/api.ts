@@ -300,8 +300,32 @@ export class ApiClient {
   contactCallActivities(contactId: string, signal?: AbortSignal) {
     return this.request<CallActivity[]>(`/calling/contacts/${contactId}/activities`, { signal });
   }
-  enrichAccount(accountId: string, signal?: AbortSignal) {
-    return this.request<Account>(`/accounts/${accountId}/enrich`, { method: "POST", signal });
+  /** Enrich from web. Returns the updated account plus the list of fields actually filled
+   * (from the X-Enriched-Fields header) so the UI can report honestly. */
+  async enrichAccount(
+    accountId: string,
+    signal?: AbortSignal,
+  ): Promise<{ account: Account; filled: string[] }> {
+    const headers: Record<string, string> = {};
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    const res = await fetch(this.buildUrl(`/accounts/${accountId}/enrich`), {
+      method: "POST",
+      headers,
+      signal,
+    });
+    if (res.status === 401) this.onUnauthorized?.();
+    const text = await res.text();
+    const data = text ? safeJsonParse(text) : null;
+    if (!res.ok) {
+      const detail =
+        (data && typeof data === "object" && "detail" in data
+          ? String((data as { detail: unknown }).detail)
+          : null) || res.statusText || "Enrichment failed";
+      throw new ApiError(res.status, detail);
+    }
+    const filledHeader = res.headers.get("X-Enriched-Fields") || "";
+    const filled = filledHeader ? filledHeader.split(",").filter(Boolean) : [];
+    return { account: data as Account, filled };
   }
   archiveAccount(accountId: string, signal?: AbortSignal) {
     return this.request<Account>(`/accounts/${accountId}/archive`, { method: "POST", signal });
@@ -431,7 +455,13 @@ export class ApiClient {
 
   // ---- signals ----
   listSignals(
-    params: { account_id?: string; kind?: string; limit?: number; offset?: number } = {},
+    params: {
+      account_id?: string;
+      kind?: string;
+      max_age_days?: number;
+      limit?: number;
+      offset?: number;
+    } = {},
     signal?: AbortSignal,
   ) {
     return this.request<SignalEvent[]>("/signals", { query: params, signal });

@@ -28,6 +28,11 @@
 		-Server
 	}
 
+	# /metrics is internal-only: Prometheus scrapes app:8000 directly on the Docker network.
+	# Never expose it publicly (it leaks endpoints, traffic shape, and version fingerprints).
+	@metrics path /metrics
+	respond @metrics 404
+
 	reverse_proxy app:8000 {
 		# SSE streams (campaign/run progress, chat) must not buffer.
 		flush_interval -1

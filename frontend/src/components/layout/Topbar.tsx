@@ -1,6 +1,11 @@
-import { IconButton } from "@/components/ui";
+import { IconButton, Select } from "@/components/ui";
 import { LogOutIcon, MenuIcon, MoonIcon, SunIcon } from "@/components/ui/icons";
 import { useTheme } from "@/app/ThemeContext";
+import {
+  SIGNAL_WINDOW_OPTIONS,
+  useSignalWindow,
+  type SignalWindowDays,
+} from "@/app/SignalWindowContext";
 import { useAuth } from "@/app/AuthContext";
 import { Avatar } from "@/components/ui";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
@@ -13,6 +18,7 @@ export interface TopbarProps {
 
 export function Topbar({ title, onMenuClick }: TopbarProps) {
   const { theme, toggle } = useTheme();
+  const { windowDays, setWindowDays } = useSignalWindow();
   const { logout, session } = useAuth();
 
   return (
@@ -26,6 +32,21 @@ export function Topbar({ title, onMenuClick }: TopbarProps) {
       </div>
 
       <div className={styles.right}>
+        <span className={styles.signalWindow}>
+          <Select
+            aria-label="Signal recency window — applies to signals everywhere"
+            title="Only show signals newer than this, across the whole app"
+            value={windowDays === null ? "all" : String(windowDays)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setWindowDays(v === "all" ? null : (Number(v) as SignalWindowDays));
+            }}
+            options={SIGNAL_WINDOW_OPTIONS.map((o) => ({
+              value: o.value === null ? "all" : String(o.value),
+              label: o.value === null ? "Signals: all time" : `Signals: ${o.value}d`,
+            }))}
+          />
+        </span>
         <IconButton
           label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
           icon={theme === "dark" ? <SunIcon /> : <MoonIcon />}

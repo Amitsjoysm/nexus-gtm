@@ -51,6 +51,10 @@ from nexus.core.tenancy import TenantSession
 from nexus.orchestration.planner import Planner, get_planner
 from nexus.orchestration.tools import ToolContext, ToolError, get_tool
 
+import logging
+
+logger = logging.getLogger("nexus.orchestration.engine")
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -148,7 +152,24 @@ class OrchestrationEngine:
     async def _drive(
         self, ts: TenantSession, run: OrchestrationRun, steps: list[RunStep], *, runtime: AgentRuntime
     ) -> None:
+        # Runaway backstop: each iteration must consume one pending step, so the loop terminates in
+        # <= len(steps). This generous cap turns a hypothetical stuck step (a step that fails to
+        # leave PENDING) into a failed run instead of a wedged worker holding a DB connection.
+        max_iterations = len(steps) * 2 + 8
+        iterations = 0
         while True:
+            iterations += 1
+            if iterations > max_iterations:
+                logger.error(
+                    "orchestration run %s exceeded %d iterations (%d steps); failing to avoid a "
+                    "runaway loop", run.id, max_iterations, len(steps),
+                )
+                step = self._next_runnable(steps)
+                if step is not None:
+                    step.status = STEP_FAILED
+                    step.error = "runaway_guard: run exceeded its step-iteration budget"
+                    await ts.flush()
+                break
             step = self._next_runnable(steps)
             if step is None:
                 break

@@ -66,13 +66,43 @@ class StubEmailVerificationProvider(EmailVerificationProvider):
                                  confidence=0.9, source=self.name)
 
 
+class CompositeEmailVerifier(EmailVerificationProvider):
+    """Fallback chain over several verifiers.
+
+    Returns the first *decisive* verdict (``valid``/``invalid``/``risky``); an ``unknown`` from one
+    provider falls through to the next. This lets a real SMTP verifier (Reacher) lead while a free
+    DNS/MX check backs it up — so a verifier outage still yields a domain-level verdict instead of a
+    blanket "unknown". Never raises (each member is fail-safe on its own).
+    """
+
+    def __init__(self, providers: list[EmailVerificationProvider]) -> None:
+        self._providers = [p for p in providers if p is not None]
+        self.name = "+".join(p.name for p in self._providers) or "stub"
+
+    async def verify_one(self, email: str) -> EmailVerification:
+        last: EmailVerification | None = None
+        for provider in self._providers:
+            verdict = await provider.verify_one(email)
+            if verdict and verdict.status and verdict.status != STATUS_UNKNOWN:
+                return verdict
+            last = verdict or last
+        return last or EmailVerification(
+            email=email, status=STATUS_UNKNOWN, confidence=0.0, source=self.name
+        )
+
+
 _verifier: EmailVerificationProvider | None = None
 
 
-def build_email_verifier(name: str) -> EmailVerificationProvider:
-    key = (name or "").strip().lower()
+def _build_single_verifier(key: str) -> EmailVerificationProvider:
+    key = (key or "").strip().lower()
     if key in ("stub", "", "none"):
         return StubEmailVerificationProvider()
+    if key in ("dns", "mx"):
+        # Free, no-infra deliverability via DNS/MX records (domain-level; no mailbox probe).
+        from nexus.verification.dns import DnsMxEmailVerifier
+
+        return DnsMxEmailVerifier()
     if key == "reacher":
         from nexus.core.config import get_settings
         from nexus.verification.reacher import ReacherEmailVerifier
@@ -84,6 +114,20 @@ def build_email_verifier(name: str) -> EmailVerificationProvider:
         )
     # Unknown keys still fail safe to the offline stub.
     return StubEmailVerificationProvider()
+
+
+def build_email_verifier(name: str) -> EmailVerificationProvider:
+    """Build the verifier from a single key ("reacher") or a fallback chain ("reacher,dns").
+
+    A chain tries each in order and returns the first decisive verdict — so the real SMTP verifier
+    leads and the free DNS/MX check is the alternative when it's unreachable or inconclusive.
+    """
+    keys = [k.strip().lower() for k in (name or "").split(",") if k.strip()]
+    if not keys:
+        return StubEmailVerificationProvider()
+    if len(keys) == 1:
+        return _build_single_verifier(keys[0])
+    return CompositeEmailVerifier([_build_single_verifier(k) for k in keys])
 
 
 def get_email_verifier() -> EmailVerificationProvider:

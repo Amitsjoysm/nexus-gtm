@@ -13,10 +13,12 @@
   gap: var(--space-8);
   padding: var(--space-12);
   color: #fff;
+  /* Infojoy brand hero: violet (primary #533afd) and ruby (#ea2261) glows over the
+     brand-dark navy family — mirrors the violet->pink gradient of the logo mark. */
   background:
-    radial-gradient(120% 120% at 0% 0%, #1b2a55 0%, transparent 55%),
-    radial-gradient(120% 120% at 100% 100%, #143b32 0%, transparent 55%),
-    linear-gradient(160deg, #0c1326, #0b0e14);
+    radial-gradient(120% 120% at 0% 0%, #2c2686 0%, transparent 55%),
+    radial-gradient(120% 120% at 100% 100%, #4d1440 0%, transparent 55%),
+    linear-gradient(160deg, #161849, #0c0d28);
   overflow: hidden;
 }
 .brand {
@@ -57,6 +59,20 @@
   font-weight: var(--weight-bold);
   letter-spacing: var(--tracking-wide);
 }
+/* Brand lockup on the always-dark hero: fixed light logo tints (theme-independent). */
+.brandInfoOnDark {
+  color: #b6adff;
+}
+.brandJoyOnDark {
+  color: #ff86ad;
+}
+/* Brand lockup on theme-following surfaces (mobile brand in the form card). */
+.brandInfo {
+  color: var(--brand-info);
+}
+.brandJoy {
+  color: var(--brand-joy);
+}
 .headline {
   font-size: var(--text-2xl);
   font-weight: var(--weight-bold);
@@ -83,7 +99,7 @@
   height: 38px;
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.08);
-  color: #cdd8ff;
+  color: #c9c4ff;
   flex-shrink: 0;
 }
 .hIcon :global(svg) {

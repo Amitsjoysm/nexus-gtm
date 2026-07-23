@@ -433,10 +433,15 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
     discovered = 0
     for tid in tenant_ids:
         async with tenant_session(tid) as ts:
-            tenant = await ts.session.get(Tenant, tid)
+            # Row-lock the tenant so two workers can't both pass the interval check and run
+            # discovery (double LLM/search spend). A concurrent worker blocks on this lock until
+            # we commit our stamp below, then reads the fresh timestamp and skips. On Postgres this
+            # is SELECT ... FOR UPDATE; on SQLite it's a no-op (writes already serialize), and the
+            # dev deploy runs a single worker, so there is no race there anyway.
+            tenant = await ts.session.get(Tenant, tid, with_for_update=True)
             last = tenant.icp_discovery_last_run_at if tenant else None
             if last is not None and ensure_aware(last) > now - interval:
-                continue  # already ran this interval
+                continue  # already ran this interval (possibly just claimed by another worker)
             # Per-workspace daily target (SDR-selectable in Settings); NULL -> platform default.
             target = (
                 tenant.icp_daily_count

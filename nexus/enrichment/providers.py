@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import abc
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -12,6 +13,13 @@ from nexus.verification import STATUS_INVALID, STATUS_VALID, EmailVerification
 
 _EMAIL = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 _PHONE = re.compile(r"(?:\+?\d[\d\-\s().]{7,}\d)")
+
+
+def _local_part(name: str) -> str:
+    """One name token -> a safe email local-part: fold accents to ASCII, drop everything but
+    ``[a-z0-9]``. "O'Mara" -> "omara", "Renée" -> "renee". Empty if nothing survives."""
+    folded = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]", "", folded.lower())
 
 
 @dataclass(slots=True)
@@ -47,7 +55,12 @@ class PatternEmailProvider(EnrichmentProvider):
         if not account.domain or not contact.full_name.strip():
             return EnrichmentResult()
         parts = re.split(r"\s+", contact.full_name.strip().lower())
-        first, last = parts[0], (parts[-1] if len(parts) > 1 else "")
+        # Strip apostrophes/diacritics/punctuation from each name part so the guessed address is
+        # RFC-valid: "Eileen O'Mara" -> eileen.omara@…, not eileen.o'mara@… (which parses invalid).
+        first = _local_part(parts[0])
+        last = _local_part(parts[-1]) if len(parts) > 1 else ""
+        if not first and not last:
+            return EnrichmentResult()
         domain = account.domain.lower().lstrip("@")
         guess = f"{first}.{last}@{domain}" if last else f"{first}@{domain}"
         return EnrichmentResult(

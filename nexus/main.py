@@ -15,7 +15,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from nexus.api.routers import all_routers
 from nexus.core.config import get_settings
 from nexus.core.db import dispose_db, get_sessionmaker, init_db
-from nexus.core.middleware import RequestContextMiddleware
+from nexus.core.middleware import (
+    IdempotencyMiddleware,
+    MaxBodySizeMiddleware,
+    RequestContextMiddleware,
+    SecurityHeadersMiddleware,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -76,7 +81,7 @@ def _maybe_enable_metrics(app: FastAPI) -> None:
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
-        title="Infojoy GTM",
+        title="InfoJoy GTM",
         description="AI-powered Go-To-Market intelligence platform.",
         version="0.1.0",
         lifespan=lifespan,
@@ -84,13 +89,32 @@ def create_app() -> FastAPI:
 
     app.add_middleware(RequestContextMiddleware)
 
+    if settings.max_request_body_bytes > 0:
+        # Outermost guard: refuse oversized bodies before anything else touches them.
+        app.add_middleware(MaxBodySizeMiddleware, max_bytes=settings.max_request_body_bytes)
+
+    if settings.security_headers_enabled:
+        # HSTS only outside local/test — never force HTTPS on a plain-HTTP localhost.
+        app.add_middleware(
+            SecurityHeadersMiddleware, enable_hsts=settings.env in ("staging", "prod")
+        )
+
+    if settings.idempotency_enabled:
+        # Opt-in: de-duplicate mutating POSTs that carry an Idempotency-Key. Inert otherwise.
+        app.add_middleware(IdempotencyMiddleware)
+
     if settings.cors_origin_list:
+        # Origins are an explicit allowlist (never "*") because credentials are allowed. Methods
+        # and headers are scoped to what the SPA actually sends rather than "*", to keep the
+        # credentialed CORS surface as narrow as the contract requires.
         app.add_middleware(
             CORSMiddleware,
             allow_origins=settings.cors_origin_list,
             allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            # Exactly the headers the client sends: bearer auth, JSON content-type, the request-id
+            # correlation header, and Last-Event-ID (SSE stream resume for chat/run progress).
+            allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Last-Event-ID"],
         )
 
     @app.get("/health", tags=["meta"])

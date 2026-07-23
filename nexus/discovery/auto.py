@@ -85,6 +85,47 @@ def _within_size_band(employee_count: int | None, icp: dict) -> bool:
     return True
 
 
+async def rescreen_discovered_account(ts: TenantSession, account: Account) -> bool:
+    """Post-enrichment ICP re-screen: archive an auto-discovered account whose now-known
+    headcount is definitively outside the ICP size band.
+
+    Discovery's size gate runs on incomplete data — search rarely returns headcount, and
+    unknown headcount is (correctly) kept. Once the account-refresh crawl fills
+    ``employee_count``, a candidate can prove out-of-band; without this re-screen it would
+    linger in the SDR's list forever. Guards:
+
+    - only ``source == "auto_discovery"`` — manual/CRM accounts were chosen by a human;
+    - only a KNOWN out-of-band headcount (the same definitive-non-match rule as discovery);
+    - never once a rep has engaged (any contacts on the account = it's theirs to keep).
+
+    Archives (``custom_fields.archived``) rather than deletes, so the account stays
+    inspectable and can be unarchived. Returns True when the account was archived.
+    """
+    if account.source != "auto_discovery" or account.employee_count is None:
+        return False
+    if account.is_archived:
+        return False  # already out of the list; nothing to do
+    profile = await get_profile(ts)
+    if profile is None or not profile.icp:
+        return False
+    if _within_size_band(account.employee_count, profile.icp):
+        return False
+    from nexus.models.account import Contact
+
+    engaged = await ts.session.scalar(
+        select(Contact.id).where(Contact.account_id == account.id).limit(1)
+    )
+    if engaged is not None:
+        return False
+    account.set_archived(True, reason="icp_size_band")  # archived_at column + legacy JSON mirror
+    await ts.flush()
+    logger.info(
+        "icp re-screen archived account %s (%s): headcount %s outside band",
+        account.id, account.name, account.employee_count,
+    )
+    return True
+
+
 async def auto_discover_for_tenant(
     ts: TenantSession,
     *,

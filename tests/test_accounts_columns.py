@@ -182,3 +182,52 @@ async def test_contacts_list_carries_linkedin(client):
     rows = (await client.get("/api/contacts", headers=auth(token))).json()
     assert rows[0]["linkedin_url"] == "https://linkedin.com/in/jane"
     assert rows[0]["account_name"] == "Acme"
+
+
+async def test_accounts_pagination_and_total_count(client):
+    """C-2: offset/limit page in SQL and X-Total-Count reports the full active count."""
+    token = await signup(client, slug="pag", email="o@pag.x", company="Pag")
+    tid = decode_access_token(token)["tid"]
+    async with tenant_session(tid) as ts:
+        for i in range(5):
+            ts.add(Account(tenant_id=tid, name=f"Co {i}", domain=f"co{i}.com"))
+        await ts.flush()
+
+    r = await client.get("/api/accounts?limit=2&offset=0", headers=auth(token))
+    assert r.status_code == 200
+    assert len(r.json()) == 2
+    assert r.headers["X-Total-Count"] == "5"
+
+    # Second page returns the next distinct rows; full walk covers all 5.
+    page2 = (await client.get("/api/accounts?limit=2&offset=2", headers=auth(token))).json()
+    page3 = (await client.get("/api/accounts?limit=2&offset=4", headers=auth(token))).json()
+    names = {a["name"] for a in r.json()} | {a["name"] for a in page2} | {a["name"] for a in page3}
+    assert names == {f"Co {i}" for i in range(5)}
+
+    # Out-of-range params are clamped/validated, never 500.
+    assert (await client.get("/api/accounts?limit=0", headers=auth(token))).status_code == 422
+    assert (await client.get("/api/accounts?limit=999", headers=auth(token))).status_code == 422
+    assert (await client.get("/api/accounts?offset=-1", headers=auth(token))).status_code == 422
+
+
+async def test_archived_rows_do_not_shrink_the_page(client):
+    """C-2 core bug: archived accounts are filtered in SQL, so a page returns `limit` ACTIVE rows
+    even when archived rows exist — previously they were dropped in Python after the LIMIT."""
+    token = await signup(client, slug="shrink", email="o@shrink.x", company="Shrink")
+    tid = decode_access_token(token)["tid"]
+    async with tenant_session(tid) as ts:
+        active, archived = [], []
+        for i in range(3):
+            a = Account(tenant_id=tid, name=f"Active {i}", domain=f"active{i}.com")
+            ts.add(a); active.append(a)
+        for i in range(3):
+            a = Account(tenant_id=tid, name=f"Dead {i}", domain=f"dead{i}.com")
+            a.set_archived(True)
+            ts.add(a); archived.append(a)
+        await ts.flush()
+
+    r = await client.get("/api/accounts?limit=3&offset=0", headers=auth(token))
+    body = r.json()
+    assert r.headers["X-Total-Count"] == "3"  # only the 3 active
+    assert len(body) == 3  # a full page of ACTIVE rows, not shrunk by the 3 archived
+    assert all(a["name"].startswith("Active") for a in body)

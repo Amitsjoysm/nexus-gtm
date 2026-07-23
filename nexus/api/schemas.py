@@ -115,6 +115,13 @@ class AccountOut(AccountIn):
     fit_score: int | None = None        # latest ICP relevance score (0..100), for the Fit column
     linkedin_url: str | None = None      # company LinkedIn (from enrichment), so reps can verify
     description: str | None = None        # one-line "what they do" (from enrichment)
+    # Extra firmographics / technographics surfaced from web enrichment (stored in custom_fields).
+    # Surfaced so the Account 360 Overview can show a fuller picture than name/industry/size alone.
+    sub_industry: str | None = None       # more specific niche (e.g. "Neobank")
+    revenue: str | None = None            # annual revenue estimate, e.g. "$10M-$50M"
+    region: str | None = None             # state / province / region
+    city: str | None = None
+    keywords: list[str] = Field(default_factory=list)  # focus keywords describing what they do
     source: str | None = None             # discovery | csv | crm — where the account came from
     # CRM trust signals: where this record syncs to and when it last did. Surfaced in the UI
     # ("Synced to Salesforce · 2m ago") so reps can trust the data they act on.
@@ -134,7 +141,9 @@ class ContactIn(BaseModel):
 class ContactOut(ContactIn):
     id: str
     account_id: str
+    email_status: str | None = None      # verifier verdict: valid|risky|invalid|unknown|None
     email_confidence: float
+    email_checked_at: str | None = None  # ISO time of last deliverability check; None = never
     phone_confidence: float
     enrichment_source: str | None = None
 

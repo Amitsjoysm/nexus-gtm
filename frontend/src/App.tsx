@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { lazy, Suspense } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { ThemeProvider } from "@/app/ThemeContext";
+import { SignalWindowProvider } from "@/app/SignalWindowContext";
 import { AuthProvider, useAuth } from "@/app/AuthContext";
 import { ToastProvider } from "@/components/ui";
 import { AppShell } from "@/components/layout/AppShell";
@@ -80,6 +81,7 @@ function RequireRole({ minRole, children }: { minRole: Role; children: ReactNode
 export function App() {
   return (
     <ThemeProvider>
+      <SignalWindowProvider>
       <AuthProvider>
         <ToastProvider>
           <BrowserRouter>
@@ -211,6 +213,7 @@ export function App() {
           </BrowserRouter>
         </ToastProvider>
       </AuthProvider>
+      </SignalWindowProvider>
     </ThemeProvider>
   );
 }

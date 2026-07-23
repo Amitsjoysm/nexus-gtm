@@ -1,21 +1,25 @@
 /*
  * Infojoy GTM — Design Tokens (single source of truth)
+ * Values follow the Infojoy design system (InfoJoy landing reference):
+ *   primary #533afd · brand-dark #1c1e54 · ink #0d253d · canvas #f6f9fc ·
+ *   hairline #e3e8ee · Inter type · radii 6/8/12/16 · motion 120/200/320ms.
  * Consume via var(--token). Never hard-code colors/spacing in components.
  * Theming: default is dark; [data-theme="light"] overrides surfaces/text.
  */
 
 :root {
-  /* ---- Typography ---- */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-    Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
-  --font-mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", "Cascadia Code",
-    Menlo, Consolas, monospace;
+  /* ---- Typography (Infojoy: Inter-first, system fallback) ---- */
+  --font-sans: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji",
+    sans-serif;
+  --font-mono: "SF Mono", "SFMono-Regular", ui-monospace, "JetBrains Mono",
+    "Cascadia Code", Menlo, Consolas, monospace;
 
   --text-xs: 0.75rem;   /* 12 */
-  --text-sm: 0.8125rem; /* 13 */
-  --text-base: 0.875rem;/* 14 */
-  --text-md: 1rem;      /* 16 */
-  --text-lg: 1.25rem;   /* 20 */
+  --text-sm: 0.8125rem; /* 13 — Infojoy caption */
+  --text-base: 0.875rem;/* 14 — Infojoy body-tabular */
+  --text-md: 1rem;      /* 16 — Infojoy body-lg */
+  --text-lg: 1.25rem;   /* 20 — Infojoy heading-md */
   --text-xl: 1.5rem;    /* 24 */
   --text-2xl: 1.875rem; /* 30 */
   --text-3xl: 2.25rem;  /* 36 */
@@ -43,11 +47,11 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
-  /* ---- Radii ---- */
+  /* ---- Radii (Infojoy: sm 6 / md 8 / lg 12 / xl 16 / pill) ---- */
   --radius-sm: 6px;
-  --radius: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
   --radius-full: 999px;
 
   /* ---- Layout ---- */
@@ -55,16 +59,16 @@
   --sidebar-w: 248px;
   --topbar-h: 60px;
 
-  /* ---- Motion ---- */
+  /* ---- Motion (Infojoy: 120 / 200 / 320ms, same easings) ---- */
   --dur-fast: 120ms;
-  --dur: 180ms;
-  --dur-slow: 260ms;
+  --dur: 200ms;
+  --dur-slow: 320ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
-  /* ---- Brand (theme-independent hues) ---- */
-  --accent: #5b8cff;
-  --accent-hover: #6f9bff;
+  /* ---- Brand ---- */
+  /* Infojoy primary is #533afd; the dark theme lifts it for contrast on navy
+     surfaces (buttons keep white text in both themes). */
   --accent-contrast: #ffffff;
 
   /* ---- Z-index ---- */
@@ -72,43 +76,64 @@
   --z-drawer: 200;
   --z-modal: 300;
   --z-toast: 400;
+
+  /* ---- Legacy aliases ----
+   * A handful of component styles reference these names; they were never defined,
+   * so those borders/colors silently fell back to initial values. Aliased to the
+   * canonical tokens (indirection resolves per-theme at use time). */
+  --border-subtle: var(--border);
+  --surface-1: var(--surface);
+  --radius-md: var(--radius);
+  --text-default: var(--text);
+  --color-accent: var(--accent);
+  --font-weight-medium: var(--weight-medium);
+  --transition-fast: var(--dur-fast) var(--ease-out);
 }
 
-/* ================= DARK (default) ================= */
+/* ================= DARK (default) =================
+ * Infojoy brand-dark family (#1c1e54, hue ~238): deep indigo-navy surfaces
+ * instead of neutral slate, with the primary lifted to stay readable. */
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #0b0e14;
-  --surface: #121722;
-  --surface-2: #161c29;
-  --surface-3: #1d2533;
-  --overlay: rgba(6, 9, 14, 0.66);
+  --bg: #0c0d28;
+  --surface: #12143a;
+  --surface-2: #171a46;
+  --surface-3: #1e2254;
+  --overlay: rgba(5, 6, 20, 0.66);
 
-  --border: #232a3b;
-  --border-strong: #313a50;
+  --border: #262a5e;
+  --border-strong: #35396f;
 
-  --text: #e8ebf2;
-  --text-muted: #9aa3b7;
-  --text-subtle: #6b7488;
-  --text-inverse: #0b0e14;
+  --text: #eaecfb;
+  --text-muted: #a0a6d2;
+  --text-subtle: #7278a8;
+  --text-inverse: #0c0d28;
 
-  --accent-quiet: rgba(91, 140, 255, 0.14);
+  --accent: #7a68ff;
+  --accent-hover: #8d7eff;
+  --accent-quiet: rgba(122, 104, 255, 0.16);
+
+  /* Brand wordmark ("InfoJoy"): "Info" indigo-violet, "Joy" ruby-pink — the logo's
+     two-tone lockup, lifted for contrast on the dark navy surfaces. */
+  --brand-info: #a49bff;
+  --brand-joy: #f9699e;
 
   --success: #36c98c;
   --success-quiet: rgba(54, 201, 140, 0.14);
   --warning: #f0b429;
   --warning-quiet: rgba(240, 180, 41, 0.15);
-  --danger: #ff6b6b;
-  --danger-quiet: rgba(255, 107, 107, 0.14);
-  --info: #5b8cff;
-  --info-quiet: rgba(91, 140, 255, 0.14);
+  --danger: #ff6b7b;
+  --danger-quiet: rgba(255, 107, 123, 0.14);
+  --info: #7a68ff;
+  --info-quiet: rgba(122, 104, 255, 0.14);
 
-  --ring: #87a9ff;
+  --ring: #a99cff;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.55);
+  --shadow-sm: 0 1px 2px rgba(4, 5, 18, 0.45);
+  --shadow: 0 6px 20px rgba(4, 5, 18, 0.5);
+  --shadow-lg: 0 18px 50px rgba(4, 5, 18, 0.6);
 
   --skeleton: linear-gradient(
     90deg,
@@ -118,27 +143,33 @@
   );
 }
 
-/* ================= LIGHT ================= */
+/* ================= LIGHT =================
+ * Straight from the Infojoy system: canvas #f6f9fc, ink #0d253d,
+ * hairline #e3e8ee, primary #533afd, blue-tinted shadows (0,55,112). */
 [data-theme="light"] {
   color-scheme: light;
 
-  --bg: #f5f7fb;
+  --bg: #f6f9fc;
   --surface: #ffffff;
-  --surface-2: #f3f5fa;
-  --surface-3: #e9edf5;
-  --overlay: rgba(17, 24, 39, 0.4);
+  --surface-2: #f6f9fc;
+  --surface-3: #eaf0f6;
+  --overlay: rgba(13, 37, 61, 0.4);
 
-  --border: #e1e6ef;
-  --border-strong: #cbd3e1;
+  --border: #e3e8ee;
+  --border-strong: #a8c3de;
 
-  --text: #131722;
-  --text-muted: #5a6478;
-  --text-subtle: #8b94a7;
+  --text: #0d253d;
+  --text-muted: #64748d;
+  --text-subtle: #8494ab;
   --text-inverse: #ffffff;
 
-  --accent: #3563e9;
-  --accent-hover: #2a52cc;
-  --accent-quiet: rgba(53, 99, 233, 0.1);
+  --accent: #533afd;
+  --accent-hover: #4434d4;
+  --accent-quiet: rgba(83, 58, 253, 0.1);
+
+  /* Brand wordmark: straight from the logo — deep indigo "Info", ruby "Joy". */
+  --brand-info: #2e2b8c;
+  --brand-joy: #ea2261;
 
   --success: #0f9d6b;
   --success-quiet: rgba(15, 157, 107, 0.12);
@@ -146,14 +177,14 @@
   --warning-quiet: rgba(185, 119, 10, 0.12);
   --danger: #d83a3a;
   --danger-quiet: rgba(216, 58, 58, 0.1);
-  --info: #3563e9;
-  --info-quiet: rgba(53, 99, 233, 0.1);
+  --info: #533afd;
+  --info-quiet: rgba(83, 58, 253, 0.1);
 
-  --ring: #2a52cc;
+  --ring: #533afd;
 
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
-  --shadow: 0 8px 24px rgba(16, 24, 40, 0.1);
-  --shadow-lg: 0 20px 48px rgba(16, 24, 40, 0.16);
+  --shadow-sm: 0 1px 3px rgba(0, 55, 112, 0.08);
+  --shadow: 0 8px 24px rgba(0, 55, 112, 0.08), 0 2px 6px rgba(0, 55, 112, 0.04);
+  --shadow-lg: 0 20px 48px rgba(0, 55, 112, 0.14);
 
   --skeleton: linear-gradient(
     90deg,

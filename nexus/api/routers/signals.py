@@ -1,10 +1,13 @@
 """Signal library: browse normalized GTM signals with filters and pagination."""
 from __future__ import annotations
 
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, Query
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import SignalOut
+from nexus.core.db import utcnow
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.models.signal import SignalEvent
@@ -33,6 +36,7 @@ async def list_signals(
     _: Principal = Depends(require(Permission.manage_accounts)),
     account_id: str | None = None,
     kind: str | None = None,
+    max_age_days: int | None = Query(default=None, ge=1, le=365),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> list[SignalOut]:
@@ -41,6 +45,10 @@ async def list_signals(
         where.append(SignalEvent.account_id == account_id)
     if kind:
         where.append(SignalEvent.kind == kind)
+    if max_age_days is not None:
+        # Recency window (e.g. 7/15/30/60/90 days). Server-side so pagination stays correct;
+        # backed by the (tenant_id, occurred_at) composite index on signal_events.
+        where.append(SignalEvent.occurred_at >= utcnow() - timedelta(days=max_age_days))
     stmt = (
         ts.select(SignalEvent, *where)
         .order_by(SignalEvent.occurred_at.desc())

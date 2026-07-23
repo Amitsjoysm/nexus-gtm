@@ -113,8 +113,11 @@ export function LoginPage() {
     <div className={styles.page}>
       <section className={styles.aside} aria-hidden="true">
         <div className={styles.brand}>
-          <img src="/infojoy-logo.png" alt="Infojoy" className={styles.logoImg} />
-          <span className={styles.brandText}>Infojoy GTM</span>
+          <img src="/infojoy-mark.png" alt="InfoJoy" className={styles.logoImg} />
+          <span className={styles.brandText}>
+            <span className={styles.brandInfoOnDark}>Info</span>
+            <span className={styles.brandJoyOnDark}>Joy</span> GTM
+          </span>
         </div>
         <h2 className={styles.headline}>
           Turn buying signals into pipeline — before your competitors notice.
@@ -132,8 +135,11 @@ export function LoginPage() {
       <section className={styles.formCol}>
         <div className={styles.formCard}>
           <div className={styles.mobileBrand}>
-            <img src="/infojoy-logo.png" alt="" className={styles.logoSmImg} />
-            <span>Infojoy GTM</span>
+            <img src="/infojoy-mark.png" alt="" className={styles.logoSmImg} />
+            <span>
+              <span className={styles.brandInfo}>Info</span>
+              <span className={styles.brandJoy}>Joy</span> GTM
+            </span>
           </div>
 
           <h1 className={styles.title}>
@@ -306,7 +312,7 @@ export function LoginPage() {
                   <br />
                 </>
               )}
-              {mode === "login" ? "New to Infojoy?" : "Already have a workspace?"}{" "}
+              {mode === "login" ? "New to InfoJoy?" : "Already have a workspace?"}{" "}
               <button
                 type="button"
                 className={styles.switchBtn}

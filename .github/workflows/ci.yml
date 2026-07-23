@@ -58,6 +58,36 @@ jobs:
         if: always()
         with: { name: coverage-xml, path: coverage.xml }
 
+  # ---------- Integration: C-1 (Postgres advisory lock + FOR UPDATE) & H-4 (Redis idempotency) ----
+  integration-postgres:
+    name: Integration (Postgres + Redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: nexus, POSTGRES_PASSWORD: nexus, POSTGRES_DB: nexus }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nexus" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.10", cache: pip }
+      - run: pip install -e ".[dev,postgres,redis]"
+      - name: Integration tests (real Postgres + Redis)
+        env:
+          NEXUS_TEST_POSTGRES_URL: postgresql+asyncpg://nexus:nexus@localhost:5432/nexus
+          NEXUS_TEST_REDIS_URL: redis://localhost:6379/0
+        run: pytest tests_integration -p no:cacheprovider --timeout=120 -q
+
   # ---------- Quality gate: frontend build ----------
   frontend:
     name: Frontend build
@@ -129,6 +159,6 @@ jobs:
   quality-gate:
     name: Quality gate
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, frontend, secrets, image]
+    needs: [lint, typecheck, test, integration-postgres, frontend, secrets, image]
     steps:
       - run: echo "All required quality gates passed."

@@ -34,6 +34,22 @@ async def process_account(
         if filled:
             await ts.flush()
 
+    # Post-enrichment ICP re-screen: an auto-discovered account whose crawled headcount is now
+    # definitively outside the ICP band is archived (not deleted) and skips scoring/inbox/plays —
+    # the SDR's daily list must only ever show strict ICP matches. No-op for manual/CRM accounts.
+    from nexus.discovery.auto import rescreen_discovered_account
+
+    if await rescreen_discovered_account(ts, account):
+        return {
+            "account_id": account.id,
+            "new_signals": len(new_signals),
+            "composite_score": None,
+            "scoring_status": "skipped",
+            "inbox_tasks_created": [],
+            "plays_executed": [],
+            "icp_screened": True,
+        }
+
     score = await runtime.run("scoring", ts, account_id=account.id, persist=True)
     composite = score.output.get("composite")
 

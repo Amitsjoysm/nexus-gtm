@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import DateTime, String, event, func
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -84,8 +84,33 @@ def get_engine() -> AsyncEngine:
         kwargs: dict = {"future": True, "pool_pre_ping": True}
         if settings.is_postgres:
             kwargs.update(pool_size=10, max_overflow=20)
+        elif settings.is_sqlite:
+            # Wait up to 30s for a lock instead of erroring immediately: the API and the
+            # always-on worker can write the same file concurrently in dev. Pairs with the
+            # WAL pragma below (concurrent readers + one writer). No effect on Postgres/prod.
+            kwargs["connect_args"] = {"timeout": 30}
         _engine = create_async_engine(settings.database_url, **kwargs)
+        if settings.is_sqlite:
+            _install_sqlite_pragmas(_engine)
     return _engine
+
+
+def _install_sqlite_pragmas(engine: AsyncEngine) -> None:
+    """Enable WAL journaling + a busy timeout on every new SQLite connection.
+
+    WAL lets readers proceed during a write (default rollback-journal blocks them); busy_timeout
+    makes a contending writer wait rather than raise ``database is locked``. Both are concurrency
+    robustness only — query results are unchanged. No-op on ``:memory:`` (WAL needs a file).
+    """
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, _record) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+        finally:
+            cursor.close()
 
 
 def get_sessionmaker() -> async_sessionmaker[AsyncSession]:

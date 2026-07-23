@@ -21,9 +21,16 @@ import type { AsyncState } from "@/hooks/useApi";
 import { useHotSignalNotifications } from "@/hooks/useHotSignalNotifications";
 import { useLivePoll } from "@/hooks/useLivePoll";
 import { useApiClient, useAuth } from "@/app/AuthContext";
+import { useSignalWindow } from "@/app/SignalWindowContext";
 import { ApiError } from "@/lib/api";
 import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
-import { activityTone, priorityTone, severityTone, strengthMeta } from "@/lib/display";
+import {
+  activityTone,
+  priorityTone,
+  severityTone,
+  signalSourceMeta,
+  strengthMeta,
+} from "@/lib/display";
 import type {
   ActivityItem,
   AnalyticsOverview,
@@ -76,13 +83,18 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const { session } = useAuth();
+  const { windowDays } = useSignalWindow();
   const canViewAttribution = session ? ROLE_RANK[session.role] >= ROLE_RANK.manager : false;
   const [seeding, setSeeding] = useState(false);
 
   const overview = useApi<AnalyticsOverview>((signal) => api.analyticsOverview(signal), []);
   const inbox = useApi<InboxTask[]>((signal) => api.listInbox(undefined, signal), []);
   const alerts = useApi<Alert[]>((signal) => api.listAlerts("open", signal), []);
-  const signals = useApi<SignalEvent[]>((signal) => api.listSignals({ limit: 6 }, signal), []);
+  const signals = useApi<SignalEvent[]>(
+    (signal) =>
+      api.listSignals({ limit: 6, max_age_days: windowDays ?? undefined }, signal),
+    [windowDays],
+  );
   // The cross-entity activity feed is a manager analytics surface (view_analytics). Reps skip
   // the request entirely so their dashboard never shows a permission error where the feed sits.
   const activity = useApi<ActivityItem[]>(
@@ -334,6 +346,7 @@ export function DashboardPage() {
                 <div className={styles.list}>
                   {rows.slice(0, 5).map((sig) => {
                     const meta = strengthMeta(sig.strength);
+                    const src = signalSourceMeta(sig);
                     return (
                       <div key={sig.id} className={styles.item}>
                         <Badge className={styles.itemAccent} tone={meta.tone} dot>
@@ -344,7 +357,22 @@ export function DashboardPage() {
                           <div className={styles.itemMeta}>
                             <span>{humanize(sig.kind)}</span>
                             <span>·</span>
+                            <span title={src.hint}>
+                              {src.label}
+                              {src.isSynthetic && " (sample)"}
+                            </span>
+                            <span>·</span>
                             <span>{timeAgo(sig.occurred_at)}</span>
+                            <span>·</span>
+                            <a
+                              className={styles.link}
+                              href={src.href}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={src.hint}
+                            >
+                              {src.linkLabel} ↗
+                            </a>
                           </div>
                         </div>
                       </div>

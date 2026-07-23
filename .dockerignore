@@ -14,3 +14,16 @@ venv/
 docs/
 tests/
 *.md
+# Host build artifacts must never leak into the image: node_modules contains
+# host-platform native binaries that would clobber the Linux `npm ci` output in
+# the frontend build stage; the SPA is always built inside that stage.
+frontend/node_modules/
+frontend/dist/
+nexus/web/dist/
+# Local AI-tooling state (the code-review graph alone is ~40MB).
+.code-review-graph/
+.claude/
+.gemini/
+.qoder/
+.mcp.json
+.opencode.json

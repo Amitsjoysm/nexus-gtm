@@ -183,8 +183,8 @@ async def test_email_settings(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No recipient for the test email")
     res = await send_email(
         settings, to=to,
-        subject="Infojoy test email",
-        body="This is a test from Infojoy. If you received it, your SMTP is set up correctly.",
+        subject="InfoJoy test email",
+        body="This is a test from InfoJoy. If you received it, your SMTP is set up correctly.",
     )
     if res.ok:
         settings["verified_at"] = _utcnow_iso()
@@ -398,8 +398,8 @@ async def test_email_account(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No recipient for the test email")
     res = await _send_email(
         acct, to=to,
-        subject="Infojoy test email",
-        body="This is a test from Infojoy. If you received it, this mailbox is set up correctly.",
+        subject="InfoJoy test email",
+        body="This is a test from InfoJoy. If you received it, this mailbox is set up correctly.",
     )
     if res.ok:
         acct["verified_at"] = _utcnow_iso()

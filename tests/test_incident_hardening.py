@@ -53,6 +53,11 @@ class _FlakyQueue(TaskQueue):
         if self.dequeues <= self.failures:
             raise ConnectionError("queue connection lost")
         self.dispatched.set()
+        # Honor the TaskQueue contract: a real empty queue blocks up to `timeout` before
+        # returning None (see InMemoryTaskQueue/RedisTaskQueue.dequeue). Returning instantly
+        # would let the worker's None-poll loop spin without ever yielding to the event loop,
+        # starving this test's own wait_for guards.
+        await asyncio.sleep(timeout or 0)
         return None
 
 
@@ -118,6 +123,26 @@ def test_default_ingestion_excludes_demo_signals_when_disabled(monkeypatch):
         set_ingestion_service(None)
 
 
+@pytest.mark.parametrize("env", ["staging", "prod"])
+def test_demo_signals_hard_disabled_in_production(monkeypatch, env):
+    """Fail-safe: staging/prod must never fabricate signals, even if the operator leaves
+    NEXUS_DEMO_SIGNALS_ENABLED=true. The env-based guard wins over the raw flag."""
+    from nexus.ingestion.service import get_ingestion_service, set_ingestion_service
+    from nexus.ingestion.sources import DemoSignalSource
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "demo_signals_enabled", True)  # operator mistake
+    monkeypatch.setattr(settings, "env", env)
+    set_ingestion_service(None)  # force re-composition from settings
+    try:
+        assert settings.demo_signals_active is False
+        sources = get_ingestion_service().sources
+        assert not any(isinstance(s, DemoSignalSource) for s in sources)
+        assert len(sources) >= 1  # the real web source is still there
+    finally:
+        set_ingestion_service(None)
+
+
 @pytest.mark.asyncio
 async def test_metrics_off_by_default_and_app_serves(client):
     """Regression: metrics must be opt-in. Auto-enabling the instrumentator put a
@@ -127,4 +152,8 @@ async def test_metrics_off_by_default_and_app_serves(client):
     r = await client.get("/api/health") if False else await client.get("/health")
     assert r.status_code == 200, r.text
     r = await client.get("/metrics")
-    assert r.status_code == 404  # not mounted by default
+    # The Prometheus endpoint must not be active by default. When the SPA build is present
+    # (as in production), an unmounted /metrics falls through to the client-side-routing shell
+    # (200 text/html) rather than 404 — either way it is NOT serving Prometheus metrics.
+    assert r.status_code == 404 or r.headers.get("content-type", "").startswith("text/html")
+    assert "# TYPE" not in r.text and "# HELP" not in r.text  # no prometheus exposition

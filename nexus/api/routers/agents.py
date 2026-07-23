@@ -55,6 +55,11 @@ async def run_pipeline(
     # source the buying committee so "Run pipeline" actually populates contacts. Contact sourcing
     # lives here (manual click), not in process_account, so the automated sweep stays cheap.
     result = await process_account(ts, account)
+    if result.get("icp_screened"):
+        # The re-screen archived this account as a definitive ICP non-match — don't source a
+        # buying committee for it (contacts would also block any future auto-archive).
+        result["new_contacts"] = 0
+        return result
     from nexus.campaigns.sourcing import source_account_contacts
     from nexus.core.config import get_settings
 

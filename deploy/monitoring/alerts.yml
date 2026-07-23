@@ -1,0 +1,49 @@
+# NEXUS GTM alert rules — the SLIs/SLOs from the production remediation plan.
+# Metric names follow prometheus-fastapi-instrumentator defaults
+# (http_requests_total, http_request_duration_seconds_bucket).
+groups:
+  - name: nexus-availability
+    rules:
+      - alert: AppDown
+        expr: up{job="nexus-app"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "NEXUS app is not being scraped (down or /metrics unreachable)"
+          description: "Prometheus cannot scrape app:8000/metrics for 1m."
+
+      - alert: HighServerErrorRate
+        # >2% 5xx over 5m — the deployment auto-rollback threshold.
+        expr: |
+          sum(rate(http_requests_total{job="nexus-app",status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total{job="nexus-app"}[5m])), 1) > 0.02
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "5xx error rate above 2% for 5m"
+          description: "Investigate app logs; consider rollback to the previous image."
+
+  - name: nexus-latency
+    rules:
+      - alert: HighApiLatencyP95
+        # P95 request latency > 1.5s over 10m (excludes the intentionally-slow agent endpoints).
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{job="nexus-app",handler!~"/api/agents.*"}[10m]))
+          ) > 1.5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "API P95 latency > 1.5s for 10m"
+          description: "Check DB pool saturation, slow queries, and CPU."
+
+  - name: nexus-saturation
+    rules:
+      - alert: NoTrafficScraped
+        # A soft signal the app stopped serving even though it's 'up'.
+        expr: sum(rate(http_requests_total{job="nexus-app"}[10m])) == 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "No HTTP requests recorded for 15m"
+          description: "The app is up but idle or not receiving traffic — verify the ingress."

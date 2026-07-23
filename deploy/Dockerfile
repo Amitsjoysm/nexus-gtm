@@ -22,11 +22,14 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Install the app + production extras (Postgres driver, Redis/Valkey queue, Alembic, metrics).
-COPY pyproject.toml ./
+# constraints.txt pins exact versions (C-3) so a fresh build can't silently pull a breaking
+# transitive (e.g. an incompatible starlette). Constraints only cap versions — they never change
+# which packages the extras resolve.
+COPY pyproject.toml constraints.txt ./
 COPY nexus ./nexus
 COPY migrations ./migrations
 COPY alembic.ini ./
-RUN pip install --no-cache-dir ".[postgres,redis,migrate,metrics]"
+RUN pip install --no-cache-dir -c constraints.txt ".[postgres,redis,migrate,metrics]"
 
 # The compiled SPA from stage 1 (served by FastAPI with SPA fallback).
 COPY --from=frontend /src/nexus/web/dist ./nexus/web/dist

@@ -12,7 +12,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from sqlalchemy import text
+
 from nexus.core.config import get_settings
+from nexus.core.db import get_sessionmaker
 from nexus.workers.queue import TaskQueue, get_task_queue
 from nexus.workers.tasks import (
     enqueue_advance_cadences,
@@ -24,29 +27,70 @@ from nexus.workers.tasks import (
 
 logger = logging.getLogger("nexus.workers.scheduler")
 
+# Postgres advisory-lock key for the singleton scheduler. A stable arbitrary 63-bit int; the
+# heartbeat holds it only for the brief enqueue burst each tick, so exactly one worker in a
+# horizontally-scaled fleet enqueues the recurring drivers — otherwise N workers would each
+# enqueue them, N-fold multiplying digest sends and (before the atomic claim below) LLM spend.
+_SCHEDULER_LOCK_KEY = 0x4E455853  # "NEXS"
+
 
 async def _enqueue_due(queue: TaskQueue) -> int:
     """Enqueue the recurring drivers for whichever switches are on. Returns the count enqueued.
 
+    Runs under a per-tick advisory lock so only the leader worker enqueues (see module docstring).
     The cadence + account-refresh drivers gate on automation_enabled; the CRM sweep gates on its
-    own crm_sync_enabled switch (so it can run independently). Each handler re-checks its switch,
-    so this is a pre-filter, not the authority."""
+    own crm_sync_enabled switch. Each handler re-checks its switch, so this is a pre-filter."""
     settings = get_settings()
-    count = 0
-    if settings.automation_enabled:
-        await enqueue_advance_cadences(queue=queue)
-        await enqueue_refresh_due_accounts(queue=queue)
-        # Digest rides the automation switch; its handler is idempotent per interval, so
-        # enqueueing every tick costs one cheap timestamp check per tenant.
-        await enqueue_send_daily_digests(queue=queue)
-        # Daily ICP auto-discovery: idempotent per interval (Tenant.icp_discovery_last_run_at);
-        # the handler also no-ops unless icp_discovery_enabled, so this is a cheap pre-filter.
-        await enqueue_discover_icp_accounts(queue=queue)
-        count += 4
-    if settings.crm_sync_enabled:
-        await enqueue_sync_crm_due_accounts(queue=queue)
-        count += 1
-    return count
+    if not (settings.automation_enabled or settings.crm_sync_enabled):
+        return 0  # nothing to enqueue; skip the lock round-trip entirely
+
+    async with get_sessionmaker()() as session:
+        if not await _acquire_scheduler_lock(session):
+            return 0  # another worker holds the scheduler lock this tick
+        try:
+            count = 0
+            if settings.automation_enabled:
+                await enqueue_advance_cadences(queue=queue)
+                await enqueue_refresh_due_accounts(queue=queue)
+                # Digest rides the automation switch; its handler is idempotent per interval.
+                await enqueue_send_daily_digests(queue=queue)
+                # Daily ICP auto-discovery: the handler atomically claims each tenant's per-interval
+                # slot (Tenant.icp_discovery_last_run_at, row-locked), so it can't double-run.
+                await enqueue_discover_icp_accounts(queue=queue)
+                count += 4
+            if settings.crm_sync_enabled:
+                await enqueue_sync_crm_due_accounts(queue=queue)
+                count += 1
+            return count
+        finally:
+            await _release_scheduler_lock(session)
+
+
+async def _acquire_scheduler_lock(session) -> bool:
+    """Try to become the scheduler leader for this tick.
+
+    Postgres: ``pg_try_advisory_lock`` — non-blocking; returns False if another worker holds it.
+    Any non-Postgres backend (SQLite/in-memory dev) is single-process by construction, so there is
+    no second scheduler to coordinate with — always the leader."""
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return True
+    got = await session.execute(
+        text("SELECT pg_try_advisory_lock(:k)"), {"k": _SCHEDULER_LOCK_KEY}
+    )
+    return bool(got.scalar())
+
+
+async def _release_scheduler_lock(session) -> None:
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    try:
+        await session.execute(
+            text("SELECT pg_advisory_unlock(:k)"), {"k": _SCHEDULER_LOCK_KEY}
+        )
+    except Exception:  # a failed unlock self-heals when the connection returns to the pool
+        logger.warning("scheduler advisory unlock failed", exc_info=True)
 
 
 async def run_scheduler(

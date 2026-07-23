@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     system_smtp_username: str = ""
     system_smtp_password: str = ""          # app password; env/secret only
     system_smtp_from: str = ""              # defaults to the username
-    system_smtp_from_name: str = "Infojoy GTM"
+    system_smtp_from_name: str = "InfoJoy GTM"
 
     # Two-step OTP registration. When enabled, /auth/signup is gated behind email verification:
     # the client calls /auth/register/start -> /auth/register/verify. Off by default so local/dev
@@ -60,6 +60,23 @@ class Settings(BaseSettings):
 
     # CORS — comma-separated origins (e.g. a Chrome extension or external SPA). Empty = same-origin.
     cors_origins: str = ""
+
+    # App-layer security headers (defense-in-depth). Set-if-absent, so when Caddy (or any proxy)
+    # already sets them they are left untouched; when the app is exposed directly they are still
+    # present. HSTS is only emitted outside local/test (never force HTTPS on plain-HTTP localhost).
+    security_headers_enabled: bool = True
+
+    # Idempotency for mutating POSTs. Off by default (opt-in): when on, a POST carrying an
+    # ``Idempotency-Key`` header is de-duplicated — a retry with the same key replays the first
+    # response instead of re-running the work. Uses the same backend as the task queue (Redis in
+    # production for cross-worker dedup; in-process for single-node dev). No header ⇒ no change.
+    idempotency_enabled: bool = False
+    idempotency_ttl_s: int = 86400  # how long a key's response is remembered (24h)
+
+    # Max accepted request body. Rejects oversized bodies with 413 before they are buffered — a
+    # cheap DoS guard. Generous enough for the CSV upload endpoints (LinkedIn connections, custom
+    # fields); tune down if you have no large uploads. 0 disables the check.
+    max_request_body_bytes: int = 10_000_000  # 10 MB
 
     # Per-source timeout (seconds) so a slow signal source can't hang a request.
     source_timeout_s: float = 8.0
@@ -132,7 +149,9 @@ class Settings(BaseSettings):
     signal_sources: str = "demo"               # ordered signal sources
     search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
     research_provider: str = "stub"            # account-research backend
-    email_verify_provider: str = "stub"        # email-deliverability backend
+    # Email-deliverability backend: "stub" (syntax only, offline default) | "dns" (free DNS/MX
+    # domain check, no infra) | "reacher" (full SMTP mailbox probe, needs an off-host verifier).
+    email_verify_provider: str = "stub"
     # Reacher verifier endpoint. In production point this at an HTTPS URL fronted by your
     # reverse proxy (the container can reach :443 but not Reacher's raw :8080), e.g.
     # https://verify.example.com/v0/check_email. The default is the local-only HTTP port.
@@ -208,8 +227,9 @@ class Settings(BaseSettings):
 
     # Synthetic demo signals (DemoSignalSource) in the DEFAULT ingestion pipeline. They make
     # a fresh local workspace come alive without network, but in production they would show
-    # reps fabricated funding/hiring events as if they were real — deployments must set
-    # NEXUS_DEMO_SIGNALS_ENABLED=false so only genuine sources feed the pipeline.
+    # reps fabricated funding/hiring events as if they were real. This flag is honored in
+    # local/test, but `demo_signals_active` HARD-DISABLES it in staging/prod regardless of
+    # value — so a forgotten env var can never leak fabricated signals to a live tenant.
     demo_signals_enabled: bool = True
 
     # Daily digest (SDR adoption): once per interval, summarize the last day's GTM activity
@@ -265,6 +285,10 @@ class Settings(BaseSettings):
         return self.database_url.startswith("postgresql")
 
     @property
+    def is_sqlite(self) -> bool:
+        return self.database_url.startswith("sqlite")
+
+    @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
@@ -298,6 +322,18 @@ class Settings(BaseSettings):
                 seen.add(k)
                 out.append(k)
         return out
+
+    @property
+    def demo_signals_active(self) -> bool:
+        """Whether synthetic demo signals actually feed the pipeline.
+
+        Fail-safe: hard-off in staging/prod so a live tenant can never be shown fabricated
+        events, even if NEXUS_DEMO_SIGNALS_ENABLED was left true by mistake. Honors the raw
+        flag only in local/test, where synthetic data is the point (offline demos, fixtures).
+        """
+        if self.env in ("staging", "prod"):
+            return False
+        return self.demo_signals_enabled
 
     @property
     def exa_api_key_list(self) -> list[str]:

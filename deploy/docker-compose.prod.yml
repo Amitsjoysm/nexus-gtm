@@ -55,6 +55,9 @@ services:
       # The app container migrates the DB to head + provisions the role/RLS on start (as owner);
       # the worker does neither (to avoid a race) and connects as the owner for cross-tenant sweeps.
       NEXUS_RUN_MIGRATIONS: "1"
+      # Real signals only in production: never fabricate demo funding/hiring events for live
+      # tenants. Redundant with the env-based fail-safe in config (NEXUS_ENV=prod), kept explicit.
+      NEXUS_DEMO_SIGNALS_ENABLED: "false"
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,6 +81,8 @@ services:
       NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD}@postgres:5432/nexus
       NEXUS_REDIS_URL: redis://valkey:6379/0
       NEXUS_QUEUE_BACKEND: redis
+      # The worker runs the automation heartbeat (which ingests signals) — keep demo signals off.
+      NEXUS_DEMO_SIGNALS_ENABLED: "false"
     depends_on:
       postgres:
         condition: service_healthy

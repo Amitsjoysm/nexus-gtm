@@ -17,9 +17,11 @@ export function Sidebar({ open, onNavigate }: SidebarProps) {
   return (
     <aside className={cn(styles.sidebar, open && styles.open)} aria-label="Primary">
       <div className={styles.brand}>
-        <img src="/infojoy-logo.png" alt="Infojoy" className={styles.logoImg} />
+        <img src="/infojoy-mark.png" alt="Infojoy" className={styles.logoImg} />
         <span className={styles.brandText}>
-          Infojoy <span className={styles.brandSub}>GTM</span>
+          <span className={styles.brandInfo}>Info</span>
+          <span className={styles.brandJoy}>Joy</span>{" "}
+          <span className={styles.brandSub}>GTM</span>
         </span>
       </div>
 

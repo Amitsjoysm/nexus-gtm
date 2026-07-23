@@ -55,8 +55,16 @@ ModelT = TypeVar("ModelT", bound="TenantScoped")
 
 @event.listens_for(Session, "before_flush")
 def _enforce_tenant_on_flush(session: Session, flush_context, instances) -> None:
-    """Backstop: stamp/validate tenant_id on every tenant-scoped object being persisted."""
-    tid = _current_tenant.get()
+    """Backstop: stamp/validate tenant_id on every tenant-scoped object being persisted.
+
+    The active tenant is resolved from the *flushing session itself* (``session.info``, stamped
+    by :class:`TenantSession`) first, falling back to the process-global context var. Binding to
+    the session — not just a single global — means two tenant sessions open in the same context
+    (e.g. an isolation test, or any code holding two sessions) each validate against their own
+    tenant instead of whichever set the global last. Tenant-less raw sessions (signup/login) have
+    no ``session.info`` entry and fall through to the context var (``None``) exactly as before.
+    """
+    tid = session.info.get("tenant_id") or _current_tenant.get()
     for obj in session.new:
         if isinstance(obj, TenantScoped):
             if getattr(obj, "tenant_id", None) is None:
@@ -101,6 +109,10 @@ class TenantSession:
     def __init__(self, session: AsyncSession, tenant_id: str):
         self.session = session
         self.tenant_id = tenant_id
+        # Bind the tenant to the session itself so the before_flush guard validates against THIS
+        # session's tenant, not a process-global that a second concurrent session could overwrite.
+        # AsyncSession.info proxies the underlying sync Session.info the guard reads.
+        session.info["tenant_id"] = tenant_id
 
     def add(self, obj: TenantScoped) -> None:
         if obj.tenant_id is None:

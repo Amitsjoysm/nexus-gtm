@@ -34,6 +34,24 @@
   gap: var(--space-1);
 }
 
+/* Compact global signal-window selector; hidden on small screens where the
+   Signals page's own toolbar remains the touchpoint. */
+.signalWindow {
+  display: inline-flex;
+  margin-right: var(--space-2);
+}
+.signalWindow select {
+  height: 32px;
+  padding-block: 0;
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 640px) {
+  .signalWindow {
+    display: none;
+  }
+}
+
 .menuBtn {
   display: none;
 }

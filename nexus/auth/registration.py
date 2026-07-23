@@ -69,12 +69,12 @@ async def send_otp_email(to: str, code: str) -> bool:
     }
     minutes = max(1, s.otp_ttl_s // 60)
     body = (
-        "Welcome to Infojoy GTM.\n\n"
+        "Welcome to InfoJoy GTM.\n\n"
         f"Your verification code is: {code}\n\n"
         f"This code expires in {minutes} minute{'s' if minutes != 1 else ''}. "
         "If you didn't request this, you can safely ignore this email."
     )
-    result = await send_email(cfg, to=to, subject="Your Infojoy GTM verification code", body=body)
+    result = await send_email(cfg, to=to, subject="Your InfoJoy GTM verification code", body=body)
     if not result.ok:
         logger.warning("OTP email to %s not sent: %s", to, result.detail)
     return result.ok

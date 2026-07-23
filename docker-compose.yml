@@ -1,7 +1,11 @@
 # Production-shaped local stack. Not required for dev (SQLite + in-memory queue work standalone).
+# Uses the same multi-stage image as production (deploy/Dockerfile): SPA build + migrations on
+# start, so `docker compose up` serves the full app at http://localhost:8000.
+# For the real single-VM production deployment (TLS, least-privilege DB role, RLS), see deploy/.
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: nexus
@@ -14,32 +18,72 @@ services:
       timeout: 3s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
+  valkey:
+    # Valkey is a drop-in for Redis (same protocol, so redis:// URLs work unchanged); matches the
+    # production stack in deploy/docker-compose.prod.yml. Append-only file for queue durability.
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--appendonly", "yes"]
     ports: ["6379:6379"]
+    volumes: ["valkeydata:/data"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   api:
-    build: .
-    command: uvicorn nexus.main:app --host 0.0.0.0 --port 8000
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    # .env carries provider keys and automation switches (LLM, Exa, contact search, ICP
+    # discovery); the explicit environment block below overrides its DB/queue entries so the
+    # container always talks to the in-stack services, never a host-local SQLite path.
+    env_file: .env
     environment:
       NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:nexus@db:5432/nexus
       NEXUS_QUEUE_BACKEND: redis
-      NEXUS_REDIS_URL: redis://redis:6379/0
+      NEXUS_REDIS_URL: redis://valkey:6379/0
+      NEXUS_RUN_MIGRATIONS: "1"
+      # Security hardening (matches deploy/.env.production.example): brute-force limiter,
+      # idempotency, and the 10 MB body cap. Verified against this stack.
+      NEXUS_AUTH_RATE_LIMIT_ENABLED: "true"
+      NEXUS_IDEMPOTENCY_ENABLED: "true"
+      NEXUS_MAX_REQUEST_BODY_BYTES: "10000000"
+      # Email deliverability: Reacher (real SMTP mailbox verification) primary, DNS/MX as the
+      # free fallback when Reacher is unreachable/inconclusive. Reacher also powers real email
+      # *finding* (VerifyingPatternEmailProvider probes permutations to find the deliverable one).
+      NEXUS_EMAIL_VERIFY_PROVIDER: "reacher,dns"
+      NEXUS_EMAIL_VERIFY_URL: "http://158.69.113.127:8080/v0/check_email"
     ports: ["8000:8000"]
     depends_on:
       db: {condition: service_healthy}
-      redis: {condition: service_started}
+      valkey: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   worker:
-    build: .
-    command: python -m nexus.workers.worker
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "nexus.workers.worker"]
+    env_file: .env
     environment:
       NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:nexus@db:5432/nexus
       NEXUS_QUEUE_BACKEND: redis
-      NEXUS_REDIS_URL: redis://redis:6379/0
+      NEXUS_REDIS_URL: redis://valkey:6379/0
     depends_on:
       db: {condition: service_healthy}
-      redis: {condition: service_started}
+      valkey: {condition: service_healthy}
+      # Wait for the api to finish migrations before consuming jobs.
+      api: {condition: service_healthy}
 
 volumes:
   pgdata:
+  valkeydata:

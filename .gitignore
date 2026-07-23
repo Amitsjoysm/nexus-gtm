@@ -35,5 +35,11 @@ crash.log
 # Local agent / editor tooling — machine-specific, may hold local API keys (never committed)
 .claude/
 .qoder/
+.gemini/
 .opencode.json
 .mcp.json
+
+# Database dumps / local backups — data artifacts, never committed (deliver via volume or seed)
+backups/
+*.dump
+*.sql

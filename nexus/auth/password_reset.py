@@ -46,11 +46,11 @@ async def send_reset_email(to: str, link: str) -> bool:
     }
     minutes = max(1, s.password_reset_ttl_s // 60)
     body = (
-        "We received a request to reset your Infojoy GTM password.\n\n"
+        "We received a request to reset your InfoJoy GTM password.\n\n"
         f"Reset it here (link expires in {minutes} minutes):\n{link}\n\n"
         "If you didn't request this, you can safely ignore this email — your password is unchanged."
     )
-    result = await send_email(cfg, to=to, subject="Reset your Infojoy GTM password", body=body)
+    result = await send_email(cfg, to=to, subject="Reset your InfoJoy GTM password", body=body)
     if not result.ok:
         logger.warning("password-reset email to %s not sent: %s", to, result.detail)
     return result.ok

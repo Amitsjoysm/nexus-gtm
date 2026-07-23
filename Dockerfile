@@ -9,10 +9,11 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Install dependencies first for better layer caching.
-COPY pyproject.toml ./
+COPY pyproject.toml constraints.txt ./
 COPY nexus ./nexus
-# Install the package plus the production extras (Postgres + Redis).
-RUN pip install --upgrade pip && pip install ".[postgres,redis]"
+# Install the package plus the production extras (Postgres + Redis). constraints.txt pins exact
+# versions (C-3) so a rebuild can't pull a breaking transitive; constraints only cap versions.
+RUN pip install --upgrade pip && pip install -c constraints.txt ".[postgres,redis]"
 
 # Run as an unprivileged user.
 RUN useradd --create-home --uid 10001 nexus

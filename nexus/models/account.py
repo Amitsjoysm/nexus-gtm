@@ -45,10 +45,39 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     crm_synced_at: Mapped[datetime | None] = mapped_column(
         TZDateTime(), nullable=True, index=True
     )
+    # Archived (SDR removed as not-relevant, or ICP re-screen). NULL = active. A dedicated,
+    # indexable column so the accounts list can filter+paginate in SQL instead of fetching a
+    # page then dropping archived rows in Python (which silently shrank the page). The legacy
+    # ``custom_fields['archived']`` boolean is kept mirrored during the transition for rollback
+    # safety; ``set_archived`` writes both. Index supports the "active, newest-first" list scan.
+    archived_at: Mapped[datetime | None] = mapped_column(
+        TZDateTime(), nullable=True, index=True
+    )
 
     contacts: Mapped[list["Contact"]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
     )
+
+    @property
+    def is_archived(self) -> bool:
+        return self.archived_at is not None
+
+    def set_archived(self, archived: bool, *, reason: str | None = None) -> None:
+        """Single write-point for archived state. Sets the ``archived_at`` column (the source of
+        truth going forward) AND mirrors the legacy ``custom_fields['archived']`` boolean so a
+        rollback to code that still reads the JSON flag stays correct (dual-write)."""
+        from nexus.core.db import utcnow
+
+        self.archived_at = utcnow() if archived else None
+        cf = dict(self.custom_fields or {})
+        if archived:
+            cf["archived"] = True
+            if reason is not None:
+                cf["archived_reason"] = reason
+        else:
+            cf["archived"] = False
+            cf.pop("archived_reason", None)
+        self.custom_fields = cf
 
 
 class Contact(IdMixin, TimestampMixin, TenantScoped, Base):

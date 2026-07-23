@@ -197,6 +197,24 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_enqueue_due_skips_when_not_scheduler_leader(monkeypatch):
+    """C-1: a worker that does not hold the scheduler advisory lock enqueues nothing, so a
+    horizontally-scaled fleet enqueues each driver once per tick instead of once per worker."""
+    import nexus.workers.scheduler as sched
+
+    monkeypatch.setattr(get_settings(), "automation_enabled", True)
+
+    async def _not_leader(session):  # simulate another worker holding the lock this tick
+        return False
+
+    monkeypatch.setattr(sched, "_acquire_scheduler_lock", _not_leader)
+    q = InMemoryTaskQueue()
+    count = await _enqueue_due(q)
+    assert count == 0
+    assert await _drain(q) == []  # follower enqueued nothing
+
+
+@pytest.mark.asyncio
 async def test_run_scheduler_stops_promptly_when_event_set(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", False)
     stop = asyncio.Event()
@@ -234,10 +252,11 @@ from tests.conftest import auth, signup
 @pytest.mark.asyncio
 async def test_automation_toggle_get_and_patch(client):
     token = await signup(client, slug="toggle", email="owner@toggle.x", company="Toggle")
-    # default off
+    # default off. (The endpoint also returns icp_daily_count/icp_daily_default per commit 0019;
+    # assert the specific field rather than exact dict equality so added fields don't break it.)
     r = await client.get("/api/workspace/automation", headers=auth(token))
     assert r.status_code == 200, r.text
-    assert r.json() == {"automation_enabled": False}
+    assert r.json()["automation_enabled"] is False
     # turn on
     r = await client.patch(
         "/api/workspace/automation",
@@ -245,10 +264,10 @@ async def test_automation_toggle_get_and_patch(client):
         json={"automation_enabled": True},
     )
     assert r.status_code == 200, r.text
-    assert r.json() == {"automation_enabled": True}
+    assert r.json()["automation_enabled"] is True
     # reads back on
     r = await client.get("/api/workspace/automation", headers=auth(token))
-    assert r.json() == {"automation_enabled": True}
+    assert r.json()["automation_enabled"] is True
 
 
 @pytest.mark.asyncio
@@ -259,7 +278,7 @@ async def test_automation_toggle_isolated_between_tenants(client):
         "/api/workspace/automation", headers=auth(a), json={"automation_enabled": True}
     )
     r = await client.get("/api/workspace/automation", headers=auth(b))
-    assert r.json() == {"automation_enabled": False}  # B unaffected
+    assert r.json()["automation_enabled"] is False  # B unaffected
 
 
 @pytest.mark.asyncio

@@ -50,6 +50,12 @@ export interface Account {
   fit_score?: number | null;
   linkedin_url?: string | null;
   description?: string | null;
+  /** Extra firmographics / technographics from web enrichment. */
+  sub_industry?: string | null;
+  revenue?: string | null;
+  region?: string | null;
+  city?: string | null;
+  keywords?: string[];
   source?: string | null;
   /** CRM trust signals: where this record syncs and when it last did. */
   crm_source?: string | null;
@@ -140,7 +146,9 @@ export interface Contact {
   email: string | null;
   phone: string | null;
   linkedin_url: string | null;
+  email_status: string | null;
   email_confidence: number;
+  email_checked_at: string | null;
   phone_confidence: number;
   enrichment_source: string | null;
 }
