@@ -161,6 +161,9 @@ async def source_account_contacts(
         person = Contact(
             tenant_id=ts.tenant_id, account_id=account.id, full_name=cand.full_name,
             title=cand.title, seniority=cand.seniority, email=cand.email,
+            # Keep the LinkedIn URL the people-search already extracted (was being dropped),
+            # so sourced contacts surface a profile link without a separate enrichment call.
+            linkedin_url=cand.linkedin_url,
             enrichment_source=f"sourcing:{cand.source}",
         )
         ts.add(person)
