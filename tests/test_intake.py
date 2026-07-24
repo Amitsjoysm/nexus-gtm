@@ -2,7 +2,44 @@
 """Unit tests for the deterministic orchestrator brain (no DB, no network)."""
 from __future__ import annotations
 
-from nexus.orchestration.intake import missing_required
+from nexus.orchestration.intake import extract_slots, missing_required
+
+
+def test_extract_intent_signals_with_year():
+    delta = extract_slots("fetch me fintech received funding in 2026 in USA", {}, None)
+    assert delta.get("industries") == ["Fintech"]
+    assert "United States" in (delta.get("geo") or [])
+    assert delta.get("intent_signals") == ["funding 2026"]
+
+
+def test_extract_intent_signals_hiring_without_year():
+    delta = extract_slots("companies that are hiring", {}, None)
+    assert "hiring" in (delta.get("intent_signals") or [])
+
+
+def test_intent_signal_relaxes_company_size_requirement():
+    # No signal → size still required (unchanged behaviour).
+    assert missing_required({"industries": ["Fintech"], "geo": ["US"]}, "companies") == [
+        "company_size"
+    ]
+    # An explicit intent signal makes the ask specific enough to run without a size.
+    assert (
+        missing_required(
+            {"industries": ["Fintech"], "geo": ["US"], "intent_signals": ["funding 2026"]},
+            "companies",
+        )
+        == []
+    )
+
+
+async def test_funding_query_launches_instead_of_clarifying():
+    decision = await IntakeController().advance(
+        icp_state={}, target=None, missing_slots=[], context_summary="",
+        user_text="fetch me fintech received funding in 2026 in USA", is_first_turn=True,
+    )
+    assert decision.action == "launch"
+    assert decision.target == "companies"
+    assert "funding 2026" in (decision.icp_state.get("intent_signals") or [])
 
 
 def test_missing_required_companies_truth_table():
@@ -43,7 +80,7 @@ def test_missing_required_defaults_target_to_companies():
     assert missing_required({}, None) == ["industries", "geo", "company_size"]
 
 
-from nexus.orchestration.intake import extract_slots, merge_icp
+from nexus.orchestration.intake import merge_icp
 
 
 def test_extract_rich_first_message_fills_multiple_slots():

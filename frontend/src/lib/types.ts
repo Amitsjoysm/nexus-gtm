@@ -574,6 +574,8 @@ export interface RunStep {
   depends_on: number[];
   approval_id: string | null;
   error: string | null;
+  /** This step's own output — each AI run's result, inspectable separately. */
+  output: Record<string, unknown>;
 }
 
 /** Deliverability verdict from the email-verification provider. */

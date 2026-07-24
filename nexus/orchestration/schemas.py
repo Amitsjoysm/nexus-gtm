@@ -35,6 +35,9 @@ class RunStepOut(BaseModel):
     depends_on: list[int]
     approval_id: str | None = None
     error: str | None = None
+    # Each step's own output, so every AI run's result is inspectable separately (not just the
+    # merged blackboard). Empty until the step completes.
+    output: dict = Field(default_factory=dict)
 
     @classmethod
     def from_model(cls, s: RunStep) -> "RunStepOut":
@@ -47,6 +50,7 @@ class RunStepOut(BaseModel):
             depends_on=list(s.depends_on or []),
             approval_id=s.approval_id,
             error=s.error,
+            output=s.output or {},
         )
 
 

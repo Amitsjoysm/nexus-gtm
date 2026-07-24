@@ -353,11 +353,30 @@ function StepTimeline({ steps }: { steps: RunStep[] }) {
                   {step.error}
                 </p>
               )}
+              <StepOutput output={step.output} />
             </div>
           </li>
         );
       })}
     </ol>
+  );
+}
+
+/** Each AI run's own output, shown separately (collapsed) from the merged blackboard. */
+function StepOutput({ output }: { output: Record<string, unknown> }) {
+  const entries = Object.entries(output ?? {}).filter(
+    ([, v]) => v != null && !(Array.isArray(v) && v.length === 0),
+  );
+  if (entries.length === 0) return null;
+  const summary = entries
+    .map(([k, v]) => `${k}: ${Array.isArray(v) ? `${v.length}` : String(v).slice(0, 40)}`)
+    .slice(0, 3)
+    .join(" · ");
+  return (
+    <details className={styles.stepOutput}>
+      <summary className={styles.stepOutputSummary}>Output — {summary}</summary>
+      <pre className={styles.stepOutputPre}>{JSON.stringify(output, null, 2)}</pre>
+    </details>
   );
 }
 

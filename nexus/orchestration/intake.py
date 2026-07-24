@@ -48,7 +48,9 @@ def missing_required(icp_state: dict, target: str | None) -> list[str]:
         missing.append("geo")
     if target == TARGET_COMPANIES:
         size = icp_state.get("company_size") or {}
-        if not (size.get("min") or size.get("max")):
+        # Company size narrows results, but a concrete intent signal (funding/hiring/…) already
+        # makes the ask specific enough to run — so don't clarify-loop on size in that case.
+        if not (size.get("min") or size.get("max")) and not icp_state.get("intent_signals"):
             missing.append("company_size")
     else:  # contacts
         if not (icp_state.get("titles") or icp_state.get("seniority")):
@@ -86,6 +88,22 @@ _NAMED_BANDS = {
 }
 _TITLE_TOKENS = ("vp", "vice president", "cro", "cmo", "ceo", "cto", "cfo", "coo",
                  "head of", "director", "manager", "chief")
+# Buying-intent signals the rep can filter on ("received funding", "hiring", …). Maps a surface
+# phrase → a canonical signal token; a year in the message ("in 2026") is appended so the discovery
+# query can bias toward that period. These flow through icp_state.intent_signals into the search.
+_INTENT_KEYWORDS = {
+    "funding": "funding", "raised": "funding", "raising": "funding", "series a": "funding",
+    "series b": "funding", "series c": "funding", "series d": "funding", "seed round": "funding",
+    "venture round": "funding", "vc round": "funding", "fundraise": "funding",
+    "hiring": "hiring", "headcount": "hiring", "job posting": "hiring", "job openings": "hiring",
+    "acquired": "acquisition", "acquisition": "acquisition", "merger": "acquisition",
+    "ipo": "ipo", "went public": "ipo",
+    "expansion": "expansion", "expanding": "expansion", "new office": "expansion",
+    "product launch": "product launch", "launched": "product launch",
+    "new ceo": "leadership change", "new cfo": "leadership change",
+    "leadership change": "leadership change",
+}
+_INTENT_YEAR_RE = re.compile(r"\b(20\d{2})\b")
 _RANGE_RE = re.compile(r"(\d[\d,]*)\s*(?:-|to|–)\s*(\d[\d,]*)")
 _UNDER_RE = re.compile(r"(?:under|below|less than|fewer than|<)\s*(\d[\d,]*)")
 _OVER_RE = re.compile(r"(?:over|above|more than|>|at least)\s*(\d[\d,]*)|(\d[\d,]*)\s*\+")
@@ -180,6 +198,17 @@ def extract_slots(text: str, icp_state: dict, pending_slot: str | None) -> dict:
     size = _parse_size(text)
     if size is not None:
         delta["company_size"] = size
+
+    # Buying-intent signals ("received funding in 2026", "hiring"). A trailing year is attached to
+    # each signal so the discovery search can target that period.
+    signals: list[str] = []
+    for phrase, token in _INTENT_KEYWORDS.items():
+        if re.search(rf"\b{re.escape(phrase)}\b", low) and token not in signals:
+            signals.append(token)
+    if signals:
+        ym = _INTENT_YEAR_RE.search(text)
+        year = ym.group(1) if ym else None
+        delta["intent_signals"] = [f"{s} {year}" if year else s for s in signals]
 
     titles = [_title_case_phrase(p) for p in _split_phrases(text)
               if any(tok in p.lower() for tok in _TITLE_TOKENS)]
