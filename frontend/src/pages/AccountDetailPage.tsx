@@ -37,6 +37,7 @@ import type {
   OutcomeStage,
   Role,
   SignalEvent,
+  TitleRecommendation,
 } from "@/lib/types";
 import styles from "./AccountDetailPage.module.css";
 
@@ -281,6 +282,20 @@ export function AccountDetailPage() {
       toast.error("Couldn't add account", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
       setAddingLookalike(null);
+    }
+  }
+
+  // "Who to target" — lazy title recommendations for this account (loaded on demand).
+  const [titleRecs, setTitleRecs] = useState<TitleRecommendation[] | null>(null);
+  const [titlesLoading, setTitlesLoading] = useState(false);
+  async function loadTitleRecs() {
+    setTitlesLoading(true);
+    try {
+      setTitleRecs(await api.recommendTitles(id, 6));
+    } catch (err) {
+      toast.error("Couldn't recommend titles", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setTitlesLoading(false);
     }
   }
 
@@ -574,15 +589,56 @@ export function AccountDetailPage() {
             <span className={styles.sectionHint}>
               Source the buying committee — net-new people with verified emails.
             </span>
-            <Button
-              variant="secondary"
-              iconLeft={<Icons.UsersIcon />}
-              loading={findingContacts}
-              onClick={findContacts}
-            >
-              Find contacts
-            </Button>
+            <div className={styles.sectionActions}>
+              <Button
+                variant="ghost"
+                loading={titlesLoading}
+                onClick={loadTitleRecs}
+              >
+                Who to target
+              </Button>
+              <Button
+                variant="secondary"
+                iconLeft={<Icons.UsersIcon />}
+                loading={findingContacts}
+                onClick={findContacts}
+              >
+                Find contacts
+              </Button>
+            </div>
           </div>
+          {titleRecs && titleRecs.length > 0 && (
+            <Card padding="md" className={styles.titleRecCard}>
+              <div className={styles.titleRecHead}>
+                Recommended titles to target — ranked by fit for this account
+              </div>
+              <div className={styles.titleRecList}>
+                {titleRecs.map((t) => (
+                  <div key={t.title} className={styles.titleRecRow}>
+                    <Badge tone={strengthMeta(t.priority_score / 100).tone} dot>
+                      {t.priority_score}
+                    </Badge>
+                    <div className={styles.titleRecBody}>
+                      <div className={styles.titleRecTitle}>
+                        {t.title}
+                        <span className={styles.titleRecDept}>
+                          {t.department} · {t.buying_influence.replace(/_/g, " ")}
+                        </span>
+                      </div>
+                      <div className={styles.titleRecReason} title={t.reason}>
+                        {t.reason}
+                      </div>
+                      {t.alternatives.length > 0 && (
+                        <div className={styles.titleRecAlt}>
+                          also: {t.alternatives.slice(0, 3).join(", ")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
           <Card padding="md">
             <DataState
               state={contacts}

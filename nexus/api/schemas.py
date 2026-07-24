@@ -100,6 +100,27 @@ class RelevanceProfileOut(RelevanceProfileIn):
     id: str
 
 
+class TitleRecommendationIn(BaseModel):
+    """Ask the engine which buyer titles to target. Give an ``account_id`` to use that account's
+    firmographics, or pass firmographics directly; both may be combined (explicit fields win)."""
+    account_id: str | None = None
+    industry: str | None = None
+    employee_count: int | None = None
+    tech_stack: list[str] = Field(default_factory=list)
+    department: str | None = None      # optional filter to one function (e.g. "Sales")
+    limit: int = 8
+
+
+class TitleRecommendationOut(BaseModel):
+    title: str
+    priority_score: int                # 0..100
+    confidence: float                  # 0..1
+    department: str
+    buying_influence: str              # economic_buyer | champion | technical_evaluator | end_user
+    reason: str
+    alternatives: list[str] = Field(default_factory=list)
+
+
 # ---- accounts / contacts ----
 class AccountIn(BaseModel):
     name: str

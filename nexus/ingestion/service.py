@@ -111,15 +111,20 @@ _service: IngestionService | None = None
 def get_ingestion_service() -> IngestionService:
     global _service
     if _service is None:
-        from nexus.ingestion.sources import DemoSignalSource, WebNewsSource
+        from nexus.ingestion.sources import DemoSignalSource, RssSignalSource, WebNewsSource
         from nexus.enrichment.browser import get_browser_provider
 
+        settings = get_settings()
         sources: list[SignalSource] = []
-        if get_settings().demo_signals_active:
+        if settings.demo_signals_active:
             # Synthetic signals: local/dev only. `demo_signals_active` is force-false in
             # staging/prod, so production can never fabricate events even if the flag is set.
             sources.append(DemoSignalSource())
         sources.append(WebNewsSource(get_browser_provider()))
+        # RSS/Atom company feeds (blog / newsroom / press). Opt-in via NEXUS_SIGNAL_SOURCES=...,rss
+        # so the default pipeline is byte-for-byte unchanged.
+        if "rss" in settings.signal_source_list:
+            sources.append(RssSignalSource())
         _service = IngestionService(sources=sources)
     return _service
 

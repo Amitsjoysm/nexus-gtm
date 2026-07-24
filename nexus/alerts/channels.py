@@ -13,6 +13,7 @@ a recording channel) and assert the payload shape without ever opening a socket.
 from __future__ import annotations
 
 import abc
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -125,23 +126,111 @@ class SlackChannel(_PostingChannel):
         }
 
 
+def _alert_action_lines(alert: Alert) -> str:
+    """Append the enriched action fields (if present in meta) so rich alerts read well in any
+    text channel. Empty string when the alert has no intelligence — so plain alerts are unchanged."""
+    meta = alert.meta or {}
+    lines = []
+    if meta.get("suggested_action"):
+        lines.append(f"Suggested action: {meta['suggested_action']}")
+    if meta.get("next_best_action"):
+        lines.append(f"Next best action: {meta['next_best_action']}")
+    if meta.get("source_url"):
+        lines.append(f"Source: {meta['source_url']}")
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
 class EmailChannel(AlertChannel):
-    """Deterministic offline stub. A real adapter sends from an everifier-validated sender."""
+    """Email delivery. Sends via SMTP when a host is configured; otherwise falls back to the
+    deterministic offline stub (unchanged default behaviour). The blocking SMTP send runs in a
+    thread so it never blocks the event loop; ``send_seam`` injects a fake sender for offline tests.
+    """
 
     name = "email"
 
-    def __init__(self, sender: str = "") -> None:
+    def __init__(
+        self,
+        sender: str = "",
+        *,
+        host: str = "",
+        port: int = 587,
+        username: str = "",
+        password: str = "",
+        to: str = "",
+        send_seam: Callable[[dict], None] | None = None,
+    ) -> None:
         self._sender = sender or "alerts@nexus.local"
+        self._host = host
+        self._port = port
+        self._username = username
+        self._password = password
+        self._to = to
+        self._send_seam = send_seam
 
     async def deliver(self, alert: Alert) -> AlertDelivery:
-        logger.info(
-            "[email-stub from %s] alert %s -> %s: %s",
-            self._sender,
-            alert.id,
-            alert.severity,
-            alert.title,
+        if not (self._host and self._to) and self._send_seam is None:
+            # Unchanged offline behaviour: no SMTP configured -> log stub.
+            logger.info(
+                "[email-stub from %s] alert %s -> %s: %s",
+                self._sender, alert.id, alert.severity, alert.title,
+            )
+            return AlertDelivery(ok=True, channel=self.name, detail="stub-logged")
+        subject = f"[{alert.severity}] {alert.title}"
+        body = (alert.body or "") + _alert_action_lines(alert)
+        try:
+            await asyncio.to_thread(self._smtp_send, subject, body)
+        except Exception as exc:  # a mail-server outage must not lose the persisted alert
+            logger.warning("email send for alert %s failed: %r", alert.id, exc)
+            return AlertDelivery(ok=False, channel=self.name, detail="smtp error")
+        return AlertDelivery(ok=True, channel=self.name, detail="sent")
+
+    def _smtp_send(self, subject: str, body: str) -> None:
+        if self._send_seam is not None:
+            self._send_seam({"from": self._sender, "to": self._to, "subject": subject, "body": body})
+            return
+        import smtplib
+        from email.message import EmailMessage
+
+        msg = EmailMessage()
+        msg["From"] = self._sender
+        msg["To"] = self._to
+        msg["Subject"] = subject
+        msg.set_content(body)
+        with smtplib.SMTP(self._host, self._port, timeout=15) as server:
+            server.starttls()
+            if self._username:
+                server.login(self._username, self._password)
+            server.send_message(msg)
+
+
+class TelegramChannel(AlertChannel):
+    """Telegram Bot API ``sendMessage``. Configured with a bot token + default chat id; skips
+    (ok=False) when unconfigured, mirroring the posting channels. Poster injectable for offline
+    tests, so the payload shape is asserted without a socket."""
+
+    name = "telegram"
+    _API = "https://api.telegram.org/bot{token}/sendMessage"
+    _EMOJI = {"info": "ℹ️", "warning": "⚠️", "critical": "\U0001f6a8"}
+
+    def __init__(self, token: str = "", chat_id: str = "", *, poster: HttpPoster | None = None) -> None:
+        self._token = token
+        self._chat_id = chat_id
+        self._post = poster or _httpx_post
+
+    async def deliver(self, alert: Alert) -> AlertDelivery:
+        if not (self._token and self._chat_id):
+            logger.info("alert %s: telegram not configured, skipping", alert.id)
+            return AlertDelivery(ok=False, channel=self.name, detail="not configured")
+        emoji = self._EMOJI.get(alert.severity, "\U0001f514")
+        text = f"{emoji} {alert.title}"
+        if alert.body:
+            text += f"\n{alert.body}"
+        text += _alert_action_lines(alert)
+        status = await self._post(
+            self._API.format(token=self._token),
+            {"chat_id": self._chat_id, "text": text, "disable_web_page_preview": True},
         )
-        return AlertDelivery(ok=True, channel=self.name, detail="stub-logged")
+        return AlertDelivery(ok=True, channel=self.name, detail=f"http {status}")
 
 
 class AlertChannelRegistry:
@@ -168,7 +257,15 @@ def build_alert_channels_from_settings() -> AlertChannelRegistry:
             InAppChannel(),
             WebhookChannel(s.alert_webhook_url),
             SlackChannel(s.alert_slack_webhook_url),
-            EmailChannel(s.alert_email_sender),
+            EmailChannel(
+                s.alert_email_sender,
+                host=s.alert_smtp_host,
+                port=s.alert_smtp_port,
+                username=s.alert_smtp_username,
+                password=s.alert_smtp_password,
+                to=s.alert_email_to,
+            ),
+            TelegramChannel(s.alert_telegram_bot_token, s.alert_telegram_chat_id),
         ]
     )
 

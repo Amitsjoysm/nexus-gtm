@@ -77,6 +77,17 @@ class PlaysEngine:
                 )
                 outcomes.append({"type": "create_task", "task_id": task.id})
             elif atype == "alert":
+                # Enrich the alert with actionable intelligence (category, importance, matched-ICP,
+                # suggested + next-best action, source URL). Merged into meta, which AlertOut
+                # already exposes — so no schema change and no API break. Best-effort: a failure
+                # here must never block the alert from being raised.
+                from nexus.alerts.enrichment import build_alert_intelligence
+
+                meta = {"play": play.name}
+                try:
+                    meta.update(build_alert_intelligence(account, signal, composite))
+                except Exception:  # intelligence is additive; never fail the alert on it
+                    pass
                 alert = await get_alert_service().create(
                     ts,
                     title=action.get("message") or signal.title,
@@ -86,7 +97,7 @@ class PlaysEngine:
                     account_id=account.id,
                     signal_id=signal.id,
                     source="play",
-                    meta={"play": play.name},
+                    meta=meta,
                 )
                 outcomes.append(
                     {"type": "alert", "alert_id": alert.id, "channel": alert.channel}

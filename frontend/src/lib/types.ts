@@ -304,6 +304,16 @@ export interface InboxTask {
   age_hours?: number | null;
 }
 
+export interface TitleRecommendation {
+  title: string;
+  priority_score: number;
+  confidence: number;
+  department: string;
+  buying_influence: string;
+  reason: string;
+  alternatives: string[];
+}
+
 export interface SignalEvent {
   id: string;
   account_id: string | null;

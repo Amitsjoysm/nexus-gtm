@@ -127,6 +127,117 @@ class DemoSignalSource(SignalSource):
         return out
 
 
+def _parse_feed(xml_text: str) -> list[dict]:
+    """Parse an RSS or Atom feed into ``[{title, link, summary}]``. Namespace-tolerant, never
+    raises. Handles RSS ``<item>`` (link is text) and Atom ``<entry>`` (link is an href attr)."""
+    import xml.etree.ElementTree as ET
+
+    def _local(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1].lower()
+
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return []
+    items: list[dict] = []
+    for el in root.iter():
+        if _local(el.tag) not in ("item", "entry"):
+            continue
+        d: dict[str, str] = {}
+        for child in el:
+            lt = _local(child.tag)
+            if lt == "title" and child.text:
+                d["title"] = child.text.strip()
+            elif lt == "link":
+                href = child.get("href")
+                link = (href or child.text or "").strip()
+                if link and "link" not in d:
+                    d["link"] = link
+            elif lt in ("description", "summary", "content") and child.text and "summary" not in d:
+                d["summary"] = child.text.strip()
+        if d.get("title"):
+            items.append(d)
+    return items
+
+
+class RssSignalSource(SignalSource):
+    """Live source: read a company's own RSS/Atom feed (blog / newsroom / press releases).
+
+    The feed URL comes from ``account.custom_fields['rss_feed']`` when set, else common conventions
+    on the account domain. Entries are the company's *own* posts, so — unlike open-web search —
+    they need no name-matching. OFF by default: activated by adding ``rss`` to
+    ``NEXUS_SIGNAL_SOURCES``. The HTTP fetch is injectable so the parser runs offline with canned
+    feed XML. Never raises across the boundary.
+    """
+
+    name = "rss"
+
+    def __init__(self, fetch=None, *, max_items: int = 5) -> None:
+        self._fetch = fetch  # async (url) -> str | None ; None = real httpx
+        self._max = max_items
+
+    async def _http_get(self, url: str) -> str | None:
+        if self._fetch is not None:
+            return await self._fetch(url)
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                resp = await client.get(url, headers={"User-Agent": "NexusGTM/1.0 (+signals)"})
+                if resp.status_code == 200 and resp.text:
+                    return resp.text
+        except Exception:  # a flaky feed host must never break ingestion
+            return None
+        return None
+
+    def _feed_urls(self, account: Account) -> list[str]:
+        cf = getattr(account, "custom_fields", None) or {}
+        explicit = str(cf.get("rss_feed") or "").strip()
+        if explicit:
+            return [explicit]
+        domain = (account.domain or "").strip().lower().lstrip("@")
+        if not domain:
+            return []
+        return [
+            f"https://{domain}/feed",
+            f"https://{domain}/rss",
+            f"https://{domain}/blog/rss.xml",
+            f"https://{domain}/news/rss",
+        ]
+
+    async def fetch(self, account: Account) -> list[RawSignal]:
+        anchor = (account.domain or account.name or "").strip().lower().replace(" ", "")
+        for url in self._feed_urls(account):
+            xml = await self._http_get(url)
+            if not xml:
+                continue
+            items = _parse_feed(xml)
+            if not items:
+                continue
+            out: list[RawSignal] = []
+            for it in items[: self._max]:
+                title = (it.get("title") or "").strip()
+                if not title:
+                    continue
+                link = (it.get("link") or "").strip()
+                summary = (it.get("summary") or "").strip()
+                kind, strength = _classify_news(f"{title} {summary}")
+                out.append(
+                    RawSignal(
+                        kind=kind,
+                        source=self.name,
+                        title=title[:380],
+                        body=summary or None,
+                        url=link or None,
+                        strength=strength,
+                        dedupe_key=f"rss:{anchor}:{link or title}"[:200],
+                    )
+                )
+            if out:
+                return out
+        return []
+
+
 class WebNewsSource(SignalSource):
     """Live source: searches the web for recent news about the account."""
 

@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     alert_webhook_url: str = ""
     alert_slack_webhook_url: str = ""
     alert_email_sender: str = ""
+    # Email via SMTP (optional). With no host set, the email channel stays the offline stub, so
+    # default behaviour is unchanged; set host + to-address to actually send.
+    alert_smtp_host: str = ""
+    alert_smtp_port: int = 587
+    alert_smtp_username: str = ""
+    alert_smtp_password: str = ""
+    alert_email_to: str = ""
+    # Telegram delivery (optional): a bot token + default chat id. Empty = channel is a no-op.
+    alert_telegram_bot_token: str = ""
+    alert_telegram_chat_id: str = ""
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./nexus.db"

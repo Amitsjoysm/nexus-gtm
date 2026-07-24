@@ -46,6 +46,7 @@ import type {
   Contact,
   CreateCustomFieldRequest,
   CreateSessionRequest,
+  TitleRecommendation,
   LaunchFromSelectionInput,
   LookalikeResponse,
   ContactLookalikeResponse,
@@ -254,6 +255,13 @@ export class ApiClient {
   enrichContact(contactId: string, signal?: AbortSignal) {
     return this.request<Contact>(`/accounts/contacts/${contactId}/enrich`, {
       method: "POST",
+      signal,
+    });
+  }
+  recommendTitles(accountId: string, limit = 8, signal?: AbortSignal) {
+    return this.request<TitleRecommendation[]>("/relevance/title-recommendations", {
+      method: "POST",
+      body: { account_id: accountId, limit },
       signal,
     });
   }

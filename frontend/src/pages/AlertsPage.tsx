@@ -16,9 +16,50 @@ import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { humanize } from "@/lib/format";
-import { severityTone } from "@/lib/display";
+import { severityTone, strengthMeta } from "@/lib/display";
 import type { Alert, AlertStatus } from "@/lib/types";
 import styles from "./AlertsPage.module.css";
+
+/** Read a string field out of an alert's enriched `meta` (empty/non-string -> undefined). */
+function metaStr(meta: Record<string, unknown>, key: string): string | undefined {
+  const v = meta[key];
+  return typeof v === "string" && v.trim() ? v : undefined;
+}
+
+/** The actionable intelligence block — only renders when the alert was enriched. */
+function AlertIntel({ meta }: { meta: Record<string, unknown> }) {
+  const matchedIcp = metaStr(meta, "matched_icp");
+  const suggested = metaStr(meta, "suggested_action");
+  const nba = metaStr(meta, "next_best_action");
+  const sourceUrl = metaStr(meta, "source_url");
+  if (!suggested && !matchedIcp && !nba) return null;
+  return (
+    <div className={styles.intel}>
+      {matchedIcp && <div className={styles.intelIcp}>{matchedIcp}</div>}
+      {suggested && (
+        <div className={styles.intelRow}>
+          <span className={styles.intelLabel}>Do now</span> {suggested}
+        </div>
+      )}
+      {nba && (
+        <div className={styles.intelRow}>
+          <span className={styles.intelLabel}>Next</span> {nba}
+        </div>
+      )}
+      {sourceUrl && (
+        <a
+          className={styles.intelLink}
+          href={sourceUrl}
+          target="_blank"
+          rel="noreferrer noopener"
+          onClick={(e) => e.stopPropagation()}
+        >
+          View source ↗
+        </a>
+      )}
+    </div>
+  );
+}
 
 export function AlertsPage() {
   const api = useApiClient();
@@ -124,9 +165,18 @@ export function AlertsPage() {
                       <Badge tone={severityTone(alert.severity)} dot>
                         {alert.severity}
                       </Badge>
+                      {metaStr(alert.meta, "category") && (
+                        <Badge tone="info">{metaStr(alert.meta, "category")}</Badge>
+                      )}
                       <span className={styles.title}>{alert.title}</span>
+                      {typeof alert.meta.importance === "number" && (
+                        <Badge tone={strengthMeta((alert.meta.importance as number) / 100).tone}>
+                          {alert.meta.importance as number}/100
+                        </Badge>
+                      )}
                     </div>
-                    <p className={styles.text}>{alert.body}</p>
+                    {alert.body && <p className={styles.text}>{alert.body}</p>}
+                    <AlertIntel meta={alert.meta} />
                     <div className={styles.meta}>
                       <Icons.SendIcon />
                       <span>{humanize(alert.channel)}</span>
@@ -134,8 +184,16 @@ export function AlertsPage() {
                       <span>{humanize(alert.source)}</span>
                     </div>
                   </div>
-                  {alert.status === "open" && (
-                    <div className={styles.actions}>
+                  <div className={styles.actions}>
+                    {alert.account_id && (
+                      <Button
+                        variant="ghost"
+                        onClick={() => navigate(`/accounts/${alert.account_id}`)}
+                      >
+                        Open account
+                      </Button>
+                    )}
+                    {alert.status === "open" && (
                       <Button
                         variant="secondary"
                         iconLeft={<Icons.CheckIcon />}
@@ -144,8 +202,8 @@ export function AlertsPage() {
                       >
                         Acknowledge
                       </Button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </Card>
             ))}

@@ -10,7 +10,7 @@ from nexus.core.db import Base, IdMixin, TimestampMixin
 from nexus.core.tenancy import TenantScoped
 
 ALERT_SEVERITIES = ("info", "warning", "critical")
-ALERT_CHANNELS = ("in_app", "webhook", "slack", "email")
+ALERT_CHANNELS = ("in_app", "webhook", "slack", "email", "telegram")
 ALERT_STATUSES = ("open", "acked")
 
 

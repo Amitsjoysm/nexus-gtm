@@ -41,6 +41,45 @@
 }
 .actions {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.intel {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--accent);
+  background: var(--surface-subtle, rgba(127, 127, 127, 0.06));
+  border-radius: var(--radius-sm, 6px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.intelIcp {
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+.intelRow {
+  color: var(--text-muted);
+}
+.intelLabel {
+  display: inline-block;
+  min-width: 3.5rem;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.intelLink {
+  align-self: flex-start;
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+.intelLink:hover {
+  text-decoration: underline;
 }
 
 @media (max-width: 600px) {

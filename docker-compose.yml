@@ -56,6 +56,10 @@ services:
       # *finding* (VerifyingPatternEmailProvider probes permutations to find the deliverable one).
       NEXUS_EMAIL_VERIFY_PROVIDER: "reacher,dns"
       NEXUS_EMAIL_VERIFY_URL: "http://158.69.113.127:8080/v0/check_email"
+      # Intelligence-depth (feature branch): enable the RSS/Atom company-feed signal source in
+      # addition to demo + web_news. Alert enrichment is automatic; Telegram/SMTP stay off until
+      # their creds are set below (optional).
+      NEXUS_SIGNAL_SOURCES: "demo,rss"
     ports: ["8000:8000"]
     depends_on:
       db: {condition: service_healthy}
@@ -78,6 +82,7 @@ services:
       NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:nexus@db:5432/nexus
       NEXUS_QUEUE_BACKEND: redis
       NEXUS_REDIS_URL: redis://valkey:6379/0
+      NEXUS_SIGNAL_SOURCES: "demo,rss"
     depends_on:
       db: {condition: service_healthy}
       valkey: {condition: service_healthy}
