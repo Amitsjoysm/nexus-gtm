@@ -23,6 +23,7 @@ import type {
   RelevanceProfile,
   RelevanceProfileInput,
   Role,
+  TitleRecommendation,
   ValueProp,
 } from "@/lib/types";
 import styles from "./RelevancePage.module.css";
@@ -39,6 +40,7 @@ interface Draft {
   industries: string;
   countries: string;
   required_tech: string;
+  buyer_titles: string;
   employee_min: string;
   employee_max: string;
   product_context: string;
@@ -87,6 +89,7 @@ function toDraft(p: RelevanceProfile): Draft {
     industries: csv(p.icp.industries),
     countries: csv(p.icp.countries),
     required_tech: csv(p.icp.required_tech),
+    buyer_titles: csv(p.icp.buyer_titles),
     employee_min: p.icp.employee_min != null ? String(p.icp.employee_min) : "",
     employee_max: p.icp.employee_max != null ? String(p.icp.employee_max) : "",
     product_context: p.product_context ?? "",
@@ -152,6 +155,93 @@ export function RelevancePage() {
     setDraft((d) => (d ? { ...d, weights: { ...DEFAULT_WEIGHT_PCT } } : d));
   }
 
+  // ---- AI: draft the ICP from a website + suggest buyer titles ----
+  const [website, setWebsite] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
+  const [titleSuggestions, setTitleSuggestions] = useState<TitleRecommendation[]>([]);
+
+  function applyDraftFromProfile(p: RelevanceProfileInput) {
+    setDraft((d) => {
+      if (!d) return d;
+      const icp = p.icp || {};
+      return {
+        ...d,
+        industries: icp.industries?.length ? csv(icp.industries) : d.industries,
+        countries: icp.countries?.length ? csv(icp.countries) : d.countries,
+        required_tech: icp.required_tech?.length ? csv(icp.required_tech) : d.required_tech,
+        buyer_titles: icp.buyer_titles?.length ? csv(icp.buyer_titles) : d.buyer_titles,
+        employee_min: icp.employee_min != null ? String(icp.employee_min) : d.employee_min,
+        employee_max: icp.employee_max != null ? String(icp.employee_max) : d.employee_max,
+        product_context: p.product_context?.trim() ? p.product_context : d.product_context,
+        value_props:
+          p.value_props && p.value_props.length
+            ? p.value_props.map((v) => ({
+                name: v.name,
+                description: v.description ?? "",
+                pains_solved: csv(v.pains_solved),
+              }))
+            : d.value_props,
+      };
+    });
+  }
+
+  async function analyzeFromWebsite() {
+    if (!website.trim()) return;
+    setAnalyzing(true);
+    try {
+      const drafted = await api.analyzeWebsite(website.trim());
+      const hasData = Boolean(drafted.icp?.industries?.length || drafted.product_context?.trim());
+      applyDraftFromProfile(drafted);
+      if (hasData) {
+        toast.success("Draft ICP generated", "Review and edit below, then Save changes.");
+      } else {
+        toast.toast({
+          tone: "info",
+          title: "Couldn't analyze that site",
+          description: "Fill the fields manually, or check that search/LLM keys are configured.",
+        });
+      }
+    } catch (err) {
+      toast.error("Analysis failed", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  async function suggestTitles() {
+    if (!draft) return;
+    setSuggesting(true);
+    try {
+      setTitleSuggestions(
+        await api.suggestBuyerTitles({
+          industries: splitCsv(draft.industries),
+          employee_min: numOrNull(draft.employee_min),
+          employee_max: numOrNull(draft.employee_max),
+          required_tech: splitCsv(draft.required_tech),
+          buyer_titles: splitCsv(draft.buyer_titles),
+          limit: 10,
+        }),
+      );
+    } catch (err) {
+      toast.error(
+        "Couldn't suggest titles",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  function addTitle(title: string) {
+    setDraft((d) => {
+      if (!d) return d;
+      const current = splitCsv(d.buyer_titles);
+      if (current.some((t) => t.toLowerCase() === title.toLowerCase())) return d;
+      return { ...d, buyer_titles: csv([...current, title]) };
+    });
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!draft || !profile.data) return;
@@ -166,6 +256,7 @@ export function RelevancePage() {
         industries: splitCsv(draft.industries),
         countries: splitCsv(draft.countries),
         required_tech: splitCsv(draft.required_tech),
+        buyer_titles: splitCsv(draft.buyer_titles),
         employee_min: numOrNull(draft.employee_min),
         employee_max: numOrNull(draft.employee_max),
         weights,
@@ -243,6 +334,32 @@ export function RelevancePage() {
         {() =>
           draft ? (
             <form id="relevance-form" className={styles.stack} onSubmit={onSubmit} noValidate>
+              {canEdit && (
+                <Card padding="lg">
+                  <SectionHead
+                    title="Draft your ICP with AI"
+                    description="Paste your website — AI infers your ideal customer profile (industries, size, buyer titles, value props) from what you sell. Everything lands in the editable fields below; review and Save when it looks right."
+                  />
+                  <div className={styles.websiteRow}>
+                    <Input
+                      value={website}
+                      onChange={(e) => setWebsite(e.target.value)}
+                      placeholder="https://yourcompany.com"
+                      disabled={analyzing}
+                      aria-label="Your website URL"
+                    />
+                    <Button
+                      type="button"
+                      iconLeft={<Icons.BoltIcon />}
+                      loading={analyzing}
+                      onClick={analyzeFromWebsite}
+                      disabled={!website.trim()}
+                    >
+                      Generate ICP
+                    </Button>
+                  </div>
+                </Card>
+              )}
               <Card padding="lg">
                 <SectionHead
                   title="Ideal customer profile"
@@ -295,6 +412,44 @@ export function RelevancePage() {
                       disabled={!canEdit}
                     />
                   </Field>
+                  <Field label="Buyer titles" hint="Who to target across the buying committee. Comma-separated.">
+                    <Input
+                      value={draft.buyer_titles}
+                      onChange={(e) => setField("buyer_titles", e.target.value)}
+                      placeholder="VP Sales, Head of RevOps, CTO"
+                      disabled={!canEdit}
+                    />
+                  </Field>
+                  {canEdit && (
+                    <div className={styles.suggestBlock}>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        iconLeft={<Icons.BoltIcon />}
+                        loading={suggesting}
+                        onClick={suggestTitles}
+                      >
+                        Suggest titles (AI)
+                      </Button>
+                      {titleSuggestions.length > 0 && (
+                        <div className={styles.chips}>
+                          {titleSuggestions.map((t) => (
+                            <button
+                              key={t.title}
+                              type="button"
+                              className={styles.chip}
+                              title={`${t.priority_score}/100 · ${t.department} · ${t.reason}`}
+                              onClick={() => addTitle(t.title)}
+                            >
+                              <span className={styles.chipScore}>{t.priority_score}</span>
+                              {t.title}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </Card>
 

@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
+    AnalyzeWebsiteIn,
     RelevanceProfileIn,
     RelevanceProfileOut,
+    SuggestTitlesIn,
     TitleRecommendationIn,
     TitleRecommendationOut,
 )
@@ -84,3 +86,49 @@ async def recommend_target_titles(
         limit=body.limit,
     )
     return [TitleRecommendationOut(**vars(r)) for r in recs]
+
+
+@router.post("/suggest-titles", response_model=list[TitleRecommendationOut])
+async def suggest_buyer_titles(
+    body: SuggestTitlesIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.run_agents)),
+) -> list[TitleRecommendationOut]:
+    """Generate up to 10 buyer titles for the whole ICP (all target industries + size + tech), so a
+    founder/SDR can populate ``buyer_titles``. Uses the posted draft ICP, or the saved profile when
+    the body is empty. Read-only and additive."""
+    from nexus.relevance.titles import recommend_titles_for_icp
+
+    icp = {
+        "industries": body.industries,
+        "employee_min": body.employee_min,
+        "employee_max": body.employee_max,
+        "required_tech": body.required_tech,
+        "buyer_titles": body.buyer_titles,
+    }
+    if not any([body.industries, body.employee_min, body.employee_max,
+                body.required_tech, body.buyer_titles]):
+        profile = await get_or_create_profile(ts)
+        icp = profile.icp or {}
+    recs = recommend_titles_for_icp(icp, limit=body.limit)
+    return [TitleRecommendationOut(**vars(r)) for r in recs]
+
+
+@router.post("/analyze-website", response_model=RelevanceProfileIn)
+async def analyze_website(
+    body: AnalyzeWebsiteIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_relevance)),
+) -> RelevanceProfileIn:
+    """AI-draft an ICP from a company's website: web research + LLM inference of who they sell to.
+    Returns an editable draft (icp / value_props / product_context) — it does NOT save. The user
+    reviews and edits it, then saves via ``PUT /relevance/profile``. Empty draft when offline or
+    the site can't be analyzed."""
+    from nexus.agents.llm import get_llm_provider
+    from nexus.integrations.registry import get_registry
+    from nexus.relevance.website_icp import analyze_website_to_icp
+
+    draft = await analyze_website_to_icp(
+        body.url, search=get_registry().search, llm=get_llm_provider()
+    )
+    return RelevanceProfileIn(**draft)

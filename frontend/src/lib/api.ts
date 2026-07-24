@@ -397,6 +397,30 @@ export class ApiClient {
       signal,
     });
   }
+  suggestBuyerTitles(
+    icp: {
+      industries?: string[];
+      employee_min?: number | null;
+      employee_max?: number | null;
+      required_tech?: string[];
+      buyer_titles?: string[];
+      limit?: number;
+    },
+    signal?: AbortSignal,
+  ) {
+    return this.request<TitleRecommendation[]>("/relevance/suggest-titles", {
+      method: "POST",
+      body: { limit: 10, ...icp },
+      signal,
+    });
+  }
+  analyzeWebsite(url: string, signal?: AbortSignal) {
+    return this.request<RelevanceProfileInput>("/relevance/analyze-website", {
+      method: "POST",
+      body: { url },
+      signal,
+    });
+  }
 
   // ---- lists / segments ----
   previewList(filter: ListFilter, signal?: AbortSignal) {

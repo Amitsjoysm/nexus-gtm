@@ -220,3 +220,37 @@ def recommend_titles(
     # Highest priority first; stable tie-break by confidence then title for determinism.
     out.sort(key=lambda r: (-r.priority_score, -r.confidence, r.title))
     return out[: max(1, limit)]
+
+
+def recommend_titles_for_icp(icp: dict, *, limit: int = 10) -> list[TitleRecommendation]:
+    """Recommend up to ``limit`` (capped at 10) buyer titles for a whole ICP, not one account.
+
+    Considers ALL of the ICP's fields: every target industry (a title elevated in *any* of them
+    wins that boost), the midpoint of the employee range, the required tech stack, and the titles
+    already listed. Deterministic; safe on a partial/empty ICP (falls back to the base ranking).
+    """
+    icp = icp or {}
+    industries = [i for i in (icp.get("industries") or []) if str(i).strip()] or [None]
+    emin, emax = icp.get("employee_min"), icp.get("employee_max")
+    if emin and emax:
+        employee_count: int | None = (int(emin) + int(emax)) // 2
+    else:
+        employee_count = emin or emax
+    tech = icp.get("required_tech") or []
+    buyer_titles = icp.get("buyer_titles") or icp.get("titles") or []
+
+    # Score against each target industry; keep the best score per title across industries.
+    best: dict[str, TitleRecommendation] = {}
+    for industry in industries:
+        for rec in recommend_titles(
+            industry=industry,
+            employee_count=employee_count,
+            tech_stack=tech,
+            icp_buyer_titles=buyer_titles,
+            limit=len(ROLES),
+        ):
+            current = best.get(rec.title)
+            if current is None or rec.priority_score > current.priority_score:
+                best[rec.title] = rec
+    out = sorted(best.values(), key=lambda r: (-r.priority_score, -r.confidence, r.title))
+    return out[: min(10, max(1, limit))]

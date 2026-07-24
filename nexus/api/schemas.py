@@ -121,6 +121,21 @@ class TitleRecommendationOut(BaseModel):
     alternatives: list[str] = Field(default_factory=list)
 
 
+class SuggestTitlesIn(BaseModel):
+    """Generate up to `limit` (max 10) buyer titles from the WHOLE ICP. Pass the current draft
+    fields to suggest from unsaved edits; leave all empty to use the saved profile's ICP."""
+    industries: list[str] = Field(default_factory=list)
+    employee_min: int | None = None
+    employee_max: int | None = None
+    required_tech: list[str] = Field(default_factory=list)
+    buyer_titles: list[str] = Field(default_factory=list)
+    limit: int = 10
+
+
+class AnalyzeWebsiteIn(BaseModel):
+    url: str
+
+
 # ---- accounts / contacts ----
 class AccountIn(BaseModel):
     name: str

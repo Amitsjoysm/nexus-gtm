@@ -430,6 +430,7 @@ export interface IcpDefinition {
   employee_min?: number | null;
   employee_max?: number | null;
   required_tech?: string[];
+  buyer_titles?: string[];
   weights?: Record<string, number>;
 }
 

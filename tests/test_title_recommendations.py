@@ -1,7 +1,14 @@
 """Title recommendation engine + endpoint. Deterministic and offline."""
 from __future__ import annotations
 
-from nexus.relevance.titles import ENT, MID, SMB, recommend_titles, size_band
+from nexus.relevance.titles import (
+    ENT,
+    MID,
+    SMB,
+    recommend_titles,
+    recommend_titles_for_icp,
+    size_band,
+)
 from tests.conftest import auth, signup
 
 
@@ -82,6 +89,31 @@ def test_output_is_deterministic_bounded_and_well_formed():
         )
 
 
+# ---------------------------------------------------------------- ICP-wide (up to 10)
+def test_recommend_titles_for_icp_aggregates_industries_and_caps_at_10():
+    icp = {
+        "industries": ["Financial Services", "Software"],
+        "employee_min": 200, "employee_max": 2000,
+        "required_tech": ["Snowflake"], "buyer_titles": ["Head of Data"],
+    }
+    recs = recommend_titles_for_icp(icp, limit=10)
+    assert 1 <= len(recs) <= 10
+    titles = [r.title for r in recs]
+    assert "Chief Information Security Officer" in titles     # FinServ industry boost
+    hod = next(r for r in recs if r.title == "Head of Data")
+    assert "ICP" in hod.reason                                 # ICP buyer_titles + tech boost
+
+
+def test_recommend_titles_for_icp_limit_is_capped_at_10():
+    recs = recommend_titles_for_icp({"industries": ["Software"]}, limit=50)
+    assert len(recs) == 10
+
+
+def test_recommend_titles_for_icp_empty_falls_back_to_base():
+    recs = recommend_titles_for_icp({}, limit=10)
+    assert len(recs) == 10
+
+
 # ---------------------------------------------------------------- endpoint (integration)
 async def test_endpoint_adhoc_firmographics(client):
     token = await signup(client, slug="rex", email="o@rex.com", company="Rex")
@@ -117,3 +149,17 @@ async def test_endpoint_uses_account_and_icp(client):
     data = r.json()
     hop = next(d for d in data if d["title"] == "Head of Product")
     assert "ICP" in hop["reason"]        # ICP buyer_titles boosted it and is cited
+
+
+async def test_suggest_titles_endpoint_returns_up_to_10(client):
+    token = await signup(client, slug="st", email="o@st.com", company="ST")
+    r = await client.post(
+        "/api/relevance/suggest-titles",
+        headers=auth(token),
+        json={"industries": ["Financial Services"], "employee_min": 200,
+              "employee_max": 2000, "limit": 10},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert 1 <= len(data) <= 10
+    assert all("title" in d and "priority_score" in d for d in data)
