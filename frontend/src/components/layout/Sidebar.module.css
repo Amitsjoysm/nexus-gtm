@@ -11,11 +11,41 @@
   flex-shrink: 0;
 }
 
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-4);
+}
+.hamburger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.hamburger:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.hamburger :global(svg) {
+  width: 20px;
+  height: 20px;
+}
 .brand {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-2) var(--space-5);
+  gap: var(--space-2);
+  min-width: 0;
 }
 .logo {
   display: inline-flex;
@@ -124,38 +154,9 @@
   color: var(--text-subtle);
 }
 
-/* ---- collapse toggle (desktop) ---- */
-.collapseBtn {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  min-height: 36px;
-  width: 100%;
-  border: none;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  color: var(--text-subtle);
-  font-size: var(--text-xs);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-.collapseBtn:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-.collapseIcon {
-  display: inline-flex;
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-.collapseIcon :global(svg) {
-  width: 18px;
-  height: 18px;
-}
-/* Hide the collapse control on mobile (the drawer handles small screens). */
+/* Hide the collapse hamburger on mobile — the topbar menu + drawer handle small screens. */
 @media (max-width: 1024px) {
-  .collapseBtn {
+  .hamburger {
     display: none;
   }
 }
@@ -167,13 +168,12 @@
     padding-left: var(--space-2);
     padding-right: var(--space-2);
   }
-  .collapsed .brandText,
+  .collapsed .brand,
   .collapsed .linkLabel,
-  .collapsed .footText,
-  .collapsed .collapseLabel {
+  .collapsed .footText {
     display: none;
   }
-  .collapsed .brand {
+  .collapsed .header {
     justify-content: center;
     padding-left: 0;
     padding-right: 0;
@@ -184,12 +184,6 @@
   }
   .collapsed .footer {
     justify-content: center;
-  }
-  .collapsed .collapseBtn {
-    justify-content: center;
-  }
-  .collapsed .collapseIcon {
-    transform: rotate(180deg);
   }
 }
 

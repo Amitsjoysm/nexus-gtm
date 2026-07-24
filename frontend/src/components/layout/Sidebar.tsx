@@ -23,13 +23,27 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
       className={cn(styles.sidebar, open && styles.open, collapsed && styles.collapsed)}
       aria-label="Primary"
     >
-      <div className={styles.brand}>
-        <img src="/infojoy-mark.png" alt="Infojoy" className={styles.logoImg} />
-        <span className={styles.brandText}>
-          <span className={styles.brandInfo}>Info</span>
-          <span className={styles.brandJoy}>Joy</span>{" "}
-          <span className={styles.brandSub}>GTM</span>
-        </span>
+      <div className={styles.header}>
+        {onToggleCollapse && (
+          <button
+            type="button"
+            className={styles.hamburger}
+            onClick={onToggleCollapse}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-pressed={collapsed}
+            title={collapsed ? "Expand menu" : "Collapse menu"}
+          >
+            <Icons.MenuIcon />
+          </button>
+        )}
+        <div className={styles.brand}>
+          <img src="/infojoy-mark.png" alt="Infojoy" className={styles.logoImg} />
+          <span className={styles.brandText}>
+            <span className={styles.brandInfo}>Info</span>
+            <span className={styles.brandJoy}>Joy</span>{" "}
+            <span className={styles.brandSub}>GTM</span>
+          </span>
+        </div>
       </div>
 
       <nav className={styles.nav} aria-label="Main navigation">
@@ -53,22 +67,6 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
         <span className={styles.badge}>{role ?? "—"}</span>
         <span className={styles.footText}>Signed in</span>
       </div>
-
-      {onToggleCollapse && (
-        <button
-          type="button"
-          className={styles.collapseBtn}
-          onClick={onToggleCollapse}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-pressed={collapsed}
-          title={collapsed ? "Expand" : "Collapse"}
-        >
-          <span className={styles.collapseIcon} aria-hidden="true">
-            <Icons.ChevronLeftIcon />
-          </span>
-          <span className={styles.collapseLabel}>Collapse</span>
-        </button>
-      )}
     </aside>
   );
 }
