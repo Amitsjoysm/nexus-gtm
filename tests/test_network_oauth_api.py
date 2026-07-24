@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import httpx
-import pytest
 
-from tests.conftest import auth, client, signup
+from tests.conftest import auth, signup
 
 
 async def test_oauth_start_unconfigured_returns_400(client):
