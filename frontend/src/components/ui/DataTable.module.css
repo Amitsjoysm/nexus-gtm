@@ -9,6 +9,12 @@
   font-size: var(--text-sm);
 }
 
+/* Compact density: tighter cells for column-heavy tables so they fit without horizontal scroll. */
+.compact thead th,
+.compact .row td {
+  padding: var(--space-2) var(--space-2);
+}
+
 .table thead th {
   text-align: left;
   font-size: var(--text-xs);

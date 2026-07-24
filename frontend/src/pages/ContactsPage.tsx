@@ -35,6 +35,39 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> 
   invalid: "danger",
 };
 
+// Detected email service provider (from MX records) → a friendly label shown under the address.
+const PROVIDER_LABELS: Record<string, string> = {
+  gsuite: "Google",
+  office365: "Microsoft",
+  outlook: "Outlook",
+  yahoo: "Yahoo",
+  zoho: "Zoho",
+  proton: "Proton",
+  custom: "Custom",
+  disposable: "Disposable",
+};
+// Full name for the hover tooltip (the badge stays short to keep the column narrow).
+const PROVIDER_FULL: Record<string, string> = {
+  gsuite: "Google Workspace",
+  office365: "Microsoft 365",
+  custom: "Custom / self-hosted",
+};
+const providerFull = (p?: string | null) =>
+  (p ? PROVIDER_FULL[p] ?? PROVIDER_LABELS[p] ?? p : "");
+// Ultra-tiny provider "favicon": a brand-colored letter badge (G, M, O, …).
+const PROVIDER_INITIAL: Record<string, string> = {
+  gsuite: "G",
+  office365: "M",
+  outlook: "O",
+  yahoo: "Y",
+  zoho: "Z",
+  proton: "P",
+  custom: "C",
+  disposable: "!",
+};
+const providerInitial = (p?: string | null) =>
+  (p ? PROVIDER_INITIAL[p] ?? (PROVIDER_LABELS[p]?.[0]?.toUpperCase() ?? "?") : "");
+
 // Mirrors NEXUS_EMAIL_REVERIFY_COOLDOWN_DAYS: a confirmed-valid address is re-checkable only
 // after this window (the backend enforces it with a 429; this just saves the click).
 const REVERIFY_COOLDOWN_DAYS = 30;
@@ -151,19 +184,34 @@ export function ContactsPage() {
         key: "full_name",
         header: "Name",
         sortValue: (c) => c.full_name,
-        render: (c) => <span className={styles.name}>{c.full_name}</span>,
+        render: (c) => (
+          <span className={styles.name} title={c.full_name}>
+            {c.full_name}
+          </span>
+        ),
       },
       {
         key: "title",
         header: "Title",
         sortValue: (c) => c.title,
-        render: (c) => c.title ?? <span className={styles.muted}>—</span>,
+        render: (c) =>
+          c.title ? (
+            <span className={styles.truncate} title={c.title}>
+              {c.title}
+            </span>
+          ) : (
+            <span className={styles.muted}>—</span>
+          ),
       },
       {
         key: "account_name",
         header: "Account",
         sortValue: (c) => c.account_name,
-        render: (c) => <span className={styles.account}>{c.account_name}</span>,
+        render: (c) => (
+          <span className={styles.account} title={c.account_name}>
+            {c.account_name}
+          </span>
+        ),
       },
       {
         key: "email",
@@ -171,7 +219,25 @@ export function ContactsPage() {
         hideOnMobile: true,
         sortValue: (c) => c.email,
         render: (c) =>
-          c.email ? <span className={styles.mono}>{c.email}</span> : <span className={styles.muted}>—</span>,
+          c.email ? (
+            <div className={styles.emailCell}>
+              {c.email_provider && (
+                <span
+                  className={styles.provider}
+                  data-provider={c.email_provider}
+                  title={`Mailbox provider: ${providerFull(c.email_provider)}`}
+                  aria-label={`Mailbox provider: ${providerFull(c.email_provider)}`}
+                >
+                  {providerInitial(c.email_provider)}
+                </span>
+              )}
+              <span className={styles.mono} title={c.email}>
+                {c.email}
+              </span>
+            </div>
+          ) : (
+            <span className={styles.muted}>—</span>
+          ),
       },
       {
         key: "phone",
@@ -227,16 +293,19 @@ export function ContactsPage() {
         key: "linkedin_url",
         header: "LinkedIn",
         hideOnMobile: true,
+        align: "center",
         render: (c) =>
           c.linkedin_url ? (
             <a
               href={c.linkedin_url}
               target="_blank"
               rel="noreferrer noopener"
-              className={styles.account}
+              className={styles.linkedin}
+              title={`Open ${c.full_name}'s LinkedIn`}
+              aria-label={`Open ${c.full_name}'s LinkedIn profile`}
               onClick={(e) => e.stopPropagation()}
             >
-              View
+              in
             </a>
           ) : (
             <span className={styles.muted}>—</span>
@@ -251,47 +320,43 @@ export function ContactsPage() {
             <Button
               size="sm"
               variant="ghost"
+              iconLeft={<Icons.ShieldCheckIcon />}
               loading={busyId === c.id}
               disabled={verifiedFresh(c)}
               title={
                 verifiedFresh(c)
                   ? `Verified valid ${timeAgo(c.email_checked_at as string)} — re-verification opens ${reverifyDueDate(c)}`
-                  : undefined
+                  : "Verify email"
               }
               onClick={() => verify(c)}
               aria-label={`Verify ${c.full_name}'s email`}
-            >
-              Verify
-            </Button>
+            />
             <Button
               size="sm"
               variant="ghost"
               iconLeft={<Icons.UsersIcon />}
               loading={similarId === c.id}
+              title="Find similar people"
               onClick={() => findSimilar(c)}
               aria-label={`Find people similar to ${c.full_name}`}
-            >
-              Similar
-            </Button>
+            />
             <Button
               size="sm"
               variant="ghost"
-              iconLeft={<Icons.MessageIcon />}
+              iconLeft={<Icons.MailIcon />}
+              title="Draft a personalized email"
               onClick={() => setEmailFor(c)}
               aria-label={`Draft an email to ${c.full_name}`}
-            >
-              Email
-            </Button>
+            />
             <Button
               size="sm"
               variant="secondary"
               iconLeft={<Icons.PhoneIcon />}
               loading={callingId === c.id}
+              title="Call"
               onClick={() => startCall(c)}
               aria-label={`Call ${c.full_name}`}
-            >
-              Call
-            </Button>
+            />
           </span>
         ),
       },
@@ -353,6 +418,7 @@ export function ContactsPage() {
         <DataTable<WorkspaceContact>
           columns={columns}
           rows={visible}
+          density="compact"
           getRowKey={(c) => c.id}
           loading={contacts.loading && !contacts.data}
           skeletonRows={6}

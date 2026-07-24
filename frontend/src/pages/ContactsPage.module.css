@@ -8,8 +8,25 @@
 .rowActions {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 2px;
   justify-content: flex-end;
+}
+/* Square, compact icon buttons (more specific than Button's .sm padding, so it wins). */
+.rowActions button {
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+  min-width: 30px;
+}
+/* Cap wide text columns with an ellipsis so the table fits without horizontal scroll. */
+.name,
+.account,
+.truncate {
+  display: inline-block;
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .toolbar > :first-child {
@@ -33,11 +50,77 @@
 
 .mono {
   font-family: var(--font-mono, monospace);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  display: inline-block;
+  max-width: 116px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .muted {
   color: var(--text-subtle);
+}
+
+/* Email cell: a tiny brand-colored provider "favicon" + the address, inline. */
+.emailCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.provider {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: var(--weight-bold, 700);
+  line-height: 1;
+  color: #fff;
+  background: var(--text-subtle);
+}
+.provider[data-provider="gsuite"] {
+  background: #ea4335;
+}
+.provider[data-provider="office365"],
+.provider[data-provider="outlook"] {
+  background: #0078d4;
+}
+.provider[data-provider="yahoo"] {
+  background: #6001d2;
+}
+.provider[data-provider="proton"] {
+  background: #6d4aff;
+}
+.provider[data-provider="zoho"] {
+  background: #e42527;
+}
+.provider[data-provider="disposable"] {
+  background: var(--danger, #c0392b);
+}
+
+/* Recognizable LinkedIn "in" badge link. */
+.linkedin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: #0a66c2;
+  color: #fff;
+  font-weight: var(--weight-bold, 700);
+  font-size: 11px;
+  text-decoration: none;
+}
+.linkedin:hover {
+  filter: brightness(1.12);
+  text-decoration: none;
 }
 
 /* "Similar people" modal */

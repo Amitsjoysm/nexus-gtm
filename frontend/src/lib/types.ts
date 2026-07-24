@@ -149,6 +149,7 @@ export interface Contact {
   email_status: string | null;
   email_confidence: number;
   email_checked_at: string | null;
+  email_provider: string | null;
   phone_confidence: number;
   enrichment_source: string | null;
 }
@@ -166,6 +167,8 @@ export interface WorkspaceContact {
   email_confidence: number;
   /** ISO timestamp of the last deliverability check (any verdict). null = never checked. */
   email_checked_at: string | null;
+  /** Detected email service provider (gsuite|office365|outlook|yahoo|custom|…). */
+  email_provider: string | null;
   phone: string | null;
   phone_confidence: number;
   linkedin_url: string | null;

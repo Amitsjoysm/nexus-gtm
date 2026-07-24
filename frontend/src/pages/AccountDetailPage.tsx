@@ -737,7 +737,7 @@ export function AccountDetailPage() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        iconLeft={<Icons.MessageIcon />}
+                        iconLeft={<Icons.MailIcon />}
                         onClick={() => setEmailFor(c)}
                         aria-label={`Draft an email to ${c.full_name}`}
                       >

@@ -222,6 +222,13 @@ export const MessageIcon = (props: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+export const MailIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="m3 7 9 6 9-6" />
+  </Svg>
+);
+
 export const FileTextIcon = (props: SVGProps<SVGSVGElement>) => (
   <Svg {...props}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" />

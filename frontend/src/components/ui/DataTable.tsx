@@ -45,6 +45,8 @@ export interface DataTableProps<T> {
    * Accepts any CSS length (e.g. 840 → "840px", "60rem").
    */
   minWidth?: number | string;
+  /** Row density. "compact" tightens cell padding for column-heavy tables. */
+  density?: "default" | "compact";
 }
 
 function isSortable<T>(c: Column<T>): boolean {
@@ -85,6 +87,7 @@ export function DataTable<T>({
   caption,
   className,
   minWidth,
+  density = "default",
 }: DataTableProps<T>) {
   const [sort, setSort] = useState<SortState | null>(null);
   const showEmpty = !loading && rows.length === 0;
@@ -113,7 +116,10 @@ export function DataTable<T>({
 
   return (
     <div className={cn(styles.scroll, className)}>
-      <table className={styles.table} style={tableMinWidth ? { minWidth: tableMinWidth } : undefined}>
+      <table
+        className={cn(styles.table, density === "compact" && styles.compact)}
+        style={tableMinWidth ? { minWidth: tableMinWidth } : undefined}
+      >
         {caption && <caption className="sr-only">{caption}</caption>}
         <thead>
           <tr>

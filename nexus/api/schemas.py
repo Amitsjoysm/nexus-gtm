@@ -180,6 +180,7 @@ class ContactOut(ContactIn):
     email_status: str | None = None      # verifier verdict: valid|risky|invalid|unknown|None
     email_confidence: float
     email_checked_at: str | None = None  # ISO time of last deliverability check; None = never
+    email_provider: str | None = None    # detected ESP: gsuite|office365|outlook|yahoo|custom|…
     phone_confidence: float
     enrichment_source: str | None = None
 
@@ -199,6 +200,7 @@ class WorkspaceContactOut(BaseModel):
     email_confidence: float = 0.0
     # ISO timestamp of the last deliverability check (any verdict). None = never checked.
     email_checked_at: str | None = None
+    email_provider: str | None = None    # detected ESP: gsuite|office365|outlook|yahoo|custom|…
     phone: str | None = None
     phone_confidence: float = 0.0
     linkedin_url: str | None = None

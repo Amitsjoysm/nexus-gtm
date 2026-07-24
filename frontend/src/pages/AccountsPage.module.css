@@ -29,8 +29,31 @@
 
 .rowActions {
   display: inline-flex;
-  gap: var(--space-1);
+  gap: 2px;
   justify-content: flex-end;
+}
+.rowActions button {
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+  min-width: 30px;
+}
+/* Recognizable LinkedIn "in" badge link (matches the Contacts table). */
+.linkedin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: #0a66c2;
+  color: #fff;
+  font-weight: var(--weight-bold, 700);
+  font-size: 11px;
+  text-decoration: none;
+}
+.linkedin:hover {
+  filter: brightness(1.12);
+  text-decoration: none;
 }
 .search {
   position: relative;

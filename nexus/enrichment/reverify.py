@@ -60,6 +60,14 @@ async def reverify_contact(contact: Contact, verify: Verify) -> bool:
     # Stamp the check time even when the verdict didn't move (unknown→unknown): the SDR sees
     # "Checked <date>" instead of an apparent no-op, and the cool-down has an anchor.
     contact.email_checked_at = utcnow()
+    # Persist the detected ESP (gsuite/office365/…) so the UI can show it. JSON column: reassign
+    # (don't mutate in place) so SQLAlchemy sees the change.
+    if verdict.provider_type:
+        cf = dict(contact.custom_fields or {})
+        if cf.get("email_provider") != verdict.provider_type:
+            cf["email_provider"] = verdict.provider_type
+            contact.custom_fields = cf
+            changed = True
     if verdict.status == STATUS_VALID and verdict.confidence > (contact.email_confidence or 0.0):
         contact.email_confidence = verdict.confidence
         changed = True

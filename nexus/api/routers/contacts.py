@@ -91,6 +91,7 @@ async def list_contacts(
             email_checked_at=(
                 contact.email_checked_at.isoformat() if contact.email_checked_at else None
             ),
+            email_provider=(contact.custom_fields or {}).get("email_provider"),
             phone=contact.phone,
             phone_confidence=contact.phone_confidence,
             linkedin_url=contact.linkedin_url,

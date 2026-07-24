@@ -26,6 +26,7 @@ from nexus.verification.provider import (
     STATUS_UNKNOWN,
     EmailVerification,
     EmailVerificationProvider,
+    provider_from_mx,
 )
 
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})$")
@@ -50,13 +51,14 @@ class DnsMxEmailVerifier(EmailVerificationProvider):
         m = _EMAIL_RE.match(addr)
         if not m:
             return EmailVerification(
-                email=addr, status=STATUS_INVALID, confidence=0.9,
-                source=self.name, provider_type="dns",
+                email=addr, status=STATUS_INVALID, confidence=0.9, source=self.name,
             )
         status, confidence, signals = await self._grade_domain(m.group(1).lower())
+        # Surface the ESP (gsuite/office365/…) from the MX hosts when we have them.
+        provider = provider_from_mx(signals.get("mx"))
         return EmailVerification(
             email=addr, status=status, confidence=confidence,
-            source=self.name, provider_type="dns", signals=signals,
+            source=self.name, provider_type=provider, signals=signals,
         )
 
     async def _grade_domain(self, domain: str) -> _Grade:

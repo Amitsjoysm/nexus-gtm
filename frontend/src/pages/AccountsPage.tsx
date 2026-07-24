@@ -129,17 +129,19 @@ export function AccountsPage() {
         key: "linkedin_url",
         header: "LinkedIn",
         hideOnMobile: true,
+        align: "center",
         render: (a) =>
           a.linkedin_url ? (
             <a
               href={a.linkedin_url}
               target="_blank"
               rel="noreferrer noopener"
-              className={styles.link}
+              className={styles.linkedin}
               onClick={(e) => e.stopPropagation()}
+              title={`Open ${a.name} on LinkedIn`}
               aria-label={`Open ${a.name} on LinkedIn`}
             >
-              View
+              in
             </a>
           ) : (
             <span className={styles.muted}>—</span>
@@ -154,21 +156,29 @@ export function AccountsPage() {
             <Button
               size="sm"
               variant="ghost"
-              loading={busyId === a.id}
-              onClick={() => pushToCrm(a)}
-              aria-label={`Push ${a.name} to CRM`}
-            >
-              <Icons.PlugIcon />
-            </Button>
+              iconLeft={<Icons.UsersIcon />}
+              onClick={() => navigate(`/accounts/${a.id}`)}
+              title="Open account & contacts"
+              aria-label={`Open ${a.name}`}
+            />
             <Button
               size="sm"
               variant="ghost"
+              iconLeft={<Icons.PlugIcon />}
+              loading={busyId === a.id}
+              onClick={() => pushToCrm(a)}
+              title="Push to CRM"
+              aria-label={`Push ${a.name} to CRM`}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              iconLeft={<Icons.TrashIcon />}
               loading={busyId === a.id}
               onClick={() => removeAccount(a)}
+              title="Remove account"
               aria-label={`Remove ${a.name}`}
-            >
-              <Icons.TrashIcon />
-            </Button>
+            />
           </span>
         ),
       },

@@ -32,10 +32,12 @@
 .icon {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0; /* never let the icon collapse to 0 width in an icon-only (label-less) button */
 }
 .icon :global(svg) {
   width: 1.05em;
   height: 1.05em;
+  flex-shrink: 0;
 }
 .spinner {
   color: currentColor;

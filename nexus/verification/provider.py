@@ -20,6 +20,29 @@ STATUS_INVALID = "invalid"
 STATUS_UNKNOWN = "unknown"
 STATUS_RISKY = "risky"
 
+# ESP classification from MX host names — so the UI can show whether an address is Google
+# Workspace, Microsoft 365, etc. Shared by the DNS verifier and (conceptually) Reacher.
+_MX_PROVIDER_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("gsuite", ("google.com", "googlemail", "l.google.com", "aspmx")),
+    ("office365", ("mail.protection.outlook.com", "office365")),
+    ("outlook", ("outlook.com", "hotmail", "live.com")),
+    ("yahoo", ("yahoodns", "yahoo.com")),
+    ("zoho", ("zoho.com", "zohomail")),
+    ("proton", ("protonmail", "proton.me")),
+)
+
+
+def provider_from_mx(mx_hosts) -> str | None:
+    """Classify the email service provider (gsuite/office365/outlook/…) from MX host names.
+    Returns 'custom' when hosts exist but match nothing known, None when there are no hosts."""
+    blob = " ".join((str(h) or "").lower() for h in (mx_hosts or []))
+    if not blob.strip():
+        return None
+    for ptype, needles in _MX_PROVIDER_RULES:
+        if any(n in blob for n in needles):
+            return ptype
+    return "custom"
+
 
 @dataclass(slots=True)
 class EmailVerification:

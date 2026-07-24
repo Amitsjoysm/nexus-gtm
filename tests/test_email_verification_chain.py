@@ -90,6 +90,45 @@ async def test_dns_verifier_grades_from_resolver(monkeypatch):
     assert (await verifier.verify_one("a@dead.example")).status == STATUS_INVALID
 
 
+def test_provider_from_mx_classifies_esp():
+    from nexus.verification.provider import provider_from_mx
+
+    assert provider_from_mx(["aspmx.l.google.com", "alt1.aspmx.l.google.com"]) == "gsuite"
+    assert provider_from_mx(["acme-com.mail.protection.outlook.com"]) == "office365"
+    assert provider_from_mx(["mx1.self-hosted.io"]) == "custom"
+    assert provider_from_mx([]) is None
+    assert provider_from_mx(None) is None
+
+
+async def test_dns_verifier_surfaces_provider_from_mx(monkeypatch):
+    from nexus.verification import dns as dnsmod
+
+    def fake_resolve(domain, timeout):
+        return (STATUS_RISKY, 0.5, {"mx": ["aspmx.l.google.com"]})
+
+    monkeypatch.setattr(dnsmod.DnsMxEmailVerifier, "_resolve", staticmethod(fake_resolve))
+    verdict = await dnsmod.DnsMxEmailVerifier().verify_one("a@acme.com")
+    assert verdict.provider_type == "gsuite"
+
+
+async def test_reverify_persists_provider_to_custom_fields():
+    from nexus.enrichment.reverify import reverify_contact
+    from nexus.models.account import Contact
+
+    contact = Contact(full_name="A", account_id="x", email="a@acme.com", custom_fields={})
+
+    async def verify(email):
+        return EmailVerification(
+            email=email, status=STATUS_RISKY, confidence=0.5,
+            source="reacher", provider_type="office365",
+        )
+
+    changed = await reverify_contact(contact, verify)
+    assert changed is True
+    assert contact.email_status == STATUS_RISKY
+    assert (contact.custom_fields or {}).get("email_provider") == "office365"
+
+
 async def test_pattern_guess_sanitizes_apostrophe_names():
     """The blind pattern guesser must emit an RFC-valid local-part: O'Mara -> omara."""
     from nexus.enrichment.providers import _EMAIL, PatternEmailProvider

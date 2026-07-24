@@ -101,6 +101,12 @@ class WaterfallEnricher:
             if merged.email_status:
                 contact.email_status = merged.email_status
                 contact.email_checked_at = utcnow()
+                # Persist the detected ESP (gsuite/office365/…) for the UI. Reassign the JSON dict
+                # so SQLAlchemy tracks the change.
+                if merged.provider_type:
+                    cf = dict(contact.custom_fields or {})
+                    cf["email_provider"] = merged.provider_type
+                    contact.custom_fields = cf
         if merged.phone and merged.phone_confidence >= contact.phone_confidence:
             contact.phone, contact.phone_confidence = merged.phone, merged.phone_confidence
         if merged.found:

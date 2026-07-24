@@ -63,6 +63,7 @@ def _contact_out(c: Contact) -> ContactOut:
         email_status=c.email_status,
         email_confidence=c.email_confidence,
         email_checked_at=(c.email_checked_at.isoformat() if c.email_checked_at else None),
+        email_provider=(c.custom_fields or {}).get("email_provider"),
         phone_confidence=c.phone_confidence,
         enrichment_source=c.enrichment_source,
     )
