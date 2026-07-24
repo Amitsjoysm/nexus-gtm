@@ -3,6 +3,19 @@
   flex-direction: column;
   gap: var(--space-4);
 }
+/* On wide screens, flow the cards into two masonry columns so the form isn't one very tall
+   single column (halves the scroll). break-inside keeps each card intact. */
+@media (min-width: 1200px) {
+  .stack {
+    display: block;
+    column-count: 2;
+    column-gap: var(--space-4);
+  }
+  .stack > * {
+    break-inside: avoid;
+    margin-bottom: var(--space-4);
+  }
+}
 .notice {
   display: flex;
   align-items: center;
