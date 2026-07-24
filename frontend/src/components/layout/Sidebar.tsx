@@ -2,20 +2,27 @@ import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { NAV_ITEMS, canSee } from "@/app/nav";
 import { useAuth } from "@/app/AuthContext";
+import { Icons } from "@/components/ui";
 import styles from "./Sidebar.module.css";
 
 export interface SidebarProps {
   /** Mobile drawer open state. */
   open: boolean;
+  /** Desktop icons-only collapse. */
+  collapsed?: boolean;
   onNavigate: () => void;
+  onToggleCollapse?: () => void;
 }
 
-export function Sidebar({ open, onNavigate }: SidebarProps) {
+export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse }: SidebarProps) {
   const { session } = useAuth();
   const role = session?.role;
 
   return (
-    <aside className={cn(styles.sidebar, open && styles.open)} aria-label="Primary">
+    <aside
+      className={cn(styles.sidebar, open && styles.open, collapsed && styles.collapsed)}
+      aria-label="Primary"
+    >
       <div className={styles.brand}>
         <img src="/infojoy-mark.png" alt="Infojoy" className={styles.logoImg} />
         <span className={styles.brandText}>
@@ -31,12 +38,13 @@ export function Sidebar({ open, onNavigate }: SidebarProps) {
             key={item.to}
             to={item.to}
             onClick={onNavigate}
+            title={collapsed ? item.label : undefined}
             className={({ isActive }) => cn(styles.link, isActive && styles.active)}
           >
             <span className={styles.icon} aria-hidden="true">
               {item.icon}
             </span>
-            <span>{item.label}</span>
+            <span className={styles.linkLabel}>{item.label}</span>
           </NavLink>
         ))}
       </nav>
@@ -45,6 +53,22 @@ export function Sidebar({ open, onNavigate }: SidebarProps) {
         <span className={styles.badge}>{role ?? "—"}</span>
         <span className={styles.footText}>Signed in</span>
       </div>
+
+      {onToggleCollapse && (
+        <button
+          type="button"
+          className={styles.collapseBtn}
+          onClick={onToggleCollapse}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-pressed={collapsed}
+          title={collapsed ? "Expand" : "Collapse"}
+        >
+          <span className={styles.collapseIcon} aria-hidden="true">
+            <Icons.ChevronLeftIcon />
+          </span>
+          <span className={styles.collapseLabel}>Collapse</span>
+        </button>
+      )}
     </aside>
   );
 }

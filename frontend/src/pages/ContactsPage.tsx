@@ -17,6 +17,7 @@ import {
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
 import { CallConsole } from "@/components/CallConsole";
+import { EmailComposer } from "@/components/EmailComposer";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -56,6 +57,7 @@ export function ContactsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reverifying, setReverifying] = useState(false);
   const [callTask, setCallTask] = useState<CallTask | null>(null);
+  const [emailFor, setEmailFor] = useState<WorkspaceContact | null>(null);
   const [callingId, setCallingId] = useState<string | null>(null);
   // "Similar people" — opens a modal ranking the workspace's other contacts against this one.
   const [similarFor, setSimilarFor] = useState<WorkspaceContact | null>(null);
@@ -273,6 +275,15 @@ export function ContactsPage() {
             </Button>
             <Button
               size="sm"
+              variant="ghost"
+              iconLeft={<Icons.MessageIcon />}
+              onClick={() => setEmailFor(c)}
+              aria-label={`Draft an email to ${c.full_name}`}
+            >
+              Email
+            </Button>
+            <Button
+              size="sm"
               variant="secondary"
               iconLeft={<Icons.PhoneIcon />}
               loading={callingId === c.id}
@@ -367,6 +378,22 @@ export function ContactsPage() {
       >
         {callTask && (
           <CallConsole task={callTask} autoGenerate onLogged={() => setCallTask(null)} />
+        )}
+      </Modal>
+
+      <Modal
+        open={!!emailFor}
+        onClose={() => setEmailFor(null)}
+        title={emailFor ? `Email ${emailFor.full_name}` : "Email"}
+        description="Hyper-personalized to this contact and account — edit, copy, or open in your mail client."
+      >
+        {emailFor && (
+          <EmailComposer
+            accountId={emailFor.account_id}
+            contactId={emailFor.id}
+            contactName={emailFor.full_name}
+            contactEmail={emailFor.email}
+          />
         )}
       </Modal>
 

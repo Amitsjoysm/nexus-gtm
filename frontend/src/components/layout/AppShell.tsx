@@ -25,6 +25,10 @@ export function AppShell() {
   const location = useLocation();
   const { tenantEpoch } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Desktop sidebar collapse (icons-only), remembered across sessions.
+  const [collapsed, setCollapsed] = useState(
+    () => typeof localStorage !== "undefined" && localStorage.getItem("sidebar-collapsed") === "1",
+  );
   const title = titleFor(location.pathname);
 
   // Close the mobile drawer on route change; keep the document title in sync.
@@ -33,13 +37,30 @@ export function AppShell() {
     document.title = `${title} · InfoJoy GTM`;
   }, [location.pathname, title]);
 
+  function toggleCollapse() {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem("sidebar-collapsed", next ? "1" : "0");
+      } catch {
+        /* storage may be unavailable (private mode) — collapse still works for the session */
+      }
+      return next;
+    });
+  }
+
   return (
     <div className={styles.shell}>
       <a className="skip-link" href="#main">
         Skip to content
       </a>
 
-      <Sidebar open={drawerOpen} onNavigate={() => setDrawerOpen(false)} />
+      <Sidebar
+        open={drawerOpen}
+        collapsed={collapsed}
+        onNavigate={() => setDrawerOpen(false)}
+        onToggleCollapse={toggleCollapse}
+      />
 
       {drawerOpen && (
         <button

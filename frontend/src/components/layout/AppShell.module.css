@@ -1,17 +1,24 @@
 .shell {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .body {
   flex: 1;
   min-width: 0;
+  min-height: 0; /* let .main scroll within the column instead of growing the page */
   display: flex;
   flex-direction: column;
 }
 
+/* The main content is its own scroll container, so the sidebar + topbar stay fixed and only
+   the page body scrolls (with its own scrollbar). */
 .main {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   outline: none;
 }
 

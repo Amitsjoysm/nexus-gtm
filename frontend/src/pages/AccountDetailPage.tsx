@@ -21,6 +21,7 @@ import {
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { CallConsole } from "@/components/CallConsole";
+import { EmailComposer } from "@/components/EmailComposer";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { useSignalWindow } from "@/app/SignalWindowContext";
@@ -109,6 +110,7 @@ export function AccountDetailPage() {
 
   // Per-contact calling: queue a call + open the AI call console (script + dial + log) right here.
   const [callTask, setCallTask] = useState<CallTask | null>(null);
+  const [emailFor, setEmailFor] = useState<Contact | null>(null);
   const [callingId, setCallingId] = useState<string | null>(null);
   async function startCall(c: Contact) {
     setCallingId(c.id);
@@ -734,6 +736,15 @@ export function AccountDetailPage() {
                       </Button>
                       <Button
                         size="sm"
+                        variant="ghost"
+                        iconLeft={<Icons.MessageIcon />}
+                        onClick={() => setEmailFor(c)}
+                        aria-label={`Draft an email to ${c.full_name}`}
+                      >
+                        Email
+                      </Button>
+                      <Button
+                        size="sm"
                         variant="secondary"
                         iconLeft={<Icons.PhoneIcon />}
                         loading={callingId === c.id}
@@ -975,6 +986,22 @@ export function AccountDetailPage() {
             task={callTask}
             autoGenerate
             onLogged={() => setCallTask(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        open={!!emailFor}
+        onClose={() => setEmailFor(null)}
+        title={emailFor ? `Email ${emailFor.full_name}` : "Email"}
+        description="Hyper-personalized to this contact and account — edit, copy, or open in your mail client."
+      >
+        {emailFor && (
+          <EmailComposer
+            accountId={id}
+            contactId={emailFor.id}
+            contactName={emailFor.full_name}
+            contactEmail={emailFor.email}
           />
         )}
       </Modal>

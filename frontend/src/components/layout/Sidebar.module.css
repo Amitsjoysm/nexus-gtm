@@ -59,6 +59,9 @@
   flex-direction: column;
   gap: 2px;
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .link {
@@ -72,9 +75,15 @@
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
   text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
   transition:
     background var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
+}
+.linkLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .link:hover {
   background: var(--surface-2);
@@ -113,6 +122,75 @@
 .footText {
   font-size: var(--text-xs);
   color: var(--text-subtle);
+}
+
+/* ---- collapse toggle (desktop) ---- */
+.collapseBtn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  min-height: 36px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.collapseBtn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.collapseIcon {
+  display: inline-flex;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.collapseIcon :global(svg) {
+  width: 18px;
+  height: 18px;
+}
+/* Hide the collapse control on mobile (the drawer handles small screens). */
+@media (max-width: 1024px) {
+  .collapseBtn {
+    display: none;
+  }
+}
+
+/* ---- collapsed (icons only), desktop only ---- */
+@media (min-width: 1025px) {
+  .collapsed {
+    width: 68px;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+  }
+  .collapsed .brandText,
+  .collapsed .linkLabel,
+  .collapsed .footText,
+  .collapsed .collapseLabel {
+    display: none;
+  }
+  .collapsed .brand {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .collapsed .link {
+    justify-content: center;
+    gap: 0;
+  }
+  .collapsed .footer {
+    justify-content: center;
+  }
+  .collapsed .collapseBtn {
+    justify-content: center;
+  }
+  .collapsed .collapseIcon {
+    transform: rotate(180deg);
+  }
 }
 
 /* ---- mobile drawer ---- */
