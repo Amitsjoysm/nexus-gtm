@@ -198,7 +198,6 @@ def test_registry_builds_configured_providers(monkeypatch):
 async def test_sync_refreshes_expired_token_and_records_errors():
     import time
 
-    from nexus.models.network import NetworkSourceAccount
     from nexus.network.connectors.base import NetworkSyncBatch, RawIdentity, SourceAccountRef
     from nexus.network.connectors.oauthbase import OAuthConnector
     from nexus.network.crypto import seal_tokens

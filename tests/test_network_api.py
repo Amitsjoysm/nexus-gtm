@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import pytest
 
-from tests.conftest import auth, client, signup
+from tests.conftest import auth, signup
 
 
 async def test_network_end_to_end_over_http(client):

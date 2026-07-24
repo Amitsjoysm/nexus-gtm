@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import httpx
-import pytest
 
 
 def test_authorize_url_includes_pkce_and_scopes():
