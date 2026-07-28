@@ -581,6 +581,34 @@ async def _resolve_icp_paused_alert(ts) -> None:
         existing.acked_at = _utcnow()
 
 
+async def handle_rollup_usage(payload: dict) -> dict:
+    """Periodic driver: fold each tenant's usage events into rollups.
+
+    Mirrors the existing cross-tenant sweep pattern (a raw, tenant-agnostic id scan, then
+    per-tenant sessions for the RLS-scoped work). Idempotent, so the heartbeat may enqueue it
+    every tick. Never raises: one bad tenant must not stop the sweep.
+    """
+    from sqlalchemy import distinct, select
+
+    from nexus.billing.rollups import rebuild_rollups
+    from nexus.models.billing import BillingUsageEvent
+
+    async with get_sessionmaker()() as session:
+        tenant_ids = list(
+            (await session.scalars(select(distinct(BillingUsageEvent.tenant_id)))).all()
+        )
+
+    processed = 0
+    for tid in tenant_ids:
+        try:
+            async with tenant_session(tid) as ts:
+                await rebuild_rollups(ts)
+            processed += 1
+        except Exception:
+            logger.warning("usage rollup failed for tenant %s", tid, exc_info=True)
+    return {"tenants": processed}
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
@@ -592,6 +620,7 @@ HANDLERS: dict[str, Handler] = {
     "send_daily_digests": handle_send_daily_digests,
     "discover_icp_accounts": handle_discover_icp_accounts,
     "sync_network_account": handle_sync_network_account,
+    "rollup_usage": handle_rollup_usage,
 }
 
 
@@ -667,6 +696,11 @@ async def enqueue_sync_network_account(
         Job(name="sync_network_account",
             payload={"tenant_id": tenant_id, "account_id": account_id})
     )
+
+
+async def enqueue_rollup_usage(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="rollup_usage", payload={}))
 
 
 async def dispatch(job: Job) -> dict:
