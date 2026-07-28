@@ -253,6 +253,18 @@ class Settings(BaseSettings):
     # with compatible pinned versions and a scraper in front.
     metrics_enabled: bool = False
 
+    # ---- Billing platform (commercial OS) --------------------------------------------------
+    # Enforcement mode is the master kill switch (docs/billing/15-Migration-Strategy.md §1):
+    #   off    = the seam is a no-op passthrough (incident escape hatch)
+    #   shadow = evaluate + record usage, NEVER block  (safe default; ships dark)
+    #   on     = evaluate + record + enforce per-capability
+    billing_enforcement: Literal["off", "shadow", "on"] = "shadow"
+    # Comma-separated emails bootstrapped as platform super-admins (chicken-and-egg solution for
+    # the /admin portal). Empty = nobody has platform access until a row is inserted by hand.
+    platform_admin_emails: str = ""
+    # Sync the capability/plan seed into the DB on startup. Off in tests (fixtures seed directly).
+    billing_seed_on_startup: bool = True
+
     # Relationship-graph network connectors (real OAuth + token encryption). Empty default →
     # the provider is inert (its /oauth/start returns 400) — never a fake-data fallback.
     network_google_client_id: str = ""
@@ -321,6 +333,10 @@ class Settings(BaseSettings):
     @property
     def contact_search_source_list(self) -> list[str]:
         return self._csv_list(self.contact_search_sources)
+
+    @property
+    def platform_admin_email_list(self) -> list[str]:
+        return [e.lower() for e in self._csv_list(self.platform_admin_emails)]
 
     def _key_pool(self, primary: str, pool_csv: str) -> list[str]:
         """Primary key first, then the rotation pool — deduped, blanks dropped."""
