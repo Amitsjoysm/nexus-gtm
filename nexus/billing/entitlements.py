@@ -170,9 +170,6 @@ async def current_usage(ts: TenantSession, capability_id: str) -> float:
     total = float(rollup.quantity) if rollup is not None else 0.0
     # Events newer than the rollup's last write are not yet reflected in it.
     watermark = ensure_aware(rollup.updated_at) if rollup is not None else None
-    stmt = ts.select(BillingUsageEvent).where(
-        BillingUsageEvent.capability_id == capability_id
-    )
     period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     conds = [BillingUsageEvent.occurred_at >= period_start]
     if watermark is not None:

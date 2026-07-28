@@ -42,8 +42,6 @@ async def rebuild_rollups(ts, *, since: datetime | None = None) -> dict:
     events themselves rather than incremented, so a retry or overlapping window can never
     double-count. Returns ``{"events": n, "buckets": m}``.
     """
-    from sqlalchemy import select
-
     from nexus.models.billing import BillingUsageEvent, BillingUsageRollup
 
     stmt = ts.select(BillingUsageEvent)
