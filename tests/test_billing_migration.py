@@ -41,3 +41,22 @@ def test_usage_migration_creates_tables():
     for table in ("billing_usage_events", "billing_usage_rollups"):
         assert table in Base.metadata.tables
         assert f'"{table}"' in src or f"'{table}'" in src
+
+
+def test_money_migration_creates_tables():
+    import importlib
+    import inspect
+
+    import nexus.models  # noqa: F401
+    from nexus.core.db import Base
+
+    mod = importlib.import_module("migrations.versions.0024_billing_money")
+    assert mod.revision == "0024_billing_money"
+    assert mod.down_revision == "0023_billing_rollup_marker"
+    src = inspect.getsource(mod.upgrade)
+    for t in ("billing_rate_cards", "billing_cost_rates", "billing_credit_ledger",
+              "billing_invoices", "billing_invoice_lines"):
+        assert t in Base.metadata.tables
+        assert f'"{t}"' in src or f"'{t}'" in src
+    down = inspect.getsource(mod.downgrade)
+    assert down.index("billing_invoice_lines") < down.index("billing_invoices")
