@@ -149,10 +149,45 @@ touches Account/Contact/Inbox/Cadence.
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Latest: `0019_verification_icp_controls` (contact
-verification timestamp + per-tenant ICP daily-discovery count) on top of
-`0018_relationship_graph` (the Network tables above). Every tenant-scoped table automatically
-gets RLS via `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
+Alembic under `migrations/versions/`. Latest: `0023_billing_rollup_marker`, on top of
+`0022_billing_usage` / `0021_billing_foundation` (the Billing tables below),
+`0020_account_archived_at`, `0019_verification_icp_controls` (contact verification timestamp +
+per-tenant ICP daily-discovery count) and `0018_relationship_graph` (the Network tables above).
+Every tenant-scoped table automatically gets RLS via `scripts/apply_rls.py` on deploy — no manual
+policy work needed for new tables.
+
+Migrations are **additive only**. Running raw `alembic upgrade` against a fresh SQLite file
+fails at the first revision (`env.py` creates the schema first); the real path is
+`bootstrap_db.py` → `alembic upgrade head` → `apply_rls.py`, which is what the entrypoint runs.
+
+## Billing & Entitlements (`nexus/billing/`)
+
+A commercial operating system: any capability can be priced, quota'd, or gated **without
+touching application code**. Designed in `docs/billing/` (19 docs); milestone plans in
+`docs/superpowers/plans/2026-07-28-billing-m*.md`.
+
+- **One seam.** Application code calls `check_and_meter(ts, capability_id=...)` — or the
+  ergonomic `metered()` context manager — and never mentions a plan or a price. Plans, quotas,
+  and prices are rows, not branches.
+- **Regression-proof by construction.** Unknown capability → allow. Tenant with no subscription
+  → allow. Engine raises → allow. Default `NEXUS_BILLING_ENFORCEMENT=shadow` evaluates and
+  records but never blocks; `off` is a full kill switch. Every pre-existing tenant maps to the
+  `legacy-unlimited` plan.
+- **Config, not constants.** `catalog.py` (capabilities), `plans.py` (plans + entitlements),
+  `rates.py` (prices + COGS). Seeds run on startup and never overwrite a live value — once
+  shipped, pricing belongs to Admin, not to a redeploy.
+- **The margin floor is enforced, not aspirational.** `rates.validate_rate()` refuses any price
+  below 50% gross margin unless finance records an explicit exception, and it runs on the seed
+  itself so a bad price cannot reach the database.
+- **Usage is an append-only event stream**; rollups are derived and rebuildable. Quota reads =
+  period rollup + events still marked unrolled, so they stay exact between sweeps and degrade to
+  slower — never to undercounting — if the rollup worker stops. Corrections are compensating
+  negative rows, never deletes.
+- **Platform admin is separate from tenant RBAC.** `require_platform_admin` (env allowlist or
+  the `platform_admins` table) fails closed; no tenant role grants it.
+- The four platform-global tables (`billing_capabilities`, `billing_plans`,
+  `billing_plan_entitlements`, `platform_admins`) intentionally carry no `tenant_id` and no RLS
+  policy. Everything tenant-facing does.
 
 ## Frontend skills — USE THESE for any UI work
 
