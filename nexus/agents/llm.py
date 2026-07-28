@@ -346,6 +346,36 @@ class FallbackLLMProvider(LLMProvider):
         raise last_exc  # only reached if every provider raised (i.e. no stub at the tail)
 
 
+class CostTrackingProvider(LLMProvider):
+    """Delegates to a real provider and reports what the call cost.
+
+    Wrapping here rather than inside each provider means every model call is measured exactly
+    once, whichever backend or fallback served it — there is no path to the network that skips
+    the meter. It reports COGS only; the billable *action* is metered at the endpoint, because
+    one endpoint may make several model calls and no customer recognizes "a token" as a unit.
+    """
+
+    def __init__(self, inner: LLMProvider, usd_per_1k_tokens: float):
+        self.inner = inner
+        self.usd_per_1k_tokens = usd_per_1k_tokens
+
+    async def complete(self, messages, *, temperature=0.2, max_tokens=800,
+                       purpose=None, variables=None) -> LLMResponse:
+        from nexus.billing.context import report_cost
+
+        resp = await self.inner.complete(
+            messages, temperature=temperature, max_tokens=max_tokens,
+            purpose=purpose, variables=variables,
+        )
+        # A no-op when nothing is metering, so background jobs and scripts are unaffected.
+        report_cost(
+            usd=(resp.tokens or 0) / 1000 * self.usd_per_1k_tokens,
+            tokens=resp.tokens or 0,
+            source=type(self.inner).__name__,
+        )
+        return resp
+
+
 def _build_llm_chain(s) -> LLMProvider:
     """Assemble the provider (chain). ``auto`` prefers Anthropic, then Groq, then any configured
     OpenAI-compatible endpoint, always tailed by the stub so completion can't hard-fail."""
@@ -381,6 +411,9 @@ def get_llm_provider() -> LLMProvider:
             _provider = OpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model)
         else:
             _provider = StubLLMProvider()
+        # Measure whatever we ended up with — one wrapper, no bypass. `set_llm_provider` is
+        # deliberately left unwrapped so test injection stays exact.
+        _provider = CostTrackingProvider(_provider, s.llm_usd_per_1k_tokens)
     return _provider
 
 

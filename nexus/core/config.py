@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
+    # Blended $/1k tokens used to attribute real COGS to a metered action. Config, never a
+    # constant: providers reprice, and margin reporting must follow without a redeploy.
+    llm_usd_per_1k_tokens: float = 0.0006
     # Anthropic (preferred when keyed) — native /v1/messages API.
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"

@@ -48,3 +48,32 @@ async def test_concurrent_tasks_get_independent_scopes():
     a, b = await asyncio.gather(one(0.001), one(0.010))
     assert round(a, 6) == 0.002
     assert round(b, 6) == 0.020
+
+
+async def test_llm_calls_report_their_cost_into_the_active_scope():
+    """Cost is measured from the provider's own token count, not guessed at the endpoint."""
+    from nexus.agents.llm import CostTrackingProvider, LLMMessage, StubLLMProvider
+    from nexus.billing.context import cost_scope
+
+    inner = StubLLMProvider()
+    provider = CostTrackingProvider(inner, usd_per_1k_tokens=0.002)
+    with cost_scope() as cost:
+        resp = await provider.complete([LLMMessage(role="user", content="hi there")])
+    assert resp.text                       # delegation is transparent
+    assert cost.calls == 1
+    assert cost.usd == resp.tokens / 1000 * 0.002
+
+
+async def test_cost_tracking_provider_is_transparent_without_a_scope():
+    from nexus.agents.llm import CostTrackingProvider, LLMMessage, StubLLMProvider
+
+    provider = CostTrackingProvider(StubLLMProvider(), usd_per_1k_tokens=0.002)
+    resp = await provider.complete([LLMMessage(role="user", content="hi")])
+    assert resp.text                       # no scope, no crash
+
+
+def test_llm_cost_rate_is_configurable():
+    """Nothing about price or cost is hardcoded — it is settings, like every other rate."""
+    from nexus.core.config import get_settings
+
+    assert hasattr(get_settings(), "llm_usd_per_1k_tokens")
