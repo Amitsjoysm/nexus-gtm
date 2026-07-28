@@ -1,6 +1,13 @@
 """ORM models. Importing this package registers all mappers."""
 from nexus.models.account import Account, Contact
 from nexus.models.alerts import Alert
+from nexus.models.billing import (
+    BillingCapability,
+    BillingPlan,
+    BillingPlanEntitlement,
+    BillingSubscription,
+    PlatformAdmin,
+)
 from nexus.models.chat import ChatMessage, ChatSession, CustomFieldDef
 from nexus.models.identity import Membership, Tenant, User, Workspace
 from nexus.models.intelligence import AccountScore, AgentRun
@@ -61,4 +68,9 @@ __all__ = [
     "NetworkPerson",
     "NetworkIdentity",
     "NetworkEdge",
+    "BillingCapability",
+    "BillingPlan",
+    "BillingPlanEntitlement",
+    "BillingSubscription",
+    "PlatformAdmin",
 ]
