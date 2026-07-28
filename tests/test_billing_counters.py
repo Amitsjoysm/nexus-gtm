@@ -57,3 +57,13 @@ async def test_rollup_job_is_safe_to_run_twice():
     async with tenant_session(tid) as ts:
         row = next(r for r in await ts.list(BillingUsageRollup) if r.period_kind == "period")
         assert float(row.quantity) == 5      # not 10
+
+
+def test_rollup_is_on_the_scheduler():
+    """The rollup must actually run in production, not just exist as a handler."""
+    import inspect
+
+    from nexus.workers import scheduler
+
+    src = inspect.getsource(scheduler)
+    assert "rollup_usage" in src or "enqueue_rollup_usage" in src

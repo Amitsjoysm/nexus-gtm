@@ -21,6 +21,7 @@ from nexus.workers.tasks import (
     enqueue_advance_cadences,
     enqueue_discover_icp_accounts,
     enqueue_refresh_due_accounts,
+    enqueue_rollup_usage,
     enqueue_send_daily_digests,
     enqueue_sync_crm_due_accounts,
 )
@@ -39,16 +40,22 @@ async def _enqueue_due(queue: TaskQueue) -> int:
 
     Runs under a per-tick advisory lock so only the leader worker enqueues (see module docstring).
     The cadence + account-refresh drivers gate on automation_enabled; the CRM sweep gates on its
-    own crm_sync_enabled switch. Each handler re-checks its switch, so this is a pre-filter."""
+    own crm_sync_enabled switch. Each handler re-checks its switch, so this is a pre-filter.
+
+    Usage rollups are enqueued unconditionally (no pre-filter early-return above): billing
+    accuracy is not an opt-in feature, so every workspace's usage must roll up on every tick,
+    automation switches or not."""
     settings = get_settings()
-    if not (settings.automation_enabled or settings.crm_sync_enabled):
-        return 0  # nothing to enqueue; skip the lock round-trip entirely
 
     async with get_sessionmaker()() as session:
         if not await _acquire_scheduler_lock(session):
             return 0  # another worker holds the scheduler lock this tick
         try:
             count = 0
+            # Usage rollups must run for every workspace, not just automation opt-ins — placed
+            # outside the automation_enabled/crm_sync_enabled gates below on purpose.
+            await enqueue_rollup_usage(queue=queue)
+            count += 1
             if settings.automation_enabled:
                 await enqueue_advance_cadences(queue=queue)
                 await enqueue_refresh_due_accounts(queue=queue)
