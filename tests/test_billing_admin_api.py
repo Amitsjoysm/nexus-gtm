@@ -1,9 +1,7 @@
 # tests/test_billing_admin_api.py
 from __future__ import annotations
 
-import pytest
-
-from tests.conftest import auth, client, signup
+from tests.conftest import auth, signup  # `client` is an auto-discovered conftest fixture
 
 
 async def test_admin_billing_requires_platform_admin(client):

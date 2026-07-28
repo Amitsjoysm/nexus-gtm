@@ -44,12 +44,18 @@ class UsageOut(BaseModel):
 @router.get("/usage", response_model=UsageOut)
 async def get_usage(
     ts: TenantSession = Depends(get_tenant_session),
+    # Deliberately rep+ (manage_accounts): this returns quota counts, not money, and the rep
+    # hitting a 402 is exactly who needs to see "17 of 20 used". Money surfaces are admin-only.
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> UsageOut:
-    from nexus.billing.rollups import period_key
-    from nexus.core.db import utcnow
+    from sqlalchemy import func
 
-    key = period_key(utcnow(), "period")
+    from nexus.billing.rollups import period_key, period_start
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingUsageEvent
+
+    now = utcnow()
+    key = period_key(now, "period")
 
     subs = await ts.list(BillingSubscription, limit=5)
     sub = next((s for s in subs if s.status in ("trialing", "active", "past_due")), None)
@@ -79,6 +85,27 @@ async def get_usage(
         ).all()
     }
 
+    # The rollup alone lags reality between sweeps. Enforcement counts rollup + unrolled tail,
+    # so this must too, or a rep sees "17 of 20" while a 402 tells them they are at 20. One
+    # grouped query keeps that agreement without a per-capability N+1.
+    tail = {
+        cap: float(qty or 0)
+        for cap, qty in (
+            await ts.session.execute(
+                select(
+                    BillingUsageEvent.capability_id,
+                    func.sum(BillingUsageEvent.quantity),
+                )
+                .where(
+                    BillingUsageEvent.tenant_id == ts.tenant_id,
+                    BillingUsageEvent.rolled_at.is_(None),
+                    BillingUsageEvent.occurred_at >= period_start(now),
+                )
+                .group_by(BillingUsageEvent.capability_id)
+            )
+        ).all()
+    }
+
     caps = (
         await ts.session.scalars(
             select(BillingCapability)
@@ -90,7 +117,7 @@ async def get_usage(
     out = []
     for c in caps:
         ent = ents.get(c.id)
-        used = rollups.get(c.id, 0.0)
+        used = rollups.get(c.id, 0.0) + tail.get(c.id, 0.0)
         # Only surface things the customer can actually reason about: anything they've used, or
         # anything their plan puts a number on. Pure-internal shadow meters stay hidden.
         if used == 0 and ent is None:
