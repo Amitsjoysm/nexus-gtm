@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import ReverifyResult, WorkspaceContactOut
+from nexus.billing.meter import metered
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Account, Contact
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/contacts", tags=["contacts"])
 async def reverify_contact_emails(
     only_unverified: bool = True,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ReverifyResult:
     """Re-run the email verifier against contacts that already have an address but no verdict
     (status null/blank/unknown), and persist the result. Use after the verifier was unreachable
@@ -27,6 +28,16 @@ async def reverify_contact_emails(
     from nexus.enrichment.reverify import reverify_contacts
 
     result = await reverify_contacts(ts, only_unverified=only_unverified)
+
+    # Metered AFTER the pass, with the real number of checks: 12 verifications is 12 units, not
+    # one call. The size of the batch is not knowable up front, so gating beforehand would have
+    # to guess — enforcement instead applies to the next call, which is the honest behavior for
+    # a bulk job.
+    checked = int(result.get("checked", 0) or 0)
+    if checked:
+        async with metered(ts, "verify.email", quantity=checked,
+                           user_id=principal.user_id, attrs={"bulk": True}):
+            pass
     return ReverifyResult(**result)
 
 

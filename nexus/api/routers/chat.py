@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from nexus.api.deps import Principal, get_principal, get_tenant_session, require
+from nexus.billing.meter import metered
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.models.chat import ChatMessage, ChatSession
@@ -47,13 +48,15 @@ async def create_session(
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.run_orchestration)),
 ) -> ChatTurnResponse:
-    session, messages = await ChatService().create_session(
-        ts,
-        created_by=principal.user_id,
-        account_id=body.account_id,
-        parent_session_id=body.parent_session_id,
-        message=body.message,
-    )
+    async with metered(ts, "ai.chat_turn", user_id=principal.user_id,
+                       attrs={"kind": "create_session"}):
+        session, messages = await ChatService().create_session(
+            ts,
+            created_by=principal.user_id,
+            account_id=body.account_id,
+            parent_session_id=body.parent_session_id,
+            message=body.message,
+        )
     return _turn(session, messages)
 
 
@@ -91,9 +94,11 @@ async def post_message(
     session = await ts.get(ChatSession, session_id)
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
-    appended = await ChatService().post_message(
-        ts, session, body.content, created_by=principal.user_id
-    )
+    async with metered(ts, "ai.chat_turn", user_id=principal.user_id,
+                       attrs={"session_id": session_id}):
+        appended = await ChatService().post_message(
+            ts, session, body.content, created_by=principal.user_id
+        )
     return _turn(session, appended)
 
 
@@ -101,12 +106,13 @@ async def post_message(
 async def save_icp(
     session_id: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_relevance)),
+    principal: Principal = Depends(require(Permission.manage_relevance)),
 ) -> SaveIcpResponse:
     session = await ts.get(ChatSession, session_id)
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
-    profile = await ChatService().save_icp(ts, session)
+    async with metered(ts, "ai.icp_from_website", user_id=principal.user_id):
+        profile = await ChatService().save_icp(ts, session)
     return SaveIcpResponse(ok=True, icp=profile.icp or {})
 
 

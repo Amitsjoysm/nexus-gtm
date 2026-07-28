@@ -127,3 +127,70 @@ async def test_quota_exceeded_renders_a_useful_402():
     assert body["error"] == "quota_exceeded"
     assert body["capability"] == "ai.email_draft"
     assert body["upgrade_url"]
+
+
+async def test_running_an_agent_records_usage(client):
+    """The highest-leverage seam: one wrap on /agents/{name}/run covers every AI action."""
+    from sqlalchemy import select
+
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+    from nexus.models.billing import BillingUsageEvent
+    from nexus.models.identity import Tenant
+    from tests.conftest import auth, signup
+
+    await sync_catalog()
+    await sync_plans()
+    token = await signup(client, slug="wire", email="w@wire.com", company="Wire")
+
+    r = await client.post("/api/agents/research/run", headers=auth(token), json={"inputs": {}})
+    assert r.status_code == 200, r.text
+
+    async with get_sessionmaker()() as s:
+        tid = (await s.scalars(select(Tenant.id).where(Tenant.slug == "wire"))).first()
+        ts = TenantSession(s, tid)
+        rows = await ts.list(BillingUsageEvent)
+
+    assert len(rows) == 1
+    assert rows[0].capability_id == "ai.research_brief"
+    assert rows[0].attrs.get("agent") == "research"
+
+
+async def test_an_unknown_agent_is_never_billed(client):
+    """404 must not cost the customer anything."""
+    from sqlalchemy import select
+
+    from nexus.billing.catalog import sync_catalog
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+    from nexus.models.billing import BillingUsageEvent
+    from nexus.models.identity import Tenant
+    from tests.conftest import auth, signup
+
+    await sync_catalog()
+    token = await signup(client, slug="unk", email="u@unk.com", company="Unk")
+
+    r = await client.post("/api/agents/nope/run", headers=auth(token), json={"inputs": {}})
+    assert r.status_code == 404
+
+    async with get_sessionmaker()() as s:
+        tid = (await s.scalars(select(Tenant.id).where(Tenant.slug == "unk"))).first()
+        ts = TenantSession(s, tid)
+        assert await ts.list(BillingUsageEvent) == []
+
+
+async def test_reverify_meters_one_unit_per_email():
+    """Quantity must reflect real consumption: 12 verifications is 12 units, not one call."""
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.meter import metered
+    from nexus.models.billing import BillingUsageEvent
+
+    await sync_catalog()
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        async with metered(ts, "verify.email", quantity=12):
+            pass
+        ev = (await ts.list(BillingUsageEvent))[0]
+        assert float(ev.quantity) == 12
