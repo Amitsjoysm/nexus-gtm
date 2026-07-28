@@ -3,8 +3,13 @@ from nexus.models.account import Account, Contact
 from nexus.models.alerts import Alert
 from nexus.models.billing import (
     BillingCapability,
+    BillingCostRate,
+    BillingCreditLedger,
+    BillingInvoice,
+    BillingInvoiceLine,
     BillingPlan,
     BillingPlanEntitlement,
+    BillingRateCard,
     BillingSubscription,
     BillingUsageEvent,
     BillingUsageRollup,
@@ -76,5 +81,10 @@ __all__ = [
     "BillingSubscription",
     "BillingUsageEvent",
     "BillingUsageRollup",
+    "BillingRateCard",
+    "BillingCostRate",
+    "BillingCreditLedger",
+    "BillingInvoice",
+    "BillingInvoiceLine",
     "PlatformAdmin",
 ]

@@ -227,3 +227,103 @@ class BillingUsageRollup(IdMixin, TimestampMixin, TenantScoped, Base):
     quantity: Mapped[float] = mapped_column(Numeric(18, 6), default=0, nullable=False)
     event_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cost_usd: Mapped[float] = mapped_column(Numeric(14, 8), default=0, nullable=False)
+
+
+# ---- money: rate cards, costs, credits, invoices ---------------------------------------------
+class BillingRateCard(TimestampMixin, Base):
+    """What one unit of a capability COSTS THE CUSTOMER, in credits (1 credit = $0.01 list).
+
+    Platform-global config, edited in Admin. ``tiers`` is an ordered volume ladder:
+    ``[{"upto": 10000, "credits": 2}, {"upto": null, "credits": 1}]`` — the last entry with a
+    null ``upto`` is the catch-all. Empty tiers ⇒ flat ``credits_per_unit``.
+    """
+
+    __tablename__ = "billing_rate_cards"
+
+    capability_id: Mapped[str] = mapped_column(
+        ForeignKey("billing_capabilities.id", ondelete="CASCADE"), primary_key=True
+    )
+    credits_per_unit: Mapped[float] = mapped_column(Numeric(12, 4), default=0, nullable=False)
+    tiers: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    # Set when finance deliberately ships a line below the margin floor; surfaces on dashboards.
+    margin_exception: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    margin_exception_reason: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class BillingCostRate(TimestampMixin, Base):
+    """What one unit of a capability COSTS US (COGS). Drives margin validation and reporting.
+
+    Versioned by ``updated_at``; usage events stamp the cost at write time so historical margin
+    is immune to later repricing (docs/billing/12-Cost-Analysis.md).
+    """
+
+    __tablename__ = "billing_cost_rates"
+
+    capability_id: Mapped[str] = mapped_column(
+        ForeignKey("billing_capabilities.id", ondelete="CASCADE"), primary_key=True
+    )
+    unit_cost_usd: Mapped[float] = mapped_column(Numeric(12, 8), default=0, nullable=False)
+    source: Mapped[str] = mapped_column(String(120), default="")   # provider//model provenance
+    note: Mapped[str] = mapped_column(Text, default="")
+
+
+class BillingCreditLedger(IdMixin, TimestampMixin, TenantScoped, Base):
+    """Append-only credit movements. Balance is SUM(delta) — never a mutable counter.
+
+    An append-only ledger is the only representation that survives concurrent grants/burns and
+    stays auditable when a customer disputes a charge.
+    """
+
+    __tablename__ = "billing_credit_ledger"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_credit_idempotency"),
+        Index("ix_credit_tenant_time", "tenant_id", "created_at"),
+    )
+
+    # Positive = granted/purchased, negative = burned.
+    delta: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20))   # grant|purchase|burn|expiry|adjustment
+    reason: Mapped[str] = mapped_column(Text, default="")
+    capability_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    period_key: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120))
+    actor: Mapped[str] = mapped_column(String(120), default="system")
+
+
+class BillingInvoice(IdMixin, TimestampMixin, TenantScoped, Base):
+    """A rated billing period. Immutable once finalized — corrections are credit notes."""
+
+    __tablename__ = "billing_invoices"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "period_key", name="uq_invoice_period"),
+        Index("ix_invoice_tenant_status", "tenant_id", "status"),
+    )
+
+    number: Mapped[str] = mapped_column(String(40), default="")
+    period_key: Mapped[str] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|finalized|paid|void
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    subtotal_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    plan_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    finalized_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    meta: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class BillingInvoiceLine(IdMixin, TimestampMixin, TenantScoped, Base):
+    """One charge on an invoice. Always traceable to a capability + period."""
+
+    __tablename__ = "billing_invoice_lines"
+    __table_args__ = (Index("ix_invoice_line_invoice", "invoice_id"),)
+
+    invoice_id: Mapped[str] = mapped_column(
+        ForeignKey("billing_invoices.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20))   # base|seat|overage|credit_pack|discount
+    capability_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    description: Mapped[str] = mapped_column(String(300), default="")
+    quantity: Mapped[float] = mapped_column(Numeric(18, 6), default=0, nullable=False)
+    unit_credits: Mapped[float] = mapped_column(Numeric(12, 4), default=0, nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
