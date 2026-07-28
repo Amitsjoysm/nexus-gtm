@@ -5,7 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -13,6 +13,7 @@ from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from nexus.api.routers import all_routers
+from nexus.billing.errors import QuotaExceeded
 from nexus.core.config import get_settings
 from nexus.core.db import dispose_db, get_sessionmaker, init_db
 from nexus.core.middleware import (
@@ -150,6 +151,15 @@ def create_app() -> FastAPI:
         return JSONResponse({"status": "ready", "db": "up"})
 
     _maybe_enable_metrics(app)
+
+    @app.exception_handler(QuotaExceeded)
+    async def _quota_exceeded(request: Request, exc: QuotaExceeded) -> JSONResponse:
+        """402 Payment Required, carrying what the UI needs to render an upsell.
+
+        A bare 500 teaches the customer nothing; the payload names the capability, the limit
+        they hit, and where to upgrade.
+        """
+        return JSONResponse(status_code=402, content=exc.to_payload())
 
     api = "/api"
     for router in all_routers:

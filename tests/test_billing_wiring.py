@@ -92,3 +92,38 @@ async def test_metered_never_blocks_in_shadow_mode():
         async with metered(ts, "ai.email_draft") as m:
             assert m.allowed is True
             assert m.would_block is True        # reported, not enforced
+
+
+async def test_quota_exceeded_renders_a_useful_402():
+    """A dead 500 teaches the customer nothing; a 402 with the upgrade path converts.
+
+    Builds its own app rather than using the `client` fixture, because the probe route has to be
+    registered before the SPA catch-all mount that `create_app` adds last.
+    """
+    import httpx
+    from fastapi import APIRouter
+
+    from nexus.billing.errors import QuotaExceeded
+    from nexus.main import create_app
+
+    app = create_app()
+
+    r = APIRouter()
+
+    @r.get("/__quota_probe")
+    async def probe():
+        raise QuotaExceeded("ai.email_draft", reason="quota_exhausted", used=20, quota=20)
+
+    app.include_router(r)
+    # The SPA is mounted at "/" and would otherwise swallow the probe.
+    app.router.routes.insert(0, app.router.routes.pop())
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.get("/__quota_probe")
+
+    assert resp.status_code == 402, resp.text
+    body = resp.json()
+    assert body["error"] == "quota_exceeded"
+    assert body["capability"] == "ai.email_draft"
+    assert body["upgrade_url"]
