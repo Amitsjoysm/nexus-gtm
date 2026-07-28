@@ -587,22 +587,36 @@ async def handle_rollup_usage(payload: dict) -> dict:
     Mirrors the existing cross-tenant sweep pattern (a raw, tenant-agnostic id scan, then
     per-tenant sessions for the RLS-scoped work). Idempotent, so the heartbeat may enqueue it
     every tick. Never raises: one bad tenant must not stop the sweep.
+
+    Scoped to the CURRENT billing period on both sides — the tenant scan and the rebuild. This
+    job runs on every heartbeat tick forever, so an unbounded rebuild would re-read a tenant's
+    entire event history each time: fine at a thousand events, ruinous at ten million. Closed
+    periods are already final, and the one case that needs a wider window — a straggler written
+    just after a period boundary — is picked up by the full-window rebuild at invoicing time.
     """
     from sqlalchemy import distinct, select
 
-    from nexus.billing.rollups import rebuild_rollups
+    from nexus.billing.rollups import period_start, rebuild_rollups
+    from nexus.core.db import utcnow
     from nexus.models.billing import BillingUsageEvent
 
+    since = period_start(utcnow())
     async with get_sessionmaker()() as session:
         tenant_ids = list(
-            (await session.scalars(select(distinct(BillingUsageEvent.tenant_id)))).all()
+            (
+                await session.scalars(
+                    select(distinct(BillingUsageEvent.tenant_id)).where(
+                        BillingUsageEvent.occurred_at >= since
+                    )
+                )
+            ).all()
         )
 
     processed = 0
     for tid in tenant_ids:
         try:
             async with tenant_session(tid) as ts:
-                await rebuild_rollups(ts)
+                await rebuild_rollups(ts, since=since)
             processed += 1
         except Exception:
             logger.warning("usage rollup failed for tenant %s", tid, exc_info=True)

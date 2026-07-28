@@ -17,14 +17,14 @@
 [12-Cost-Analysis](../../billing/12-Cost-Analysis.md) ·
 [13-Pricing-Recommendations](../../billing/13-Pricing-Recommendations.md) §2
 
-**Non-breaking guarantee:** 4 new tables (migration 0023), one new module tree. Existing tables
+**Non-breaking guarantee:** 4 new tables (migration 0024), one new module tree. Existing tables
 untouched; no existing endpoint or job modified except append-only worker registration.
 
 ---
 
 ## File structure
 
-**Create:** `nexus/billing/rates.py` (rate-card + cost-rate seed & lookup), `nexus/billing/credits.py`, `nexus/billing/rating.py`, `nexus/billing/invoicing.py`, `migrations/versions/0023_billing_money.py`, tests `test_billing_rates.py`, `test_billing_credits.py`, `test_billing_rating.py`
+**Create:** `nexus/billing/rates.py` (rate-card + cost-rate seed & lookup), `nexus/billing/credits.py`, `nexus/billing/rating.py`, `nexus/billing/invoicing.py`, `migrations/versions/0024_billing_money.py`, tests `test_billing_rates.py`, `test_billing_credits.py`, `test_billing_rating.py`
 **Modify (append-only):** `nexus/models/billing.py` (+4 models), `nexus/models/__init__.py`, `nexus/workers/tasks.py` (period-close handler)
 
 ---
@@ -195,9 +195,9 @@ git commit -m "feat(billing): rate card, cost rate, credit ledger, invoice model
 
 ---
 
-## Task 2: Migration 0023
+## Task 2: Migration 0024
 
-**Files:** Create `migrations/versions/0023_billing_money.py`; Test: append to `tests/test_billing_migration.py`
+**Files:** Create `migrations/versions/0024_billing_money.py`; Test: append to `tests/test_billing_migration.py`
 
 - [ ] **Step 1: Write the failing test (append)**
 
@@ -210,9 +210,9 @@ def test_money_migration_creates_tables():
     import nexus.models  # noqa: F401
     from nexus.core.db import Base
 
-    mod = importlib.import_module("migrations.versions.0023_billing_money")
-    assert mod.revision == "0023_billing_money"
-    assert mod.down_revision == "0022_billing_usage"
+    mod = importlib.import_module("migrations.versions.0024_billing_money")
+    assert mod.revision == "0024_billing_money"
+    assert mod.down_revision == "0023_billing_rollup_marker"
     src = inspect.getsource(mod.upgrade)
     for t in ("billing_rate_cards", "billing_cost_rates", "billing_credit_ledger",
               "billing_invoices", "billing_invoice_lines"):
@@ -227,12 +227,12 @@ def test_money_migration_creates_tables():
 - [ ] **Step 3: Write the migration**
 
 ```python
-# migrations/versions/0023_billing_money.py
+# migrations/versions/0024_billing_money.py
 """Billing money layer: rate cards, cost rates, credit ledger, invoices.
 
 Additive only — safe on a live database.
 
-Revision ID: 0023_billing_money
+Revision ID: 0024_billing_money
 Revises: 0022_billing_usage
 Create Date: 2026-07-28
 """
@@ -241,8 +241,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0023_billing_money"
-down_revision = "0022_billing_usage"
+revision = "0024_billing_money"
+down_revision = "0023_billing_rollup_marker"
 branch_labels = None
 depends_on = None
 
@@ -339,8 +339,8 @@ def downgrade() -> None:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add migrations/versions/0023_billing_money.py tests/test_billing_migration.py
-git commit -m "feat(billing): migration 0023 (rate cards, credits, invoices)"
+git add migrations/versions/0024_billing_money.py tests/test_billing_migration.py
+git commit -m "feat(billing): migration 0024 (rate cards, credits, invoices)"
 ```
 
 ---

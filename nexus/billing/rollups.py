@@ -35,18 +35,36 @@ def period_key(when: datetime, kind: str) -> str:
     raise ValueError(f"unknown period kind: {kind}")
 
 
+def period_start(when: datetime) -> datetime:
+    """First instant of the billing period containing ``when`` (UTC)."""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    when = when.astimezone(timezone.utc)
+    return when.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
 async def rebuild_rollups(ts, *, since: datetime | None = None) -> dict:
     """Fold this tenant's usage events into rollups. Idempotent (upsert by natural key).
 
     Safe to re-run over any window: each (capability, grain, key) bucket is recomputed from the
     events themselves rather than incremented, so a retry or overlapping window can never
     double-count. Returns ``{"events": n, "buckets": m}``.
+
+    ``since`` is snapped DOWN to the start of its billing period before use. Buckets are
+    recomputed by assignment, so a window that only partially covers a bucket would erase the
+    part outside it — a caller passing "the last hour" would truncate the whole month's period
+    rollup to that hour. Snapping makes every touched bucket fully covered, so no caller can
+    trigger that by accident.
+
+    Aggregated events are stamped ``rolled_at`` so quota reads can identify the unrolled tail
+    exactly, without comparing clocks.
     """
+    from nexus.core.db import utcnow
     from nexus.models.billing import BillingUsageEvent, BillingUsageRollup
 
     stmt = ts.select(BillingUsageEvent)
     if since is not None:
-        stmt = stmt.where(BillingUsageEvent.occurred_at >= since)
+        stmt = stmt.where(BillingUsageEvent.occurred_at >= period_start(since))
     events = list((await ts.session.scalars(stmt)).all())
     if not events:
         return {"events": 0, "buckets": 0}
@@ -78,5 +96,12 @@ async def rebuild_rollups(ts, *, since: datetime | None = None) -> dict:
             row.quantity = qty
             row.event_count = int(cnt)
             row.cost_usd = cost
+
+    # Mark exactly the events folded in above. The rollup total and the unrolled tail are then
+    # disjoint and complete by construction, which is what makes the quota read exact.
+    stamped = utcnow()
+    for ev in events:
+        if ev.rolled_at is None:
+            ev.rolled_at = stamped
     await ts.flush()
     return {"events": len(events), "buckets": len(agg)}

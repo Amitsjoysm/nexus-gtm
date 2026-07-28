@@ -169,9 +169,10 @@ class BillingUsageEvent(IdMixin, TimestampMixin, TenantScoped, Base):
     """One immutable, idempotent record of a billable action.
 
     This is the system of truth for billing: invoices, quotas, and margin reports are all
-    derived from this stream (docs/billing/03-Metering-Architecture.md §1). Rows are never
-    updated or deleted inside the retention window — corrections are compensating rows with a
-    negative ``quantity``.
+    derived from this stream (docs/billing/03-Metering-Architecture.md §1). The billing FACTS
+    (quantity, capability, cost, timestamps) are never updated or deleted inside the retention
+    window — corrections are compensating rows with a negative ``quantity``. The one writable
+    field is ``rolled_at``, which is derived bookkeeping, not a billing fact.
 
     ``unit_cost_usd`` is stamped AT WRITE TIME from the cost-rate table so margin reports reflect
     the cost when the action happened, immune to later provider repricing.
@@ -183,6 +184,8 @@ class BillingUsageEvent(IdMixin, TimestampMixin, TenantScoped, Base):
         UniqueConstraint("tenant_id", "idempotency_key", name="uq_usage_idempotency"),
         Index("ix_usage_tenant_cap_time", "tenant_id", "capability_id", "occurred_at"),
         Index("ix_usage_occurred", "occurred_at"),
+        # The quota hot path scans exactly the unrolled tail; keep it index-only.
+        Index("ix_usage_unrolled", "tenant_id", "capability_id", "rolled_at"),
     )
 
     capability_id: Mapped[str] = mapped_column(String(80), index=True)
@@ -196,6 +199,13 @@ class BillingUsageEvent(IdMixin, TimestampMixin, TenantScoped, Base):
     unit_cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 8), nullable=True)
     billed_credits: Mapped[float | None] = mapped_column(Numeric(12, 4), nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(TZDateTime(), index=True)
+    # NULL until a rollup has folded this event in. Quota reads are "period rollup + events
+    # still NULL", which is exact without comparing two Python-stamped clocks: on a coarse
+    # clock (Windows ticks at ~15ms) a real event can tie the rollup's write time and vanish
+    # from the count, which under enforcement hands out free quota. A marker cannot tie.
+    # It is also liveness-safe: if the rollup worker stops, everything stays NULL and is summed
+    # live — the read degrades to slower, never to undercounting.
+    rolled_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
 
 
 class BillingUsageRollup(IdMixin, TimestampMixin, TenantScoped, Base):
