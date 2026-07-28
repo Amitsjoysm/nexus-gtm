@@ -1,24 +1,13 @@
-"""Performance hardening: bounded connector buffers, single-round-trip overview, migration chain."""
+"""Performance hardening: bounded connector buffers, single-round-trip overview."""
 from __future__ import annotations
-
-import importlib.util
-from pathlib import Path
 
 import pytest
 
 from tests.conftest import auth, signup
 
-
-def test_migration_0010_chains_from_0009():
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "migrations" / "versions" / "0010_perf_indexes.py"
-    )
-    spec = importlib.util.spec_from_file_location("mig_0010", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert mod.revision == "0010_perf_indexes"
-    assert mod.down_revision == "0009_crm_auto_sync"
+# `test_migration_0010_chains_from_0009` lived here; revisions 0001-0020 are now squashed into
+# the frozen `0020_baseline_schema`. tests/test_migrations_replay.py supersedes it by replaying
+# the whole chain onto an empty database and diffing the result against Base.metadata.
 
 
 @pytest.mark.asyncio

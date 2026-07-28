@@ -1,25 +1,15 @@
 """SDR adoption features: attribution, SLA aging, CRM trust fields, daily digest."""
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
 import pytest
 
 from nexus.core.config import get_settings
 from tests.conftest import auth, signup
 
-
-def test_migration_0011_chains_from_0010():
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "migrations" / "versions" / "0011_sdr_adoption.py"
-    )
-    spec = importlib.util.spec_from_file_location("mig_0011", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert mod.revision == "0011_sdr_adoption"
-    assert mod.down_revision == "0010_perf_indexes"
+# The former `test_migration_0011_chains_from_0010` asserted two revision strings. Revisions
+# 0001-0020 are now squashed into the frozen `0020_baseline_schema`, and
+# tests/test_migrations_replay.py makes a strictly stronger claim in its place: the entire chain
+# replays onto an empty database and reproduces Base.metadata exactly.
 
 
 async def _seed_campaign(client, token) -> tuple[str, str]:

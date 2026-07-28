@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-import importlib.util
-from pathlib import Path
 
 from nexus.core.config import get_settings
 from nexus.core.db import get_sessionmaker
@@ -41,14 +39,9 @@ async def test_account_last_refreshed_at_defaults_none():
         assert acct.last_refreshed_at is None
 
 
-def test_migration_0008_chains_from_0007():
-    path = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "0008_continuous_automation.py"
-    spec = importlib.util.spec_from_file_location("mig_0008", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert mod.revision == "0008_continuous_automation"
-    assert mod.down_revision == "0007_cadence"
-    assert hasattr(mod, "upgrade") and hasattr(mod, "downgrade")
+# `test_migration_0008_chains_from_0007` lived here; revisions 0001-0020 are now squashed into
+# the frozen `0020_baseline_schema`. tests/test_migrations_replay.py supersedes it by replaying
+# the whole chain onto an empty database and diffing the result against Base.metadata.
 
 
 from datetime import datetime, timedelta, timezone

@@ -1,12 +1,22 @@
 """Create-or-migrate database bootstrap for production deploys.
 
-Migration 0001 materializes the CURRENT model metadata (create_all), so running the full
-alembic chain on a fresh database would re-create tables that 0001 already built in their
-latest shape. The correct bootstrap is therefore state-dependent:
+The bootstrap is state-dependent:
 
   * fresh database (no tables)          -> create_all + ``alembic stamp head``
   * tables but no alembic_version       -> ``alembic stamp head`` (create_all-origin DB)
   * stamped database                    -> ``alembic upgrade head`` (normal upgrade path)
+
+Historical note: the "create" branch used to be *required*, because the old ``0001_initial``
+called ``Base.metadata.create_all()`` and so pre-created tables that later revisions then failed
+to create — the chain could not be replayed onto an empty database at all. That is fixed
+(``0020_baseline_schema`` is frozen literal DDL, and ``tests/test_migrations_replay.py`` proves
+the chain rebuilds the schema exactly). The branch is kept because it is faster than replaying
+25 revisions and because the "stamp" branch is still needed for databases created by create_all
+before migrations existed.
+
+Switching the fresh-database path to a plain ``alembic upgrade head`` would make deploys
+exercise the chain itself, which is the stronger guarantee — a deliberate change to make on its
+own, not as a side effect.
 
 Run inside the app image: ``python scripts/bootstrap_db.py``.
 """
