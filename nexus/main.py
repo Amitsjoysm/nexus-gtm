@@ -62,9 +62,11 @@ async def lifespan(app: FastAPI):
         try:
             from nexus.billing.catalog import sync_catalog
             from nexus.billing.plans import sync_plans
+            from nexus.billing.rates import sync_rates
 
             await sync_catalog()
             await sync_plans()
+            await sync_rates()
         except Exception:
             logging.getLogger("nexus.main").warning(
                 "billing seed sync failed; continuing without it", exc_info=True
