@@ -69,8 +69,17 @@ async def rate_period(ts: TenantSession, *, period_key: str) -> BillingInvoice:
     if invoice is not None and invoice.status in ("finalized", "paid", "void"):
         return invoice
 
-    subs = await ts.list(BillingSubscription, limit=5)
-    sub = next((s for s in subs if s.status in ("trialing", "active", "past_due")), None)
+    # Deterministic selection. The invariant is one active subscription per tenant, but rating
+    # must be replayable even when that invariant is briefly violated (a mid-flight plan change,
+    # a bad admin write): unordered "first active row" would rate the same period differently on
+    # a re-run, which is exactly the guarantee this module exists to provide. Newest wins.
+    subs = await ts.session.scalars(
+        ts.select(
+            BillingSubscription,
+            BillingSubscription.status.in_(("trialing", "active", "past_due")),
+        ).order_by(BillingSubscription.created_at.desc(), BillingSubscription.id.desc())
+    )
+    sub = subs.first()
     plan = await ts.session.get(BillingPlan, sub.plan_id) if sub else None
 
     if invoice is None:

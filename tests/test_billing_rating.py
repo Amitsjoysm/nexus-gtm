@@ -148,3 +148,74 @@ async def test_finalize_makes_invoice_immutable():
         again = await rate_period(ts, period_key=key)
         assert again.status == "finalized"
         assert again.total_cents == finalized.total_cents
+
+
+# ---- volume ladder ---------------------------------------------------------------------------
+# Every RATE_SEED line currently ships `tiers: []`, so the rating tests above all take the flat
+# branch and leave the ladder unverified. Admin exposes tier editing in M6, so it gets pinned
+# here first.
+
+def _card(credits, tiers):
+    from nexus.models.billing import BillingRateCard
+
+    return BillingRateCard(capability_id="x", credits_per_unit=credits, tiers=tiers)
+
+
+def test_tiered_credits_falls_back_to_the_flat_rate_without_tiers():
+    from nexus.billing.rating import tiered_credits
+
+    assert tiered_credits(100, _card(2, [])) == 200
+
+
+def test_tiered_credits_prices_each_band_at_its_own_rate():
+    from nexus.billing.rating import tiered_credits
+
+    card = _card(3, [{"upto": 100, "credits": 3}, {"upto": 1000, "credits": 2}])
+    assert tiered_credits(50, card) == 150                 # wholly inside band 1
+    assert tiered_credits(100, card) == 300                # exactly fills band 1
+    # 100 @ 3 + 150 @ 2 -- the ladder is marginal, not a cliff that reprices earlier units.
+    assert tiered_credits(250, card) == 300 + 300
+
+
+def test_tiered_credits_catch_all_band_absorbs_the_remainder():
+    from nexus.billing.rating import tiered_credits
+
+    card = _card(5, [{"upto": 10, "credits": 5}, {"upto": None, "credits": 1}])
+    assert tiered_credits(10, card) == 50
+    assert tiered_credits(1_000_000, card) == 50 + 999_990
+
+
+def test_tiered_credits_charges_the_base_rate_when_the_ladder_runs_out():
+    """A ladder with no catch-all band must not silently make the tail free."""
+    from nexus.billing.rating import tiered_credits
+
+    card = _card(7, [{"upto": 10, "credits": 1}])          # covers only the first 10
+    assert tiered_credits(10, card) == 10
+    assert tiered_credits(12, card) == 10 + 14             # 2 units at the base rate of 7
+
+
+def test_tiered_credits_of_zero_units_is_free():
+    from nexus.billing.rating import tiered_credits
+
+    assert tiered_credits(0, _card(3, [{"upto": 10, "credits": 3}])) == 0
+
+
+async def test_rating_picks_the_subscription_deterministically():
+    """Re-rating must reproduce the same invoice even if a tenant briefly holds two active
+    subscriptions — otherwise the replayability guarantee is only true when data is tidy."""
+    from nexus.billing.rating import rate_period
+    from nexus.billing.rollups import period_key, rebuild_rollups
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingSubscription
+
+    tid = await _setup("free")                      # base 0
+    key = period_key(utcnow(), "period")
+    async with tenant_session(tid) as ts:
+        ts.add(BillingSubscription(plan_id="growth", status="active"))   # base 7900, newer
+        await ts.flush()
+        await rebuild_rollups(ts)
+
+        first = await rate_period(ts, period_key=key)
+        second = await rate_period(ts, period_key=key)
+        assert first.total_cents == second.total_cents
+        assert first.plan_id == second.plan_id
