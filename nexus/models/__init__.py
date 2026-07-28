@@ -6,6 +6,8 @@ from nexus.models.billing import (
     BillingPlan,
     BillingPlanEntitlement,
     BillingSubscription,
+    BillingUsageEvent,
+    BillingUsageRollup,
     PlatformAdmin,
 )
 from nexus.models.chat import ChatMessage, ChatSession, CustomFieldDef
@@ -72,5 +74,7 @@ __all__ = [
     "BillingPlan",
     "BillingPlanEntitlement",
     "BillingSubscription",
+    "BillingUsageEvent",
+    "BillingUsageRollup",
     "PlatformAdmin",
 ]

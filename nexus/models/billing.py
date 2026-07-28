@@ -25,6 +25,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -162,3 +163,57 @@ class PlatformAdmin(IdMixin, TimestampMixin, Base):
     platform_role: Mapped[str] = mapped_column(String(20), default="support")
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     note: Mapped[str] = mapped_column(Text, default="")
+
+
+class BillingUsageEvent(IdMixin, TimestampMixin, TenantScoped, Base):
+    """One immutable, idempotent record of a billable action.
+
+    This is the system of truth for billing: invoices, quotas, and margin reports are all
+    derived from this stream (docs/billing/03-Metering-Architecture.md §1). Rows are never
+    updated or deleted inside the retention window — corrections are compensating rows with a
+    negative ``quantity``.
+
+    ``unit_cost_usd`` is stamped AT WRITE TIME from the cost-rate table so margin reports reflect
+    the cost when the action happened, immune to later provider repricing.
+    """
+
+    __tablename__ = "billing_usage_events"
+    __table_args__ = (
+        # Replay safety: a retried queue job or duplicated webhook can never double-bill.
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_usage_idempotency"),
+        Index("ix_usage_tenant_cap_time", "tenant_id", "capability_id", "occurred_at"),
+        Index("ix_usage_occurred", "occurred_at"),
+    )
+
+    capability_id: Mapped[str] = mapped_column(String(80), index=True)
+    # Numeric, not int: tokens and GB are fractional units.
+    quantity: Mapped[float] = mapped_column(Numeric(18, 6), default=0, nullable=False)
+    unit: Mapped[str] = mapped_column(String(20), default="action")
+    user_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(20), default="api")  # api|worker|middleware|system
+    idempotency_key: Mapped[str] = mapped_column(String(120))
+    attrs: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    unit_cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 8), nullable=True)
+    billed_credits: Mapped[float | None] = mapped_column(Numeric(12, 4), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(TZDateTime(), index=True)
+
+
+class BillingUsageRollup(IdMixin, TimestampMixin, TenantScoped, Base):
+    """Pre-aggregated usage per tenant/capability/period — the fast path for quota checks and
+    dashboards. Derived from events; safe to rebuild at any time."""
+
+    __tablename__ = "billing_usage_rollups"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "capability_id", "period_kind", "period_key",
+            name="uq_usage_rollup_period",
+        ),
+        Index("ix_usage_rollup_lookup", "tenant_id", "capability_id", "period_kind"),
+    )
+
+    capability_id: Mapped[str] = mapped_column(String(80), index=True)
+    period_kind: Mapped[str] = mapped_column(String(10))       # hour | day | period
+    period_key: Mapped[str] = mapped_column(String(40))        # "2026-07-28T14" | "2026-07-28"
+    quantity: Mapped[float] = mapped_column(Numeric(18, 6), default=0, nullable=False)
+    event_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cost_usd: Mapped[float] = mapped_column(Numeric(14, 8), default=0, nullable=False)
