@@ -99,3 +99,26 @@ async def test_rebuild_rollups_sums_cost():
         await rebuild_rollups(ts)
         row = next(r for r in await ts.list(BillingUsageRollup) if r.period_kind == "period")
         assert float(row.cost_usd) > 0
+
+
+async def test_current_usage_prefers_rollup_and_adds_unrolled_events():
+    """Authoritative counter = rolled-up total + any events not yet folded in. Never double
+    counts, never misses recent usage."""
+    from datetime import timezone
+
+    from nexus.billing.entitlements import current_usage
+    from nexus.billing.rollups import rebuild_rollups
+    from nexus.core.db import utcnow
+
+    now = utcnow().astimezone(timezone.utc)
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        await _event(ts, "verify.email", 4, now)
+        await rebuild_rollups(ts)               # 4 is now in the period rollup
+        assert await current_usage(ts, "verify.email") == 4
+
+        await _event(ts, "verify.email", 3, now)   # not yet rolled up
+        assert await current_usage(ts, "verify.email") == 7
+
+        await rebuild_rollups(ts)                  # folding it in must not double-count
+        assert await current_usage(ts, "verify.email") == 7

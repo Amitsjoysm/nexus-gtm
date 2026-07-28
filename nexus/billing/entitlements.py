@@ -141,21 +141,50 @@ class MeterResult:
 
 
 async def current_usage(ts: TenantSession, capability_id: str) -> float:
-    """Usage of this capability in the current calendar month (authoritative counter path)."""
+    """Authoritative usage for the current billing period.
+
+    Reads the ``period`` rollup (O(1)) and adds any events recorded after the rollup watermark,
+    so the number is always exact even between rollup runs. Postgres — never the cache — is the
+    source of truth for hard limits: a cache wipe must not hand out free quota
+    (docs/billing/02-Entitlement-Engine.md §4).
+    """
     from sqlalchemy import func
 
-    from nexus.core.db import utcnow
-    from nexus.models.billing import BillingUsageEvent
+    from nexus.billing.rollups import period_key
+    from nexus.core.db import ensure_aware, utcnow
+    from nexus.models.billing import BillingUsageEvent, BillingUsageRollup
 
-    start = utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    total = await ts.session.scalar(
+    now = utcnow()
+    key = period_key(now, "period")
+    rollup = (
+        await ts.session.scalars(
+            ts.select(
+                BillingUsageRollup,
+                BillingUsageRollup.capability_id == capability_id,
+                BillingUsageRollup.period_kind == "period",
+                BillingUsageRollup.period_key == key,
+            ).limit(1)
+        )
+    ).first()
+
+    total = float(rollup.quantity) if rollup is not None else 0.0
+    # Events newer than the rollup's last write are not yet reflected in it.
+    watermark = ensure_aware(rollup.updated_at) if rollup is not None else None
+    stmt = ts.select(BillingUsageEvent).where(
+        BillingUsageEvent.capability_id == capability_id
+    )
+    period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    conds = [BillingUsageEvent.occurred_at >= period_start]
+    if watermark is not None:
+        conds.append(BillingUsageEvent.created_at > watermark)
+    unrolled = await ts.session.scalar(
         select(func.coalesce(func.sum(BillingUsageEvent.quantity), 0)).where(
             BillingUsageEvent.tenant_id == ts.tenant_id,
             BillingUsageEvent.capability_id == capability_id,
-            BillingUsageEvent.occurred_at >= start,
+            *conds,
         )
     )
-    return float(total or 0)
+    return total + float(unrolled or 0)
 
 
 async def check_and_meter(
