@@ -109,3 +109,116 @@ async def resolve_entitlement(ts: TenantSession, capability_id: str) -> Resolved
     except Exception:  # resolution failure must degrade to allow, never to a 500
         logger.warning("entitlement resolution failed for %s", capability_id, exc_info=True)
         return ResolvedEntitlement(capability_id, mode="shadow", source="unknown")
+
+
+# ---- the seam ------------------------------------------------------------------------------
+@dataclass(slots=True)
+class MeterResult:
+    """Outcome of one seam call. Callers only ever need ``allowed``."""
+
+    allowed: bool
+    recorded: bool = False
+    reason: str | None = None        # quota_exhausted | disabled | dependency | throttled
+    would_block: bool = False        # True when shadow mode suppressed a real block
+    used: float = 0
+    quota: int | None = None
+    entitlement: "ResolvedEntitlement | None" = None
+
+    def raise_if_blocked(self) -> None:
+        """Convenience for routers: turn a block into the typed HTTP-mappable exception."""
+        if self.allowed:
+            return
+        from nexus.billing.errors import QuotaExceeded
+
+        ent = self.entitlement
+        raise QuotaExceeded(
+            ent.capability_id if ent else "unknown",
+            reason=self.reason or "quota_exhausted",
+            used=self.used,
+            quota=self.quota,
+            plan_id=ent.plan_id if ent else None,
+        )
+
+
+async def current_usage(ts: TenantSession, capability_id: str) -> float:
+    """Usage of this capability in the current calendar month (authoritative counter path)."""
+    from sqlalchemy import func
+
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingUsageEvent
+
+    start = utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    total = await ts.session.scalar(
+        select(func.coalesce(func.sum(BillingUsageEvent.quantity), 0)).where(
+            BillingUsageEvent.tenant_id == ts.tenant_id,
+            BillingUsageEvent.capability_id == capability_id,
+            BillingUsageEvent.occurred_at >= start,
+        )
+    )
+    return float(total or 0)
+
+
+async def check_and_meter(
+    ts: TenantSession,
+    *,
+    capability_id: str,
+    quantity: float = 1,
+    user_id: str | None = None,
+    source: str = "api",
+    idempotency_key: str | None = None,
+    attrs: dict | None = None,
+) -> MeterResult:
+    """THE billing seam. Resolve entitlement, decide, record usage.
+
+    Application code calls exactly this and never mentions a plan. Behavior is governed by
+    ``NEXUS_BILLING_ENFORCEMENT``:
+      off    -> pure passthrough (no evaluation, no recording)
+      shadow -> evaluate + record, but ALWAYS allow (``would_block`` reports what would happen)
+      on     -> evaluate + record + enforce
+
+    Never raises: any internal failure degrades to allow (docs/billing/01 §6).
+    """
+    from nexus.billing.usage import record_usage
+    from nexus.core.config import get_settings
+
+    mode = get_settings().billing_enforcement
+    if mode == "off":
+        return MeterResult(allowed=True, recorded=False)
+
+    try:
+        ent = await resolve_entitlement(ts, capability_id)
+
+        blocked_reason: str | None = None
+        used = 0.0
+        if ent.mode == "disabled":
+            blocked_reason = "disabled"
+        elif ent.mode in ("shadow", "enabled", "unlimited"):
+            blocked_reason = None            # never quota-limited
+        elif ent.quota is not None:
+            used = await current_usage(ts, capability_id)
+            limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
+            # Overage pricing means "keep going and charge for it", not "stop".
+            if used + quantity > limit and ent.overage_price_credits is None:
+                blocked_reason = "quota_exhausted"
+
+        enforced = mode == "on"
+        allowed = True if not enforced else blocked_reason is None
+
+        recorded = False
+        if allowed:
+            recorded = await record_usage(
+                ts, capability_id=capability_id, quantity=quantity, unit=ent.unit,
+                user_id=user_id, source=source, idempotency_key=idempotency_key, attrs=attrs,
+            )
+        return MeterResult(
+            allowed=allowed,
+            recorded=recorded,
+            reason=blocked_reason if not allowed else None,
+            would_block=blocked_reason is not None,
+            used=used,
+            quota=ent.quota,
+            entitlement=ent,
+        )
+    except Exception:  # the seam must never break the product
+        logger.warning("check_and_meter failed for %s", capability_id, exc_info=True)
+        return MeterResult(allowed=True, recorded=False)
