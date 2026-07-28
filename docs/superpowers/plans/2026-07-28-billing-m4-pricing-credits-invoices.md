@@ -816,6 +816,28 @@ async def test_rate_period_charges_overage_beyond_quota():
         assert over[0].amount_cents == 20
 
 
+async def test_plan_overage_price_overrides_the_rate_card():
+    """Growth prices verify.email overage at 1 credit/unit; the global card says 0.25.
+
+    The plan entitlement must win, otherwise a negotiated rate would silently bill at list.
+    """
+    from nexus.billing.rating import rate_period
+    from nexus.billing.rollups import period_key, rebuild_rollups
+    from nexus.core.db import utcnow
+
+    tid = await _setup("growth")     # verify.email quota 5000, overage_price_credits 1
+    key = period_key(utcnow(), "period")
+    async with tenant_session(tid) as ts:
+        await _use(ts, "verify.email", 5100, key="v1")     # 100 over
+        await rebuild_rollups(ts)
+        inv = await rate_period(ts, period_key=key)
+        over = [ln for ln in await _lines(ts, inv) if ln.kind == "overage"]
+        assert len(over) == 1
+        assert float(over[0].unit_credits) == 1
+        assert over[0].amount_cents == 100                 # 100 x 1 credit, NOT 100 x 0.25
+        assert inv.total_cents == 7900 + 100               # base + overage
+
+
 async def test_rating_is_deterministic_and_replayable():
     """Re-rating a period must reproduce identical lines — the audit guarantee."""
     from nexus.billing.rating import rate_period
@@ -1008,17 +1030,24 @@ async def rate_period(ts: TenantSession, *, period_key: str) -> BillingInvoice:
             over = float(r.quantity) - float(quota)
             if over <= 0:
                 continue
-            card = cards.get(r.capability_id)
-            if card is None or not card.active:
-                continue
-            credits = tiered_credits(over, card)
+            # A plan may set its own overage price. It overrides the global rate card, so a
+            # negotiated enterprise rate never requires forking the catalog.
+            if ent.overage_price_credits is not None:
+                unit_credits = float(ent.overage_price_credits)
+                credits = over * unit_credits
+            else:
+                card = cards.get(r.capability_id)
+                if card is None or not card.active:
+                    continue
+                credits = tiered_credits(over, card)
+                unit_credits = float(card.credits_per_unit)
             amount = int(round(credits * CREDIT_CENTS))
             if amount <= 0:
                 continue
             lines.append(BillingInvoiceLine(
                 invoice_id=invoice.id, kind="overage", capability_id=r.capability_id,
                 description=f"{r.capability_id} overage ({over:g} over {quota})",
-                quantity=over, unit_credits=card.credits_per_unit, amount_cents=amount,
+                quantity=over, unit_credits=unit_credits, amount_cents=amount,
             ))
 
     for ln in lines:
@@ -1048,7 +1077,12 @@ async def finalize_invoice(ts: TenantSession, invoice_id: str) -> BillingInvoice
     return inv
 ```
 
-- [ ] **Step 4: Run** `PYTEST_XDIST_WORKER=m4 py -3.10 -m pytest tests/test_billing_rating.py -v` → PASS (5 tests)
+- [ ] **Step 4: Run** `PYTEST_XDIST_WORKER=m4 py -3.10 -m pytest tests/test_billing_rating.py -v` → PASS (6 tests)
+
+Seed values these assertions depend on (verified against `nexus/billing/plans.py`): Growth
+`base_price_cents=7900`, Growth `verify.email` quota 5000 / overage 1 credit, Free
+`ai.email_draft` quota 20, `legacy-unlimited` `base_price_cents=0` + `plan_class="unlimited"`.
+If a number disagrees, trust `plans.py` and report — do not edit the seed to match the test.
 
 - [ ] **Step 5: Commit**
 
