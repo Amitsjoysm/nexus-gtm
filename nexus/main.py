@@ -55,6 +55,21 @@ async def lifespan(app: FastAPI):
     from nexus.ingestion.crm_sync import register_crm_sync_subscribers
 
     register_crm_sync_subscribers()
+
+    # Billing catalog/plan seed: idempotent, additive, and non-fatal. A seed failure must never
+    # stop the API from serving (docs/billing/15-Migration-Strategy.md).
+    if get_settings().billing_seed_on_startup:
+        try:
+            from nexus.billing.catalog import sync_catalog
+            from nexus.billing.plans import sync_plans
+
+            await sync_catalog()
+            await sync_plans()
+        except Exception:
+            logging.getLogger("nexus.main").warning(
+                "billing seed sync failed; continuing without it", exc_info=True
+            )
+
     yield
     await dispose_db()
 
