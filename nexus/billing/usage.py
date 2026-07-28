@@ -11,8 +11,6 @@ from __future__ import annotations
 import logging
 import uuid
 
-from sqlalchemy import select
-
 from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.models.billing import BillingUsageEvent
