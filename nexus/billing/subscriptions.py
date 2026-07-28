@@ -92,3 +92,56 @@ async def backfill_subscriptions() -> dict:
     if created:
         logger.info("subscription backfill: %d tenant(s) placed on %s", created, LEGACY_PLAN_ID)
     return {"created": created}
+
+
+async def _active(ts: TenantSession) -> BillingSubscription | None:
+    subs = await ts.session.scalars(
+        ts.select(BillingSubscription, BillingSubscription.status.in_(ACTIVE_STATUSES))
+        .order_by(BillingSubscription.created_at.desc(), BillingSubscription.id.desc())
+    )
+    return subs.first()
+
+
+async def change_plan(ts: TenantSession, plan_id: str, *, actor: str = "system"):
+    """Move a tenant to another plan, in place.
+
+    Switching the existing row rather than opening a second one keeps "one subscription per
+    tenant" true at all times — two active rows would make rating ambiguous.
+    """
+    plan = await ts.session.get(BillingPlan, plan_id)
+    if plan is None:
+        raise ValueError(f"unknown plan: {plan_id}")
+    sub = await _active(ts)
+    if sub is None:
+        return await ensure_subscription(ts, plan_id=plan_id)
+
+    previous = sub.plan_id
+    sub.plan_id = plan_id
+    sub.status = "active"
+    sub.currency = plan.currency
+    sub.interval = plan.interval
+    # Grandfathered terms are frozen legacy pricing; taking a new plan means taking its terms.
+    sub.grandfathered = False
+    sub.cancel_at_period_end = False
+    sub.meta = {
+        **(sub.meta or {}),
+        "previous_plan_id": previous,
+        "changed_by": actor,
+        "changed_at": utcnow().isoformat(),
+    }
+    await ts.flush()
+    return sub
+
+
+async def cancel_subscription(ts: TenantSession, *, at_period_end: bool = True):
+    """Cancel. At period end by default — the customer paid through it."""
+    sub = await _active(ts)
+    if sub is None:
+        return None
+    if at_period_end:
+        sub.cancel_at_period_end = True
+    else:
+        sub.status = "canceled"
+        sub.cancel_at_period_end = False
+    await ts.flush()
+    return sub
