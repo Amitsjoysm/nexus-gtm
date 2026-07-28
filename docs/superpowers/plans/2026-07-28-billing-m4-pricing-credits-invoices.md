@@ -667,14 +667,9 @@ async def _append(
     expires_at: datetime | None = None, actor: str = "system",
 ) -> bool:
     """Append one movement unless the idempotency key was already used."""
-    dup = (
-        await ts.session.scalars(
-            ts.select(
-                BillingCreditLedger,
-                BillingCreditLedger.idempotency_key == idempotency_key,
-            ).limit(1)
-        )
-    ).first()
+    dup = await ts.first(
+        BillingCreditLedger, BillingCreditLedger.idempotency_key == idempotency_key
+    )
     if dup is not None:
         return False
     ts.add(
@@ -724,15 +719,12 @@ async def burn_credits(
 
 async def history(ts: TenantSession, *, limit: int = 100) -> list[BillingCreditLedger]:
     """Most recent movements first — powers the customer's credit history view."""
-    return list(
-        (
-            await ts.session.scalars(
-                ts.select(BillingCreditLedger)
-                .order_by(BillingCreditLedger.created_at.desc())
-                .limit(limit)
-            )
-        ).all()
+    rows = await ts.session.scalars(
+        ts.select(BillingCreditLedger)
+        .order_by(BillingCreditLedger.created_at.desc())
+        .limit(limit)
     )
+    return list(rows.all())
 ```
 
 - [ ] **Step 4: Run** `PYTEST_XDIST_WORKER=m4 py -3.10 -m pytest tests/test_billing_credits.py -v` → PASS (4 tests)
@@ -803,7 +795,7 @@ async def test_rate_period_charges_base_fee_only_when_no_overage():
 async def _lines(ts, inv):
     from nexus.models.billing import BillingInvoiceLine
 
-    return [ln for ln in await ts.list(BillingInvoiceLine) if ln.invoice_id == inv.id]
+    return await ts.list(BillingInvoiceLine, BillingInvoiceLine.invoice_id == inv.id)
 
 
 async def test_rate_period_charges_overage_beyond_quota():
@@ -956,11 +948,7 @@ async def rate_period(ts: TenantSession, *, period_key: str) -> BillingInvoice:
 
     A finalized invoice is returned untouched: history is never silently rewritten.
     """
-    invoice = (
-        await ts.session.scalars(
-            ts.select(BillingInvoice, BillingInvoice.period_key == period_key).limit(1)
-        )
-    ).first()
+    invoice = await ts.first(BillingInvoice, BillingInvoice.period_key == period_key)
     if invoice is not None and invoice.status in ("finalized", "paid", "void"):
         return invoice
 
@@ -975,8 +963,9 @@ async def rate_period(ts: TenantSession, *, period_key: str) -> BillingInvoice:
         await ts.flush()
     else:
         # Rebuild lines from scratch so re-rating is a pure function of current data.
-        for old in [ln for ln in await ts.list(BillingInvoiceLine)
-                    if ln.invoice_id == invoice.id]:
+        for old in await ts.list(
+            BillingInvoiceLine, BillingInvoiceLine.invoice_id == invoice.id
+        ):
             await ts.delete(old)
         await ts.flush()
 
@@ -1006,10 +995,11 @@ async def rate_period(ts: TenantSession, *, period_key: str) -> BillingInvoice:
             c.capability_id: c
             for c in (await ts.session.scalars(select(BillingRateCard))).all()
         }
-        rollups = [
-            r for r in await ts.list(BillingUsageRollup)
-            if r.period_kind == "period" and r.period_key == period_key
-        ]
+        rollups = await ts.list(
+            BillingUsageRollup,
+            BillingUsageRollup.period_kind == "period",
+            BillingUsageRollup.period_key == period_key,
+        )
         for r in sorted(rollups, key=lambda x: x.capability_id):
             ent = ents.get(r.capability_id)
             quota = ent.quota if ent is not None else None
