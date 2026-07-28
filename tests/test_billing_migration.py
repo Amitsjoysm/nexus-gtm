@@ -25,3 +25,19 @@ def test_migration_creates_every_billing_table():
     down = inspect.getsource(mod.downgrade)
     assert down.index("billing_plan_entitlements") < down.index("billing_plans")
     assert down.index("billing_subscriptions") < down.index("billing_plans")
+
+
+def test_usage_migration_creates_tables():
+    import importlib
+    import inspect
+
+    import nexus.models  # noqa: F401
+    from nexus.core.db import Base
+
+    mod = importlib.import_module("migrations.versions.0022_billing_usage")
+    assert mod.revision == "0022_billing_usage"
+    assert mod.down_revision == "0021_billing_foundation"
+    src = inspect.getsource(mod.upgrade)
+    for table in ("billing_usage_events", "billing_usage_rollups"):
+        assert table in Base.metadata.tables
+        assert f'"{table}"' in src or f"'{table}'" in src
