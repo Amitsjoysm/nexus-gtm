@@ -75,3 +75,37 @@ def require(permission: Permission) -> Callable[[Principal], Principal]:
         return principal
 
     return _checker
+
+
+async def require_platform_admin(
+    principal: Principal = Depends(get_principal),
+) -> Principal:
+    """Gate for the staff /admin surface.
+
+    Platform admins are operators of the SaaS, NOT tenant members: tenant RBAC (owner/admin)
+    deliberately grants nothing here. Membership comes from the ``platform_admins`` table, plus
+    an env allowlist (``NEXUS_PLATFORM_ADMIN_EMAILS``) that solves the bootstrap problem.
+    """
+    from sqlalchemy import select
+
+    from nexus.core.config import get_settings
+    from nexus.models.billing import PlatformAdmin
+    from nexus.models.identity import User
+
+    async with get_sessionmaker()() as session:
+        user = await session.get(User, principal.user_id)
+        if user is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "platform access denied")
+        email = (user.email or "").lower()
+        if email in get_settings().platform_admin_email_list:
+            return principal
+        row = (
+            await session.scalars(
+                select(PlatformAdmin).where(
+                    PlatformAdmin.email == email, PlatformAdmin.active == True  # noqa: E712
+                )
+            )
+        ).first()
+    if row is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "platform access denied")
+    return principal

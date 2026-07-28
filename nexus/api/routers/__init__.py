@@ -1,6 +1,7 @@
 """API router registry."""
 from nexus.api.routers import (
     accounts,
+    admin_billing,
     agents,
     alerts,
     auth,
@@ -39,6 +40,7 @@ all_routers = [
     chat.router,
     custom_fields.router,
     outcomes.router,
+    admin_billing.router,
 ]
 
 __all__ = ["all_routers"]
