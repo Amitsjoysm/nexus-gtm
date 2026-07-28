@@ -68,6 +68,13 @@ async def lifespan(app: FastAPI):
             await sync_catalog()
             await sync_plans()
             await sync_rates()
+
+            # Every tenant must hold a subscription before enforcement can ever be armed;
+            # an un-subscribed tenant would fall through to catalog defaults and be mis-gated.
+            # Idempotent and additive — a paying tenant is never touched.
+            from nexus.billing.subscriptions import backfill_subscriptions
+
+            await backfill_subscriptions()
         except Exception:
             logging.getLogger("nexus.main").warning(
                 "billing seed sync failed; continuing without it", exc_info=True
