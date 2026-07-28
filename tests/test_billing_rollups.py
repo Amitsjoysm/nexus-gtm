@@ -22,3 +22,80 @@ def test_period_key_normalises_naive_datetimes_to_utc():
 
     naive = datetime(2026, 7, 28, 14, 37, 12)
     assert period_key(naive, "hour") == "2026-07-28T14"
+
+
+from tests.conftest import make_tenant, tenant_session
+
+
+async def _event(ts, cap: str, qty: float, when):
+    from nexus.models.billing import BillingUsageEvent
+
+    ts.add(
+        BillingUsageEvent(
+            capability_id=cap, quantity=qty, unit="action", source="api",
+            idempotency_key=f"{cap}:{qty}:{when.isoformat()}", occurred_at=when,
+        )
+    )
+    await ts.flush()
+
+
+async def test_rebuild_rollups_aggregates_all_grains():
+    from datetime import datetime, timezone
+
+    from nexus.billing.rollups import rebuild_rollups
+    from nexus.models.billing import BillingUsageRollup
+
+    t0 = datetime(2026, 7, 28, 14, 0, tzinfo=timezone.utc)
+    t1 = datetime(2026, 7, 28, 15, 0, tzinfo=timezone.utc)
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        await _event(ts, "ai.email_draft", 2, t0)
+        await _event(ts, "ai.email_draft", 3, t1)
+
+        res = await rebuild_rollups(ts)
+        assert res["events"] == 2
+
+        rows = await ts.list(BillingUsageRollup)
+        by = {(r.period_kind, r.period_key): r for r in rows}
+        assert float(by[("hour", "2026-07-28T14")].quantity) == 2
+        assert float(by[("hour", "2026-07-28T15")].quantity) == 3
+        assert float(by[("day", "2026-07-28")].quantity) == 5
+        assert float(by[("period", "2026-07")].quantity) == 5
+        assert by[("period", "2026-07")].event_count == 2
+
+
+async def test_rebuild_rollups_is_idempotent():
+    """Re-running must not double-count — rollups are upserted, not appended."""
+    from datetime import datetime, timezone
+
+    from nexus.billing.rollups import rebuild_rollups
+    from nexus.models.billing import BillingUsageRollup
+
+    when = datetime(2026, 7, 28, 14, 0, tzinfo=timezone.utc)
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        await _event(ts, "verify.email", 10, when)
+        await rebuild_rollups(ts)
+        await rebuild_rollups(ts)
+        rows = [r for r in await ts.list(BillingUsageRollup) if r.period_kind == "period"]
+        assert len(rows) == 1
+        assert float(rows[0].quantity) == 10        # not 20
+
+
+async def test_rebuild_rollups_sums_cost():
+    from datetime import datetime, timezone
+
+    from nexus.billing.rollups import rebuild_rollups
+    from nexus.models.billing import BillingUsageEvent, BillingUsageRollup
+
+    when = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        ts.add(BillingUsageEvent(
+            capability_id="ai.tokens", quantity=1000, unit="token", source="api",
+            idempotency_key="k1", occurred_at=when, unit_cost_usd=0.0000012,
+        ))
+        await ts.flush()
+        await rebuild_rollups(ts)
+        row = next(r for r in await ts.list(BillingUsageRollup) if r.period_kind == "period")
+        assert float(row.cost_usd) > 0
