@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     # Blended $/1k tokens used to attribute real COGS to a metered action. Config, never a
     # constant: providers reprice, and margin reporting must follow without a redeploy.
     llm_usd_per_1k_tokens: float = 0.0006
+    # Payments. Default `noop` moves no money and lets the whole lifecycle run offline; `stripe`
+    # is inert until stripe_secret_key is set, and says so rather than faking success.
+    payment_provider: Literal["noop", "stripe"] = "noop"
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
     # Anthropic (preferred when keyed) — native /v1/messages API.
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
