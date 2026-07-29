@@ -57,6 +57,16 @@ class PaymentProvider(abc.ABC):
         """Return a stable provider-side customer id for this tenant."""
 
     @abc.abstractmethod
+    async def attach_payment_method(
+        self, *, customer_id: str, payment_method_id: str, set_default: bool = True
+    ) -> bool:
+        """Attach a card to the customer and (by default) make it the one we bill.
+
+        Without this an off-session charge has nothing to draw on, so it is part of the
+        interface rather than a Stripe-only detail.
+        """
+
+    @abc.abstractmethod
     async def charge(
         self, *, customer_id: str, amount_cents: int, currency: str, idempotency_key: str,
         description: str = "",
@@ -81,6 +91,7 @@ class NoopPaymentProvider(PaymentProvider):
 
     def __init__(self) -> None:
         self.customers: dict[str, str] = {}
+        self.payment_methods: dict[str, str] = {}
         self.charges: list[dict[str, Any]] = []
         self.refunds: list[dict[str, Any]] = []
         self._seen: dict[str, PaymentResult] = {}
@@ -88,6 +99,12 @@ class NoopPaymentProvider(PaymentProvider):
     async def ensure_customer(self, *, tenant_id: str, email: str, name: str = "") -> str:
         cid = self.customers.setdefault(tenant_id, f"noop_cus_{tenant_id[:12]}")
         return cid
+
+    async def attach_payment_method(
+        self, *, customer_id: str, payment_method_id: str, set_default: bool = True
+    ) -> bool:
+        self.payment_methods[customer_id] = payment_method_id
+        return True
 
     async def charge(
         self, *, customer_id: str, amount_cents: int, currency: str, idempotency_key: str,
@@ -160,6 +177,27 @@ class StripePaymentProvider(PaymentProvider):
             raise PaymentError(f"stripe {path} -> {resp.status_code}: {resp.text[:300]}")
         return resp.json()
 
+    async def _get(self, path: str) -> dict:
+        import httpx
+
+        headers = {"Authorization": f"Bearer {self.secret_key}"}
+        async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+            resp = await client.get(f"{self.BASE}{path}", headers=headers)
+        if resp.status_code >= 400:
+            raise PaymentError(f"stripe {path} -> {resp.status_code}: {resp.text[:300]}")
+        return resp.json()
+
+    async def _default_payment_method(self, customer_id: str) -> str:
+        """The card we bill. An off-session PaymentIntent does not read invoice_settings on its
+        own, so it has to be passed explicitly."""
+        cust = await self._get(f"/customers/{customer_id}")
+        pm = (cust.get("invoice_settings") or {}).get("default_payment_method")
+        if pm:
+            return str(pm)
+        listed = await self._get(f"/payment_methods?customer={customer_id}&type=card&limit=1")
+        data = listed.get("data") or []
+        return str(data[0]["id"]) if data else ""
+
     async def ensure_customer(self, *, tenant_id: str, email: str, name: str = "") -> str:
         self._require()
         data = await self._post(
@@ -169,19 +207,39 @@ class StripePaymentProvider(PaymentProvider):
         )
         return str(data.get("id", ""))
 
+    async def attach_payment_method(
+        self, *, customer_id: str, payment_method_id: str, set_default: bool = True
+    ) -> bool:
+        self._require()
+        attached = await self._post(
+            f"/payment_methods/{payment_method_id}/attach", {"customer": customer_id}
+        )
+        # Attaching a test token (`pm_card_visa`) mints a concrete PaymentMethod with a NEW id.
+        # Setting the default to the string we were handed would reference something that is
+        # not attached to this customer, and Stripe rejects it.
+        real_id = str(attached.get("id") or payment_method_id)
+        if set_default:
+            await self._post(
+                f"/customers/{customer_id}",
+                {"invoice_settings[default_payment_method]": real_id},
+            )
+        return True
+
     async def charge(
         self, *, customer_id: str, amount_cents: int, currency: str, idempotency_key: str,
         description: str = "",
     ) -> PaymentResult:
         self._require()
+        form: dict[str, Any] = {
+            "amount": int(amount_cents), "currency": currency.lower(),
+            "customer": customer_id, "confirm": "true",
+            "off_session": "true", "description": description,
+        }
+        pm = await self._default_payment_method(customer_id)
+        if pm:
+            form["payment_method"] = pm
         data = await self._post(
-            "/payment_intents",
-            {
-                "amount": int(amount_cents), "currency": currency.lower(),
-                "customer": customer_id, "confirm": "true",
-                "off_session": "true", "description": description,
-            },
-            idempotency_key=idempotency_key,
+            "/payment_intents", form, idempotency_key=idempotency_key
         )
         return PaymentResult(
             ok=data.get("status") in ("succeeded", "processing"),

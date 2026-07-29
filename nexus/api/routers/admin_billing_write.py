@@ -284,3 +284,43 @@ async def grant_tenant_credits(
             "applied": applied,
             "balance": await balance(ts),
         }
+
+
+class CollectIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Used only when the workspace has no payment customer yet.
+    email: str = ""
+    name: str = ""
+
+
+@router.post("/tenants/{tenant_id}/invoices/{invoice_id}/collect")
+async def collect_invoice_endpoint(
+    tenant_id: str,
+    invoice_id: str,
+    body: CollectIn,
+    principal: Principal = Depends(require_platform_admin),
+) -> dict:
+    """Charge a finalized invoice through the configured payment provider.
+
+    Explicit rather than automatic on period close: nobody should discover they were charged
+    because a background job decided so. Auto-collection is a separate decision to make once
+    dunning exists.
+    """
+    from nexus.billing.collection import CollectionError, collect_invoice
+
+    async with get_sessionmaker()() as session:
+        await apply_rls(session, tenant_id)
+        ts = TenantSession(session, tenant_id)
+        try:
+            result = await collect_invoice(
+                ts, invoice_id, email=body.email, name=body.name
+            )
+        except CollectionError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        await record_admin_action(
+            session, actor=principal.user_id, action="invoice.collect",
+            target=invoice_id, subject_tenant_id=tenant_id, after=result,
+        )
+        await session.commit()
+        return result

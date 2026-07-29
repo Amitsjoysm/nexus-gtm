@@ -60,6 +60,26 @@ def tiered_credits(units: float, card: BillingRateCard) -> float:
     return total
 
 
+async def _credits_burned(ts: TenantSession, capability_id: str, period: str) -> float:
+    """Credits already spent on this capability's overage during this period.
+
+    Burns are negative deltas, so the sum is negated to give a positive "already paid" figure.
+    """
+    from sqlalchemy import func
+
+    from nexus.models.billing import BillingCreditLedger
+
+    total = await ts.session.scalar(
+        select(func.coalesce(func.sum(BillingCreditLedger.delta), 0)).where(
+            BillingCreditLedger.tenant_id == ts.tenant_id,
+            BillingCreditLedger.capability_id == capability_id,
+            BillingCreditLedger.period_key == period,
+            BillingCreditLedger.kind == "burn",
+        )
+    )
+    return abs(float(total or 0))
+
+
 async def rate_period(ts: TenantSession, *, period_key: str) -> BillingInvoice:
     """Rate one billing period into a draft invoice. Idempotent (upserts by period).
 
@@ -146,6 +166,14 @@ async def rate_period(ts: TenantSession, *, period_key: str) -> BillingInvoice:
                 credits = tiered_credits(over, card)
                 unit_credits = float(card.credits_per_unit)
             amount = int(round(credits * CREDIT_CENTS))
+
+            # Credits are pre-paid. Whatever this period's overage already burned must not be
+            # charged again here, or the customer pays twice for the same units: once from the
+            # balance at the moment of use, and once on the invoice.
+            already_paid = await _credits_burned(ts, r.capability_id, period_key)
+            if already_paid > 0:
+                amount = max(0, amount - int(round(already_paid * CREDIT_CENTS)))
+
             if amount <= 0:
                 continue
             lines.append(BillingInvoiceLine(

@@ -161,3 +161,61 @@ async def test_shadow_mode_still_never_blocks():
         res = await check_and_meter(ts, capability_id="ai.email_draft", idempotency_key="s1")
         assert res.allowed is True
         assert res.would_block is True
+
+
+async def test_credits_and_invoice_do_not_both_charge_for_the_same_overage(enforcing):
+    """Regression: the customer must not pay twice for one overage.
+
+    Found by running the whole loop against Stripe — 200 units past quota burned 200 credits at
+    the moment of use AND appeared as a 200c overage line on the invoice. Credits are pre-paid,
+    so whatever they covered must not be billed again.
+    """
+    from nexus.billing.credits import balance, grant_credits
+    from nexus.billing.entitlements import check_and_meter
+    from nexus.billing.rating import rate_period
+    from nexus.billing.rollups import period_key, rebuild_rollups
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingInvoiceLine
+
+    tid = await _seed("growth")            # verify.email quota 5000, overage 1 credit/unit
+    async with tenant_session(tid) as ts:
+        await grant_credits(ts, 3000, reason="included", idempotency_key="g")
+        await check_and_meter(ts, capability_id="verify.email", quantity=5200,
+                              idempotency_key="bulk")
+
+        # 200 units over -> 200 credits spent at point of use.
+        assert await balance(ts) == 2800
+
+        await rebuild_rollups(ts)
+        key = period_key(utcnow(), "period")
+        inv = await rate_period(ts, period_key=key)
+        lines = await ts.list(BillingInvoiceLine, BillingInvoiceLine.invoice_id == inv.id)
+        overage = [ln for ln in lines if ln.kind == "overage"]
+
+        # The overage was already paid from the balance, so it must not be on the invoice too.
+        assert overage == []
+        assert inv.total_cents == 7900          # base fee only
+
+
+async def test_overage_beyond_the_credit_balance_still_reaches_the_invoice(enforcing):
+    """Only the part credits actually covered is deducted; the rest is still billable."""
+    from nexus.billing.credits import grant_credits
+    from nexus.billing.entitlements import check_and_meter
+    from nexus.billing.rating import rate_period
+    from nexus.billing.rollups import period_key, rebuild_rollups
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingInvoiceLine
+
+    tid = await _seed("growth")
+    async with tenant_session(tid) as ts:
+        await grant_credits(ts, 50, reason="small", idempotency_key="g")
+        # 200 over, but only 50 credits exist -> the burn is refused (all-or-nothing), so the
+        # whole overage goes on the invoice.
+        await check_and_meter(ts, capability_id="verify.email", quantity=5200,
+                              idempotency_key="bulk")
+        await rebuild_rollups(ts)
+        inv = await rate_period(ts, period_key=period_key(utcnow(), "period"))
+        lines = await ts.list(BillingInvoiceLine, BillingInvoiceLine.invoice_id == inv.id)
+        overage = [ln for ln in lines if ln.kind == "overage"]
+        assert len(overage) == 1
+        assert overage[0].amount_cents == 200

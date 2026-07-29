@@ -206,3 +206,27 @@ async def test_throttle_raises_429_not_402(enforcing):
     with pytest.raises(BillingThrottled) as exc:
         result.raise_if_blocked()
     assert exc.value.retry_after_s > 0
+
+
+async def test_an_explicit_plan_entitlement_outranks_the_module_gate(enforcing):
+    """The seed's own contradiction: Free disables module.outreach but still sells 20
+    ai.email_drafts. A plan that explicitly prices and quotas a capability means it, so the
+    module gate must not silently revoke what the plan sold."""
+    from nexus.billing.entitlements import resolve_entitlement
+    from nexus.models.billing import BillingSubscription
+
+    await _catalog()
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        ts.add(BillingSubscription(plan_id="free", status="active"))
+        await ts.flush()
+
+        res = await resolve_entitlement(ts, "ai.email_draft")
+        assert res.mode == "metered"
+        assert res.quota == 20
+        assert res.source == "plan"
+
+        # ...while a capability the plan does NOT mention still obeys the gate.
+        gated = await resolve_entitlement(ts, "network.search")
+        assert gated.mode == "disabled"
+        assert gated.source == "dependency"

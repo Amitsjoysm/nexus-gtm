@@ -239,6 +239,12 @@ async def _apply_dependencies(
     """
     if not ent.depends_on or depth >= _MAX_DEPENDENCY_DEPTH:
         return ent
+    if ent.source == "plan":
+        # The plan named this capability explicitly, with its own mode and quota. That is a
+        # deliberate commercial decision and outranks a blanket module gate — Free disables
+        # module.outreach yet still sells 20 ai.email_drafts, and it means the 20. Module gates
+        # are the default for capabilities a plan does NOT mention.
+        return ent
     for dep in ent.depends_on:
         if dep == ent.capability_id:
             continue
@@ -287,9 +293,15 @@ async def _burn_for_overage(
         amount = float(over_units) * float(price)
         if amount <= 0:
             return False
+        from nexus.billing.rollups import period_key as _period_key
+        from nexus.core.db import utcnow
+
         return await burn_credits(
             ts, amount, reason=f"{ent.capability_id} beyond plan quota",
             idempotency_key=burn_key, capability_id=ent.capability_id,
+            # Stamped with the period so rating can tell what this period's overage already
+            # paid for and avoid charging it a second time on the invoice.
+            period_key=_period_key(utcnow(), "period"),
         )
     except Exception:
         logger.warning("credit burn failed for %s", ent.capability_id, exc_info=True)

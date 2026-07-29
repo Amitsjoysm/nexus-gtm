@@ -99,3 +99,126 @@ def test_override_restores_from_settings():
     assert get_payment_provider() is sentinel
     set_payment_provider(None)
     assert get_payment_provider() is not sentinel
+
+
+# ---- collection: invoice -> money ----------------------------------------------------------
+
+async def _finalized_invoice(plan_id: str = "growth"):
+    """A tenant with one finalized invoice. Growth's base fee gives it a non-zero total."""
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from nexus.billing.rates import sync_rates
+    from nexus.billing.rating import finalize_invoice, rate_period
+    from nexus.billing.rollups import period_key, rebuild_rollups
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingSubscription
+    from tests.conftest import make_tenant, tenant_session
+
+    await sync_catalog()
+    await sync_plans()
+    await sync_rates()
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        ts.add(BillingSubscription(plan_id=plan_id, status="active"))
+        await ts.flush()
+        await rebuild_rollups(ts)
+        inv = await rate_period(ts, period_key=period_key(utcnow(), "period"))
+        await finalize_invoice(ts, inv.id)
+        return tid, inv.id
+
+
+async def test_collecting_a_finalized_invoice_marks_it_paid():
+    from nexus.billing.collection import collect_invoice
+    from nexus.billing.payments import NoopPaymentProvider, set_payment_provider
+    from nexus.models.billing import BillingInvoice
+    from tests.conftest import tenant_session
+
+    provider = NoopPaymentProvider()
+    set_payment_provider(provider)
+    try:
+        tid, inv_id = await _finalized_invoice()
+        async with tenant_session(tid) as ts:
+            res = await collect_invoice(ts, inv_id, email="ap@acme.test", name="Acme")
+            assert res["ok"] is True
+            assert res["amount_cents"] == 7900
+            inv = await ts.get(BillingInvoice, inv_id)
+            assert inv.status == "paid"
+            assert inv.meta["psp_reference"]
+        assert len(provider.charges) == 1
+    finally:
+        set_payment_provider(None)
+
+
+async def test_collection_is_idempotent_on_the_invoice():
+    """A retried collection must not take the money twice. The invoice id is the key."""
+    from nexus.billing.collection import collect_invoice
+    from nexus.billing.payments import NoopPaymentProvider, set_payment_provider
+    from tests.conftest import tenant_session
+
+    provider = NoopPaymentProvider()
+    set_payment_provider(provider)
+    try:
+        tid, inv_id = await _finalized_invoice()
+        async with tenant_session(tid) as ts:
+            first = await collect_invoice(ts, inv_id, email="ap@acme.test")
+            second = await collect_invoice(ts, inv_id, email="ap@acme.test")
+        assert first["reference"]
+        assert second.get("already") is True
+        assert len(provider.charges) == 1        # charged exactly once
+    finally:
+        set_payment_provider(None)
+
+
+async def test_a_draft_invoice_cannot_be_collected():
+    """A draft is still being recomputed; charging one would bill a number that can change."""
+    import pytest as _pytest
+
+    from nexus.billing.collection import CollectionError, collect_invoice
+    from nexus.billing.payments import NoopPaymentProvider, set_payment_provider
+    from nexus.billing.rating import rate_period
+    from nexus.billing.rollups import period_key, rebuild_rollups
+    from nexus.core.db import utcnow
+    from tests.conftest import tenant_session
+
+    provider = NoopPaymentProvider()
+    set_payment_provider(provider)
+    try:
+        tid, _ = await _finalized_invoice()
+        async with tenant_session(tid) as ts:
+            await rebuild_rollups(ts)
+            draft = await rate_period(ts, period_key=period_key(utcnow(), "period"))
+            draft.status = "draft"
+            await ts.flush()
+            with _pytest.raises(CollectionError):
+                await collect_invoice(ts, draft.id, email="ap@acme.test")
+        assert provider.charges == []
+    finally:
+        set_payment_provider(None)
+
+
+async def test_zero_total_invoice_never_touches_the_provider():
+    """A $0 charge is an error at every PSP; there is nothing to collect."""
+    from nexus.billing.collection import collect_invoice
+    from nexus.billing.payments import NoopPaymentProvider, set_payment_provider
+    from tests.conftest import tenant_session
+
+    provider = NoopPaymentProvider()
+    set_payment_provider(provider)
+    try:
+        tid, inv_id = await _finalized_invoice("free")       # base price 0
+        async with tenant_session(tid) as ts:
+            res = await collect_invoice(ts, inv_id, email="ap@acme.test")
+            assert res["status"] == "paid"
+            assert res["amount_cents"] == 0
+        assert provider.charges == []
+    finally:
+        set_payment_provider(None)
+
+
+async def test_noop_attach_records_the_card():
+    from nexus.billing.payments import NoopPaymentProvider
+
+    p = NoopPaymentProvider()
+    cid = await p.ensure_customer(tenant_id="t1", email="a@b.com")
+    assert await p.attach_payment_method(customer_id=cid, payment_method_id="pm_x") is True
+    assert p.payment_methods[cid] == "pm_x"
