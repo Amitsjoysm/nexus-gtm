@@ -114,13 +114,17 @@ class Settings(BaseSettings):
     # Blended $/1k tokens used to attribute real COGS to a metered action. Config, never a
     # constant: providers reprice, and margin reporting must follow without a redeploy.
     llm_usd_per_1k_tokens: float = 0.0006
-    # Payments. Default `noop` moves no money and lets the whole lifecycle run offline; `stripe`
-    # is inert until stripe_secret_key is set, and says so rather than faking success.
     # Owner-role connection for cross-tenant platform work (staff console, payment webhooks).
     # The app itself connects as the least-privilege RLS-bound role; see
     # nexus.core.db.get_platform_sessionmaker for why those few paths need this.
     db_owner_url: str = ""
+    # Payments. Default `noop` moves no money and lets the whole lifecycle run offline; `stripe`
+    # is inert until stripe_secret_key is set, and says so rather than faking success.
     payment_provider: Literal["noop", "stripe"] = "noop"
+    # Days after each failed collection before the next attempt. Config so finance can tune
+    # recovery without a deploy; retrying faster than this damages authorization rates.
+    billing_dunning_schedule_days: str = "1,3,7"
+    billing_dunning_enabled: bool = True
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     # Anthropic (preferred when keyed) — native /v1/messages API.

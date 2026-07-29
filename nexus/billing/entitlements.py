@@ -174,6 +174,13 @@ async def current_usage(ts: TenantSession, capability_id: str) -> float:
     from nexus.core.db import utcnow
     from nexus.models.billing import BillingUsageEvent, BillingUsageRollup
 
+    # Gauges answer "how many exist right now", not "how many happened this period". Summing
+    # events would only ever climb: remove a member and a counter still shows the old seat count,
+    # so the customer could never get back under their limit.
+    gauge = _GAUGE_RESOLVERS.get(capability_id)
+    if gauge is not None:
+        return await gauge(ts)
+
     now = utcnow()
     rollup = await ts.first(
         BillingUsageRollup,
@@ -200,6 +207,22 @@ async def current_usage(ts: TenantSession, capability_id: str) -> float:
 # a business rule: it stops one bad caller (or a unit-conversion bug) from draining a balance or
 # poisoning a rollup with an absurd number.
 MAX_QUANTITY_PER_CALL = 1_000_000
+
+
+async def _count_seats(ts: TenantSession) -> float:
+    """Live members of this workspace. `seat.member` is a gauge, not a counter."""
+    from sqlalchemy import func
+
+    from nexus.models.identity import Membership
+
+    total = await ts.session.scalar(
+        select(func.count(Membership.id)).where(Membership.tenant_id == ts.tenant_id)
+    )
+    return float(total or 0)
+
+
+# capability_id -> resolver returning the CURRENT level rather than a period total.
+_GAUGE_RESOLVERS = {"seat.member": _count_seats}
 
 
 def _valid_quantity(quantity: float) -> bool:

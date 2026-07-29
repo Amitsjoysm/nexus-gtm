@@ -666,6 +666,47 @@ async def handle_roll_billing_periods(payload: dict) -> dict:
     return {"rolled": rolled}
 
 
+async def handle_dunning_sweep(payload: dict) -> dict:
+    """Periodic driver: retry failed collections on schedule, escalate when exhausted.
+
+    Scoped to tenants that actually owe something, so the common case costs one indexed scan.
+    Each invoice carries its own next-attempt time, so running this every tick still only
+    charges on schedule. Never raises: one bad tenant must not stop the sweep.
+    """
+    from sqlalchemy import distinct, select
+
+    from nexus.billing.dunning import run_dunning
+    from nexus.core.config import get_settings
+    from nexus.models.billing import BillingInvoice
+
+    if not get_settings().billing_dunning_enabled:
+        return {"skipped": "dunning_disabled"}
+
+    async with get_sessionmaker()() as session:
+        tenant_ids = list(
+            (
+                await session.scalars(
+                    select(distinct(BillingInvoice.tenant_id)).where(
+                        BillingInvoice.status == "finalized",
+                        BillingInvoice.total_cents > 0,
+                    )
+                )
+            ).all()
+        )
+
+    totals = {"tenants": 0, "attempted": 0, "recovered": 0, "exhausted": 0}
+    for tid in tenant_ids:
+        try:
+            async with tenant_session(tid) as ts:
+                res = await run_dunning(ts)
+            totals["tenants"] += 1
+            for k in ("attempted", "recovered", "exhausted"):
+                totals[k] += res.get(k, 0)
+        except Exception:
+            logger.warning("dunning sweep failed for tenant %s", tid, exc_info=True)
+    return totals
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
@@ -679,6 +720,7 @@ HANDLERS: dict[str, Handler] = {
     "sync_network_account": handle_sync_network_account,
     "rollup_usage": handle_rollup_usage,
     "roll_billing_periods": handle_roll_billing_periods,
+    "dunning_sweep": handle_dunning_sweep,
 }
 
 
@@ -764,6 +806,11 @@ async def enqueue_rollup_usage(*, queue: TaskQueue | None = None) -> None:
 async def enqueue_roll_billing_periods(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="roll_billing_periods", payload={}))
+
+
+async def enqueue_dunning_sweep(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="dunning_sweep", payload={}))
 
 
 async def dispatch(job: Job) -> dict:
