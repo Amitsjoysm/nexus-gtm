@@ -36,5 +36,16 @@
 	reverse_proxy app:8000 {
 		# SSE streams (campaign/run progress, chat) must not buffer.
 		flush_interval -1
+
+		# Ride out a redeploy instead of showing users a 502. The stack runs a single app
+		# replica, so `compose up -d app` leaves a few seconds with nothing to proxy to and
+		# every request in that window — including CSS — fails. Health checks take the
+		# backend out of rotation while it restarts, and lb_try_duration holds the request
+		# open until it is back rather than failing it immediately.
+		health_uri /health
+		health_interval 2s
+		health_timeout 2s
+		lb_try_duration 30s
+		lb_try_interval 500ms
 	}
 }
