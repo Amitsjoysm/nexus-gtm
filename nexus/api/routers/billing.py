@@ -135,3 +135,92 @@ async def get_usage(
         period=key,
         capabilities=out,
     )
+
+
+class CreditEntryOut(BaseModel):
+    id: str
+    delta: float
+    kind: str
+    reason: str
+    created_at: str
+
+
+class CreditsOut(BaseModel):
+    balance: float
+    entries: list[CreditEntryOut]
+
+
+class InvoiceLineOut(BaseModel):
+    kind: str
+    capability_id: str | None
+    description: str
+    quantity: float
+    amount_cents: int
+
+
+class InvoiceOut(BaseModel):
+    id: str
+    number: str
+    period_key: str
+    status: str
+    currency: str
+    total_cents: int
+    finalized_at: str | None
+    lines: list[InvoiceLineOut]
+
+
+@router.get("/credits", response_model=CreditsOut)
+async def get_credits(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> CreditsOut:
+    """Credit balance plus recent movements.
+
+    The balance is SUM(delta) over an append-only ledger, never a stored counter, so what the
+    customer sees is derived from the same rows an audit would read.
+    """
+    from nexus.billing.credits import balance, history
+
+    entries = await history(ts, limit=50)
+    return CreditsOut(
+        balance=await balance(ts),
+        entries=[
+            CreditEntryOut(
+                id=e.id, delta=float(e.delta), kind=e.kind, reason=e.reason,
+                created_at=e.created_at.isoformat() if e.created_at else "",
+            )
+            for e in entries
+        ],
+    )
+
+
+@router.get("/invoices", response_model=list[InvoiceOut])
+async def list_invoices(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> list[InvoiceOut]:
+    """This workspace's invoices, newest period first, each with its charge lines."""
+    from nexus.models.billing import BillingInvoice, BillingInvoiceLine
+
+    invoices = await ts.list(BillingInvoice)
+    invoices.sort(key=lambda i: i.period_key, reverse=True)
+    all_lines = await ts.list(BillingInvoiceLine)
+    by_invoice: dict[str, list] = {}
+    for line in all_lines:
+        by_invoice.setdefault(line.invoice_id, []).append(line)
+
+    return [
+        InvoiceOut(
+            id=inv.id, number=inv.number, period_key=inv.period_key, status=inv.status,
+            currency=inv.currency, total_cents=inv.total_cents,
+            finalized_at=inv.finalized_at.isoformat() if inv.finalized_at else None,
+            lines=[
+                InvoiceLineOut(
+                    kind=ln.kind, capability_id=ln.capability_id, description=ln.description,
+                    quantity=float(ln.quantity), amount_cents=ln.amount_cents,
+                )
+                for ln in sorted(by_invoice.get(inv.id, []), key=lambda x: (x.kind, x.description))
+            ],
+        )
+        for inv in invoices
+    ]

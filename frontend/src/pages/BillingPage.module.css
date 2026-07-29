@@ -1,0 +1,183 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ---- plan summary ---------------------------------------------------------------------
+   A single quiet row, not the big-number hero. The plan and the period are facts the user
+   checks, not statistics to be impressed by. */
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+.summaryItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.summaryLabel {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.summaryValue {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+/* ---- usage meters --------------------------------------------------------------------- */
+.meters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.meterHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.meterName {
+  font-size: var(--text-base);
+  color: var(--text-default);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.meterCount {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--text-default);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.meterCountDanger {
+  color: var(--danger);
+}
+
+.meterLimit {
+  font-weight: var(--weight-normal);
+  color: var(--text-muted);
+}
+
+.meterUnlimited {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.track {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width 200ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+/* Colour carries state: approaching the limit, then at it. Nothing decorative. */
+.fill_ok {
+  background: var(--accent);
+}
+
+.fill_warn {
+  background: var(--warning);
+}
+
+.fill_danger {
+  background: var(--danger);
+}
+
+.fill_none {
+  background: var(--border-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill {
+    transition: none;
+  }
+}
+
+/* ---- credits + invoices --------------------------------------------------------------- */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.grant {
+  color: var(--success);
+  font-variant-numeric: tabular-nums;
+}
+
+.spend {
+  color: var(--text-default);
+  font-variant-numeric: tabular-nums;
+}
+
+.lines {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.linesTitle {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+.lineList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-size: var(--text-base);
+  color: var(--text-default);
+}
+
+.lineDesc {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lineAmount {
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .summary {
+    gap: var(--space-5);
+  }
+}

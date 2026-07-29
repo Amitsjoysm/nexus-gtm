@@ -1,0 +1,54 @@
+.panel {
+  margin-top: var(--space-5);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.subtle {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* Two lines in one cell: the human name, then the stable id engineers grep for. */
+.stackCell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stackCell > span:first-child {
+  overflow-wrap: anywhere;
+}
+
+.marginCell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* A price below the floor without a recorded exception should never exist — the API refuses
+   it. If one ever appears, it must read as wrong at a glance. */
+.marginBad {
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
+}
+
+.marginException {
+  color: var(--warning);
+}
+
+.notice {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--warning-quiet);
+  color: var(--text-default);
+  font-size: var(--text-base);
+}

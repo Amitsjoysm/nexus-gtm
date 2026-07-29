@@ -4,6 +4,7 @@ import {
   BellIcon,
   BoltIcon,
   BuildingIcon,
+  CreditCardIcon,
   DashboardIcon,
   InboxIcon,
   ListIcon,
@@ -51,6 +52,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/relevance", label: "Relevance", icon: <TargetIcon />, minRole: "manager" },
   { to: "/members", label: "Members", icon: <UsersIcon />, minRole: "manager" },
   { to: "/integrations", label: "Integrations", icon: <PlugIcon />, minRole: "admin" },
+  { to: "/settings/billing", label: "Billing", icon: <CreditCardIcon />, minRole: "admin" },
   { to: "/settings", label: "Settings", icon: <SettingsIcon />, minRole: "admin" },
 ];
 

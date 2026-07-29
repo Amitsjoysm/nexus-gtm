@@ -58,6 +58,11 @@ const ChatPage = lazyPage(() => import("@/pages/ChatPage"), "ChatPage");
 const CampaignsPage = lazyPage(() => import("@/pages/CampaignsPage"), "CampaignsPage");
 const CadencesPage = lazyPage(() => import("@/pages/CadencesPage"), "CadencesPage");
 const SettingsPage = lazyPage(() => import("@/pages/SettingsPage"), "SettingsPage");
+const BillingPage = lazyPage(() => import("@/pages/BillingPage"), "BillingPage");
+const AdminBillingPage = lazyPage(
+  () => import("@/pages/AdminBillingPage"),
+  "AdminBillingPage",
+);
 
 const ROLE_RANK: Record<Role, number> = { owner: 3, admin: 2, manager: 1, rep: 0 };
 
@@ -201,6 +206,24 @@ export function App() {
                   element={
                     <RequireRole minRole="admin">
                       <SettingsPage />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/settings/billing"
+                  element={
+                    <RequireRole minRole="admin">
+                      <BillingPage />
+                    </RequireRole>
+                  }
+                />
+                {/* Platform-admin only. The API gate is `require_platform_admin`, which no
+                    tenant role satisfies; this route guard is convenience, not the boundary. */}
+                <Route
+                  path="/admin/billing"
+                  element={
+                    <RequireRole minRole="owner">
+                      <AdminBillingPage />
                     </RequireRole>
                   }
                 />

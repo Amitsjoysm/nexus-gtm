@@ -1061,3 +1061,97 @@ export interface ActivityItem {
   at: string;
   tone: ActivityTone | string;
 }
+
+/* ---- Billing ------------------------------------------------------------------------- */
+
+export interface CapabilityUsage {
+  capability_id: string;
+  name: string;
+  category: string;
+  unit: string;
+  used: number;
+  /** null = unlimited on this plan. */
+  quota: number | null;
+  mode: string;
+}
+
+export interface BillingUsage {
+  plan: string | null;
+  plan_name: string | null;
+  period: string;
+  capabilities: CapabilityUsage[];
+}
+
+export interface CreditEntry {
+  id: string;
+  /** Positive = granted, negative = spent. */
+  delta: number;
+  kind: string;
+  reason: string;
+  created_at: string;
+}
+
+export interface BillingCredits {
+  balance: number;
+  entries: CreditEntry[];
+}
+
+export interface InvoiceLine {
+  kind: string;
+  capability_id: string | null;
+  description: string;
+  quantity: number;
+  amount_cents: number;
+}
+
+export interface Invoice {
+  id: string;
+  number: string;
+  period_key: string;
+  status: string;
+  currency: string;
+  total_cents: number;
+  finalized_at: string | null;
+  lines: InvoiceLine[];
+}
+
+export interface AdminRateCard {
+  capability_id: string;
+  name: string;
+  category: string;
+  unit: string;
+  credits_per_unit: number;
+  unit_cost_usd: number;
+  /** 0-1. The guardrail refuses anything below 0.5 without an exception. */
+  gross_margin: number;
+  tiers: Record<string, unknown>[];
+  margin_exception: boolean;
+  margin_exception_reason: string;
+  active: boolean;
+}
+
+export interface AdminSubscription {
+  tenant_id: string;
+  tenant_name: string;
+  plan_id: string;
+  status: string;
+  grandfathered: boolean;
+  current_period_end: string | null;
+}
+
+export interface AdminPlan {
+  id: string;
+  name: string;
+  description: string;
+  plan_class: string;
+  status: string;
+  base_price_cents: number;
+  seat_price_cents: number;
+  currency: string;
+  interval: string;
+  included_credits: number;
+  max_seats: number | null;
+  trial_days: number;
+  sort_order: number;
+  entitlement_count: number;
+}

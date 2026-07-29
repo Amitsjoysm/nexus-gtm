@@ -210,6 +210,13 @@ export const BoltIcon = (props: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+export const CreditCardIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <rect x="2" y="5" width="20" height="14" rx="2" />
+    <path d="M2 10h20" />
+  </Svg>
+);
+
 export const PlugIcon = (props: SVGProps<SVGSVGElement>) => (
   <Svg {...props}>
     <path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 0 1-10 0V8ZM12 16v6" />

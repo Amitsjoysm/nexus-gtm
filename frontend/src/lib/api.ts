@@ -19,6 +19,12 @@ import type {
   ApprovalDecisionRequest,
   ApprovalStatus,
   AutomationSettings,
+  AdminPlan,
+  AdminRateCard,
+  AdminSubscription,
+  BillingCredits,
+  BillingUsage,
+  Invoice,
   EmailAccount,
   EmailAccountInput,
   EmailSettings,
@@ -659,6 +665,28 @@ export class ApiClient {
       body: { to: to ?? null },
       signal,
     });
+  }
+
+  // ---- billing (tenant surface) ----
+  billingUsage(signal?: AbortSignal) {
+    return this.request<BillingUsage>("/billing/usage", { signal });
+  }
+  billingCredits(signal?: AbortSignal) {
+    return this.request<BillingCredits>("/billing/credits", { signal });
+  }
+  billingInvoices(signal?: AbortSignal) {
+    return this.request<Invoice[]>("/billing/invoices", { signal });
+  }
+
+  // ---- billing (platform-admin control plane) ----
+  adminBillingPlans(signal?: AbortSignal) {
+    return this.request<AdminPlan[]>("/admin/billing/plans", { signal });
+  }
+  adminBillingRates(signal?: AbortSignal) {
+    return this.request<AdminRateCard[]>("/admin/billing/rates", { signal });
+  }
+  adminBillingSubscriptions(signal?: AbortSignal) {
+    return this.request<AdminSubscription[]>("/admin/billing/subscriptions", { signal });
   }
 
   // ---- sending mailboxes (multi-account SMTP) ----

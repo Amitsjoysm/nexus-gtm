@@ -104,3 +104,105 @@ async def list_plans(
         )
         for p in plans
     ]
+
+
+class RateCardOut(BaseModel):
+    capability_id: str
+    name: str
+    category: str
+    unit: str
+    credits_per_unit: float
+    unit_cost_usd: float
+    gross_margin: float
+    tiers: list[dict]
+    margin_exception: bool
+    margin_exception_reason: str
+    active: bool
+
+
+class SubscriptionOut(BaseModel):
+    tenant_id: str
+    tenant_name: str
+    plan_id: str
+    status: str
+    grandfathered: bool
+    current_period_end: str | None
+
+
+@router.get("/rates", response_model=list[RateCardOut])
+async def list_rate_cards(
+    _: Principal = Depends(require_platform_admin),
+) -> list[RateCardOut]:
+    """Every priced capability with its cost and the resulting gross margin.
+
+    Margin is computed here rather than stored so it can never go stale against a repriced card
+    or a revised cost — the number an admin sees is the number the guardrail enforces.
+    """
+    from nexus.billing.rates import gross_margin
+    from nexus.models.billing import BillingCostRate, BillingRateCard
+
+    async with get_sessionmaker()() as session:
+        cards = (await session.scalars(select(BillingRateCard))).all()
+        costs = {
+            c.capability_id: float(c.unit_cost_usd)
+            for c in (await session.scalars(select(BillingCostRate))).all()
+        }
+        caps = {
+            c.id: c for c in (await session.scalars(select(BillingCapability))).all()
+        }
+
+    out: list[RateCardOut] = []
+    for card in cards:
+        cap = caps.get(card.capability_id)
+        cost = costs.get(card.capability_id, 0.0)
+        credits = float(card.credits_per_unit)
+        out.append(
+            RateCardOut(
+                capability_id=card.capability_id,
+                name=cap.name if cap else card.capability_id,
+                category=cap.category if cap else "",
+                unit=cap.unit if cap else "action",
+                credits_per_unit=credits,
+                unit_cost_usd=cost,
+                gross_margin=round(gross_margin(credits, cost), 4),
+                tiers=list(card.tiers or []),
+                margin_exception=card.margin_exception,
+                margin_exception_reason=card.margin_exception_reason,
+                active=card.active,
+            )
+        )
+    out.sort(key=lambda r: (r.category, r.capability_id))
+    return out
+
+
+@router.get("/subscriptions", response_model=list[SubscriptionOut])
+async def list_subscriptions(
+    _: Principal = Depends(require_platform_admin),
+) -> list[SubscriptionOut]:
+    """Every tenant's current plan. Reads across tenants deliberately — this is the platform
+    control plane, not a tenant surface, and it is gated by `require_platform_admin`."""
+    from nexus.models.billing import BillingSubscription
+    from nexus.models.identity import Tenant
+
+    async with get_sessionmaker()() as session:
+        rows = (
+            await session.execute(
+                select(BillingSubscription, Tenant.name).join(
+                    Tenant, Tenant.id == BillingSubscription.tenant_id
+                )
+            )
+        ).all()
+
+    return sorted(
+        (
+            SubscriptionOut(
+                tenant_id=sub.tenant_id, tenant_name=name, plan_id=sub.plan_id,
+                status=sub.status, grandfathered=sub.grandfathered,
+                current_period_end=(
+                    sub.current_period_end.isoformat() if sub.current_period_end else None
+                ),
+            )
+            for sub, name in rows
+        ),
+        key=lambda s: s.tenant_name.lower(),
+    )
