@@ -13,7 +13,7 @@ from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from nexus.api.routers import all_routers
-from nexus.billing.errors import QuotaExceeded
+from nexus.billing.errors import BillingThrottled, QuotaExceeded
 from nexus.core.config import get_settings
 from nexus.core.db import dispose_db, get_sessionmaker, init_db
 from nexus.core.middleware import (
@@ -167,6 +167,19 @@ def create_app() -> FastAPI:
         they hit, and where to upgrade.
         """
         return JSONResponse(status_code=402, content=exc.to_payload())
+
+    @app.exception_handler(BillingThrottled)
+    async def _billing_throttled(request: Request, exc: BillingThrottled) -> JSONResponse:
+        """429 with Retry-After. A rate limit is not an upsell — the fix is to wait, not pay."""
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "throttled",
+                "capability": exc.capability_id,
+                "retry_after_s": exc.retry_after_s,
+            },
+            headers={"Retry-After": str(exc.retry_after_s)},
+        )
 
     api = "/api"
     for router in all_routers:

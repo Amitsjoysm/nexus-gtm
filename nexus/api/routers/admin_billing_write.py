@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from nexus.api.deps import Principal, require_platform_admin
+from nexus.billing.audit import record_admin_action, snapshot
 from nexus.core.db import get_sessionmaker
 from nexus.core.tenancy import TenantSession, apply_rls
 from nexus.models.billing import (
@@ -30,6 +31,17 @@ from nexus.models.billing import (
 )
 
 router = APIRouter(prefix="/admin/billing", tags=["admin-billing"])
+
+# Snapshotted into the audit log so a dispute can be reconstructed from the record alone.
+_PLAN_FIELDS = (
+    "name", "status", "base_price_cents", "seat_price_cents", "included_credits",
+    "max_seats", "trial_days", "sort_order",
+)
+_ENT_FIELDS = (
+    "mode", "quota", "soft_limit_pct", "hard_limit", "burst_limit",
+    "overage_price_credits", "reset_policy",
+)
+_RATE_FIELDS = ("credits_per_unit", "active", "margin_exception", "margin_exception_reason")
 
 
 class PlanPatch(BaseModel):
@@ -94,14 +106,20 @@ class CreditGrantIn(BaseModel):
 async def update_plan(
     plan_id: str,
     body: PlanPatch,
-    _: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_admin),
 ) -> dict:
     async with get_sessionmaker()() as session:
         plan = await session.get(BillingPlan, plan_id)
         if plan is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown plan '{plan_id}'")
+        before = snapshot(plan, _PLAN_FIELDS)
         for field, value in body.model_dump(exclude_unset=True).items():
             setattr(plan, field, value)
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="plan.update", target=plan_id,
+            before=before, after=snapshot(plan, _PLAN_FIELDS),
+        )
         await session.commit()
         return {
             "id": plan.id, "name": plan.name, "status": plan.status,
@@ -116,7 +134,7 @@ async def upsert_entitlement(
     plan_id: str,
     capability_id: str,
     body: EntitlementIn,
-    _: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_admin),
 ) -> dict:
     from sqlalchemy import select
 
@@ -135,11 +153,18 @@ async def upsert_entitlement(
                 )
             )
         ).first()
+        before = snapshot(row, _ENT_FIELDS)
         if row is None:
             row = BillingPlanEntitlement(plan_id=plan_id, capability_id=capability_id)
             session.add(row)
         for field, value in body.model_dump().items():
             setattr(row, field, value)
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="entitlement.upsert",
+            target=f"{plan_id}/{capability_id}", before=before,
+            after=snapshot(row, _ENT_FIELDS),
+        )
         await session.commit()
         return {"plan_id": plan_id, "capability_id": capability_id, "mode": row.mode,
                 "quota": row.quota}
@@ -149,7 +174,7 @@ async def upsert_entitlement(
 async def upsert_rate_card(
     capability_id: str,
     body: RateCardIn,
-    _: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_admin),
 ) -> dict:
     """Set a capability's price. Refused with 422 below the margin floor.
 
@@ -178,6 +203,7 @@ async def upsert_rate_card(
             ) from exc
 
         card = await session.get(BillingRateCard, capability_id)
+        before = snapshot(card, _RATE_FIELDS)
         if card is None:
             card = BillingRateCard(capability_id=capability_id)
             session.add(card)
@@ -186,6 +212,12 @@ async def upsert_rate_card(
         card.active = body.active
         card.margin_exception = body.margin_exception
         card.margin_exception_reason = body.margin_exception_reason
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="rate.upsert", target=capability_id,
+            before=before, after=snapshot(card, _RATE_FIELDS),
+            note=body.margin_exception_reason,
+        )
         await session.commit()
         return {
             "capability_id": capability_id,
@@ -200,7 +232,7 @@ async def upsert_rate_card(
 async def set_tenant_subscription(
     tenant_id: str,
     body: SubscriptionIn,
-    _: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_admin),
 ) -> dict:
     from nexus.billing.subscriptions import change_plan, ensure_subscription
 
@@ -213,7 +245,12 @@ async def set_tenant_subscription(
         ts = TenantSession(session, tenant_id)
         created = await ensure_subscription(ts, plan_id=body.plan_id)
         sub = created if created is not None else await change_plan(
-            ts, body.plan_id, actor="platform_admin"
+            ts, body.plan_id, actor=principal.user_id
+        )
+        await record_admin_action(
+            session, actor=principal.user_id, action="subscription.change",
+            target=body.plan_id, subject_tenant_id=tenant_id,
+            after={"plan_id": sub.plan_id, "status": sub.status},
         )
         await session.commit()
         return {"tenant_id": tenant_id, "plan_id": sub.plan_id, "status": sub.status}
@@ -223,7 +260,7 @@ async def set_tenant_subscription(
 async def grant_tenant_credits(
     tenant_id: str,
     body: CreditGrantIn,
-    _: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_admin),
 ) -> dict:
     from nexus.billing.credits import balance, grant_credits
 
@@ -232,7 +269,12 @@ async def grant_tenant_credits(
         ts = TenantSession(session, tenant_id)
         applied = await grant_credits(
             ts, body.amount, kind="adjustment", reason=body.reason,
-            idempotency_key=body.idempotency_key, actor="platform_admin",
+            idempotency_key=body.idempotency_key, actor=principal.user_id,
+        )
+        await record_admin_action(
+            session, actor=principal.user_id, action="credits.grant",
+            target=body.idempotency_key, subject_tenant_id=tenant_id,
+            after={"amount": body.amount, "applied": applied}, note=body.reason,
         )
         await session.commit()
         return {

@@ -6,6 +6,7 @@ from nexus.models.billing import (
     BillingCostRate,
     BillingCreditLedger,
     BillingInvoice,
+    BillingAuditLog,
     BillingInvoiceLine,
     BillingPlan,
     BillingPlanEntitlement,
@@ -86,5 +87,6 @@ __all__ = [
     "BillingCreditLedger",
     "BillingInvoice",
     "BillingInvoiceLine",
+    "BillingAuditLog",
     "PlatformAdmin",
 ]

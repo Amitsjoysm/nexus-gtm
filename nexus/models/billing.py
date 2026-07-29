@@ -327,3 +327,31 @@ class BillingInvoiceLine(IdMixin, TimestampMixin, TenantScoped, Base):
     quantity: Mapped[float] = mapped_column(Numeric(18, 6), default=0, nullable=False)
     unit_credits: Mapped[float] = mapped_column(Numeric(12, 4), default=0, nullable=False)
     amount_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class BillingAuditLog(IdMixin, TimestampMixin, Base):
+    """Every platform-admin mutation, with before/after snapshots.
+
+    Required by docs/billing/17-Production-Checklist.md §Admin: 100% of admin mutations
+    captured. Without it, a platform admin can reprice a plan and nothing records who or when.
+
+    Platform-global on purpose, like the catalog: it records actions ACROSS tenants and must
+    stay readable by a platform admin who has no tenant binding. The affected tenant is stored
+    as ``subject_tenant_id`` rather than ``tenant_id`` specifically so that
+    ``scripts/apply_rls.py`` — which enrolls any table having a ``tenant_id`` column — does not
+    put an RLS policy on it and hide the log from the only people meant to read it.
+    """
+
+    __tablename__ = "billing_audit_log"
+    __table_args__ = (
+        Index("ix_billing_audit_action_time", "action", "created_at"),
+        Index("ix_billing_audit_subject", "subject_tenant_id"),
+    )
+
+    actor: Mapped[str] = mapped_column(String(255), index=True)
+    action: Mapped[str] = mapped_column(String(60), index=True)
+    target: Mapped[str] = mapped_column(String(120), default="")
+    subject_tenant_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    before: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    after: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    note: Mapped[str] = mapped_column(Text, default="")

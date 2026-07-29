@@ -57,8 +57,15 @@ async def _active_subscription(ts: TenantSession) -> BillingSubscription | None:
     return live[0] if live else (rows[0] if rows else None)
 
 
-async def resolve_entitlement(ts: TenantSession, capability_id: str) -> ResolvedEntitlement:
-    """Compute the effective entitlement. Never raises."""
+async def resolve_entitlement(
+    ts: TenantSession, capability_id: str, *, _depth: int = 0
+) -> ResolvedEntitlement:
+    """Compute the effective entitlement. Never raises.
+
+    A capability whose ``depends_on`` module is disabled is itself disabled: that is what makes
+    a module gate ("this plan does not include Network") actually gate, rather than being a note
+    in the catalog.
+    """
     try:
         cap = await ts.session.get(BillingCapability, capability_id)
         if cap is None:
@@ -76,7 +83,7 @@ async def resolve_entitlement(ts: TenantSession, capability_id: str) -> Resolved
 
         sub = await _active_subscription(ts)
         if sub is None:
-            return base
+            return await _apply_dependencies(ts, base, _depth)
         base.plan_id = sub.plan_id
 
         plan = await ts.session.get(BillingPlan, sub.plan_id)
@@ -84,7 +91,7 @@ async def resolve_entitlement(ts: TenantSession, capability_id: str) -> Resolved
             base.mode = "unlimited"
             base.quota = None
             base.source = "plan_class"
-            return base
+            return base        # unlimited classes bypass module gates by definition
 
         ent = (
             await ts.session.scalars(
@@ -95,7 +102,7 @@ async def resolve_entitlement(ts: TenantSession, capability_id: str) -> Resolved
             )
         ).first()
         if ent is None:
-            return base
+            return await _apply_dependencies(ts, base, _depth)
 
         base.mode = ent.mode
         base.quota = ent.quota
@@ -106,7 +113,7 @@ async def resolve_entitlement(ts: TenantSession, capability_id: str) -> Resolved
         base.burst_limit = ent.burst_limit
         base.reset_policy = ent.reset_policy
         base.source = "plan"
-        return base
+        return await _apply_dependencies(ts, base, _depth)
     except Exception:  # resolution failure must degrade to allow, never to a 500
         logger.warning("entitlement resolution failed for %s", capability_id, exc_info=True)
         return ResolvedEntitlement(capability_id, mode="shadow", source="unknown")
@@ -129,9 +136,15 @@ class MeterResult:
         """Convenience for routers: turn a block into the typed HTTP-mappable exception."""
         if self.allowed:
             return
-        from nexus.billing.errors import QuotaExceeded
+        from nexus.billing.errors import BillingThrottled, QuotaExceeded
 
         ent = self.entitlement
+        if self.reason == "throttled":
+            # Rate, not entitlement: 429 with a retry hint, never a 402 upsell. Telling someone
+            # to upgrade when they simply need to slow down is the wrong instruction.
+            raise BillingThrottled(
+                ent.capability_id if ent else "unknown", retry_after_s=60
+            )
         raise QuotaExceeded(
             ent.capability_id if ent else "unknown",
             reason=self.reason or "quota_exhausted",
@@ -181,6 +194,62 @@ async def current_usage(ts: TenantSession, capability_id: str) -> float:
         )
     )
     return total + float(unrolled or 0)
+
+
+async def _over_burst(ts: TenantSession, capability_id: str, burst_limit: int) -> bool:
+    """True when this capability was used more than ``burst_limit`` times in the last minute.
+
+    Counts events rather than summing quantity: a burst limit is about request rate, not volume.
+    Uses ix_usage_tenant_cap_time, so it is an indexed range count. Any failure returns False —
+    a throttle check that errors must not become a block.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingUsageEvent
+
+    try:
+        since = utcnow() - timedelta(seconds=60)
+        recent = await ts.session.scalar(
+            select(func.count(BillingUsageEvent.id)).where(
+                BillingUsageEvent.tenant_id == ts.tenant_id,
+                BillingUsageEvent.capability_id == capability_id,
+                BillingUsageEvent.occurred_at >= since,
+            )
+        )
+        return int(recent or 0) >= int(burst_limit)
+    except Exception:
+        logger.warning("burst check failed for %s", capability_id, exc_info=True)
+        return False
+
+
+_MAX_DEPENDENCY_DEPTH = 4
+
+
+async def _apply_dependencies(
+    ts: TenantSession, ent: ResolvedEntitlement, depth: int
+) -> ResolvedEntitlement:
+    """Disable a capability whose required module is disabled.
+
+    The seed is a flat two-level structure (capability -> module), so cycles are not reachable;
+    the depth guard is here so a future catalog edit degrades to "allow" instead of recursing
+    forever inside the metering hot path.
+    """
+    if not ent.depends_on or depth >= _MAX_DEPENDENCY_DEPTH:
+        return ent
+    for dep in ent.depends_on:
+        if dep == ent.capability_id:
+            continue
+        resolved = await resolve_entitlement(ts, dep, _depth=depth + 1)
+        # An unknown dependency resolves to "shadow" and is deliberately not a block: unknown
+        # always means allow, or cataloging a capability late could break a shipped feature.
+        if resolved.mode == "disabled":
+            ent.mode = "disabled"
+            ent.source = "dependency"
+            return ent
+    return ent
 
 
 async def _burn_for_overage(
@@ -264,7 +333,7 @@ async def check_and_meter(
         blocked_reason: str | None = None
         used = 0.0
         if ent.mode == "disabled":
-            blocked_reason = "disabled"
+            blocked_reason = "disabled" if ent.source != "dependency" else "dependency"
         elif ent.mode in ("shadow", "enabled", "unlimited"):
             blocked_reason = None            # never quota-limited
         elif ent.quota is not None:
@@ -278,6 +347,13 @@ async def check_and_meter(
                 covered = await _burn_for_overage(ts, ent, over, key)
                 if not covered and ent.overage_price_credits is None:
                     blocked_reason = "quota_exhausted"
+
+        # Burst is a separate axis from quota: a tenant well inside its monthly allowance can
+        # still hammer an endpoint. Only queried for capabilities that set a limit, so it costs
+        # nothing on the rest.
+        if blocked_reason is None and ent.burst_limit is not None:
+            if await _over_burst(ts, capability_id, ent.burst_limit):
+                blocked_reason = "throttled"
 
         enforced = mode == "on"
         allowed = True if not enforced else blocked_reason is None

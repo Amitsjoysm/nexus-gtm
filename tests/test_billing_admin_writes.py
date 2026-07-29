@@ -134,3 +134,99 @@ async def test_unknown_plan_and_capability_are_rejected(client, monkeypatch):
     r = await client.put("/api/admin/billing/rates/no.such.capability",
                          headers=auth(token), json={"credits_per_unit": 5})
     assert r.status_code == 404
+
+
+# ---- audit trail ---------------------------------------------------------------------------
+# docs/billing/17-Production-Checklist.md §Admin requires 100% of admin mutations captured.
+# Without this, a platform admin can reprice a plan and nothing records who or when.
+
+async def _admin(client, monkeypatch, slug: str):
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from nexus.billing.rates import sync_rates
+    from nexus.core.config import get_settings
+
+    await sync_catalog()
+    await sync_plans()
+    await sync_rates()
+    monkeypatch.setattr(get_settings(), "platform_admin_emails", "boss@nexus.com")
+    return await signup(client, slug=slug, email="boss@nexus.com", company=slug.upper())
+
+
+async def _audit_rows(action: str | None = None):
+    from sqlalchemy import select
+
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.billing import BillingAuditLog
+
+    async with get_sessionmaker()() as s:
+        stmt = select(BillingAuditLog)
+        if action:
+            stmt = stmt.where(BillingAuditLog.action == action)
+        return list((await s.scalars(stmt)).all())
+
+
+async def test_plan_repricing_is_audited_with_before_and_after(client, monkeypatch):
+    token = await _admin(client, monkeypatch, "au1")
+    r = await client.patch("/api/admin/billing/plans/growth", headers=auth(token),
+                           json={"base_price_cents": 9900})
+    assert r.status_code == 200, r.text
+
+    rows = await _audit_rows("plan.update")
+    assert len(rows) == 1
+    assert rows[0].target == "growth"
+    assert rows[0].actor
+    # The whole point: what it was, not just what it became.
+    assert rows[0].before["base_price_cents"] == 7900
+    assert rows[0].after["base_price_cents"] == 9900
+
+
+async def test_rate_change_and_credit_grant_are_audited(client, monkeypatch):
+    from sqlalchemy import select
+
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.identity import Tenant
+
+    token = await _admin(client, monkeypatch, "au2")
+    async with get_sessionmaker()() as s:
+        tid = (await s.scalars(select(Tenant.id).where(Tenant.slug == "au2"))).first()
+
+    r = await client.put("/api/admin/billing/rates/ai.email_draft", headers=auth(token),
+                         json={"credits_per_unit": 3})
+    assert r.status_code == 200, r.text
+
+    r = await client.post(f"/api/admin/billing/tenants/{tid}/credits", headers=auth(token),
+                          json={"amount": 100, "reason": "goodwill",
+                                "idempotency_key": "au2-1"})
+    assert r.status_code == 200, r.text
+
+    assert len(await _audit_rows("rate.upsert")) == 1
+    grants = await _audit_rows("credits.grant")
+    assert len(grants) == 1
+    assert grants[0].subject_tenant_id == tid       # which customer was affected
+
+
+async def test_audit_log_is_not_tenant_scoped():
+    """It records actions ACROSS tenants, so it must not carry a `tenant_id` column — that is
+    what `scripts/apply_rls.py` keys on, and an RLS policy would hide the log from the platform
+    admins who are its only readers."""
+    from nexus.models.billing import BillingAuditLog
+
+    assert "tenant_id" not in BillingAuditLog.__table__.columns
+    assert "subject_tenant_id" in BillingAuditLog.__table__.columns
+
+
+async def test_a_failed_audit_write_does_not_roll_back_the_mutation(client, monkeypatch):
+    """A billing change that succeeded must not be undone because its audit row failed."""
+    import nexus.api.routers.admin_billing_write as mod
+
+    token = await _admin(client, monkeypatch, "au3")
+
+    async def failing(*a, **k):
+        return False
+
+    monkeypatch.setattr(mod, "record_admin_action", failing)
+    r = await client.patch("/api/admin/billing/plans/starter", headers=auth(token),
+                           json={"base_price_cents": 4900})
+    assert r.status_code == 200
+    assert r.json()["base_price_cents"] == 4900
