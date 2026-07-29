@@ -79,6 +79,17 @@ class PaymentProvider(abc.ABC):
     ) -> PaymentResult:
         """Return money already collected."""
 
+    @abc.abstractmethod
+    async def ensure_plan_price(
+        self, *, plan_id: str, name: str, amount_cents: int, currency: str = "USD",
+        interval: str = "month",
+    ) -> dict:
+        """Publish a plan as a product + recurring price at the provider.
+
+        Needed so a bespoke, per-customer price negotiated in Admin exists as a real object at
+        the PSP, rather than only inside our own tables. Returns ``{"product_id", "price_id"}``.
+        """
+
 
 class NoopPaymentProvider(PaymentProvider):
     """Offline default. Records intent, moves no money, never fails.
@@ -92,6 +103,7 @@ class NoopPaymentProvider(PaymentProvider):
     def __init__(self) -> None:
         self.customers: dict[str, str] = {}
         self.payment_methods: dict[str, str] = {}
+        self.prices: dict[str, dict[str, Any]] = {}
         self.charges: list[dict[str, Any]] = []
         self.refunds: list[dict[str, Any]] = []
         self._seen: dict[str, PaymentResult] = {}
@@ -123,6 +135,14 @@ class NoopPaymentProvider(PaymentProvider):
         )
         self._seen[idempotency_key] = result
         return result
+
+    async def ensure_plan_price(
+        self, *, plan_id: str, name: str, amount_cents: int, currency: str = "USD",
+        interval: str = "month",
+    ) -> dict:
+        out = {"product_id": f"noop_prod_{plan_id}", "price_id": f"noop_price_{plan_id}"}
+        self.prices[plan_id] = {**out, "amount_cents": amount_cents, "name": name}
+        return out
 
     async def refund(
         self, *, reference: str, amount_cents: int, idempotency_key: str
@@ -246,6 +266,32 @@ class StripePaymentProvider(PaymentProvider):
             provider=self.name, reference=str(data.get("id", "")),
             amount_cents=int(amount_cents), currency=currency, detail=data,
         )
+
+    async def ensure_plan_price(
+        self, *, plan_id: str, name: str, amount_cents: int, currency: str = "USD",
+        interval: str = "month",
+    ) -> dict:
+        self._require()
+        # Keyed on the plan id, so re-publishing the same custom plan reuses the product
+        # instead of littering the account with duplicates.
+        product = await self._post(
+            "/products",
+            {"name": name, "metadata[plan_id]": plan_id},
+            idempotency_key=f"product:{plan_id}",
+        )
+        product_id = str(product.get("id", ""))
+        price = await self._post(
+            "/prices",
+            {
+                "product": product_id, "unit_amount": int(amount_cents),
+                "currency": currency.lower(), "recurring[interval]": interval,
+                "metadata[plan_id]": plan_id,
+            },
+            # Amount is in the key: changing the price must mint a NEW Stripe price object,
+            # because Stripe prices are immutable once created.
+            idempotency_key=f"price:{plan_id}:{amount_cents}:{currency}:{interval}",
+        )
+        return {"product_id": product_id, "price_id": str(price.get("id", ""))}
 
     async def refund(
         self, *, reference: str, amount_cents: int, idempotency_key: str

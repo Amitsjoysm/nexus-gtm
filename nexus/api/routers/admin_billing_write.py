@@ -324,3 +324,77 @@ async def collect_invoice_endpoint(
         )
         await session.commit()
         return result
+
+
+class CustomPlanIn(BaseModel):
+    """A negotiated, per-customer deal."""
+
+    model_config = {"extra": "forbid"}
+
+    base_plan_id: str = "growth"
+    name: str = ""
+    base_price_cents: int = Field(ge=0)
+    included_credits: int = Field(default=0, ge=0)
+    currency: str = "USD"
+    interval: str = "month"
+    max_seats: int | None = Field(default=None, ge=0)
+    # capability_id -> {quota, mode, overage_price_credits, ...}
+    entitlement_overrides: dict[str, dict] = Field(default_factory=dict)
+    # Assign it to the tenant immediately. False builds the deal without switching them onto it.
+    assign: bool = True
+    publish_to_provider: bool = True
+
+
+@router.post("/tenants/{tenant_id}/custom-plan")
+async def create_tenant_custom_plan(
+    tenant_id: str,
+    body: CustomPlanIn,
+    principal: Principal = Depends(require_platform_admin),
+) -> dict:
+    """Build a bespoke plan for one customer and publish it to the payment provider.
+
+    Clones a base plan so a deal never has to be specified from scratch, applies the negotiated
+    overrides, creates the product + price at the PSP, and (by default) moves the tenant onto it.
+    """
+    from nexus.billing.custom_plans import CustomPlanError, create_custom_plan, custom_plan_id
+    from nexus.billing.subscriptions import change_plan, ensure_subscription
+    from nexus.models.identity import Tenant
+
+    async with get_sessionmaker()() as session:
+        tenant = await session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown tenant '{tenant_id}'")
+
+        plan_id = custom_plan_id(tenant.slug)
+        try:
+            result = await create_custom_plan(
+                session,
+                plan_id=plan_id,
+                name=body.name or f"{tenant.name} (custom)",
+                base_plan_id=body.base_plan_id,
+                base_price_cents=body.base_price_cents,
+                included_credits=body.included_credits,
+                currency=body.currency,
+                interval=body.interval,
+                max_seats=body.max_seats,
+                entitlement_overrides=body.entitlement_overrides,
+                publish_to_provider=body.publish_to_provider,
+            )
+        except CustomPlanError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+        if body.assign:
+            await apply_rls(session, tenant_id)
+            ts = TenantSession(session, tenant_id)
+            created = await ensure_subscription(ts, plan_id=plan_id)
+            if created is None:
+                await change_plan(ts, plan_id, actor=principal.user_id)
+            result["assigned"] = True
+
+        await record_admin_action(
+            session, actor=principal.user_id, action="custom_plan.create",
+            target=plan_id, subject_tenant_id=tenant_id, after=result,
+            note=f"derived from {body.base_plan_id}",
+        )
+        await session.commit()
+        return result
