@@ -126,3 +126,65 @@ async def test_cancel_at_period_end_keeps_service_running():
         sub = await cancel_subscription(ts, at_period_end=True)
         assert sub.cancel_at_period_end is True
         assert sub.status == "active"
+
+
+async def test_period_roll_closes_rates_and_advances():
+    """Close the books: rate the period, finalize the invoice, grant the new period's credits,
+    then advance the window."""
+    from nexus.billing.subscriptions import ensure_subscription, roll_period
+    from nexus.billing.credits import balance
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingInvoice, BillingSubscription
+    from datetime import timedelta
+
+    await _seed()
+    tid = await make_tenant(slug="rp1", name="RP One")
+    async with tenant_session(tid) as ts:
+        sub = await ensure_subscription(ts, plan_id="growth")   # 2000 included credits
+        sub.current_period_end = utcnow() - timedelta(minutes=1)   # due
+        await ts.flush()
+
+        rolled = await roll_period(ts)
+        assert rolled is True
+
+        inv = (await ts.list(BillingInvoice))[0]
+        assert inv.status == "finalized"
+
+        assert await balance(ts) == 2000                        # new period's credits granted
+
+        sub = (await ts.list(BillingSubscription))[0]
+        assert sub.current_period_end > utcnow()                # window advanced
+
+
+async def test_period_roll_is_a_noop_before_the_period_ends():
+    from nexus.billing.subscriptions import ensure_subscription, roll_period
+
+    await _seed()
+    tid = await make_tenant(slug="rp2", name="RP Two")
+    async with tenant_session(tid) as ts:
+        await ensure_subscription(ts, plan_id="growth")          # period ends in a month
+        assert await roll_period(ts) is False
+
+
+async def test_period_roll_grants_credits_exactly_once():
+    """Idempotency at the money boundary: a retried job must not double-grant."""
+    from nexus.billing.credits import balance
+    from nexus.billing.subscriptions import ensure_subscription, roll_period
+    from nexus.core.db import utcnow
+    from datetime import timedelta
+
+    await _seed()
+    tid = await make_tenant(slug="rp3", name="RP Three")
+    async with tenant_session(tid) as ts:
+        sub = await ensure_subscription(ts, plan_id="growth")
+        sub.current_period_end = utcnow() - timedelta(minutes=1)
+        await ts.flush()
+        await roll_period(ts)
+        first = await balance(ts)
+
+        # Force it due again and re-roll within the same calendar month. The grant is keyed by
+        # period, so the second roll resolves to the same key and must not grant again.
+        sub.current_period_end = utcnow() - timedelta(minutes=1)
+        await ts.flush()
+        await roll_period(ts)
+        assert await balance(ts) == first           # exactly once, not twice

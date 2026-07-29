@@ -173,26 +173,28 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", True)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    # +1 for rollup_usage, which is enqueued every tick regardless of automation_enabled
-    # (billing/nexus/workers/scheduler.py — usage rollups are not an automation opt-in).
-    assert count == 5
+    # +2 for rollup_usage and roll_billing_periods, which are enqueued every tick regardless of
+    # automation_enabled (billing/nexus/workers/scheduler.py — billing is not an automation
+    # opt-in).
+    assert count == 6
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "advance_cadences", "refresh_due_accounts", "send_daily_digests",
-        "discover_icp_accounts", "rollup_usage",
+        "discover_icp_accounts", "rollup_usage", "roll_billing_periods",
     }
 
 
 @pytest.mark.asyncio
 async def test_enqueue_due_noop_when_disabled(monkeypatch):
-    """With automation off, only the automation-gated drivers are skipped. Usage rollups still
-    run every tick for every workspace — billing accuracy is not an automation opt-in."""
+    """With automation off, only the automation-gated drivers are skipped. Usage rollups and
+    billing-period rolls still run every tick for every workspace — billing accuracy is not an
+    automation opt-in."""
     monkeypatch.setattr(get_settings(), "automation_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    assert count == 1
+    assert count == 2
     jobs = await _drain(q)
-    assert {j.name for j in jobs} == {"rollup_usage"}
+    assert {j.name for j in jobs} == {"rollup_usage", "roll_billing_periods"}
 
 
 @pytest.mark.asyncio

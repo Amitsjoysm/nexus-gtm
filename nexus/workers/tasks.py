@@ -623,6 +623,49 @@ async def handle_rollup_usage(payload: dict) -> dict:
     return {"tenants": processed}
 
 
+async def handle_roll_billing_periods(payload: dict) -> dict:
+    """Periodic driver: close every billing period that has ended.
+
+    Mirrors ``handle_rollup_usage`` — a raw, tenant-agnostic id scan, then per-tenant sessions
+    for the RLS-scoped work. The scan is the pre-filter (only subscriptions whose window has
+    actually elapsed); ``roll_period`` re-checks the boundary itself, so an id that goes stale
+    between the scan and the roll is a no-op rather than an early close.
+
+    Idempotent, so the heartbeat may enqueue it every tick: a rolled subscription's window is
+    already in the future, and the new period's credit grant is keyed by period so a retry can
+    never double-grant. Never raises — one bad tenant must not stop the sweep.
+    """
+    from sqlalchemy import distinct, select
+
+    from nexus.billing.subscriptions import ACTIVE_STATUSES, roll_period
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingSubscription
+
+    now = utcnow()
+    async with get_sessionmaker()() as session:
+        tenant_ids = list(
+            (
+                await session.scalars(
+                    select(distinct(BillingSubscription.tenant_id)).where(
+                        BillingSubscription.status.in_(ACTIVE_STATUSES),
+                        BillingSubscription.current_period_end.is_not(None),
+                        BillingSubscription.current_period_end <= now,
+                    )
+                )
+            ).all()
+        )
+
+    rolled = 0
+    for tid in tenant_ids:
+        try:
+            async with tenant_session(tid) as ts:
+                if await roll_period(ts):
+                    rolled += 1
+        except Exception:
+            logger.warning("billing period roll failed for tenant %s", tid, exc_info=True)
+    return {"rolled": rolled}
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
@@ -635,6 +678,7 @@ HANDLERS: dict[str, Handler] = {
     "discover_icp_accounts": handle_discover_icp_accounts,
     "sync_network_account": handle_sync_network_account,
     "rollup_usage": handle_rollup_usage,
+    "roll_billing_periods": handle_roll_billing_periods,
 }
 
 
@@ -715,6 +759,11 @@ async def enqueue_sync_network_account(
 async def enqueue_rollup_usage(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="rollup_usage", payload={}))
+
+
+async def enqueue_roll_billing_periods(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="roll_billing_periods", payload={}))
 
 
 async def dispatch(job: Job) -> dict:

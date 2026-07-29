@@ -21,6 +21,7 @@ from nexus.workers.tasks import (
     enqueue_advance_cadences,
     enqueue_discover_icp_accounts,
     enqueue_refresh_due_accounts,
+    enqueue_roll_billing_periods,
     enqueue_rollup_usage,
     enqueue_send_daily_digests,
     enqueue_sync_crm_due_accounts,
@@ -42,9 +43,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
     The cadence + account-refresh drivers gate on automation_enabled; the CRM sweep gates on its
     own crm_sync_enabled switch. Each handler re-checks its switch, so this is a pre-filter.
 
-    Usage rollups are enqueued unconditionally (no pre-filter early-return above): billing
-    accuracy is not an opt-in feature, so every workspace's usage must roll up on every tick,
-    automation switches or not."""
+    Usage rollups and billing-period rolls are enqueued unconditionally (no pre-filter
+    early-return above): billing accuracy is not an opt-in feature, so every workspace's usage
+    must roll up and every elapsed period must close on every tick, automation switches or
+    not."""
     settings = get_settings()
 
     async with get_sessionmaker()() as session:
@@ -55,6 +57,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             # Usage rollups must run for every workspace, not just automation opt-ins — placed
             # outside the automation_enabled/crm_sync_enabled gates below on purpose.
             await enqueue_rollup_usage(queue=queue)
+            count += 1
+            # Same reasoning: a billing period ends on the calendar, not when a workspace opts
+            # into automation. The handler self-filters to subscriptions whose window elapsed.
+            await enqueue_roll_billing_periods(queue=queue)
             count += 1
             if settings.automation_enabled:
                 await enqueue_advance_cadences(queue=queue)

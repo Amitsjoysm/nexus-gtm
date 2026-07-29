@@ -145,3 +145,52 @@ async def cancel_subscription(ts: TenantSession, *, at_period_end: bool = True):
         sub.cancel_at_period_end = False
     await ts.flush()
     return sub
+
+
+async def roll_period(ts: TenantSession) -> bool:
+    """Close the current period if it has ended. Returns True if a roll happened.
+
+    Order matters: rate and finalize BEFORE advancing the window, so the invoice describes the
+    period that just closed rather than the one starting.
+    """
+    from nexus.billing.credits import grant_credits
+    from nexus.billing.rating import finalize_invoice, rate_period
+    from nexus.billing.rollups import period_key, rebuild_rollups
+
+    sub = await _active(ts)
+    if sub is None or sub.current_period_end is None:
+        return False
+    now = utcnow()
+    end = sub.current_period_end
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    if end > now:
+        return False
+
+    closing_key = period_key(sub.current_period_start or end, "period")
+
+    # Full-window rebuild: the heartbeat sweep only covers the current period, so stragglers
+    # written just after the boundary are folded in here, at the one moment it matters.
+    await rebuild_rollups(ts)
+    invoice = await rate_period(ts, period_key=closing_key)
+    await finalize_invoice(ts, invoice.id)
+
+    if sub.cancel_at_period_end:
+        sub.status = "canceled"
+        await ts.flush()
+        return True
+
+    sub.current_period_start = now
+    sub.current_period_end = next_period_end(now, sub.interval)
+    await ts.flush()
+
+    plan = await ts.session.get(BillingPlan, sub.plan_id)
+    if plan is not None and plan.included_credits:
+        new_key = period_key(now, "period")
+        await grant_credits(
+            ts, plan.included_credits, kind="grant",
+            reason=f"{plan.name} included credits",
+            # Keyed by period, so a retried job grants once and only once.
+            idempotency_key=f"plan_grant:{new_key}", period_key=new_key,
+        )
+    return True
