@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from nexus.core.db import get_sessionmaker, utcnow
-from nexus.core.tenancy import TenantSession
+from nexus.core.tenancy import TenantSession, apply_rls
 from nexus.models.billing import BillingPlan, BillingSubscription
 
 logger = logging.getLogger("nexus.billing.subscriptions")
@@ -80,6 +80,11 @@ async def backfill_subscriptions() -> dict:
     for tid in tenant_ids:
         try:
             async with get_sessionmaker()() as session:
+                # Bind the tenant GUC before writing. The API runs as the least-privilege
+                # `nexus_app` role with RLS enforced, so an unbound INSERT is rejected by
+                # Postgres ("new row violates row-level security policy"). SQLite has no RLS,
+                # which is why this only ever surfaces against the real database.
+                await apply_rls(session, tid)
                 ts = TenantSession(session, tid)
                 sub = await ensure_subscription(
                     ts, plan_id=LEGACY_PLAN_ID, status="active", grandfathered=True,

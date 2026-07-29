@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from nexus.api.deps import Principal, require_platform_admin
 from nexus.core.db import get_sessionmaker
-from nexus.core.tenancy import TenantSession
+from nexus.core.tenancy import TenantSession, apply_rls
 from nexus.models.billing import (
     BillingCapability,
     BillingCostRate,
@@ -207,6 +207,9 @@ async def set_tenant_subscription(
     async with get_sessionmaker()() as session:
         if await session.get(BillingPlan, body.plan_id) is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown plan '{body.plan_id}'")
+        # A platform admin acts ACROSS tenants, so there is no request-scoped tenant binding to
+        # inherit. Bind it explicitly or Postgres RLS rejects the write.
+        await apply_rls(session, tenant_id)
         ts = TenantSession(session, tenant_id)
         created = await ensure_subscription(ts, plan_id=body.plan_id)
         sub = created if created is not None else await change_plan(
@@ -225,6 +228,7 @@ async def grant_tenant_credits(
     from nexus.billing.credits import balance, grant_credits
 
     async with get_sessionmaker()() as session:
+        await apply_rls(session, tenant_id)          # cross-tenant admin write; see above
         ts = TenantSession(session, tenant_id)
         applied = await grant_credits(
             ts, body.amount, kind="adjustment", reason=body.reason,
