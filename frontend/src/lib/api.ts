@@ -25,6 +25,8 @@ import type {
   BillingCredits,
   BillingUsage,
   Invoice,
+  PlatformAdmin,
+  PlatformIdentity,
   EmailAccount,
   EmailAccountInput,
   EmailSettings,
@@ -687,6 +689,57 @@ export class ApiClient {
   }
   adminBillingSubscriptions(signal?: AbortSignal) {
     return this.request<AdminSubscription[]>("/admin/billing/subscriptions", { signal });
+  }
+  /** Answers "am I a platform admin?" — returns false rather than 403. */
+  platformWhoAmI(signal?: AbortSignal) {
+    return this.request<PlatformIdentity>("/admin/billing/whoami", { signal });
+  }
+  listPlatformAdmins(signal?: AbortSignal) {
+    return this.request<PlatformAdmin[]>("/admin/billing/admins", { signal });
+  }
+  grantPlatformAdmin(body: { email: string; platform_role: string; note?: string }) {
+    return this.request<{ email: string; created: boolean }>("/admin/billing/admins", {
+      method: "POST",
+      body,
+    });
+  }
+  revokePlatformAdmin(email: string) {
+    return this.request<{ email: string; active: boolean }>(
+      `/admin/billing/admins/${encodeURIComponent(email)}`,
+      { method: "DELETE" },
+    );
+  }
+  updatePlan(planId: string, body: Record<string, unknown>) {
+    return this.request<AdminPlan>(`/admin/billing/plans/${planId}`, {
+      method: "PATCH",
+      body,
+    });
+  }
+  upsertRateCard(capabilityId: string, body: Record<string, unknown>) {
+    return this.request<AdminRateCard>(`/admin/billing/rates/${capabilityId}`, {
+      method: "PUT",
+      body,
+    });
+  }
+  setTenantSubscription(tenantId: string, planId: string) {
+    return this.request<{ plan_id: string; status: string }>(
+      `/admin/billing/tenants/${tenantId}/subscription`,
+      { method: "POST", body: { plan_id: planId } },
+    );
+  }
+  grantTenantCredits(tenantId: string, body: {
+    amount: number; reason: string; idempotency_key: string;
+  }) {
+    return this.request<{ applied: boolean; balance: number }>(
+      `/admin/billing/tenants/${tenantId}/credits`,
+      { method: "POST", body },
+    );
+  }
+  createCustomPlan(tenantId: string, body: Record<string, unknown>) {
+    return this.request<Record<string, unknown>>(
+      `/admin/billing/tenants/${tenantId}/custom-plan`,
+      { method: "POST", body },
+    );
   }
 
   // ---- sending mailboxes (multi-account SMTP) ----

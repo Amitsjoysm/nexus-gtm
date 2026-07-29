@@ -1155,3 +1155,18 @@ export interface AdminPlan {
   sort_order: number;
   entitlement_count: number;
 }
+
+export interface PlatformIdentity {
+  email: string;
+  is_platform_admin: boolean;
+  platform_role: string;
+}
+
+export interface PlatformAdmin {
+  id: string;
+  email: string;
+  platform_role: string;
+  active: boolean;
+  note: string;
+  created_at: string;
+}

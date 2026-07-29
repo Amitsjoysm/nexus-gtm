@@ -4,6 +4,7 @@ import type { ComponentType, ReactNode } from "react";
 import { ThemeProvider } from "@/app/ThemeContext";
 import { SignalWindowProvider } from "@/app/SignalWindowContext";
 import { AuthProvider, useAuth } from "@/app/AuthContext";
+import { RequirePlatformAdmin } from "@/app/RequirePlatformAdmin";
 import { ToastProvider } from "@/components/ui";
 import { AppShell } from "@/components/layout/AppShell";
 import { RouteFallback } from "@/components/layout/RouteFallback";
@@ -217,14 +218,16 @@ export function App() {
                     </RequireRole>
                   }
                 />
-                {/* Platform-admin only. The API gate is `require_platform_admin`, which no
-                    tenant role satisfies; this route guard is convenience, not the boundary. */}
+                {/* Platform-admin only, and NOT a tenant role — guarding this on minRole="owner"
+                    let any workspace owner load the console shell. The API gate
+                    (`require_platform_admin`) is still the real boundary; this stops the SPA
+                    offering a door that will not open. */}
                 <Route
                   path="/admin/billing"
                   element={
-                    <RequireRole minRole="owner">
+                    <RequirePlatformAdmin>
                       <AdminBillingPage />
-                    </RequireRole>
+                    </RequirePlatformAdmin>
                   }
                 />
                 <Route path="/members" element={<MembersPage />} />

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
-from nexus.api.deps import Principal, require_platform_admin
+from nexus.api.deps import Principal, get_principal, require_platform_admin
 from nexus.core.db import get_sessionmaker
 from nexus.models.billing import BillingCapability, BillingPlan, BillingPlanEntitlement
 
@@ -210,3 +210,71 @@ async def list_subscriptions(
         ),
         key=lambda s: s.tenant_name.lower(),
     )
+
+
+class WhoAmIOut(BaseModel):
+    email: str
+    is_platform_admin: bool
+    platform_role: str = ""
+
+
+@router.get("/whoami", response_model=WhoAmIOut)
+async def whoami(principal: Principal = Depends(get_principal)) -> WhoAmIOut:
+    """Is the caller a platform admin?
+
+    Deliberately gated on plain authentication, not on require_platform_admin: it answers
+    "am I one?", so it must return false rather than 403. The SPA uses it to decide whether the
+    staff console is reachable at all, instead of guessing from tenant role — a workspace owner
+    is not a platform admin, and routing on tenant role let any owner load the console shell.
+    """
+    from sqlalchemy import select
+
+    from nexus.core.config import get_settings
+    from nexus.models.billing import PlatformAdmin
+    from nexus.models.identity import User
+
+    async with get_sessionmaker()() as session:
+        user = await session.get(User, principal.user_id)
+        email = (user.email or "").lower() if user else ""
+        if not email:
+            return WhoAmIOut(email="", is_platform_admin=False)
+        if email in get_settings().platform_admin_email_list:
+            return WhoAmIOut(email=email, is_platform_admin=True, platform_role="superadmin")
+        row = (
+            await session.scalars(
+                select(PlatformAdmin).where(
+                    PlatformAdmin.email == email, PlatformAdmin.active == True  # noqa: E712
+                )
+            )
+        ).first()
+    if row is None:
+        return WhoAmIOut(email=email, is_platform_admin=False)
+    return WhoAmIOut(email=email, is_platform_admin=True, platform_role=row.platform_role)
+
+
+class PlatformAdminOut(BaseModel):
+    id: str
+    email: str
+    platform_role: str
+    active: bool
+    note: str
+    created_at: str
+
+
+@router.get("/admins", response_model=list[PlatformAdminOut])
+async def list_platform_admins(
+    _: Principal = Depends(require_platform_admin),
+) -> list[PlatformAdminOut]:
+    from nexus.models.billing import PlatformAdmin
+
+    async with get_sessionmaker()() as session:
+        rows = (
+            await session.scalars(select(PlatformAdmin).order_by(PlatformAdmin.email))
+        ).all()
+    return [
+        PlatformAdminOut(
+            id=r.id, email=r.email, platform_role=r.platform_role, active=r.active,
+            note=r.note, created_at=r.created_at.isoformat() if r.created_at else "",
+        )
+        for r in rows
+    ]

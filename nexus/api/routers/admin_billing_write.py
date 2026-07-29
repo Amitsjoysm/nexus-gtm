@@ -402,3 +402,103 @@ async def create_tenant_custom_plan(
         )
         await session.commit()
         return result
+
+
+class PlatformAdminIn(BaseModel):
+    """Grant platform-admin rights to an email address."""
+
+    model_config = {"extra": "forbid"}
+
+    email: str = Field(min_length=3, max_length=255)
+    platform_role: str = "superadmin"
+    note: str = ""
+
+
+@router.post("/admins")
+async def create_platform_admin(
+    body: PlatformAdminIn,
+    principal: Principal = Depends(require_platform_admin),
+) -> dict:
+    """Make someone a platform admin. Only an existing platform admin can do this.
+
+    The email does NOT have to belong to an existing user: pre-authorizing a colleague before
+    they sign up is the normal onboarding order. The grant is keyed on the email, which is what
+    require_platform_admin matches on.
+    """
+    from sqlalchemy import select
+
+    from nexus.models.billing import PlatformAdmin
+
+    email = body.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "not an email address")
+    if body.platform_role not in ("superadmin", "support", "finance"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown platform role")
+
+    async with get_sessionmaker()() as session:
+        row = (
+            await session.scalars(select(PlatformAdmin).where(PlatformAdmin.email == email))
+        ).first()
+        before = snapshot(row, ("email", "platform_role", "active"))
+        created = row is None
+        if row is None:
+            row = PlatformAdmin(email=email)
+            session.add(row)
+        row.platform_role = body.platform_role
+        row.active = True
+        row.note = body.note
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="platform_admin.grant",
+            target=email, before=before,
+            after=snapshot(row, ("email", "platform_role", "active")), note=body.note,
+        )
+        await session.commit()
+        return {"email": email, "platform_role": row.platform_role,
+                "active": True, "created": created}
+
+
+@router.delete("/admins/{email}")
+async def revoke_platform_admin(
+    email: str,
+    principal: Principal = Depends(require_platform_admin),
+) -> dict:
+    """Revoke platform-admin rights.
+
+    Deactivates rather than deletes, so the audit trail keeps pointing at a real row. Refuses to
+    remove the last active admin: locking every operator out of the billing console is not a
+    state anyone can recover from through the product.
+    """
+    from sqlalchemy import func, select
+
+    from nexus.models.billing import PlatformAdmin
+
+    email = email.strip().lower()
+    async with get_sessionmaker()() as session:
+        row = (
+            await session.scalars(select(PlatformAdmin).where(PlatformAdmin.email == email))
+        ).first()
+        if row is None or not row.active:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"{email} is not an active admin")
+
+        remaining = await session.scalar(
+            select(func.count(PlatformAdmin.id)).where(
+                PlatformAdmin.active == True  # noqa: E712
+            )
+        )
+        if int(remaining or 0) <= 1:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "cannot revoke the last active platform admin; grant another one first",
+            )
+
+        before = snapshot(row, ("email", "platform_role", "active"))
+        row.active = False
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="platform_admin.revoke",
+            target=email, before=before,
+            after=snapshot(row, ("email", "platform_role", "active")),
+        )
+        await session.commit()
+        return {"email": email, "active": False}

@@ -1,4 +1,8 @@
 import { useState } from "react";
+import { Button } from "@/components/ui";
+import { CustomPlanDialog } from "./admin/CustomPlanDialog";
+import { TenantActionsDialog } from "./admin/TenantActionsDialog";
+import { PlatformAdmins } from "./admin/PlatformAdmins";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge, Card, CardHeader, EmptyState, Skeleton, Tabs } from "@/components/ui";
 import { DataState } from "@/components/DataState";
@@ -221,6 +225,9 @@ function Plans() {
 function Subscriptions() {
   const api = useApiClient();
   const subs = useApi<AdminSubscription[]>((signal) => api.adminBillingSubscriptions(signal), []);
+  const plans = useApi<AdminPlan[]>((signal) => api.adminBillingPlans(signal), []);
+  const [custom, setCustom] = useState<AdminSubscription | null>(null);
+  const [actions, setActions] = useState<AdminSubscription | null>(null);
 
   const columns: Column<AdminSubscription>[] = [
     { key: "tenant_name", header: "Workspace", sortable: true },
@@ -260,6 +267,21 @@ function Subscriptions() {
         ),
     },
     {
+      key: "actions",
+      header: "",
+      width: "220px",
+      render: (r) => (
+        <div className={styles.rowActions}>
+          <Button variant="secondary" onClick={() => setActions(r)}>
+            Manage
+          </Button>
+          <Button variant="ghost" onClick={() => setCustom(r)}>
+            Custom plan
+          </Button>
+        </div>
+      ),
+    },
+    {
       key: "current_period_end",
       header: "Period ends",
       width: "150px",
@@ -289,13 +311,29 @@ function Subscriptions() {
       }
     >
       {(rows) => (
-        <DataTable
-          columns={columns}
-          rows={rows}
-          getRowKey={(r) => r.tenant_id}
-          caption="Subscriptions"
-          minWidth={760}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            rows={rows}
+            getRowKey={(r) => r.tenant_id}
+            caption="Subscriptions"
+            minWidth={980}
+          />
+          <TenantActionsDialog
+            open={actions !== null}
+            onClose={() => setActions(null)}
+            tenant={actions}
+            plans={plans.data ?? []}
+            onDone={() => subs.refetch()}
+          />
+          <CustomPlanDialog
+            open={custom !== null}
+            onClose={() => setCustom(null)}
+            tenant={custom}
+            plans={plans.data ?? []}
+            onDone={() => subs.refetch()}
+          />
+        </>
       )}
     </DataState>
   );
@@ -305,6 +343,7 @@ const TABS = [
   { value: "rates", label: "Rate cards" },
   { value: "plans", label: "Plans" },
   { value: "subs", label: "Subscriptions" },
+  { value: "access", label: "Access" },
 ];
 
 export function AdminBillingPage() {
@@ -326,6 +365,7 @@ export function AdminBillingPage() {
           {tab === "rates" && <RateCards />}
           {tab === "plans" && <Plans />}
           {tab === "subs" && <Subscriptions />}
+          {tab === "access" && <PlatformAdmins />}
         </div>
       </Card>
     </div>
