@@ -21,7 +21,9 @@
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: var(--tracking-wide);
-  color: var(--text-subtle);
+  /* --text-subtle lands at 3.09:1 (light) / 4.19:1 (dark) here, under the 4.5:1 floor these
+     12px uppercase labels need. --text-muted clears it in both themes. */
+  color: var(--text-muted);
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;

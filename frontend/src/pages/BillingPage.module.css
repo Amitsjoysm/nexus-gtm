@@ -127,7 +127,7 @@
 }
 
 .grant {
-  color: var(--success);
+  color: var(--success-text);
   font-variant-numeric: tabular-nums;
 }
 

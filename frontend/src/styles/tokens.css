@@ -122,6 +122,10 @@
 
   --success: #36c98c;
   --success-quiet: rgba(54, 201, 140, 0.14);
+  /* Success as TEXT. --success is tuned for fills and bars; as body text on a surface it
+     lands around 3.5:1, under the 4.5:1 floor. Use this whenever green carries a word or a
+     number rather than filling a shape. */
+  --success-text: #36c98c;
   --warning: #f0b429;
   --warning-quiet: rgba(240, 180, 41, 0.15);
   --danger: #ff6b7b;
@@ -173,6 +177,8 @@
 
   --success: #0f9d6b;
   --success-quiet: rgba(15, 157, 107, 0.12);
+  /* Darkened for text use: #0f9d6b is 3.47:1 on white, below the 4.5:1 floor. */
+  --success-text: #0a7350;
   --warning: #b9770a;
   --warning-quiet: rgba(185, 119, 10, 0.12);
   --danger: #d83a3a;
