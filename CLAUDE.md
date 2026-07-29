@@ -149,16 +149,31 @@ touches Account/Contact/Inbox/Cadence.
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Latest: `0023_billing_rollup_marker`, on top of
-`0022_billing_usage` / `0021_billing_foundation` (the Billing tables below),
-`0020_account_archived_at`, `0019_verification_icp_controls` (contact verification timestamp +
-per-tenant ICP daily-discovery count) and `0018_relationship_graph` (the Network tables above).
-Every tenant-scoped table automatically gets RLS via `scripts/apply_rls.py` on deploy — no manual
-policy work needed for new tables.
+Alembic under `migrations/versions/`. Head: `0026_billing_webhooks`. The chain is
+`0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
+(the Billing tables below). Every tenant-scoped table automatically gets RLS via
+`scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
-Migrations are **additive only**. Running raw `alembic upgrade` against a fresh SQLite file
-fails at the first revision (`env.py` creates the schema first); the real path is
-`bootstrap_db.py` → `alembic upgrade head` → `apply_rls.py`, which is what the entrypoint runs.
+Migrations are **additive only**, and the chain **is** replayable onto an empty database —
+`tests/test_migrations_replay.py` builds one from nothing but `alembic upgrade head` and diffs
+the result against `Base.metadata`. Do not reintroduce a `create_all()` inside a revision: the
+old `0001_initial` did that, so it materialized whatever models existed *at run time* rather
+than a frozen historical schema, and the chain could never be replayed. Production still runs
+`bootstrap_db.py` → `alembic upgrade head` → `apply_rls.py`.
+
+### Two traps that only bite against real Postgres
+
+The suite runs on SQLite, which has **no RLS**. Both of these pass every test and fail in prod:
+
+- **A hand-built `TenantSession` must call `apply_rls(session, tenant_id)` first**, or writes are
+  rejected. `tests/test_rls_binding_guard.py` is an AST guard against this.
+- **Genuinely cross-tenant reads return ZERO ROWS, not an error**, under the app's RLS-bound
+  role. Use `get_platform_sessionmaker()` (owner role) for those — the staff console and the
+  payment webhook both need it — and only behind `require_platform_admin` or signature
+  verification.
+
+Also: `apply_rls` sets the tenant GUC **transaction-locally**, so a read after `commit()` has no
+binding and silently returns nothing.
 
 ## Billing & Entitlements (`nexus/billing/`)
 
@@ -184,10 +199,24 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   slower — never to undercounting — if the rollup worker stops. Corrections are compensating
   negative rows, never deletes.
 - **Platform admin is separate from tenant RBAC.** `require_platform_admin` (env allowlist or
-  the `platform_admins` table) fails closed; no tenant role grants it.
-- The four platform-global tables (`billing_capabilities`, `billing_plans`,
-  `billing_plan_entitlements`, `platform_admins`) intentionally carry no `tenant_id` and no RLS
-  policy. Everything tenant-facing does.
+  the `platform_admins` table) fails closed; no tenant role grants it. Every admin mutation is
+  captured in `billing_audit_log` with before/after snapshots.
+- **Money flows through one seam.** `metered()` → quota → credits → overage price → block.
+  Credits are pre-paid, so rating deducts what a period's burns already covered — otherwise the
+  customer pays twice for one overage. Collection is keyed by invoice id at the provider, so a
+  retry can never double-charge. Dunning (`nexus/billing/dunning.py`) retries on a config
+  schedule and escalates to `past_due`; it never silently voids a debt.
+- **Payments are a provider seam** (`payments.py`): `noop` by default so the whole lifecycle runs
+  offline; `stripe` is inert until keyed and raises rather than faking success. Webhooks verify
+  an HMAC over the **raw** body, enforce a freshness window, and dedupe on the provider event id
+  as a primary key.
+- **Gauges are not counters.** `seat.member` resolves to live membership count; summing events
+  would only ever climb, so a customer could never get back under a seat limit.
+- Platform-global tables carry no `tenant_id` and no RLS policy: `billing_capabilities`,
+  `billing_plans`, `billing_plan_entitlements`, `billing_rate_cards`, `billing_cost_rates`,
+  `platform_admins`, `billing_audit_log`, `billing_webhook_events`. The audit and webhook tables
+  deliberately name their tenant column `subject_tenant_id` so `apply_rls.py` — which enrolls any
+  table having `tenant_id` — does not hide them from the operators who must read them.
 
 ## Frontend skills — USE THESE for any UI work
 
