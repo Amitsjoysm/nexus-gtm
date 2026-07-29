@@ -355,3 +355,29 @@ class BillingAuditLog(IdMixin, TimestampMixin, Base):
     before: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     after: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     note: Mapped[str] = mapped_column(Text, default="")
+
+
+class BillingWebhookEvent(TimestampMixin, Base):
+    """Every payment-provider event we have already processed.
+
+    Replay protection. A webhook endpoint is a public, unauthenticated URL: anyone who learns it
+    can POST to it, and the provider itself retries aggressively. Signature verification proves
+    the sender; this table proves we act on each event exactly once, so a replayed
+    ``payment_intent.succeeded`` cannot mark a second invoice paid.
+
+    Platform-global (no ``tenant_id``): events arrive before we know which tenant they concern,
+    and the id space is the provider's.
+    """
+
+    __tablename__ = "billing_webhook_events"
+    __table_args__ = (Index("ix_billing_webhook_type_time", "event_type", "created_at"),)
+
+    # The provider's own event id (Stripe `evt_...`) is the primary key: uniqueness is the
+    # replay guard, enforced by the database rather than by application logic.
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20), default="stripe")
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="processed")
+    subject_tenant_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payload_digest: Mapped[str] = mapped_column(String(64), default="")
+    note: Mapped[str] = mapped_column(Text, default="")

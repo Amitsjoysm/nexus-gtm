@@ -196,6 +196,54 @@ async def current_usage(ts: TenantSession, capability_id: str) -> float:
     return total + float(unrolled or 0)
 
 
+# A single action cannot plausibly consume more than this. The cap is a blast radius limit, not
+# a business rule: it stops one bad caller (or a unit-conversion bug) from draining a balance or
+# poisoning a rollup with an absurd number.
+MAX_QUANTITY_PER_CALL = 1_000_000
+
+
+def _valid_quantity(quantity: float) -> bool:
+    """Reject anything that would corrupt the counters.
+
+    Negative quantity is the interesting one: usage is summed, so a negative would *reduce*
+    recorded usage and hand back quota. Compensating rows are written by the refund path with
+    an explicit key, never through the gate.
+    """
+    try:
+        q = float(quantity)
+    except (TypeError, ValueError):
+        return False
+    if q != q or q in (float("inf"), float("-inf")):   # NaN / infinity
+        return False
+    return 0 < q <= MAX_QUANTITY_PER_CALL
+
+
+async def _lock_capability(ts: TenantSession, capability_id: str) -> None:
+    """Serialize check-then-record for one tenant+capability.
+
+    Without this, two concurrent requests both read `used` before either writes, both conclude
+    there is room, and the tenant spends past the limit. The window is small but it is exactly
+    where a determined caller aims: fire N parallel requests at a quota with 1 unit left.
+
+    Transaction-scoped, so it releases on commit or rollback and cannot leak. Postgres only;
+    SQLite serializes writers anyway, so there is nothing to guard in tests.
+    """
+    try:
+        bind = ts.session.get_bind()
+        if bind.dialect.name != "postgresql":
+            return
+        from sqlalchemy import text
+
+        await ts.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+            {"k": f"meter:{ts.tenant_id}:{capability_id}"},
+        )
+    except Exception:
+        # A lock we could not take must not break metering; worst case we are back to the
+        # pre-existing race rather than failing the request.
+        logger.warning("advisory lock failed for %s", capability_id, exc_info=True)
+
+
 async def _over_burst(ts: TenantSession, capability_id: str, burst_limit: int) -> bool:
     """True when this capability was used more than ``burst_limit`` times in the last minute.
 
@@ -335,6 +383,15 @@ async def check_and_meter(
     if mode == "off":
         return MeterResult(allowed=True, recorded=False)
 
+    if not _valid_quantity(quantity):
+        # Do not record, do not gate — a nonsensical quantity is a caller bug or an attempt to
+        # rewind the counter. Allow the action (metering never breaks the product) but bill
+        # nothing, and make it visible.
+        logger.warning(
+            "rejecting invalid quantity %r for %s; not recorded", quantity, capability_id
+        )
+        return MeterResult(allowed=True, recorded=False, reason="invalid_quantity")
+
     try:
         ent = await resolve_entitlement(ts, capability_id)
 
@@ -349,6 +406,9 @@ async def check_and_meter(
         elif ent.mode in ("shadow", "enabled", "unlimited"):
             blocked_reason = None            # never quota-limited
         elif ent.quota is not None:
+            # Serialize before reading the counter: check-then-record is only safe if no other
+            # request can slip between the two.
+            await _lock_capability(ts, capability_id)
             used = await current_usage(ts, capability_id)
             limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
             over = used + quantity - limit
