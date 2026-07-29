@@ -11,7 +11,7 @@ import logging
 
 from fastapi import APIRouter, Header, Request, Response, status
 
-from nexus.core.db import get_sessionmaker
+from nexus.core.db import get_platform_sessionmaker
 
 logger = logging.getLogger("nexus.billing.webhooks")
 
@@ -57,7 +57,9 @@ async def stripe_webhook(
         response.status_code = status.HTTP_400_BAD_REQUEST
         return {"error": "invalid_webhook"}
 
-    async with get_sessionmaker()() as session:
+    # A payment event arrives with no tenant context; the invoice it refers to could belong
+    # to any workspace. Under the RLS-bound role the lookup silently matches nothing.
+    async with get_platform_sessionmaker()() as session:
         if await already_processed(session, event.event_id):
             # Idempotent success. The provider retries aggressively and a replay must not
             # re-apply the effect, but it also should not look like a failure.

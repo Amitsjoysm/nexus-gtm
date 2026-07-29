@@ -181,10 +181,14 @@ async def list_subscriptions(
 ) -> list[SubscriptionOut]:
     """Every tenant's current plan. Reads across tenants deliberately — this is the platform
     control plane, not a tenant surface, and it is gated by `require_platform_admin`."""
+    from nexus.core.db import get_platform_sessionmaker
     from nexus.models.billing import BillingSubscription
     from nexus.models.identity import Tenant
 
-    async with get_sessionmaker()() as session:
+    # Cross-tenant by definition. Under the app's RLS-bound role this query returns zero rows
+    # rather than erroring, which is why the staff console looked empty on a database holding
+    # eleven subscriptions.
+    async with get_platform_sessionmaker()() as session:
         rows = (
             await session.execute(
                 select(BillingSubscription, Tenant.name).join(

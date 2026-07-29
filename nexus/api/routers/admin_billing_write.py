@@ -276,13 +276,17 @@ async def grant_tenant_credits(
             target=body.idempotency_key, subject_tenant_id=tenant_id,
             after={"amount": body.amount, "applied": applied}, note=body.reason,
         )
+        # Read the balance BEFORE committing. apply_rls sets the tenant GUC transaction-locally,
+        # so after a commit the binding is gone and the very next read returns zero rows under
+        # RLS — reporting "balance: 0" for a grant that actually succeeded.
+        new_balance = await balance(ts)
         await session.commit()
         return {
             "tenant_id": tenant_id,
             # False means the key was already used — the caller does not need to distinguish
             # "refused" from "already applied"; both mean no new credits were minted.
             "applied": applied,
-            "balance": await balance(ts),
+            "balance": new_balance,
         }
 
 

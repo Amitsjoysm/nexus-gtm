@@ -95,6 +95,41 @@ def get_engine() -> AsyncEngine:
     return _engine
 
 
+_platform_engine: AsyncEngine | None = None
+_platform_sessionmaker: async_sessionmaker[AsyncSession] | None = None
+
+
+def get_platform_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    """A session for genuinely cross-tenant PLATFORM work, bypassing RLS.
+
+    The API connects as the least-privilege ``nexus_app`` role, whose RLS policies read
+    ``app.current_tenant``. That is correct for everything tenant-facing, but it silently
+    returns ZERO ROWS for the few operations that legitimately span tenants — listing every
+    workspace's subscription in the staff console, or matching an incoming payment webhook to
+    the invoice it paid, which arrives with no tenant context at all. Those queries do not
+    error; they come back empty, which is the dangerous failure mode.
+
+    ``NEXUS_DB_OWNER_URL`` is already provisioned to the app container for exactly this. Falls
+    back to the normal URL when unset (SQLite in dev and tests, where there is no RLS anyway).
+
+    Use this ONLY behind ``require_platform_admin`` or webhook signature verification. Anything
+    tenant-facing must keep using ``get_sessionmaker`` + ``TenantSession``.
+    """
+    global _platform_engine, _platform_sessionmaker
+    if _platform_sessionmaker is None:
+        settings = get_settings()
+        url = settings.db_owner_url or settings.database_url
+        kwargs: dict = {"future": True, "pool_pre_ping": True}
+        if url.startswith("postgresql"):
+            # Small pool: platform reads are rare compared with tenant traffic.
+            kwargs.update(pool_size=2, max_overflow=3)
+        _platform_engine = create_async_engine(url, **kwargs)
+        _platform_sessionmaker = async_sessionmaker(
+            _platform_engine, expire_on_commit=False, class_=AsyncSession
+        )
+    return _platform_sessionmaker
+
+
 def _install_sqlite_pragmas(engine: AsyncEngine) -> None:
     """Enable WAL journaling + a busy timeout on every new SQLite connection.
 
