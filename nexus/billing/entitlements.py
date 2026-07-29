@@ -10,6 +10,7 @@ missing subscriptions, and internal errors all resolve to "allow".
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -182,6 +183,50 @@ async def current_usage(ts: TenantSession, capability_id: str) -> float:
     return total + float(unrolled or 0)
 
 
+async def _burn_for_overage(
+    ts: TenantSession, ent: "ResolvedEntitlement", over_units: float, key: str
+) -> bool:
+    """Spend credits for units beyond the plan's included quota.
+
+    Returns True when the overage is paid for. Price precedence matches the invoice rating path
+    (plan entitlement, else the global rate card), so what is spent in flight and what is billed
+    at period close cannot disagree.
+
+    Never raises: a burn failure degrades to "not covered", and the caller decides. Losing the
+    charge on one action beats breaking the product.
+    """
+    from nexus.billing.credits import burn_credits
+    from nexus.models.billing import BillingCreditLedger, BillingRateCard
+
+    burn_key = f"{key}:burn"
+    try:
+        # A retried request re-derives the same overage. Treat an existing burn as covered,
+        # otherwise the retry would be refused for an action already paid for.
+        already = await ts.first(
+            BillingCreditLedger, BillingCreditLedger.idempotency_key == burn_key
+        )
+        if already is not None:
+            return True
+
+        price = ent.overage_price_credits
+        if price is None:
+            card = await ts.session.get(BillingRateCard, ent.capability_id)
+            if card is None or not card.active:
+                return False        # unpriced capability: nothing to charge against
+            price = float(card.credits_per_unit)
+
+        amount = float(over_units) * float(price)
+        if amount <= 0:
+            return False
+        return await burn_credits(
+            ts, amount, reason=f"{ent.capability_id} beyond plan quota",
+            idempotency_key=burn_key, capability_id=ent.capability_id,
+        )
+    except Exception:
+        logger.warning("credit burn failed for %s", ent.capability_id, exc_info=True)
+        return False
+
+
 async def check_and_meter(
     ts: TenantSession,
     *,
@@ -212,6 +257,10 @@ async def check_and_meter(
     try:
         ent = await resolve_entitlement(ts, capability_id)
 
+        # One key for the whole decision, so the usage row and the credit burn either both
+        # apply or both no-op on a retry. record_usage would otherwise mint its own.
+        key = idempotency_key or f"auto:{uuid.uuid4().hex}"
+
         blocked_reason: str | None = None
         used = 0.0
         if ent.mode == "disabled":
@@ -221,9 +270,14 @@ async def check_and_meter(
         elif ent.quota is not None:
             used = await current_usage(ts, capability_id)
             limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
-            # Overage pricing means "keep going and charge for it", not "stop".
-            if used + quantity > limit and ent.overage_price_credits is None:
-                blocked_reason = "quota_exhausted"
+            over = used + quantity - limit
+            if over > 0:
+                # Past what the plan includes. Spend credits first — that is what they are for.
+                # An explicit overage price means "keep going and invoice it", not "stop", so it
+                # still passes when the balance cannot cover it. Otherwise this is the wall.
+                covered = await _burn_for_overage(ts, ent, over, key)
+                if not covered and ent.overage_price_credits is None:
+                    blocked_reason = "quota_exhausted"
 
         enforced = mode == "on"
         allowed = True if not enforced else blocked_reason is None
@@ -232,7 +286,7 @@ async def check_and_meter(
         if allowed:
             recorded = await record_usage(
                 ts, capability_id=capability_id, quantity=quantity, unit=ent.unit,
-                user_id=user_id, source=source, idempotency_key=idempotency_key, attrs=attrs,
+                user_id=user_id, source=source, idempotency_key=key, attrs=attrs,
             )
         return MeterResult(
             allowed=allowed,
