@@ -2,6 +2,7 @@
 from nexus.api.routers import (
     accounts,
     admin_billing,
+    admin_billing_write,
     agents,
     alerts,
     auth,
@@ -42,6 +43,7 @@ all_routers = [
     custom_fields.router,
     outcomes.router,
     admin_billing.router,
+    admin_billing_write.router,
     billing.router,
 ]
 
