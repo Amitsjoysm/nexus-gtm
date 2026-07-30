@@ -5,9 +5,10 @@ The other half of M11. Retry-with-backoff keeps a transient failure from losing 
 what happens when the failure was not transient — the job is parked with its payload, and an
 operator who has fixed the cause replays it from here.
 
-Gated by ``require_platform_admin``: dead letters span every tenant, so no tenant role may see
-them. Every replay is written to the audit log — re-running a customer's job is an admin
-mutation, and "who re-ran this, and when" has to come from a record.
+Gated on ``jobs.manage``: dead letters span every tenant, so no tenant role may see them, and
+replaying someone's job is not something a support admin needs. Every replay is written to the
+audit log — re-running a customer's job is an admin mutation, and "who re-ran this, and when" has
+to come from a record.
 """
 from __future__ import annotations
 
@@ -17,8 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from nexus.api.deps import Principal, require_platform_admin
+from nexus.api.deps import Principal, require_platform_permission
 from nexus.billing.audit import record_admin_action
+from nexus.billing.permissions import JOBS_MANAGE
 from nexus.core.db import get_sessionmaker, utcnow
 from nexus.models.jobs import DeadLetterJob
 from nexus.workers.queue import Job, get_task_queue
@@ -61,7 +63,7 @@ async def list_dead_letters(
     # done. History stays one query parameter away.
     include_replayed: bool = False,
     limit: int = Query(default=100, ge=1, le=500),
-    _: Principal = Depends(require_platform_admin),
+    _: Principal = Depends(require_platform_permission(JOBS_MANAGE)),
 ) -> list[DeadLetterOut]:
     stmt = select(DeadLetterJob)
     if job_name:
@@ -77,7 +79,7 @@ async def list_dead_letters(
 @router.post("/dead-letters/{dead_letter_id}/replay")
 async def replay_dead_letter(
     dead_letter_id: str,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(JOBS_MANAGE)),
 ) -> dict:
     """Put one dead-lettered job back on the queue with a fresh attempt budget.
 

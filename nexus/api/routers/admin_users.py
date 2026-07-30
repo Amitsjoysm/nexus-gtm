@@ -15,8 +15,9 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from nexus.api.deps import Principal, require_platform_admin
+from nexus.api.deps import Principal, require_platform_permission
 from nexus.billing.audit import record_admin_action
+from nexus.billing.permissions import USERS_MANAGE
 from nexus.core.db import get_sessionmaker
 
 logger = logging.getLogger("nexus.api.admin_users")
@@ -27,7 +28,7 @@ router = APIRouter(prefix="/admin/users", tags=["admin-users"])
 @router.delete("/{email}/mfa")
 async def reset_user_mfa(
     email: str,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(USERS_MANAGE)),
 ) -> dict:
     """Clear every MFA factor and recovery code for one user.
 

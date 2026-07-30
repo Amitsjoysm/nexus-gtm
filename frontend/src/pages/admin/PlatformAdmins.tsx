@@ -4,6 +4,7 @@ import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
+import { permissionLabel } from "@/lib/permissions";
 import type { PlatformAdmin } from "@/lib/types";
 import styles from "./AdminForms.module.css";
 
@@ -107,6 +108,17 @@ export function PlatformAdmins() {
                     {a.platform_role}
                     {a.note ? ` · ${a.note}` : ""}
                   </span>
+                  {/* The stored set, not the role name. A role is a shortcut for granting these;
+                      what someone can actually do is this list, so show it. */}
+                  {a.active && a.permissions.length > 0 && (
+                    <ul className={styles.permList}>
+                      {a.permissions.map((p) => (
+                        <li key={p} className={styles.permChip}>
+                          {permissionLabel(p)}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
                 <div className={styles.tenantActions}>
                   <Badge tone={a.active ? "success" : "neutral"}>

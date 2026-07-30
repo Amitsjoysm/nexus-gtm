@@ -1,9 +1,12 @@
 # nexus/api/routers/admin_billing.py
-"""Staff-only billing administration (read surface for M1).
+"""Staff-only billing administration (read surface).
 
-Everything here is gated by ``require_platform_admin`` — tenant RBAC grants no access.
-Write endpoints (plan CRUD, entitlement editing, enforcement flips) land in Milestone 3
-(docs/billing/06-Admin-Portal.md).
+Gated on ``billing.read``, which every platform role holds — tenant RBAC grants no access at all.
+The one exception is the ``/admins`` listing: who operates the platform is only visible to admins
+who can change it (``admins.manage``). Writes live in ``admin_billing_write.py``.
+
+``whoami`` is deliberately gated on plain authentication instead, because it answers "am I one?"
+and must return false rather than 403.
 """
 from __future__ import annotations
 
@@ -11,7 +14,8 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
-from nexus.api.deps import Principal, get_principal, require_platform_admin
+from nexus.api.deps import Principal, get_principal, require_platform_permission
+from nexus.billing.permissions import ADMINS_MANAGE, BILLING_READ, effective_permissions
 from nexus.core.db import get_sessionmaker
 from nexus.models.billing import BillingCapability, BillingPlan, BillingPlanEntitlement
 
@@ -53,7 +57,7 @@ async def list_capabilities(
     category: str | None = None,
     active: bool | None = None,
     limit: int = Query(default=500, ge=1, le=1000),
-    _: Principal = Depends(require_platform_admin),
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
 ) -> list[CapabilityOut]:
     stmt = select(BillingCapability)
     if category:
@@ -76,7 +80,7 @@ async def list_capabilities(
 @router.get("/plans", response_model=list[PlanOut])
 async def list_plans(
     status_filter: str | None = None,
-    _: Principal = Depends(require_platform_admin),
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
 ) -> list[PlanOut]:
     stmt = select(BillingPlan).order_by(BillingPlan.sort_order, BillingPlan.id)
     if status_filter:
@@ -131,7 +135,7 @@ class SubscriptionOut(BaseModel):
 
 @router.get("/rates", response_model=list[RateCardOut])
 async def list_rate_cards(
-    _: Principal = Depends(require_platform_admin),
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
 ) -> list[RateCardOut]:
     """Every priced capability with its cost and the resulting gross margin.
 
@@ -177,7 +181,7 @@ async def list_rate_cards(
 
 @router.get("/subscriptions", response_model=list[SubscriptionOut])
 async def list_subscriptions(
-    _: Principal = Depends(require_platform_admin),
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
 ) -> list[SubscriptionOut]:
     """Every tenant's current plan. Reads across tenants deliberately — this is the platform
     control plane, not a tenant surface, and it is gated by `require_platform_admin`."""
@@ -216,6 +220,11 @@ class WhoAmIOut(BaseModel):
     email: str
     is_platform_admin: bool
     platform_role: str = ""
+    # Lets the SPA hide controls a narrower role cannot use. The server is still the boundary.
+    permissions: list[str] = []
+    # The ceiling on this caller's credit grants, or null for no ceiling. Surfaced so the console
+    # can state the actual limit instead of hardcoding a number that config can change.
+    credit_grant_cap: float | None = None
 
 
 @router.get("/whoami", response_model=WhoAmIOut)
@@ -239,7 +248,12 @@ async def whoami(principal: Principal = Depends(get_principal)) -> WhoAmIOut:
         if not email:
             return WhoAmIOut(email="", is_platform_admin=False)
         if email in get_settings().platform_admin_email_list:
-            return WhoAmIOut(email=email, is_platform_admin=True, platform_role="superadmin")
+            from nexus.billing.permissions import ALL_PERMISSIONS
+
+            return WhoAmIOut(
+                email=email, is_platform_admin=True, platform_role="superadmin",
+                permissions=sorted(ALL_PERMISSIONS), credit_grant_cap=None,
+            )
         row = (
             await session.scalars(
                 select(PlatformAdmin).where(
@@ -249,13 +263,25 @@ async def whoami(principal: Principal = Depends(get_principal)) -> WhoAmIOut:
         ).first()
     if row is None:
         return WhoAmIOut(email=email, is_platform_admin=False)
-    return WhoAmIOut(email=email, is_platform_admin=True, platform_role=row.platform_role)
+    from nexus.billing.permissions import CREDITS_GRANT, effective_permissions
+
+    held = effective_permissions(row)
+    return WhoAmIOut(
+        email=email, is_platform_admin=True, platform_role=row.platform_role,
+        permissions=sorted(held),
+        # None means "no ceiling". Whether the caller can grant at all is answered by the
+        # permission list, not by this field.
+        credit_grant_cap=(
+            None if CREDITS_GRANT in held else get_settings().billing_support_credit_cap
+        ),
+    )
 
 
 class PlatformAdminOut(BaseModel):
     id: str
     email: str
     platform_role: str
+    permissions: list[str] = []
     active: bool
     note: str
     created_at: str
@@ -263,7 +289,7 @@ class PlatformAdminOut(BaseModel):
 
 @router.get("/admins", response_model=list[PlatformAdminOut])
 async def list_platform_admins(
-    _: Principal = Depends(require_platform_admin),
+    _: Principal = Depends(require_platform_permission(ADMINS_MANAGE)),
 ) -> list[PlatformAdminOut]:
     from nexus.models.billing import PlatformAdmin
 
@@ -273,7 +299,8 @@ async def list_platform_admins(
         ).all()
     return [
         PlatformAdminOut(
-            id=r.id, email=r.email, platform_role=r.platform_role, active=r.active,
+            id=r.id, email=r.email, platform_role=r.platform_role,
+            permissions=sorted(effective_permissions(r)), active=r.active,
             note=r.note, created_at=r.created_at.isoformat() if r.created_at else "",
         )
         for r in rows

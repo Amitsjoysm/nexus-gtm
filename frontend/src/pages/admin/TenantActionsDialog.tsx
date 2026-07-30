@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Button, Field, Input, Modal, Select, useToast } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
+import { usePlatformCan, usePlatformIdentity } from "@/app/RequirePlatformAdmin";
+import { CREDITS_GRANT, CREDITS_GRANT_CAPPED, SUBSCRIPTIONS_WRITE } from "@/lib/permissions";
 import { ApiError } from "@/lib/api";
 import type { AdminPlan, AdminSubscription } from "@/lib/types";
 import styles from "./AdminForms.module.css";
@@ -17,10 +19,19 @@ interface Props {
 export function TenantActionsDialog({ open, onClose, tenant, plans, onDone }: Props) {
   const api = useApiClient();
   const toast = useToast();
+  const can = usePlatformCan();
+  const identity = usePlatformIdentity();
   const [planId, setPlanId] = useState("");
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState<"plan" | "credits" | null>(null);
+
+  const canChangePlan = can(SUBSCRIPTIONS_WRITE);
+  const canGrant = can(CREDITS_GRANT) || can(CREDITS_GRANT_CAPPED);
+  // A ceiling only applies to someone who holds *only* the capped permission. The number comes
+  // from the server so the console never contradicts the limit actually enforced.
+  const cap = can(CREDITS_GRANT) ? null : identity?.credit_grant_cap ?? null;
+  const overCap = cap != null && Number(amount) > cap;
 
   async function changePlan() {
     if (!tenant || !planId) return;
@@ -72,57 +83,76 @@ export function TenantActionsDialog({ open, onClose, tenant, plans, onDone }: Pr
       open={open}
       onClose={onClose}
       title={tenant ? tenant.tenant_name : "Workspace"}
-      description="Change the plan or adjust the credit balance for this workspace."
+      description={
+        canChangePlan
+          ? "Change the plan or adjust the credit balance for this workspace."
+          : "Adjust the credit balance for this workspace."
+      }
     >
       <div className={styles.form}>
-        <Field label="Move to plan" hint="Takes effect immediately.">
-          <Select
-            value={planId}
-            onChange={(e) => setPlanId(e.target.value)}
-            placeholder="Select a plan…"
-            options={plans.map((p) => ({
-              value: p.id,
-              label: `${p.name} — $${(p.base_price_cents / 100).toFixed(2)}/${p.interval}`,
-            }))}
-          />
-        </Field>
-        <div className={styles.actions}>
-          <Button onClick={changePlan} loading={busy === "plan"} disabled={!planId}>
-            Change plan
-          </Button>
-        </div>
+        {canChangePlan && (
+          <>
+            <Field label="Move to plan" hint="Takes effect immediately.">
+              <Select
+                value={planId}
+                onChange={(e) => setPlanId(e.target.value)}
+                placeholder="Select a plan…"
+                options={plans.map((p) => ({
+                  value: p.id,
+                  label: `${p.name} — $${(p.base_price_cents / 100).toFixed(2)}/${p.interval}`,
+                }))}
+              />
+            </Field>
+            <div className={styles.actions}>
+              <Button onClick={changePlan} loading={busy === "plan"} disabled={!planId}>
+                Change plan
+              </Button>
+            </div>
+          </>
+        )}
 
-        <fieldset className={styles.fieldset}>
-          <legend className={styles.legend}>Grant credits</legend>
-          <div className={styles.row}>
-            <Field label="Credits" hint="1 credit = $0.01.">
-              <Input
-                type="number"
-                min="1"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="500"
-              />
-            </Field>
-            <Field label="Reason" hint="Appears in the customer's ledger.">
-              <Input
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Goodwill adjustment"
-              />
-            </Field>
-          </div>
-          <div className={styles.actions}>
-            <Button
-              variant="secondary"
-              onClick={grantCredits}
-              loading={busy === "credits"}
-              disabled={!amount}
-            >
-              Grant credits
-            </Button>
-          </div>
-        </fieldset>
+        {canGrant && (
+          <fieldset className={styles.fieldset}>
+            <legend className={styles.legend}>Grant credits</legend>
+            <div className={styles.row}>
+              <Field
+                label="Credits"
+                hint={
+                  cap == null
+                    ? "1 credit = $0.01."
+                    : `1 credit = $0.01. Your limit is ${cap.toLocaleString()} per grant.`
+                }
+                error={overCap ? `Grants above ${cap?.toLocaleString()} need finance.` : undefined}
+              >
+                <Input
+                  type="number"
+                  min="1"
+                  max={cap ?? undefined}
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="500"
+                />
+              </Field>
+              <Field label="Reason" hint="Appears in the customer's ledger.">
+                <Input
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Goodwill adjustment"
+                />
+              </Field>
+            </div>
+            <div className={styles.actions}>
+              <Button
+                variant="secondary"
+                onClick={grantCredits}
+                loading={busy === "credits"}
+                disabled={!amount || overCap}
+              >
+                Grant credits
+              </Button>
+            </div>
+          </fieldset>
+        )}
       </div>
     </Modal>
   );

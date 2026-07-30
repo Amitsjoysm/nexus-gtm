@@ -2,8 +2,10 @@
 """Staff-only billing administration (write surface).
 
 Pricing must be changeable without a redeploy — that is the whole premise of the platform
-(docs/billing/06-Admin-Portal.md §2). Everything here is gated by ``require_platform_admin``,
-which fails closed and which no tenant role can reach.
+(docs/billing/06-Admin-Portal.md §2). Every endpoint here names the one permission it needs via
+``require_platform_permission`` — it fails closed, and no tenant role can reach it. Being a
+platform admin is not enough: repricing is `pricing.write`, moving a workspace between plans is
+`subscriptions.write`, charging a card is `invoices.collect`.
 
 Two invariants are enforced at this layer, not merely documented:
 
@@ -18,8 +20,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from nexus.api.deps import Principal, require_platform_admin
+from nexus.api.deps import Principal, get_principal, require_platform_permission
 from nexus.billing.audit import record_admin_action, snapshot
+from nexus.billing.permissions import ALL_PERMISSIONS, permissions_for_role, ADMINS_MANAGE, INVOICES_COLLECT, PRICING_WRITE, SUBSCRIPTIONS_WRITE
 from nexus.core.db import get_sessionmaker
 from nexus.core.tenancy import TenantSession, apply_rls
 from nexus.models.billing import (
@@ -106,7 +109,7 @@ class CreditGrantIn(BaseModel):
 async def update_plan(
     plan_id: str,
     body: PlanPatch,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
 ) -> dict:
     async with get_sessionmaker()() as session:
         plan = await session.get(BillingPlan, plan_id)
@@ -134,7 +137,7 @@ async def upsert_entitlement(
     plan_id: str,
     capability_id: str,
     body: EntitlementIn,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
 ) -> dict:
     from sqlalchemy import select
 
@@ -174,7 +177,7 @@ async def upsert_entitlement(
 async def upsert_rate_card(
     capability_id: str,
     body: RateCardIn,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
 ) -> dict:
     """Set a capability's price. Refused with 422 below the margin floor.
 
@@ -232,7 +235,7 @@ async def upsert_rate_card(
 async def set_tenant_subscription(
     tenant_id: str,
     body: SubscriptionIn,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(SUBSCRIPTIONS_WRITE)),
 ) -> dict:
     from nexus.billing.subscriptions import change_plan, ensure_subscription
 
@@ -260,9 +263,31 @@ async def set_tenant_subscription(
 async def grant_tenant_credits(
     tenant_id: str,
     body: CreditGrantIn,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(get_principal),
 ) -> dict:
+    """Grant credits. Requires ``credits.grant``, or ``credits.grant.capped`` within the ceiling.
+
+    The permission needed depends on the AMOUNT, so this cannot be a plain ``Depends`` gate:
+    support may issue goodwill credits up to a configured ceiling, and anything larger needs
+    finance. Checked here rather than in a dependency because only the body knows the size.
+    """
+    from nexus.api.deps import platform_permissions
     from nexus.billing.credits import balance, grant_credits
+    from nexus.billing.permissions import CREDITS_GRANT, CREDITS_GRANT_CAPPED
+    from nexus.core.config import get_settings
+
+    held = await platform_permissions(principal)
+    cap = get_settings().billing_support_credit_cap
+    if CREDITS_GRANT not in held:
+        if CREDITS_GRANT_CAPPED not in held:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "platform access denied")
+        if body.amount > cap:
+            # Deliberately specific: the caller has a legitimate grant permission and needs to
+            # know an escalation is required, not be told they have no access at all.
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"grants above {cap:g} credits require the credits.grant permission",
+            )
 
     async with get_sessionmaker()() as session:
         await apply_rls(session, tenant_id)          # cross-tenant admin write; see above
@@ -303,7 +328,7 @@ async def collect_invoice_endpoint(
     tenant_id: str,
     invoice_id: str,
     body: CollectIn,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(INVOICES_COLLECT)),
 ) -> dict:
     """Charge a finalized invoice through the configured payment provider.
 
@@ -353,7 +378,7 @@ class CustomPlanIn(BaseModel):
 async def create_tenant_custom_plan(
     tenant_id: str,
     body: CustomPlanIn,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(SUBSCRIPTIONS_WRITE)),
 ) -> dict:
     """Build a bespoke plan for one customer and publish it to the payment provider.
 
@@ -411,13 +436,15 @@ class PlatformAdminIn(BaseModel):
 
     email: str = Field(min_length=3, max_length=255)
     platform_role: str = "superadmin"
+    # Optional explicit override; empty means "expand the role preset".
+    permissions: list[str] = Field(default_factory=list)
     note: str = ""
 
 
 @router.post("/admins")
 async def create_platform_admin(
     body: PlatformAdminIn,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(ADMINS_MANAGE)),
 ) -> dict:
     """Make someone a platform admin. Only an existing platform admin can do this.
 
@@ -434,34 +461,49 @@ async def create_platform_admin(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "not an email address")
     if body.platform_role not in ("superadmin", "support", "finance"):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unknown platform role")
+    unknown = set(body.permissions) - set(ALL_PERMISSIONS)
+    if unknown:
+        # A typo'd permission would silently grant nothing, which is worse than a clear refusal.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"unknown permission(s): {', '.join(sorted(unknown))}",
+        )
 
     async with get_sessionmaker()() as session:
         row = (
             await session.scalars(select(PlatformAdmin).where(PlatformAdmin.email == email))
         ).first()
-        before = snapshot(row, ("email", "platform_role", "active"))
+        before = snapshot(row, ("email", "platform_role", "permissions", "active"))
         created = row is None
         if row is None:
             row = PlatformAdmin(email=email)
             session.add(row)
         row.platform_role = body.platform_role
+        # Store the EXPANDED set, not just the role name. If "support" is redefined tomorrow,
+        # people provisioned today must not silently gain power they were never granted.
+        row.permissions = (
+            list(body.permissions)
+            if body.permissions
+            else permissions_for_role(body.platform_role)
+        )
         row.active = True
         row.note = body.note
         await session.flush()
         await record_admin_action(
             session, actor=principal.user_id, action="platform_admin.grant",
             target=email, before=before,
-            after=snapshot(row, ("email", "platform_role", "active")), note=body.note,
+            after=snapshot(row, ("email", "platform_role", "permissions", "active")), note=body.note,
         )
         await session.commit()
         return {"email": email, "platform_role": row.platform_role,
+                "permissions": list(row.permissions or []),
                 "active": True, "created": created}
 
 
 @router.delete("/admins/{email}")
 async def revoke_platform_admin(
     email: str,
-    principal: Principal = Depends(require_platform_admin),
+    principal: Principal = Depends(require_platform_permission(ADMINS_MANAGE)),
 ) -> dict:
     """Revoke platform-admin rights.
 
@@ -492,7 +534,7 @@ async def revoke_platform_admin(
                 "cannot revoke the last active platform admin; grant another one first",
             )
 
-        before = snapshot(row, ("email", "platform_role", "active"))
+        before = snapshot(row, ("email", "platform_role", "permissions", "active"))
         row.active = False
         await session.flush()
         await record_admin_action(

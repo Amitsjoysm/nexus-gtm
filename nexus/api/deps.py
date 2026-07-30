@@ -80,25 +80,47 @@ def require(permission: Permission) -> Callable[[Principal], Principal]:
 async def require_platform_admin(
     principal: Principal = Depends(get_principal),
 ) -> Principal:
-    """Gate for the staff /admin surface.
+    """Gate for the staff /admin surface. Prefer ``require_platform_permission``.
 
     Platform admins are operators of the SaaS, NOT tenant members: tenant RBAC (owner/admin)
     deliberately grants nothing here. Membership comes from the ``platform_admins`` table, plus
     an env allowlist (``NEXUS_PLATFORM_ADMIN_EMAILS``) that solves the bootstrap problem.
+
+    Kept for compatibility, but no longer a *flat* gate: it now means ``billing.read``, the
+    weakest permission any platform role holds. It used to accept any active row regardless of
+    role, so an endpoint written against it would silently reopen the hole M14 closed — a support
+    admin repricing plans. Every endpoint should name the permission it actually needs.
+    """
+    from nexus.billing.permissions import BILLING_READ
+
+    held = await platform_permissions(principal)
+    if BILLING_READ not in held:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "platform access denied")
+    return principal
+
+
+async def platform_permissions(principal: Principal) -> set[str]:
+    """The permission set this principal actually holds on the platform surface.
+
+    Returns an empty set for anyone who is not a platform admin, so callers can treat "no
+    permissions" and "not staff" identically.
     """
     from sqlalchemy import select
 
+    from nexus.billing.permissions import ALL_PERMISSIONS, effective_permissions
     from nexus.core.config import get_settings
     from nexus.models.billing import PlatformAdmin
     from nexus.models.identity import User
 
     async with get_sessionmaker()() as session:
         user = await session.get(User, principal.user_id)
-        if user is None:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "platform access denied")
-        email = (user.email or "").lower()
+        email = (user.email or "").lower() if user else ""
+        if not email:
+            return set()
+        # The bootstrap allowlist keeps FULL power. It exists to solve "nobody can reach the
+        # console yet"; narrowing it would reintroduce the lockout it was added to prevent.
         if email in get_settings().platform_admin_email_list:
-            return principal
+            return set(ALL_PERMISSIONS)
         row = (
             await session.scalars(
                 select(PlatformAdmin).where(
@@ -106,6 +128,23 @@ async def require_platform_admin(
                 )
             )
         ).first()
-    if row is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "platform access denied")
-    return principal
+    return effective_permissions(row) if row is not None else set()
+
+
+def require_platform_permission(permission: str):
+    """Gate a staff endpoint on ONE named permission.
+
+    Separate from ``require_platform_admin`` on purpose: that dependency is retained as the
+    equivalent of ``billing.read`` so an endpoint's behaviour changes only when it is
+    individually annotated. Nobody loses access during the rollout.
+    """
+
+    async def _dep(principal: Principal = Depends(get_principal)) -> Principal:
+        held = await platform_permissions(principal)
+        if permission not in held:
+            # Same message and status as the plain admin gate: an admin probing which specific
+            # permission they lack learns nothing they could not learn by trying.
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "platform access denied")
+        return principal
+
+    return _dep

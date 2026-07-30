@@ -1160,12 +1160,18 @@ export interface PlatformIdentity {
   email: string;
   is_platform_admin: boolean;
   platform_role: string;
+  /** Expanded permission set. The console hides controls it does not contain; the server still
+   *  enforces every one of them. */
+  permissions: string[];
+  /** Ceiling on this caller's credit grants; null means no ceiling. */
+  credit_grant_cap: number | null;
 }
 
 export interface PlatformAdmin {
   id: string;
   email: string;
   platform_role: string;
+  permissions: string[];
   active: boolean;
   note: string;
   created_at: string;

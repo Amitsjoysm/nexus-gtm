@@ -697,11 +697,17 @@ export class ApiClient {
   listPlatformAdmins(signal?: AbortSignal) {
     return this.request<PlatformAdmin[]>("/admin/billing/admins", { signal });
   }
-  grantPlatformAdmin(body: { email: string; platform_role: string; note?: string }) {
-    return this.request<{ email: string; created: boolean }>("/admin/billing/admins", {
-      method: "POST",
-      body,
-    });
+  /** `permissions` overrides the role preset; omit it to store the preset's expanded set. */
+  grantPlatformAdmin(body: {
+    email: string;
+    platform_role: string;
+    permissions?: string[];
+    note?: string;
+  }) {
+    return this.request<{ email: string; created: boolean; permissions: string[] }>(
+      "/admin/billing/admins",
+      { method: "POST", body },
+    );
   }
   revokePlatformAdmin(email: string) {
     return this.request<{ email: string; active: boolean }>(

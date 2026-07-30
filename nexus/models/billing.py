@@ -159,8 +159,13 @@ class PlatformAdmin(IdMixin, TimestampMixin, Base):
     __table_args__ = (UniqueConstraint("email", name="uq_platform_admin_email"),)
 
     email: Mapped[str] = mapped_column(String(255), index=True)
-    # super | finance | support | ops | sales
+    # superadmin | finance | support — the presets in nexus/billing/permissions.py. A role is a
+    # shortcut for granting a permission set, not a thing that is checked at request time.
     platform_role: Mapped[str] = mapped_column(String(20), default="support")
+    # Explicit grant list. EMPTY means "fall back to the role preset", which is what makes
+    # migration 0029 safe: every pre-existing row keeps behaving exactly as its role implies
+    # with no data backfill. See nexus/billing/permissions.py.
+    permissions: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     note: Mapped[str] = mapped_column(Text, default="")
 

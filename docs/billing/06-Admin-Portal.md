@@ -8,17 +8,52 @@
 
 ## 1. Access model
 
-- **New scope, not new roles inside tenants.** `platform_admins` table (user_id, platform_role,
-  mfa_enforced) — completely separate from tenant RBAC (owner/admin/manager/rep). A staff member
-  may hold zero tenant memberships.
-- Platform roles: `super` (everything), `finance` (plans/pricing/invoices/refunds),
-  `support` (read + credits/comps within caps), `ops` (workers/queues/health, no money),
-  `sales` (contract builder, draft-only until finance approves).
+- **New scope, not new roles inside tenants.** `platform_admins` table (email, platform_role,
+  permissions) — completely separate from tenant RBAC (owner/admin/manager/rep). A staff member
+  may hold zero tenant memberships. Membership also comes from an env allowlist
+  (`NEXUS_PLATFORM_ADMIN_EMAILS`), which exists to solve the bootstrap problem and deliberately
+  carries full power.
 - Every mutation writes `billing_audit_log` (actor, action, entity, before/after JSON, reason).
   Sensitive actions (refund > cap, margin exception, plan retire) require a typed reason.
-- Served under `/admin` (API prefix `/api/admin/...`), same FastAPI app, distinct router set with
-  a `require_platform(role)` dependency; SPA gets an `/admin` route section visible only to
-  platform admins.
+- Served under `/admin` (API prefix `/api/admin/...`), same FastAPI app, distinct router set; SPA
+  gets an `/admin` route section visible only to platform admins.
+
+### 1.1 As built: permissions, not roles
+
+The gate is a **permission**, not a role — `require_platform_permission("pricing.write")`. A role
+is only a shortcut for granting a set of permissions, and the **expanded** set is stored on the
+row, so redefining a preset later cannot retroactively re-grant power to people provisioned
+today. Three presets shipped rather than five: `ops` and `sales` had no endpoints to gate, and a
+role that grants nothing is worse than no role, because it reads as working access.
+
+| Permission | Grants | superadmin | finance | support |
+|---|---|:-:|:-:|:-:|
+| `billing.read` | capabilities, plans, rates, subscriptions | ✓ | ✓ | ✓ |
+| `pricing.write` | reprice plans, edit entitlements, set rate cards | ✓ | ✓ | |
+| `subscriptions.write` | move a workspace between plans, custom plans | ✓ | ✓ | |
+| `credits.grant` | credit grants with no ceiling | ✓ | ✓ | |
+| `credits.grant.capped` | goodwill grants up to `NEXUS_BILLING_SUPPORT_CREDIT_CAP` | ✓ | | ✓ |
+| `invoices.collect` | charge a finalized invoice | ✓ | ✓ | |
+| `jobs.manage` | dead-letter triage and replay | ✓ | | |
+| `admins.manage` | grant/revoke platform admins, and see who they are | ✓ | | |
+| `users.manage` | reset a user's MFA, account recovery | ✓ | | ✓ |
+
+Four decisions inside that table are load-bearing:
+
+- **Support gets `credits.grant.capped`, not `credits.grant`.** Goodwill credits are the single
+  most common support action; forcing an escalation for every one turns the escalation into a
+  rubber stamp. A ceiling keeps the blast radius small while leaving the workflow usable. This is
+  the one amount-dependent check, so it lives in the handler body rather than a `Depends`.
+- **Finance cannot `admins.manage`.** Whoever can grant permissions can grant themselves any
+  other permission, so that one is not delegated alongside pricing.
+- **`admins.manage` also gates *reading* the admin list.** Who operates the platform is visible
+  only to people who can change it.
+- **An unknown role degrades to read-only, not to nothing.** Failing closed to no access would
+  lock out an admin whose role string was mistyped, with no way to fix it through the product.
+
+An empty `permissions` list falls back to the role preset. That is what made migration `0029` a
+pure `add_column` with no backfill: every pre-existing admin kept exactly the access their role
+implied, with no window in which a half-run backfill left someone half-granted.
 
 ## 2. Portal map (v1 scope → later)
 

@@ -149,10 +149,11 @@ touches Account/Contact/Inbox/Cadence.
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0028_user_mfa`. The chain is
+Alembic under `migrations/versions/`. Head: `0029_admin_permissions`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
-`mfa_recovery_codes`). Every tenant-scoped table automatically gets RLS via
+`mfa_recovery_codes`) → `0029` (`platform_admins.permissions`). Every tenant-scoped table
+automatically gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —
@@ -199,9 +200,19 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   period rollup + events still marked unrolled, so they stay exact between sweeps and degrade to
   slower — never to undercounting — if the rollup worker stops. Corrections are compensating
   negative rows, never deletes.
-- **Platform admin is separate from tenant RBAC.** `require_platform_admin` (env allowlist or
-  the `platform_admins` table) fails closed; no tenant role grants it. Every admin mutation is
-  captured in `billing_audit_log` with before/after snapshots.
+- **Platform admin is separate from tenant RBAC, and is per-permission.** Membership (env
+  allowlist or the `platform_admins` table) fails closed; no tenant role grants it. Every endpoint
+  names the one permission it needs via `require_platform_permission(...)` — the nine names live in
+  `nexus/billing/permissions.py`. `platform_role` is only a shortcut for granting a set: the
+  **expanded** set is stored on the row, so redefining "support" tomorrow cannot silently re-grant
+  power to people provisioned today. An empty `permissions` list falls back to the role preset,
+  which is what makes migration `0029` backfill-free. `require_platform_admin` is retained but now
+  means `billing.read`, not "any active row" — as a flat gate it let a support admin reprice every
+  plan. The env allowlist deliberately keeps **full** power; narrowing it would reintroduce the
+  bootstrap lockout it exists to prevent. Credit grants are the one amount-dependent check
+  (`credits.grant.capped` up to `NEXUS_BILLING_SUPPORT_CREDIT_CAP`), so they are checked in the
+  body rather than a `Depends`. Every admin mutation is captured in `billing_audit_log` with
+  before/after snapshots.
 - **Money flows through one seam.** `metered()` → quota → credits → overage price → block.
   Credits are pre-paid, so rating deducts what a period's burns already covered — otherwise the
   customer pays twice for one overage. Collection is keyed by invoice id at the provider, so a

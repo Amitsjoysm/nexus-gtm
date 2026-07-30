@@ -9,6 +9,8 @@ import { DataState } from "@/components/DataState";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
+import { usePlatformCan } from "@/app/RequirePlatformAdmin";
+import { ADMINS_MANAGE, SUBSCRIPTIONS_WRITE } from "@/lib/permissions";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
 import type { AdminPlan, AdminRateCard, AdminSubscription } from "@/lib/types";
@@ -224,10 +226,14 @@ function Plans() {
 
 function Subscriptions() {
   const api = useApiClient();
+  const can = usePlatformCan();
   const subs = useApi<AdminSubscription[]>((signal) => api.adminBillingSubscriptions(signal), []);
   const plans = useApi<AdminPlan[]>((signal) => api.adminBillingPlans(signal), []);
   const [custom, setCustom] = useState<AdminSubscription | null>(null);
   const [actions, setActions] = useState<AdminSubscription | null>(null);
+  // "Manage" still opens for a support admin — it holds the credit grant they legitimately need.
+  // A custom plan is a subscription write and nothing else, so it disappears without one.
+  const canCustomPlan = can(SUBSCRIPTIONS_WRITE);
 
   const columns: Column<AdminSubscription>[] = [
     { key: "tenant_name", header: "Workspace", sortable: true },
@@ -269,15 +275,17 @@ function Subscriptions() {
     {
       key: "actions",
       header: "",
-      width: "220px",
+      width: canCustomPlan ? "220px" : "120px",
       render: (r) => (
         <div className={styles.rowActions}>
           <Button variant="secondary" onClick={() => setActions(r)}>
             Manage
           </Button>
-          <Button variant="ghost" onClick={() => setCustom(r)}>
-            Custom plan
-          </Button>
+          {canCustomPlan && (
+            <Button variant="ghost" onClick={() => setCustom(r)}>
+              Custom plan
+            </Button>
+          )}
         </div>
       ),
     },
@@ -339,15 +347,17 @@ function Subscriptions() {
   );
 }
 
-const TABS = [
-  { value: "rates", label: "Rate cards" },
-  { value: "plans", label: "Plans" },
-  { value: "subs", label: "Subscriptions" },
-  { value: "access", label: "Access" },
-];
-
 export function AdminBillingPage() {
   const [tab, setTab] = useState("rates");
+  const can = usePlatformCan();
+  // Access is where power is granted, so it is visible only to admins who can grant it. The other
+  // three tabs are reads, which every platform role holds.
+  const tabs = [
+    { value: "rates", label: "Rate cards" },
+    { value: "plans", label: "Plans" },
+    { value: "subs", label: "Subscriptions" },
+    ...(can(ADMINS_MANAGE) ? [{ value: "access", label: "Access" }] : []),
+  ];
 
   return (
     <div>
@@ -360,12 +370,12 @@ export function AdminBillingPage() {
           title="Platform billing"
           subtitle="Visible only to platform administrators, not to workspace owners."
         />
-        <Tabs items={TABS} value={tab} onChange={setTab} aria-label="Billing sections" />
+        <Tabs items={tabs} value={tab} onChange={setTab} aria-label="Billing sections" />
         <div className={styles.panel} role="tabpanel">
           {tab === "rates" && <RateCards />}
           {tab === "plans" && <Plans />}
           {tab === "subs" && <Subscriptions />}
-          {tab === "access" && <PlatformAdmins />}
+          {tab === "access" && can(ADMINS_MANAGE) && <PlatformAdmins />}
         </div>
       </Card>
     </div>

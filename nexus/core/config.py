@@ -156,6 +156,10 @@ class Settings(BaseSettings):
     # recovery without a deploy; retrying faster than this damages authorization rates.
     billing_dunning_schedule_days: str = "1,3,7"
     billing_dunning_enabled: bool = True
+    # Ceiling for a `credits.grant.capped` holder (support). Goodwill credits are the most
+    # common support action, so forcing an escalation for every one makes the escalation a
+    # rubber stamp; a ceiling keeps the blast radius small while leaving the workflow usable.
+    billing_support_credit_cap: float = 1000.0
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     # Anthropic (preferred when keyed) — native /v1/messages API.

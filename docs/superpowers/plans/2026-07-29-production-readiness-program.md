@@ -142,6 +142,25 @@ reads `platform_role`. A "support" admin can reprice plans and mint unlimited cr
 **Preserves:** all current admin endpoints and the superadmin experience. Only *new* narrower
 roles gain restrictions.
 
+**As built — two deliberate deviations.**
+
+1. *No `billing.write`.* It would have been a grab-bag covering repricing, plan moves, and
+   charging a card. Split into `pricing.write`, `subscriptions.write`, and `invoices.collect`
+   (plus `jobs.manage` for dead-letter replay), so finance can reprice without being able to
+   replay jobs. Nine permissions, each mapping to one real decision.
+2. *No backfill.* Rather than writing the full set onto every existing row, an **empty**
+   `permissions` list falls back to the role preset (`effective_permissions`). Same outcome —
+   nobody loses access — but there is no window in which a half-run backfill leaves an admin
+   half-granted, and `0029` is a pure `add_column`. Writes store the **expanded** set, so
+   redefining a preset later cannot retroactively re-grant power.
+
+Also: `require_platform_admin` now *is* `billing.read` rather than "any active row". Left as a
+flat gate it would have been a loaded gun — the next endpoint written against it would silently
+reopen exactly this hole. No endpoint uses it any more.
+
+Verified in `tests/test_admin_permissions.py` (17 cases). The deny cases were confirmed to bite:
+restoring the old "any active row = full access" behaviour fails 7 of them.
+
 ---
 
 # PHASE 3 — OBSERVABILITY (P1)
