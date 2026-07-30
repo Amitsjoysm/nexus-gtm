@@ -149,11 +149,11 @@ touches Account/Contact/Inbox/Cadence.
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0027_dead_letter_jobs`. The chain is
+Alembic under `migrations/versions/`. Head: `0028_user_mfa`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
-(the Billing tables below) → `0027` (`dead_letter_jobs`, the job-durability table). Every
-tenant-scoped table automatically gets RLS via `scripts/apply_rls.py` on deploy — no manual
-policy work needed for new tables.
+(the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
+`mfa_recovery_codes`). Every tenant-scoped table automatically gets RLS via
+`scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —
 `tests/test_migrations_replay.py` builds one from nothing but `alembic upgrade head` and diffs
@@ -211,6 +211,23 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   offline; `stripe` is inert until keyed and raises rather than faking success. Webhooks verify
   an HMAC over the **raw** body, enforce a freshness window, and dedupe on the provider event id
   as a primary key.
+- **Two payment paths, on purpose** (M12). Self-serve uses hosted **Checkout + Customer Portal**
+  (`POST /billing/checkout`, `POST /billing/portal`) so card data never touches us and PCI scope
+  stays at the provider; the resulting subscription arrives via webhook, never a self-write.
+  Enterprise stays admin-driven (custom plan + `collect_invoice`) and is refused by the portal
+  endpoints — a `plan_class == "custom"` tenant gets a 409.
+- **Stripe drives subscription state** (M12): `checkout.session.completed`,
+  `customer.subscription.created|updated|deleted`, `invoice.paid|payment_failed|finalized`.
+  Statuses map onto the existing `SUBSCRIPTION_STATUSES` via `STRIPE_SUBSCRIPTION_STATUS` —
+  never extend that vocabulary, or rating and entitlements can no longer reason about it.
+  `unpaid` → `past_due` (keeps the debt visible); `incomplete` is **deliberately unmapped**
+  because the subscription never started, and guessing would either cancel a live customer or
+  activate one who has not paid. Unmapped statuses leave our row untouched.
+- **Reconciliation reports, never repairs** (`nexus/billing/reconcile.py`). A missed webhook is
+  otherwise invisible until a customer complains. It skips subscriptions with no
+  `psp_subscription_id` (enterprise deals never had a provider object) and ignores unmapped
+  statuses, so real findings are not buried in noise. Which side is right depends on what the
+  customer agreed to — an automated writer would resolve that wrongly and destroy the evidence.
 - **Gauges are not counters.** `seat.member` resolves to live membership count; summing events
   would only ever climb, so a customer could never get back under a seat limit.
 - Platform-global tables carry no `tenant_id` and no RLS policy: `billing_capabilities`,
@@ -219,6 +236,31 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   deliberately name their tenant column `subject_tenant_id` so `apply_rls.py` — which enrolls any
   table having `tenant_id` — does not hide them from the operators who must read them.
   `dead_letter_jobs` (below) follows the same rule for the same reason.
+
+## MFA (`nexus/auth/`) — M13
+
+Opt-in per user; **login is unchanged for anyone who has not confirmed a factor**. That is the
+compatibility line — an unconfirmed enrolment must never gate login, or a half-finished setup
+locks someone out of their own account.
+
+- Two methods, one primitive: TOTP is RFC 6238 on a 30s step; the "email" method is the same
+  code generator on a 300s step, so a mailed code lives 5–10 minutes (step ± 1 drift) and
+  inherits the TOTP **replay guard** rather than needing its own in-flight row and expiry logic.
+- `last_used_counter` refuses a counter value that has already been accepted, even inside its
+  valid window — without it a captured code is reusable for up to 90 seconds.
+- TOTP seeds are Fernet-sealed at rest (`nexus/core/crypto.py`, key from `mfa_secret_enc_key`
+  else derived from `secret_key`); recovery codes are stored as one-way hashes, single-use.
+  Neither is readable back from the database.
+- When MFA is active, login returns a **short-TTL single-purpose challenge token** that
+  authorizes nothing except `/auth/mfa/verify`. A challenge accepted as a bearer token anywhere
+  else would make the second factor decorative; there is a test asserting it is rejected.
+- `user_mfa` / `mfa_recovery_codes` deliberately have **no `tenant_id`**: MFA is read on the
+  login path *before* any tenant is known, so RLS enrolment would return zero rows and lock
+  every user out. A user can also belong to several workspaces.
+- Account recovery: `DELETE /admin/users/{email}/mfa`, platform-admin only, audited with
+  before/after. Deletes rather than deactivates — a stale sealed secret is a liability with no use.
+- `auth_rate_limit_enabled` now defaults **True**. Tests that legitimately fire many rapid auth
+  calls opt out via the `no_auth_rate_limit` fixture; the default is not weakened for them.
 
 ## Job durability (`nexus/workers/`)
 
