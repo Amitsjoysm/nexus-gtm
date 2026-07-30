@@ -42,6 +42,23 @@ class Settings(BaseSettings):
     otp_resend_cooldown_s: int = 60          # min seconds between code emails for one registration
     otp_secret: str = ""                     # HMAC key for hashing OTPs; falls back to secret_key
 
+    # Multi-factor authentication (opt-in per user; enrolment never gates a user who has not
+    # confirmed one). TOTP is RFC 6238 with the standard 30s step; the "email" method is the same
+    # primitive on a longer step, so a mailed code lives 5-10 minutes (step + ±1 drift) and shares
+    # the TOTP replay guard instead of needing its own in-flight row.
+    mfa_issuer: str = "InfoJoy GTM"          # what shows up in the authenticator app
+    mfa_totp_step_s: int = 30
+    mfa_totp_digits: int = 6
+    mfa_totp_drift_steps: int = 1            # clock skew tolerated either side of now
+    mfa_email_code_step_s: int = 300         # mailed-code step; ±1 drift => 5-10 min validity
+    mfa_recovery_code_count: int = 10
+    mfa_challenge_ttl_s: int = 300           # life of the single-purpose second-factor challenge
+    mfa_max_attempts: int = 5                # wrong codes before the factor locks
+    mfa_lockout_s: int = 900                 # how long it stays locked (15 min)
+    # Dedicated at-rest key for TOTP seeds. Empty derives one from ``secret_key`` (so seeds are
+    # always encrypted). Separate from ``network_token_enc_key`` so the two rotate independently.
+    mfa_secret_enc_key: str = ""
+
     # Auth abuse protection. Off by default so local/dev and the offline test suite (which make
     # many rapid signup/login calls) are unaffected; enable in production. A per-client-IP
     # sliding window over the auth endpoints (login / register / password reset). Caddy + Valkey
