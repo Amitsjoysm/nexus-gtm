@@ -1,6 +1,21 @@
-"""Password hashing and JWT issuance/verification."""
+"""Password hashing and JWT issuance/verification.
+
+Two kinds of token are signed with the same key, so they are told apart by a ``typ`` claim — the
+convention ``nexus/network/oauth.py`` already uses for its PKCE state:
+
+* the **access token** carries no ``typ`` (unchanged from before MFA existed, so tokens issued by
+  the previous release keep working across a rolling deploy);
+* the **MFA challenge** carries ``typ="mfa_challenge"`` and authorizes exactly one thing —
+  exchanging a second-factor code for a real access token.
+
+:func:`decode_access_token` fails **closed** on any ``typ`` it does not recognise. That is what
+stops a challenge token being presented as a bearer token: it is a signed, unexpired JWT with a
+valid ``sub``/``tid``, so without this check it would have authenticated every endpoint in the
+API and MFA would have been a formality.
+"""
 from __future__ import annotations
 
+import secrets
 from datetime import timedelta
 
 from jose import JWTError, jwt
@@ -10,6 +25,10 @@ from nexus.core.config import get_settings
 from nexus.core.db import utcnow
 
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Absent on access tokens by design — see the module docstring.
+ACCESS_TYP = "access"
+MFA_CHALLENGE_TYP = "mfa_challenge"
 
 
 def hash_password(plain: str) -> str:
@@ -33,9 +52,54 @@ def create_access_token(*, user_id: str, tenant_id: str, role: str) -> str:
     return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
 
 
-def decode_access_token(token: str) -> dict | None:
+def _decode(token: str) -> dict | None:
     settings = get_settings()
     try:
         return jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
     except JWTError:
         return None
+
+
+def decode_access_token(token: str) -> dict | None:
+    """Decode a bearer token, refusing anything that is not an access token.
+
+    The ``typ`` test is written as an allowlist (``None`` or ``"access"``) rather than a denylist
+    so that every future token kind is rejected here until someone deliberately admits it.
+    """
+    payload = _decode(token)
+    if payload is None:
+        return None
+    if payload.get("typ") not in (None, ACCESS_TYP):
+        return None
+    return payload
+
+
+def create_mfa_challenge_token(*, user_id: str, tenant_id: str, role: str) -> str:
+    """A short-TTL credential that proves 'this password was correct' and nothing else.
+
+    It is not an access token: :func:`decode_access_token` rejects it, so it cannot be used as a
+    bearer token anywhere in the API. Its only accepted use is ``POST /auth/mfa/verify``.
+    """
+    settings = get_settings()
+    now = utcnow()
+    payload = {
+        "sub": user_id,
+        "tid": tenant_id,
+        "role": role,
+        "typ": MFA_CHALLENGE_TYP,
+        # Distinct per challenge, so two concurrent logins are distinguishable in logs.
+        "jti": secrets.token_hex(8),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=settings.mfa_challenge_ttl_s)).timestamp()),
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
+
+
+def decode_mfa_challenge_token(token: str) -> dict | None:
+    """Decode an MFA challenge, refusing an access token presented in its place."""
+    payload = _decode(token)
+    if payload is None or payload.get("typ") != MFA_CHALLENGE_TYP:
+        return None
+    if "sub" not in payload or "tid" not in payload:
+        return None
+    return payload

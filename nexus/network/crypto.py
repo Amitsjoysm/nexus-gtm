@@ -8,22 +8,19 @@ secret. ``cryptography`` ships transitively via ``python-jose[cryptography]`` (n
 """
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from nexus.core.config import get_settings
+from nexus.core.crypto import fernet_for
 
 
 def _fernet() -> Fernet:
-    s = get_settings()
-    key = (s.network_token_enc_key or "").strip()
-    if not key:
-        digest = hashlib.sha256(s.secret_key.encode()).digest()
-        key = base64.urlsafe_b64encode(digest).decode()
-    return Fernet(key.encode())
+    """The network token key, or one derived from ``secret_key``. Derivation now lives in
+    ``nexus.core.crypto`` so other subsystems (MFA) reuse it instead of copying it; the resolved
+    key for network tokens is byte-for-byte what it was."""
+    return fernet_for(get_settings().network_token_enc_key)
 
 
 def seal_tokens(bundle: dict) -> dict:

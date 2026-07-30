@@ -3,6 +3,7 @@ from nexus.api.routers import (
     accounts,
     admin_billing,
     admin_billing_write,
+    admin_users,
     admin_jobs,
     billing_webhooks,
     agents,
@@ -49,6 +50,7 @@ all_routers = [
     admin_jobs.router,
     billing.router,
     billing_webhooks.router,
+    admin_users.router,
 ]
 
 __all__ = ["all_routers"]
