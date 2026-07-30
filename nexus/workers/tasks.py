@@ -707,6 +707,47 @@ async def handle_dunning_sweep(payload: dict) -> dict:
     return totals
 
 
+async def handle_billing_reconcile(payload: dict) -> dict:
+    """Periodic driver: report where our subscription state disagrees with the provider's.
+
+    Webhooks keep the two in step, but a delivery can fail past its retry budget or an endpoint
+    can be misconfigured for a window, and those gaps are otherwise invisible until a customer
+    complains. Scoped to tenants that actually have a provider-managed subscription, so the
+    common case is one indexed scan. Reports only -- see nexus/billing/reconcile.py for why
+    repairing automatically would be worse. Never raises.
+    """
+    from sqlalchemy import distinct, select
+
+    from nexus.billing.reconcile import reconcile_tenant
+    from nexus.models.billing import BillingSubscription
+
+    async with get_sessionmaker()() as session:
+        tenant_ids = list(
+            (
+                await session.scalars(
+                    select(distinct(BillingSubscription.tenant_id)).where(
+                        BillingSubscription.psp_subscription_id.isnot(None)
+                    )
+                )
+            ).all()
+        )
+
+    totals = {"tenants": 0, "checked": 0, "drifted": 0}
+    for tid in tenant_ids:
+        try:
+            async with tenant_session(tid) as ts:
+                res = await reconcile_tenant(ts)
+            totals["tenants"] += 1
+            totals["checked"] += res.get("checked", 0)
+            totals["drifted"] += res.get("drifted", 0)
+        except Exception:
+            logger.warning("reconciliation sweep failed for tenant %s", tid, exc_info=True)
+    if totals["drifted"]:
+        logger.warning("billing reconciliation found %d drifted subscription(s)",
+                       totals["drifted"])
+    return totals
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
@@ -721,6 +762,7 @@ HANDLERS: dict[str, Handler] = {
     "rollup_usage": handle_rollup_usage,
     "roll_billing_periods": handle_roll_billing_periods,
     "dunning_sweep": handle_dunning_sweep,
+    "billing_reconcile": handle_billing_reconcile,
 }
 
 
@@ -822,6 +864,11 @@ JOB_FAILED_KEY = "__job_failed__"
 def is_job_failure(result: dict) -> bool:
     """True only for a dispatch whose handler raised — i.e. something worth retrying."""
     return isinstance(result, dict) and bool(result.get(JOB_FAILED_KEY))
+
+
+async def enqueue_billing_reconcile(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="billing_reconcile", payload={}))
 
 
 async def dispatch(job: Job) -> dict:

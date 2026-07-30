@@ -360,6 +360,7 @@ async def test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled(monkeypatch):
     # The billing drivers always ride along — they are not an automation/crm-sync opt-in.
     assert {j.name for j in jobs} == {
         "sync_crm_due_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
+        "billing_reconcile",
     }
 
 
@@ -374,6 +375,7 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
     assert {j.name for j in jobs} == {
         "advance_cadences", "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
+        "billing_reconcile",
     }
 
 

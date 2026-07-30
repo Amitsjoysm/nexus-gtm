@@ -105,6 +105,15 @@ class PaymentProvider(abc.ABC):
         """
 
     @abc.abstractmethod
+    async def get_subscription(self, *, subscription_id: str) -> dict:
+        """Fetch the provider's current view of a subscription.
+
+        Read-only. Used by reconciliation to compare their state against ours; returns ``{}``
+        when the subscription is unknown so a deleted remote object reads as "nothing to
+        compare" rather than raising mid-sweep.
+        """
+
+    @abc.abstractmethod
     async def create_billing_portal_session(
         self, *, customer_id: str, return_url: str = ""
     ) -> dict:
@@ -132,6 +141,8 @@ class NoopPaymentProvider(PaymentProvider):
         self.refunds: list[dict[str, Any]] = []
         self.checkout_sessions: list[dict[str, Any]] = []
         self.portal_sessions: list[dict[str, Any]] = []
+        # Stage remote state here to exercise reconciliation offline.
+        self.subscriptions: dict[str, dict[str, Any]] = {}
         self._seen: dict[str, PaymentResult] = {}
 
     async def ensure_customer(self, *, tenant_id: str, email: str, name: str = "") -> str:
@@ -201,6 +212,11 @@ class NoopPaymentProvider(PaymentProvider):
         }
         self.checkout_sessions.append(record)
         return record
+
+    async def get_subscription(self, *, subscription_id: str) -> dict:
+        # Whatever a test staged in `self.subscriptions`, else unknown. Lets reconciliation be
+        # exercised offline with no network and no key.
+        return self.subscriptions.get(subscription_id, {})
 
     async def create_billing_portal_session(
         self, *, customer_id: str, return_url: str = ""
@@ -399,6 +415,15 @@ class StripePaymentProvider(PaymentProvider):
             "tenant_id": tenant_id,
             "plan_id": plan_id,
         }
+
+    async def get_subscription(self, *, subscription_id: str) -> dict:
+        self._require()
+        try:
+            return await self._get(f"/subscriptions/{subscription_id}")
+        except PaymentError:
+            # A 404 means the subscription is gone at the provider. That is itself a drift
+            # finding, not a sweep-breaking error.
+            return {}
 
     async def create_billing_portal_session(
         self, *, customer_id: str, return_url: str = ""

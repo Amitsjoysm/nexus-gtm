@@ -20,6 +20,7 @@ from nexus.workers.queue import TaskQueue, get_task_queue
 from nexus.workers.tasks import (
     enqueue_advance_cadences,
     enqueue_discover_icp_accounts,
+    enqueue_billing_reconcile,
     enqueue_dunning_sweep,
     enqueue_refresh_due_accounts,
     enqueue_roll_billing_periods,
@@ -66,6 +67,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             # Recovering a declined payment is not an automation opt-in either. The handler
             # self-filters to invoices whose next attempt is actually due.
             await enqueue_dunning_sweep(queue=queue)
+            count += 1
+            # Drift detection is not an automation opt-in either: a missed webhook is exactly
+            # the case where nobody has switched anything on.
+            await enqueue_billing_reconcile(queue=queue)
             count += 1
             if settings.automation_enabled:
                 await enqueue_advance_cadences(queue=queue)

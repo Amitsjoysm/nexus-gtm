@@ -173,13 +173,14 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", True)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    # +3 for rollup_usage, roll_billing_periods and dunning_sweep, enqueued every tick
-    # regardless of automation_enabled: billing is not an automation opt-in.
-    assert count == 7
+    # +4 for rollup_usage, roll_billing_periods, dunning_sweep and billing_reconcile,
+    # enqueued every tick regardless of automation_enabled: billing is not an automation opt-in.
+    assert count == 8
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "advance_cadences", "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
+        "billing_reconcile",
     }
 
 
@@ -191,10 +192,10 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    assert count == 3
+    assert count == 4
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
-        "rollup_usage", "roll_billing_periods", "dunning_sweep",
+        "rollup_usage", "roll_billing_periods", "dunning_sweep", "billing_reconcile",
     }
 
 
