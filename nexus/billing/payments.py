@@ -90,6 +90,30 @@ class PaymentProvider(abc.ABC):
         the PSP, rather than only inside our own tables. Returns ``{"product_id", "price_id"}``.
         """
 
+    @abc.abstractmethod
+    async def create_checkout_session(
+        self, *, tenant_id: str, plan_id: str, price_id: str, customer_id: str = "",
+        success_url: str = "", cancel_url: str = "",
+    ) -> dict:
+        """Open a hosted subscribe flow. Returns at least ``{"id", "url"}``.
+
+        Self-serve only. The card details never touch our infrastructure, which is the entire
+        point of a hosted page: PCI scope stays at the provider. The resulting subscription
+        arrives back through a webhook, not through our own write — see
+        ``nexus/billing/webhooks.py``; a self-write here would diverge from the provider the
+        first time the customer changed anything in the portal.
+        """
+
+    @abc.abstractmethod
+    async def create_billing_portal_session(
+        self, *, customer_id: str, return_url: str = ""
+    ) -> dict:
+        """Open the provider's hosted self-service portal. Returns at least ``{"id", "url"}``.
+
+        Card changes, cancellations and invoice history live there; every one of those comes
+        back to us as a ``customer.subscription.*`` or ``invoice.*`` event.
+        """
+
 
 class NoopPaymentProvider(PaymentProvider):
     """Offline default. Records intent, moves no money, never fails.
@@ -106,6 +130,8 @@ class NoopPaymentProvider(PaymentProvider):
         self.prices: dict[str, dict[str, Any]] = {}
         self.charges: list[dict[str, Any]] = []
         self.refunds: list[dict[str, Any]] = []
+        self.checkout_sessions: list[dict[str, Any]] = []
+        self.portal_sessions: list[dict[str, Any]] = []
         self._seen: dict[str, PaymentResult] = {}
 
     async def ensure_customer(self, *, tenant_id: str, email: str, name: str = "") -> str:
@@ -157,6 +183,35 @@ class NoopPaymentProvider(PaymentProvider):
         )
         self._seen[idempotency_key] = result
         return result
+
+    async def create_checkout_session(
+        self, *, tenant_id: str, plan_id: str, price_id: str, customer_id: str = "",
+        success_url: str = "", cancel_url: str = "",
+    ) -> dict:
+        session_id = f"noop_cs_{len(self.checkout_sessions) + 1}"
+        record = {
+            "id": session_id, "tenant_id": tenant_id, "plan_id": plan_id,
+            "price_id": price_id, "customer_id": customer_id,
+            "success_url": success_url, "cancel_url": cancel_url,
+            # Mirrors what Stripe puts on the session, so the offline webhook fixtures in the
+            # tests can be built from exactly the shape the real provider returns.
+            "metadata": {"tenant_id": tenant_id, "plan_id": plan_id},
+            "url": f"https://checkout.local.test/{session_id}",
+            "provider": self.name,
+        }
+        self.checkout_sessions.append(record)
+        return record
+
+    async def create_billing_portal_session(
+        self, *, customer_id: str, return_url: str = ""
+    ) -> dict:
+        session_id = f"noop_ps_{len(self.portal_sessions) + 1}"
+        record = {
+            "id": session_id, "customer_id": customer_id, "return_url": return_url,
+            "url": f"https://portal.local.test/{session_id}", "provider": self.name,
+        }
+        self.portal_sessions.append(record)
+        return record
 
 
 class StripePaymentProvider(PaymentProvider):
@@ -307,6 +362,68 @@ class StripePaymentProvider(PaymentProvider):
             provider=self.name, reference=str(data.get("id", "")),
             amount_cents=int(amount_cents), detail=data,
         )
+
+    async def create_checkout_session(
+        self, *, tenant_id: str, plan_id: str, price_id: str, customer_id: str = "",
+        success_url: str = "", cancel_url: str = "",
+    ) -> dict:
+        self._require()
+        form: dict[str, Any] = {
+            "mode": "subscription",
+            "line_items[0][price]": price_id,
+            "line_items[0][quantity]": "1",
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+            "client_reference_id": tenant_id,
+            "metadata[tenant_id]": tenant_id,
+            "metadata[plan_id]": plan_id,
+            # Stamped on the SUBSCRIPTION too, not just the session. The session metadata is
+            # only visible on `checkout.session.completed`; every later
+            # `customer.subscription.*` event carries the subscription's own metadata, and
+            # without this the tenant would have to be recovered by customer-id lookup on
+            # every single one.
+            "subscription_data[metadata][tenant_id]": tenant_id,
+            "subscription_data[metadata][plan_id]": plan_id,
+        }
+        if customer_id:
+            form["customer"] = customer_id
+        # Deliberately NO idempotency key. Checkout sessions expire, and replaying the key
+        # would hand a customer a dead URL instead of a fresh one; nothing is charged by
+        # creating a session, so there is no double-spend to guard against.
+        data = await self._post("/checkout/sessions", form)
+        return {
+            "id": str(data.get("id", "")),
+            "url": str(data.get("url", "")),
+            "provider": self.name,
+            "customer_id": str(data.get("customer") or customer_id or ""),
+            "tenant_id": tenant_id,
+            "plan_id": plan_id,
+        }
+
+    async def create_billing_portal_session(
+        self, *, customer_id: str, return_url: str = ""
+    ) -> dict:
+        self._require()
+        form: dict[str, Any] = {"customer": customer_id}
+        if return_url:
+            form["return_url"] = return_url
+        data = await self._post("/billing_portal/sessions", form)
+        return {
+            "id": str(data.get("id", "")),
+            "url": str(data.get("url", "")),
+            "provider": self.name,
+            "customer_id": customer_id,
+        }
+
+    async def fetch_subscription(self, subscription_id: str) -> dict:
+        """Read one subscription back from Stripe. Used by the reconciliation job.
+
+        Not on the ABC: reconciling against a provider that holds no state (``noop``) is
+        meaningless, and forcing a synthetic answer out of it would make drift-reporting lie.
+        The reconciler feature-detects this method instead.
+        """
+        self._require()
+        return await self._get(f"/subscriptions/{subscription_id}")
 
 
 _provider: PaymentProvider | None = None

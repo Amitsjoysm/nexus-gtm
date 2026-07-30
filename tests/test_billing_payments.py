@@ -67,6 +67,15 @@ async def test_unconfigured_stripe_refuses_rather_than_pretending():
                        idempotency_key="k")
     with pytest.raises(PaymentNotConfigured):
         await p.refund(reference="pi_x", amount_cents=100, idempotency_key="k")
+    # Checkout and portal are the two self-serve surfaces; an unkeyed provider must not hand a
+    # customer a URL that goes nowhere.
+    with pytest.raises(PaymentNotConfigured):
+        await p.create_checkout_session(
+            tenant_id="t1", plan_id="growth", price_id="price_x",
+            success_url="https://app/ok", cancel_url="https://app/no",
+        )
+    with pytest.raises(PaymentNotConfigured):
+        await p.create_billing_portal_session(customer_id="cus_x", return_url="https://app")
 
 
 def test_stripe_is_selected_only_when_configured(monkeypatch):
@@ -222,3 +231,119 @@ async def test_noop_attach_records_the_card():
     cid = await p.ensure_customer(tenant_id="t1", email="a@b.com")
     assert await p.attach_payment_method(customer_id=cid, payment_method_id="pm_x") is True
     assert p.payment_methods[cid] == "pm_x"
+
+
+# ---- hosted checkout + portal (M12) ----------------------------------------------------------
+
+async def test_noop_checkout_session_is_inspectable():
+    """The offline provider has to be usable as a test double: what would have been sent to
+    Stripe is recorded rather than lost."""
+    from nexus.billing.payments import NoopPaymentProvider
+
+    p = NoopPaymentProvider()
+    out = await p.create_checkout_session(
+        tenant_id="t1", plan_id="growth", price_id="price_growth",
+        customer_id="cus_1", success_url="https://app/ok", cancel_url="https://app/no",
+    )
+
+    assert out["id"] and out["url"]
+    assert out["metadata"] == {"tenant_id": "t1", "plan_id": "growth"}
+    assert len(p.checkout_sessions) == 1
+    assert p.checkout_sessions[0]["price_id"] == "price_growth"
+
+
+async def test_noop_checkout_sessions_are_distinct():
+    """Each click mints a fresh session; reusing one would hand out an expired URL."""
+    from nexus.billing.payments import NoopPaymentProvider
+
+    p = NoopPaymentProvider()
+    a = await p.create_checkout_session(tenant_id="t1", plan_id="growth", price_id="pr")
+    b = await p.create_checkout_session(tenant_id="t1", plan_id="growth", price_id="pr")
+    assert a["id"] != b["id"]
+
+
+async def test_noop_portal_session_records_the_customer():
+    from nexus.billing.payments import NoopPaymentProvider
+
+    p = NoopPaymentProvider()
+    out = await p.create_billing_portal_session(
+        customer_id="cus_1", return_url="https://app/settings"
+    )
+    assert out["id"] and out["url"]
+    assert p.portal_sessions[0]["return_url"] == "https://app/settings"
+
+
+async def test_stripe_checkout_posts_a_subscription_session(monkeypatch):
+    """Shape check against the real adapter without a network: mode=subscription, the tenant
+    stamped on BOTH the session and the subscription, and the price as a line item."""
+    from nexus.billing.payments import StripePaymentProvider
+
+    sent: dict = {}
+
+    async def _fake_post(self, path, form, idempotency_key=""):
+        sent["path"] = path
+        sent["form"] = form
+        sent["idempotency_key"] = idempotency_key
+        return {"id": "cs_test_1", "url": "https://checkout.stripe.com/c/cs_test_1",
+                "customer": "cus_1"}
+
+    monkeypatch.setattr(StripePaymentProvider, "_post", _fake_post)
+    p = StripePaymentProvider("sk_test_x")
+    out = await p.create_checkout_session(
+        tenant_id="t1", plan_id="growth", price_id="price_growth", customer_id="cus_1",
+        success_url="https://app/ok", cancel_url="https://app/no",
+    )
+
+    assert out["id"] == "cs_test_1"
+    assert out["url"].startswith("https://checkout.stripe.com/")
+    assert sent["path"] == "/checkout/sessions"
+    form = sent["form"]
+    assert form["mode"] == "subscription"
+    assert form["line_items[0][price]"] == "price_growth"
+    assert form["metadata[tenant_id]"] == "t1"
+    assert form["metadata[plan_id]"] == "growth"
+    # Without this, every later customer.subscription.* event would need a customer lookup.
+    assert form["subscription_data[metadata][tenant_id]"] == "t1"
+    assert form["customer"] == "cus_1"
+    # No idempotency key: replaying one would return an expired session URL.
+    assert sent["idempotency_key"] == ""
+
+
+async def test_stripe_portal_posts_the_customer(monkeypatch):
+    from nexus.billing.payments import StripePaymentProvider
+
+    sent: dict = {}
+
+    async def _fake_post(self, path, form, idempotency_key=""):
+        sent["path"] = path
+        sent["form"] = form
+        return {"id": "bps_1", "url": "https://billing.stripe.com/p/session/bps_1"}
+
+    monkeypatch.setattr(StripePaymentProvider, "_post", _fake_post)
+    p = StripePaymentProvider("sk_test_x")
+    out = await p.create_billing_portal_session(
+        customer_id="cus_1", return_url="https://app/settings"
+    )
+
+    assert out["id"] == "bps_1" and out["url"].startswith("https://billing.stripe.com/")
+    assert sent["path"] == "/billing_portal/sessions"
+    assert sent["form"] == {"customer": "cus_1", "return_url": "https://app/settings"}
+
+
+def test_every_provider_implements_the_whole_seam():
+    """A method added to the ABC but not to one implementation is a crash at the worst possible
+    moment — someone trying to pay."""
+    from nexus.billing.payments import (
+        NoopPaymentProvider,
+        PaymentProvider,
+        StripePaymentProvider,
+    )
+
+    required = {
+        name for name in dir(PaymentProvider)
+        if getattr(getattr(PaymentProvider, name), "__isabstractmethod__", False)
+    }
+    assert "create_checkout_session" in required
+    assert "create_billing_portal_session" in required
+    for impl in (NoopPaymentProvider, StripePaymentProvider):
+        assert not getattr(impl, "__abstractmethods__", frozenset()), impl.__name__
