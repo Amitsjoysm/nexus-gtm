@@ -813,13 +813,35 @@ async def enqueue_dunning_sweep(*, queue: TaskQueue | None = None) -> None:
     await queue.enqueue(Job(name="dunning_sweep", payload={}))
 
 
+# Marks a dispatch whose handler RAISED. Deliberately not the plain "error" key: handlers
+# legitimately *return* {"error": "account_not_found"} as a normal, terminal outcome, and
+# retrying those three times would be a new bug rather than a fix for the old one.
+JOB_FAILED_KEY = "__job_failed__"
+
+
+def is_job_failure(result: dict) -> bool:
+    """True only for a dispatch whose handler raised — i.e. something worth retrying."""
+    return isinstance(result, dict) and bool(result.get(JOB_FAILED_KEY))
+
+
 async def dispatch(job: Job) -> dict:
+    """Route one job to its handler.
+
+    On success the handler's own dict is returned untouched — that contract predates M11 and
+    callers rely on it. On a raised exception the failure is *surfaced* (it used to be swallowed
+    here, which is how failed jobs went missing) as the same ``{"error": ...}`` shape plus
+    ``JOB_FAILED_KEY``, so the worker loop can retry or dead-letter it.
+    """
     handler = HANDLERS.get(job.name)
     if handler is None:
+        # Not a retryable failure: an unroutable name will not route on the next attempt either,
+        # so retrying it is a guaranteed-useless spin ending in a pointless dead letter.
         logger.warning("no handler for job %s", job.name)
         return {"error": "unknown_job", "name": job.name}
     try:
         return await handler(job.payload)
     except Exception as exc:  # a bad job must not kill the worker loop
-        logger.exception("job %s failed", job.name)
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        logger.exception(
+            "job %s failed (attempt %s/%s)", job.name, job.attempts + 1, job.max_attempts
+        )
+        return {"error": f"{type(exc).__name__}: {exc}", JOB_FAILED_KEY: True}

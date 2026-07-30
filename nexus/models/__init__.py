@@ -19,6 +19,7 @@ from nexus.models.billing import (
 )
 from nexus.models.chat import ChatMessage, ChatSession, CustomFieldDef
 from nexus.models.identity import Membership, Tenant, User, Workspace
+from nexus.models.jobs import DeadLetterJob
 from nexus.models.intelligence import AccountScore, AgentRun
 from nexus.models.orchestration import Approval, OrchestrationRun, RunEvent, RunStep
 from nexus.models.campaign import Campaign, CampaignTarget
@@ -91,4 +92,5 @@ __all__ = [
     "BillingAuditLog",
     "BillingWebhookEvent",
     "PlatformAdmin",
+    "DeadLetterJob",
 ]

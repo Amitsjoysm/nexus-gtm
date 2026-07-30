@@ -149,10 +149,11 @@ touches Account/Contact/Inbox/Cadence.
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0026_billing_webhooks`. The chain is
+Alembic under `migrations/versions/`. Head: `0027_dead_letter_jobs`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
-(the Billing tables below). Every tenant-scoped table automatically gets RLS via
-`scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
+(the Billing tables below) → `0027` (`dead_letter_jobs`, the job-durability table). Every
+tenant-scoped table automatically gets RLS via `scripts/apply_rls.py` on deploy — no manual
+policy work needed for new tables.
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —
 `tests/test_migrations_replay.py` builds one from nothing but `alembic upgrade head` and diffs
@@ -217,6 +218,29 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   `platform_admins`, `billing_audit_log`, `billing_webhook_events`. The audit and webhook tables
   deliberately name their tenant column `subject_tenant_id` so `apply_rls.py` — which enrolls any
   table having `tenant_id` — does not hide them from the operators who must read them.
+  `dead_letter_jobs` (below) follows the same rule for the same reason.
+
+## Job durability (`nexus/workers/`)
+
+A handler exception used to be caught by `dispatch`, logged, and dropped. Periodic sweeps
+survived that (re-enqueued every tick, idempotent); one-shot jobs — `process_account`, campaign
+sends, orchestration runs — were silently lost.
+
+- `Job` carries `attempts`/`max_attempts` **in the envelope**, so retry state survives the worker
+  that created it. `from_json` defaults both, so a job serialized by the previous release still
+  deserializes during a rolling deploy.
+- `dispatch()` returns the handler's dict untouched on success and adds `JOB_FAILED_KEY` when the
+  handler *raised* — deliberately not the plain `error` key, which handlers legitimately return
+  as a normal terminal outcome (`account_not_found`). Test with `is_job_failure()`.
+- `workers/durability.py` retries with jittered exponential backoff, then parks the job in
+  `dead_letter_jobs` with its payload intact. Even a failed dead-letter *write* logs the whole
+  payload at ERROR. Shutdown flushes in-flight backoffs back onto the queue.
+- Triage/replay: `GET|POST /admin/jobs/dead-letters...`, behind `require_platform_admin`, every
+  replay audited. Counters in `workers/metrics.py` (enqueued / succeeded / retried /
+  dead-lettered) — a plain dict, no new dependency; proper export is M15.
+- `NEXUS_JOB_RETRY_ENABLED=false` disables the retry only; the job is still dead-lettered, so the
+  kill switch degrades to "fail fast, keep the evidence" — never back to losing work.
+- **Handlers stay ignorant of all of it.** No `handle_*` signature and no `HANDLERS` entry changes.
 
 ## Frontend skills — USE THESE for any UI work
 

@@ -4,7 +4,8 @@ Two backends behind one interface:
   * :class:`InMemoryTaskQueue` — an ``asyncio.Queue`` for local/dev/test (zero external deps).
   * :class:`RedisTaskQueue` — a Redis list for production (multiple workers, durability).
 
-A job is a small JSON-serializable envelope: ``{"name": str, "payload": dict}``.
+A job is a small JSON-serializable envelope: ``{"name": str, "payload": dict}`` plus the
+retry bookkeeping added in M11.
 """
 from __future__ import annotations
 
@@ -14,22 +15,55 @@ import json
 from dataclasses import dataclass
 
 from nexus.core.config import get_settings
+from nexus.workers.metrics import increment_job_counter
 
 _QUEUE_KEY = "nexus:jobs"
+
+# How many times a job is attempted in total before it is parked in ``dead_letter_jobs``.
+DEFAULT_MAX_ATTEMPTS = 3
 
 
 @dataclass(slots=True)
 class Job:
+    """One unit of queued work.
+
+    ``attempts``/``max_attempts`` carry the retry state *in the envelope* rather than in worker
+    memory, because the worker that retries a job is very often not the worker that first ran
+    it (Valkey fans jobs out across the fleet, and a container can be replaced mid-backoff).
+
+    Both fields default, and ``from_json`` reads them with defaults, so a job serialized by the
+    PREVIOUS release — ``{"name": ..., "payload": ...}``, still sitting in Valkey during a
+    rolling deploy — deserializes cleanly instead of blowing up on its first dequeue. That
+    backward compatibility is the difference between a rolling upgrade and losing the backlog.
+    """
+
     name: str
     payload: dict
+    attempts: int = 0
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS
 
     def to_json(self) -> str:
-        return json.dumps({"name": self.name, "payload": self.payload})
+        # ``name`` and ``payload`` stay top-level, so an OLD worker still reading only those two
+        # keys during a rolling deploy processes a new-format job correctly (it just loses the
+        # retry counters, degrading to today's behaviour rather than erroring).
+        return json.dumps(
+            {
+                "name": self.name,
+                "payload": self.payload,
+                "attempts": self.attempts,
+                "max_attempts": self.max_attempts,
+            }
+        )
 
     @classmethod
     def from_json(cls, raw: str) -> "Job":
         data = json.loads(raw)
-        return cls(name=data["name"], payload=data.get("payload", {}))
+        return cls(
+            name=data["name"],
+            payload=data.get("payload", {}),
+            attempts=int(data.get("attempts", 0)),
+            max_attempts=int(data.get("max_attempts", DEFAULT_MAX_ATTEMPTS)),
+        )
 
 
 class TaskQueue(abc.ABC):
@@ -48,6 +82,7 @@ class InMemoryTaskQueue(TaskQueue):
         self._q: asyncio.Queue[Job] = asyncio.Queue()
 
     async def enqueue(self, job: Job) -> None:
+        increment_job_counter("enqueued")
         await self._q.put(job)
 
     async def dequeue(self, *, timeout: float | None = None) -> Job | None:
@@ -74,6 +109,7 @@ class RedisTaskQueue(TaskQueue):
         self._key = key
 
     async def enqueue(self, job: Job) -> None:
+        increment_job_counter("enqueued")
         await self._redis.rpush(self._key, job.to_json())
 
     async def dequeue(self, *, timeout: float | None = None) -> Job | None:

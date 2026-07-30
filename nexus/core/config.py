@@ -105,6 +105,15 @@ class Settings(BaseSettings):
     queue_backend: Literal["memory", "redis"] = "memory"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Job durability (M11). A handler exception used to be logged and dropped, which lost
+    # one-shot work (process_account, campaign sends, orchestration runs) silently. Failures are
+    # now retried with jittered exponential backoff and finally parked in `dead_letter_jobs`.
+    # The kill switch only disables the RETRY: an exhausted job is still dead-lettered, so
+    # turning this off degrades to "fail fast, keep the evidence" — never back to losing work.
+    job_retry_enabled: bool = True
+    job_retry_base_delay_s: float = 2.0      # first retry waits ~2s (±25% jitter)
+    job_retry_max_delay_s: float = 300.0     # ceiling, so a long outage backs off to ~5m
+
     # LLM. "auto" builds a runtime fallback chain (Anthropic -> Groq -> OpenAI-compat -> stub)
     # from whichever keys are present, so a provider outage degrades instead of erroring.
     llm_provider: Literal["stub", "openai_compat", "anthropic", "groq", "auto"] = "stub"
