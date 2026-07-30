@@ -110,6 +110,16 @@ def totp_code(
     return hotp_code(_decode_secret(secret_b32), counter_at(ts, step), digits=digits)
 
 
+def code_for_counter(secret_b32: str, counter: int, *, digits: int = 6) -> str:
+    """The code at an explicit counter.
+
+    Needed by the mailed-code path: if the current step's counter has already been spent, sending
+    that code again would deliver something the replay guard is bound to refuse. Sending the next
+    counter instead is still inside the +1 drift window, so it verifies.
+    """
+    return hotp_code(_decode_secret(secret_b32), counter, digits=digits)
+
+
 def verify_totp(
     secret_b32: str,
     code: str,

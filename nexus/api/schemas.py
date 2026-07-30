@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -87,6 +88,72 @@ class NewWorkspaceRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9\-]{1,79}$")
+
+
+# ---- MFA ----
+class MFAEnrollRequest(BaseModel):
+    """``totp`` = authenticator app, ``email`` = code mailed to the account address."""
+
+    method: Literal["totp", "email"] = "totp"
+
+
+class MFAEnrollResponse(BaseModel):
+    method: str
+    # TOTP only. ``secret``/``provisioning_uri`` are returned exactly once, at enrolment — the
+    # server keeps only the sealed copy and can never show them again.
+    secret: str | None = None
+    provisioning_uri: str | None = None
+    # Also shown exactly once. Empty when the user already holds unused codes, so enrolling a
+    # second method does not invalidate the printout they already have.
+    recovery_codes: list[str] = Field(default_factory=list)
+    code_sent: bool = False
+    expires_in_s: int = 0
+
+
+class MFAConfirmRequest(BaseModel):
+    method: Literal["totp", "email"] = "totp"
+    code: str = Field(min_length=1, max_length=32)
+
+
+class MFACodeRequest(BaseModel):
+    """A current second-factor code (or a recovery code) proving control of the account."""
+
+    code: str = Field(min_length=1, max_length=32)
+
+
+class MFAStatusResponse(BaseModel):
+    enabled: bool
+    methods: list[str] = Field(default_factory=list)          # confirmed — these gate login
+    pending_methods: list[str] = Field(default_factory=list)  # enrolled but never confirmed
+    recovery_codes_remaining: int = 0
+
+
+class MFARecoveryCodesResponse(BaseModel):
+    recovery_codes: list[str]
+
+
+class MFAChallengeResponse(BaseModel):
+    """The login response for a user with a confirmed second factor.
+
+    Deliberately carries no ``access_token``: ``challenge_token`` is a single-purpose,
+    short-TTL credential that authorizes nothing but ``POST /auth/mfa/verify``.
+    """
+
+    mfa_required: bool = True
+    challenge_token: str
+    methods: list[str]
+    expires_in_s: int
+
+
+class MFAVerifyRequest(BaseModel):
+    challenge_token: str
+    code: str = Field(min_length=1, max_length=32)
+    method: str | None = None  # optional hint; omitted means "try every confirmed factor"
+
+
+class MFAChallengeResendRequest(BaseModel):
+    challenge_token: str
+    method: Literal["email"] = "email"
 
 
 # ---- relevance ----

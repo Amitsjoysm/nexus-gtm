@@ -1,5 +1,13 @@
-"""Auth endpoints: signup (provision a tenant) and login (issue a JWT)."""
+"""Auth endpoints: signup (provision a tenant), login (issue a JWT), and MFA.
+
+Login is two-step **only** for a user who has confirmed a second factor. Everyone else — the
+overwhelming majority, and every existing integration — gets exactly the response they always
+got. That compatibility line is enforced by a single predicate,
+``mfa_service.has_confirmed_mfa``, and by ``tests/test_mfa_login.py``.
+"""
 from __future__ import annotations
+
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +19,15 @@ from nexus.api.schemas import (
     ForgotPasswordRequest,
     LoginRequest,
     MessageResponse,
+    MFAChallengeResendRequest,
+    MFAChallengeResponse,
+    MFACodeRequest,
+    MFAConfirmRequest,
+    MFAEnrollRequest,
+    MFAEnrollResponse,
+    MFARecoveryCodesResponse,
+    MFAStatusResponse,
+    MFAVerifyRequest,
     NewWorkspaceRequest,
     RegisterResendRequest,
     RegisterStartRequest,
@@ -22,6 +39,8 @@ from nexus.api.schemas import (
     TenantOut,
     TokenResponse,
 )
+from nexus.auth import mfa_service
+from nexus.auth.mfa_service import MFAError
 from nexus.auth.password_reset import request_password_reset, reset_password
 from nexus.auth.registration import (
     RegistrationError,
@@ -31,8 +50,16 @@ from nexus.auth.registration import (
 )
 from nexus.core.config import get_settings
 from nexus.core.ratelimit import rate_limit
-from nexus.core.security import create_access_token, hash_password, verify_password
+from nexus.core.security import (
+    create_access_token,
+    create_mfa_challenge_token,
+    decode_mfa_challenge_token,
+    hash_password,
+    verify_password,
+)
 from nexus.models.identity import Membership, Tenant, User, Workspace
+
+logger = logging.getLogger("nexus.api.auth")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -150,12 +177,17 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db_session))
     return TokenResponse(access_token=token, tenant_id=tenant.id, role="owner")
 
 
-@router.post("/login", response_model=TokenResponse)
+# ``response_model=None`` (not a union) on purpose. Declaring a union here would route every
+# response through union validation and risk reshaping the one that must never change; leaving it
+# off means the non-MFA branch is serialized straight from the same ``TokenResponse`` instance it
+# always returned — identical keys, identical order, identical 200. The MFA branch is the only
+# thing that looks different, and only for users who chose it.
+@router.post("/login", response_model=None)
 async def login(
     req: LoginRequest,
     db: AsyncSession = Depends(get_db_session),
     _rl: None = Depends(rate_limit("login")),
-) -> TokenResponse:
+) -> TokenResponse | MFAChallengeResponse:
     user = (await db.scalars(select(User).where(User.email == req.email))).first()
     if user is None or not verify_password(req.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
@@ -173,10 +205,111 @@ async def login(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "User has no tenant memberships")
 
     membership = await _resolve_membership(db, memberships, req.tenant_slug)
+
+    # The one branch. Only a *confirmed* second factor makes login two-step; a user who never
+    # enrolled — or who enrolled and never confirmed — falls straight through to the response
+    # below, unchanged.
+    if await mfa_service.has_confirmed_mfa(db, user.id):
+        return await _mfa_challenge(db, user, membership)
+
     token = create_access_token(
         user_id=user.id, tenant_id=membership.tenant_id, role=membership.role
     )
     return TokenResponse(access_token=token, tenant_id=membership.tenant_id, role=membership.role)
+
+
+async def _mfa_challenge(
+    db: AsyncSession, user: User, membership: Membership
+) -> MFAChallengeResponse:
+    """Hand back a second-factor challenge instead of a session.
+
+    The membership resolved in step one is carried in the challenge so the second step lands in
+    the same workspace the user asked for — but the role is re-read at verify time, never trusted
+    from the challenge.
+    """
+    methods = await mfa_service.confirmed_methods(db, user.id)
+    if "email" in methods:
+        try:
+            await mfa_service.send_challenge_code(db, user, "email")
+        except MFAError:
+            # A mail-delivery problem must not turn a correct password into a 500. The user can
+            # ask for another code, or use their authenticator/recovery code.
+            logger.warning("could not send MFA email code during login", exc_info=True)
+    return MFAChallengeResponse(
+        challenge_token=create_mfa_challenge_token(
+            user_id=user.id, tenant_id=membership.tenant_id, role=membership.role
+        ),
+        methods=methods,
+        expires_in_s=get_settings().mfa_challenge_ttl_s,
+    )
+
+
+@router.post("/mfa/verify", response_model=TokenResponse)
+async def mfa_verify(
+    req: MFAVerifyRequest,
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("mfa_verify")),
+) -> TokenResponse:
+    """Step two: exchange a challenge plus a second-factor code for a real session token."""
+    claims = decode_mfa_challenge_token(req.challenge_token)
+    if claims is None:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "That sign-in attempt expired. Start again."
+        )
+    user = await db.get(User, claims["sub"])
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Unknown user")
+
+    # Re-read the membership rather than trusting the role baked into the challenge: between the
+    # two steps an admin may have changed the role or revoked access entirely.
+    membership = (
+        await db.scalars(
+            select(Membership).where(
+                Membership.user_id == user.id, Membership.tenant_id == claims["tid"]
+            )
+        )
+    ).first()
+    if membership is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "No membership in the requested tenant")
+
+    try:
+        await mfa_service.verify_code(db, user.id, req.code, method=req.method)
+    except MFAError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+
+    token = create_access_token(
+        user_id=user.id, tenant_id=membership.tenant_id, role=membership.role
+    )
+    return TokenResponse(access_token=token, tenant_id=membership.tenant_id, role=membership.role)
+
+
+@router.post(
+    "/mfa/challenge/resend", response_model=MessageResponse, status_code=status.HTTP_202_ACCEPTED
+)
+async def mfa_challenge_resend(
+    req: MFAChallengeResendRequest,
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("mfa_resend")),
+) -> MessageResponse:
+    """Re-send the mailed sign-in code for an in-flight challenge.
+
+    The code is derived from the seed and the clock, so a resend inside the same step delivers the
+    same digits — deliberately: it makes a lost email recoverable without invalidating the code
+    the user may be about to type.
+    """
+    claims = decode_mfa_challenge_token(req.challenge_token)
+    if claims is None:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "That sign-in attempt expired. Start again."
+        )
+    user = await db.get(User, claims["sub"])
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Unknown user")
+    try:
+        await mfa_service.send_challenge_code(db, user, req.method)
+    except MFAError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+    return MessageResponse(message="A new sign-in code has been sent.")
 
 
 @router.post("/forgot-password", response_model=MessageResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -203,6 +336,122 @@ async def reset_password_endpoint(
     except RegistrationError as exc:
         raise HTTPException(exc.status_code, exc.detail)
     return MessageResponse(message="Your password has been reset. You can now sign in.")
+
+
+# --------------------------------------------------------------------------------------------
+# Multi-factor authentication (opt-in, per user)
+#
+# Enrolment is authenticated with an ordinary access token: you must already be signed in to add
+# a second factor. Everything that *changes* the factor (confirm, disable, regenerate) also costs
+# a live code, so a stolen session cannot quietly swap the second factor for the attacker's own.
+# --------------------------------------------------------------------------------------------
+async def _load_user(db: AsyncSession, user_id: str) -> User:
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Unknown user")
+    return user
+
+
+@router.get("/mfa", response_model=MFAStatusResponse)
+async def mfa_status(
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_db_session),
+) -> MFAStatusResponse:
+    """What the settings screen renders: which factors are live, which are half-enrolled."""
+    factors = await mfa_service.confirmed_factors(db, principal.user_id)
+    methods = await mfa_service.confirmed_methods(db, principal.user_id)
+    pending = sorted(
+        {f.method for f in await mfa_service.all_factors(db, principal.user_id)}
+        - {f.method for f in factors}
+    )
+    return MFAStatusResponse(
+        enabled=bool(methods),
+        methods=methods,
+        pending_methods=pending,
+        recovery_codes_remaining=await mfa_service.unused_recovery_code_count(db, principal.user_id),
+    )
+
+
+@router.post("/mfa/enroll", response_model=MFAEnrollResponse, status_code=status.HTTP_201_CREATED)
+async def mfa_enroll(
+    req: MFAEnrollRequest,
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("mfa_enroll")),
+) -> MFAEnrollResponse:
+    """Begin enrolment. The factor does nothing until ``/auth/mfa/confirm`` proves a code works.
+
+    For ``totp`` the seed and QR URI are in this response and nowhere else — the server stores
+    only the sealed copy. Recovery codes come back on the first enrolment of any method.
+    """
+    user = await _load_user(db, principal.user_id)
+    try:
+        result = await mfa_service.enroll(db, user, req.method)
+    except MFAError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+    return MFAEnrollResponse(
+        method=result.method,
+        secret=result.secret,
+        provisioning_uri=result.provisioning_uri,
+        recovery_codes=result.recovery_codes,
+        code_sent=result.code_sent,
+        expires_in_s=result.expires_in_s,
+    )
+
+
+@router.post("/mfa/confirm", response_model=MFAStatusResponse)
+async def mfa_confirm(
+    req: MFAConfirmRequest,
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("mfa_confirm")),
+) -> MFAStatusResponse:
+    """Verify the first code and arm the factor. Only now does login become two-step."""
+    user = await _load_user(db, principal.user_id)
+    try:
+        methods = await mfa_service.confirm(db, user, req.method, req.code)
+    except MFAError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+    return MFAStatusResponse(
+        enabled=bool(methods),
+        methods=methods,
+        pending_methods=[],
+        recovery_codes_remaining=await mfa_service.unused_recovery_code_count(db, user.id),
+    )
+
+
+@router.delete("/mfa", response_model=MessageResponse)
+async def mfa_disable(
+    req: MFACodeRequest,
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("mfa_disable")),
+) -> MessageResponse:
+    """Turn MFA off. Costs a valid current code (or a recovery code) — an access token alone is
+    not enough, otherwise session theft would be a complete MFA bypass."""
+    user = await _load_user(db, principal.user_id)
+    try:
+        await mfa_service.disable(db, user, req.code)
+    except MFAError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+    return MessageResponse(message="Two-factor authentication has been turned off.")
+
+
+@router.post("/mfa/recovery-codes/regenerate", response_model=MFARecoveryCodesResponse)
+async def mfa_regenerate_recovery_codes(
+    req: MFACodeRequest,
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_db_session),
+    _rl: None = Depends(rate_limit("mfa_recovery")),
+) -> MFARecoveryCodesResponse:
+    """Mint a fresh set and invalidate every previous code. Requires a code from a real factor —
+    a leaked printout must not be able to renew itself."""
+    user = await _load_user(db, principal.user_id)
+    try:
+        codes = await mfa_service.regenerate_recovery_codes(db, user, req.code)
+    except MFAError as exc:
+        raise HTTPException(exc.status_code, exc.detail)
+    return MFARecoveryCodesResponse(recovery_codes=codes)
 
 
 async def _resolve_membership(
