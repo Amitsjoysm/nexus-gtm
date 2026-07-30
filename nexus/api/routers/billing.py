@@ -1,12 +1,18 @@
 # nexus/api/routers/billing.py
-"""Tenant-facing billing surface: what plan am I on, and what have I used?
+"""Tenant-facing billing surface: what plan am I on, what have I used, and how do I pay?
 
-Read-only in this milestone. Powers the in-app usage meters and the upgrade prompts that a 402
-deep-links into (docs/billing/10-Usage-Tracking.md §2).
+The read surface (usage, credits, invoices) is rep-level: a rep who hits a 402 is exactly who
+needs to see "17 of 20 used" (docs/billing/10-Usage-Tracking.md §2).
+
+The two money actions — opening hosted Checkout and opening the hosted Customer Portal — are
+admin-only, and they are *redirects*, not writes. Neither one changes a subscription here:
+state arrives back through the webhook (``nexus/billing/webhooks.py``). Writing the
+subscription ourselves at redirect time would diverge from the provider the moment the customer
+abandoned the page or changed something in the portal.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -224,3 +230,194 @@ async def list_invoices(
         )
         for inv in invoices
     ]
+
+
+# ---- self-serve money actions ----------------------------------------------------------------
+# Admin+ (manage_workspace), not the rep-level read surface above: these open a page where
+# somebody's card gets charged.
+
+# Plan classes that are never self-serve. A custom/enterprise deal is negotiated and managed by
+# a platform admin (nexus/billing/custom_plans.py); routing one through hosted Checkout would
+# let a tenant admin re-buy their own bespoke contract at whatever the price row happens to say.
+ADMIN_MANAGED_PLAN_CLASSES = ("custom", "enterprise")
+
+
+class CheckoutRequest(BaseModel):
+    plan_id: str
+    success_url: str = ""
+    cancel_url: str = ""
+
+
+class PortalRequest(BaseModel):
+    return_url: str = ""
+
+
+class HostedSessionOut(BaseModel):
+    id: str
+    url: str
+    provider: str
+    plan_id: str | None = None
+
+
+def _default_url(suffix: str) -> str:
+    from nexus.core.config import get_settings
+
+    base = (get_settings().app_base_url or "").rstrip("/")
+    return f"{base}{suffix}" if base else suffix
+
+
+async def _current_subscription(ts: TenantSession) -> BillingSubscription | None:
+    from nexus.billing.subscriptions import ACTIVE_STATUSES
+
+    subs = await ts.list(BillingSubscription, limit=5)
+    return next((s for s in subs if s.status in ACTIVE_STATUSES), None)
+
+
+async def _reject_if_admin_managed(ts: TenantSession, sub: BillingSubscription | None) -> None:
+    """409 if this workspace is on an admin-managed deal.
+
+    Deliberately a hard refusal rather than a silent redirect: an enterprise customer clicking
+    "manage billing" and landing in a self-serve portal that knows nothing about their contract
+    is worse than being told to talk to their account team.
+    """
+    if sub is None:
+        return
+    plan = await ts.session.get(BillingPlan, sub.plan_id)
+    if plan is not None and plan.plan_class in ADMIN_MANAGED_PLAN_CLASSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This workspace is on the admin-managed plan '{plan.name}'. "
+            "Contact your account team to change it; self-serve billing is disabled.",
+        )
+
+
+async def _billing_email(user_id: str) -> str:
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.identity import User
+
+    async with get_sessionmaker()() as session:
+        user = await session.get(User, user_id)
+        return (user.email or "") if user is not None else ""
+
+
+@router.post("/checkout", response_model=HostedSessionOut)
+async def create_checkout(
+    body: CheckoutRequest,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> HostedSessionOut:
+    """Open hosted Checkout for a self-serve plan and hand back the redirect URL.
+
+    Nothing about the subscription is written here. ``checkout.session.completed`` and the
+    ``customer.subscription.*`` events that follow are what move our database, so an abandoned
+    Checkout leaves no half-subscribed tenant behind.
+    """
+    from nexus.billing.payments import (
+        PaymentError,
+        PaymentNotConfigured,
+        get_payment_provider,
+    )
+
+    plan = await ts.session.get(BillingPlan, body.plan_id)
+    if plan is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown plan '{body.plan_id}'")
+    if plan.status != "active":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"plan '{plan.id}' is {plan.status}, not on sale"
+        )
+    if plan.plan_class in ADMIN_MANAGED_PLAN_CLASSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"'{plan.name}' is an admin-managed plan and cannot be bought self-serve.",
+        )
+
+    sub = await _current_subscription(ts)
+    await _reject_if_admin_managed(ts, sub)
+
+    provider = get_payment_provider()
+    try:
+        # The price object has to exist at the PSP before a Checkout line item can reference it.
+        # ensure_plan_price is keyed on plan id + amount, so this is a lookup after the first
+        # call rather than a new price each time.
+        price_id = str((plan.meta or {}).get("price_id") or "")
+        if not price_id:
+            refs = await provider.ensure_plan_price(
+                plan_id=plan.id, name=plan.name, amount_cents=plan.base_price_cents,
+                currency=plan.currency, interval=plan.interval,
+            )
+            price_id = str(refs.get("price_id") or "")
+            # billing_plans is platform-global (no tenant_id, no RLS policy), so caching the
+            # reference here is a plain write, not a cross-tenant one.
+            plan.meta = {**(plan.meta or {}), **refs}
+            await ts.session.flush()
+
+        customer_id = (sub.psp_customer_id or "") if sub is not None else ""
+        if not customer_id:
+            email = await _billing_email(principal.user_id)
+            if email:
+                customer_id = await provider.ensure_customer(
+                    tenant_id=ts.tenant_id, email=email
+                )
+                if sub is not None:
+                    sub.psp_customer_id = customer_id
+                    await ts.flush()
+
+        session_out = await provider.create_checkout_session(
+            tenant_id=ts.tenant_id, plan_id=plan.id, price_id=price_id,
+            customer_id=customer_id,
+            success_url=body.success_url or _default_url("/settings/billing?checkout=success"),
+            cancel_url=body.cancel_url or _default_url("/settings/billing?checkout=cancelled"),
+        )
+    except PaymentNotConfigured as exc:
+        # 503, not 500: the deployment is missing a key, and saying so plainly is what lets an
+        # operator fix it. There is nothing the caller can retry.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except PaymentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"payment provider: {exc}") from exc
+
+    return HostedSessionOut(
+        id=str(session_out.get("id", "")), url=str(session_out.get("url", "")),
+        provider=str(session_out.get("provider", provider.name)), plan_id=plan.id,
+    )
+
+
+@router.post("/portal", response_model=HostedSessionOut)
+async def create_portal(
+    body: PortalRequest,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> HostedSessionOut:
+    """Open the provider's hosted self-service portal (cards, cancellation, invoice history)."""
+    from nexus.billing.payments import (
+        PaymentError,
+        PaymentNotConfigured,
+        get_payment_provider,
+    )
+
+    sub = await _current_subscription(ts)
+    await _reject_if_admin_managed(ts, sub)
+
+    customer_id = (sub.psp_customer_id or "") if sub is not None else ""
+    if not customer_id:
+        # No PSP customer means this workspace has never paid — there is no portal to show.
+        # Pointing them at Checkout is the honest answer.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This workspace has no payment account yet. Start a subscription first.",
+        )
+
+    provider = get_payment_provider()
+    try:
+        session_out = await provider.create_billing_portal_session(
+            customer_id=customer_id,
+            return_url=body.return_url or _default_url("/settings/billing"),
+        )
+    except PaymentNotConfigured as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except PaymentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"payment provider: {exc}") from exc
+
+    return HostedSessionOut(
+        id=str(session_out.get("id", "")), url=str(session_out.get("url", "")),
+        provider=str(session_out.get("provider", provider.name)),
+    )
