@@ -1,9 +1,10 @@
 """Lightweight per-IP rate limiting for the auth endpoints (brute-force / abuse defense).
 
 A FastAPI dependency: ``Depends(rate_limit("login"))``. It keeps a per-(bucket, client-IP) sliding
-window in process memory and raises 429 once the window is full. Off by default
-(``auth_rate_limit_enabled``) so local/dev and the offline test suite — which fire many rapid
-signup/login calls — are unaffected; production turns it on. No external dependency.
+window in process memory and raises 429 once the window is full. **ON by default** since M13:
+"secure once someone remembers to enable it" is not a security posture, and an unthrottled login
+endpoint is a credential-stuffing target. Tests that legitimately fire many rapid auth calls opt
+out via the ``no_auth_rate_limit`` fixture. No external dependency.
 
 This is in-process defense-in-depth (each uvicorn worker has its own counters); the authoritative,
 cross-process limit in production belongs at the edge (Caddy ``rate_limit``) and/or a shared Valkey

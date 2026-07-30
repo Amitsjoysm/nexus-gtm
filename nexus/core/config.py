@@ -59,11 +59,16 @@ class Settings(BaseSettings):
     # always encrypted). Separate from ``network_token_enc_key`` so the two rotate independently.
     mfa_secret_enc_key: str = ""
 
-    # Auth abuse protection. Off by default so local/dev and the offline test suite (which make
-    # many rapid signup/login calls) are unaffected; enable in production. A per-client-IP
-    # sliding window over the auth endpoints (login / register / password reset). Caddy + Valkey
-    # provide the stronger, cross-process layer in production; this is in-process defense-in-depth.
-    auth_rate_limit_enabled: bool = False
+    # Auth abuse protection. ON by default (M13): an unthrottled login endpoint is a credential
+    # -stuffing target, and "secure once someone remembers to enable it" is not a security
+    # posture. A per-client-IP sliding window over login / register / password reset / MFA
+    # verification. Caddy + Valkey provide the stronger cross-process layer in production; this
+    # is in-process defense-in-depth.
+    #
+    # The offline suite makes many rapid auth calls, so tests that need to exceed the window opt
+    # out explicitly via the `no_auth_rate_limit` fixture rather than the default being weakened
+    # for everyone.
+    auth_rate_limit_enabled: bool = True
     auth_rate_limit_max: int = 10            # max attempts per window per IP per bucket
     auth_rate_limit_window_s: int = 60
 

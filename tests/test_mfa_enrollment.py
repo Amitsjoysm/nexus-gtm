@@ -17,6 +17,11 @@ from nexus.auth.mfa import totp_code
 from nexus.core.config import get_settings
 from tests.conftest import auth, signup
 
+# Enrolment and login exercise many auth calls in quick succession, which is exactly
+# what the rate limiter is for. Opt out explicitly rather than weakening the production
+# default, which is ON.
+pytestmark = pytest.mark.usefixtures("no_auth_rate_limit")
+
 
 @pytest.fixture
 def mailed(monkeypatch):

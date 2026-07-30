@@ -160,3 +160,33 @@ __all__ = [
     "auth",
     "principal_from_token",
 ]
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_rate_limit():
+    """Clear the in-process rate-limit window between tests.
+
+    The limiter keeps a module-level dict of (bucket, ip) -> hit timestamps. Without this, one
+    chatty test can push a later test over the threshold and produce a failure that has nothing
+    to do with the code under test.
+    """
+    from nexus.core import ratelimit
+
+    ratelimit._HITS.clear()
+    yield
+    ratelimit._HITS.clear()
+
+
+@pytest.fixture
+def no_auth_rate_limit(monkeypatch):
+    """Opt out of auth rate limiting for a test that legitimately makes many rapid auth calls.
+
+    Rate limiting is ON by default in production (M13) — an unthrottled login endpoint is a
+    credential-stuffing target. A chatty test is not a reason to weaken that default for
+    everyone, so such tests declare the exemption explicitly:
+
+        pytestmark = pytest.mark.usefixtures("no_auth_rate_limit")
+    """
+    from nexus.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "auth_rate_limit_enabled", False)
