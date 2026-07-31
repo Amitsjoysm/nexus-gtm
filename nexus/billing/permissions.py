@@ -27,10 +27,15 @@ INVOICES_COLLECT = "invoices.collect"    # charge a finalized invoice
 JOBS_MANAGE = "jobs.manage"              # dead-letter triage and replay
 ADMINS_MANAGE = "admins.manage"          # grant/revoke platform admins
 USERS_MANAGE = "users.manage"            # reset a user's MFA, account recovery
+# Deliberately NOT part of users.manage. Resetting someone's MFA and *becoming* them are different
+# powers: the first is account recovery a support agent does daily, the second is reading a
+# customer's data as them. Bundling would grant the second to everyone who needs the first.
+USERS_IMPERSONATE = "users.impersonate"  # time-boxed, read-only, audited session as a user
 
 ALL_PERMISSIONS = (
     BILLING_READ, PRICING_WRITE, SUBSCRIPTIONS_WRITE, CREDITS_GRANT,
     CREDITS_GRANT_CAPPED, INVOICES_COLLECT, JOBS_MANAGE, ADMINS_MANAGE, USERS_MANAGE,
+    USERS_IMPERSONATE,
 )
 
 # Role presets. `superadmin` is everything; the other two are deliberately narrower.

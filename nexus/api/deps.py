@@ -25,6 +25,12 @@ class Principal:
     user_id: str
     tenant_id: str
     role: str
+    # Set only for an impersonation session: the platform admin acting as this user. Present so
+    # every request is attributable to a real person — a session that cannot be traced back to a
+    # human is indistinguishable from a compromised account.
+    impersonator_id: str = ""
+    # Impersonation sessions are read-only; `require_writable` refuses mutations carrying this.
+    read_only: bool = False
 
 
 async def get_db_session() -> AsyncIterator[AsyncSession]:
@@ -44,7 +50,13 @@ def get_principal(
     payload = decode_access_token(creds.credentials)
     if not payload or "sub" not in payload or "tid" not in payload:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
-    return Principal(user_id=payload["sub"], tenant_id=payload["tid"], role=payload.get("role", "rep"))
+    return Principal(
+        user_id=payload["sub"],
+        tenant_id=payload["tid"],
+        role=payload.get("role", "rep"),
+        impersonator_id=str(payload.get("imp") or ""),
+        read_only=bool(payload.get("ro")),
+    )
 
 
 async def get_tenant_session(
@@ -64,6 +76,28 @@ async def get_tenant_session(
             set_current_tenant(None)
 
 
+# Permissions an impersonating admin may still exercise. Only genuinely read-only ones: every
+# other Permission either writes tenant data or spends the customer's money (`run_agents` and
+# `run_orchestration` make billable LLM calls, which would appear on their invoice).
+_READ_PERMISSIONS = frozenset({Permission.view_analytics})
+
+
+async def require_writable(principal: Principal = Depends(get_principal)) -> Principal:
+    """Refuse a mutation made under an impersonation session.
+
+    Impersonation is **read-only** by design (the plan's "impersonate-read, audited, no writes").
+    Support diagnosing a problem never needs to change a customer's data, and an admin silently
+    editing inside a customer account is the worst thing this feature could enable. Enforced here
+    rather than trusted to the UI: a banner is a courtesy, a 403 is a control.
+    """
+    if principal.read_only:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "this is a read-only impersonation session; end it to make changes",
+        )
+    return principal
+
+
 def require(permission: Permission) -> Callable[[Principal], Principal]:
     """Dependency factory enforcing an RBAC permission."""
 
@@ -71,6 +105,14 @@ def require(permission: Permission) -> Callable[[Principal], Principal]:
         if not has_permission(Role(principal.role), permission):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, f"Role '{principal.role}' lacks {permission.value}"
+            )
+        # An impersonation session may read whatever the user can read, and change nothing. Placed
+        # here because every mutating tenant endpoint already passes through an RBAC check, so
+        # there is no route that can quietly skip it.
+        if principal.read_only and permission not in _READ_PERMISSIONS:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "this is a read-only impersonation session; end it to make changes",
             )
         return principal
 

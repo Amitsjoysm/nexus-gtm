@@ -74,6 +74,41 @@ def decode_access_token(token: str) -> dict | None:
     return payload
 
 
+def create_impersonation_token(
+    *, user_id: str, tenant_id: str, role: str, impersonator_id: str, ttl_min: int = 30
+) -> str:
+    """A short-lived, **read-only** credential that lets a platform admin see what a user sees.
+
+    Deliberately an ``access`` token rather than a new type: an admin needs to browse the real
+    application, and a bespoke type would mean auditing every endpoint for a second code path — the
+    surest way to leave one out.
+
+    What makes it safe is not the type but three claims:
+
+    * ``imp`` names the impersonator, so every request is attributable to a real person. An
+      impersonation session that cannot be traced back to a human is indistinguishable from a
+      compromised account.
+    * ``ro`` marks it read-only. ``require_writable`` refuses every mutating request carrying it —
+      support diagnosing a problem never needs to change the customer's data, and an admin acting
+      unnoticed inside a customer account is the single worst failure mode this feature has.
+    * ``exp`` is minutes, not hours. Time-boxing is the difference between a support session and a
+      standing key to every account.
+    """
+    settings = get_settings()
+    now = utcnow()
+    payload = {
+        "sub": user_id,
+        "tid": tenant_id,
+        "role": role,
+        "typ": ACCESS_TYP,
+        "imp": impersonator_id,
+        "ro": True,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=max(1, ttl_min))).timestamp()),
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
+
+
 def create_mfa_challenge_token(*, user_id: str, tenant_id: str, role: str) -> str:
     """A short-TTL credential that proves 'this password was correct' and nothing else.
 
