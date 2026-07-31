@@ -53,11 +53,9 @@ class SPAStaticFiles(StaticFiles):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    from nexus.alerts.signal_alerts import register_signal_alert_subscriber
     from nexus.ingestion.crm_sync import register_crm_sync_subscribers
 
     register_crm_sync_subscribers()
-    register_signal_alert_subscriber()
 
     # Billing catalog/plan seed: idempotent, additive, and non-fatal. A seed failure must never
     # stop the API from serving (docs/billing/15-Migration-Strategy.md).

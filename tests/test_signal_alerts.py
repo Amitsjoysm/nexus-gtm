@@ -152,12 +152,23 @@ async def _signal(tid: str, *, kind="funding", strength=0.9, title="Acme raises 
 
 
 async def _fire(tid: str, signal_id: str):
-    from nexus.alerts.signal_alerts import on_signal_created
-    from nexus.core.events import Event
+    """Raise alerts for a signal, in the same transaction that owns it.
 
-    await on_signal_created(
-        Event(name="signal.created", tenant_id=tid, payload={"signal_id": signal_id})
-    )
+    Called directly rather than through the event bus: at publish time the signal is flushed but
+    NOT committed, so a bus subscriber opening its own session cannot see it — and `alerts.
+    signal_id` is a foreign key it could not satisfy anyway. The deployed bus version produced five
+    signals and zero alerts.
+    """
+    from nexus.alerts.signal_alerts import raise_alerts_for
+    from nexus.models.account import Account
+    from nexus.models.signal import SignalEvent
+
+    async with tenant_session(tid) as ts:
+        signal = await ts.first(SignalEvent, SignalEvent.id == signal_id)
+        if signal is None:
+            return
+        account = await ts.first(Account, Account.id == signal.account_id)
+        await raise_alerts_for(ts, account, [signal])
 
 
 async def _alerts(tid: str):
@@ -251,7 +262,7 @@ async def test_an_alerting_failure_never_loses_the_signal(monkeypatch):
     def boom(*_a, **_kw):
         raise RuntimeError("alert service down")
 
-    monkeypatch.setattr(signal_alerts, "_find_by_key", boom)
+    monkeypatch.setattr(signal_alerts, "_already_alerted", boom)
     await _fire(tid, sig)          # must not raise
     from nexus.models.signal import SignalEvent
 
@@ -265,15 +276,31 @@ async def test_a_missing_signal_is_ignored():
     assert await _alerts(tid) == []
 
 
-def test_registration_is_idempotent():
-    """Registering twice would double every notification."""
-    from nexus.alerts.signal_alerts import register_signal_alert_subscriber
-    from nexus.core.events import EventBus
+async def test_alerts_are_created_by_ingestion_itself():
+    """The integration that the bus version silently failed: ingesting a strong signal must produce
+    an alert in the same transaction, with no separate subscriber involved."""
+    from nexus.ingestion.service import IngestionService
+    from nexus.ingestion.sources import RawSignal
+    from nexus.models.account import Account
 
-    bus = EventBus()
-    register_signal_alert_subscriber(bus)
-    register_signal_alert_subscriber(bus)
-    assert len(bus._handlers.get("signal.created", [])) == 1
+    class Source:
+        name = "probe"
+
+        async def fetch(self, account):
+            return [RawSignal(kind="funding", source="probe", title="Acme raises $40M",
+                              dedupe_key="probe:f1", strength=0.9)]
+
+    tid = await make_tenant(slug="sa8")
+    async with tenant_session(tid) as ts:
+        acct = Account(tenant_id=tid, name="Acme", domain="acme.com")
+        ts.add(acct)
+        await ts.flush()
+        await IngestionService(sources=[Source()]).run_sources(ts, acct)
+
+    alerts = await _alerts(tid)
+    assert len(alerts) == 1
+    assert alerts[0].severity == "critical"
+    assert alerts[0].signal_id                      # the FK the bus version could not satisfy
 
 
 @pytest.mark.parametrize("route_result", [Route(deliver=True), Route(deliver=False)])

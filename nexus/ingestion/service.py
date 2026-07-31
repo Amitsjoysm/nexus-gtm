@@ -84,6 +84,13 @@ class IngestionService:
 
         if created:
             await ts.flush()
+            # In the SAME transaction as the signals. A subscriber on the event bus cannot do this:
+            # at publish time the signal is flushed but not committed, so a second session cannot
+            # see it, and `alerts.signal_id` is a foreign key it could not satisfy. Found by
+            # deploying — the bus version produced five signals and zero alerts.
+            from nexus.alerts.signal_alerts import raise_alerts_for
+
+            await raise_alerts_for(ts, account, created)
             for ev in created:
                 await bus.publish(
                     Event(

@@ -146,6 +146,43 @@ def _classify_news(text: str) -> tuple[str, float]:
     return "news", 0.4
 
 
+def names_account(text: str, account: Account) -> bool:
+    """Whether `text` identifies THIS account, strictly enough for a precision source.
+
+    Stricter than :func:`_account_keys` membership, which accepts any single token. That is fine
+    for a broad news query but fails on multi-word names built from common words: the LinkedIn job
+    title "Included Health - Member Care Advocate (MCA)" was attributed to *Advocate Health Care*
+    because it shares "advocate", "health" and "care". Observed live.
+
+    Accepts three kinds of evidence, all of which are actually distinctive:
+
+    * the **domain root** ("advocatehealth"), which is unique by construction;
+    * the **full name as a contiguous phrase**, so word order and adjacency must match;
+    * for a **single-token name** (Ramp, Vanta, Stripe), that token — there is nothing stronger
+      available, and such names are distinctive precisely because they are one word.
+    """
+    hay = (text or "").lower()
+    if not hay:
+        return False
+
+    root = (account.domain or "").lower().split(".")[0].strip()
+    if len(root) >= 4 and root in hay:
+        return True
+
+    name = (account.name or "").strip().lower()
+    if not name:
+        return False
+    if name in hay:                      # full phrase, adjacency preserved
+        return True
+
+    tokens = [
+        t for t in re.split(r"[^a-z0-9]+", name)
+        if len(t) >= 3 and t not in _GENERIC_NAME_TOKENS
+    ]
+    # One distinctive word is the whole name: nothing stronger exists, and it is not generic.
+    return len(tokens) == 1 and tokens[0] in hay
+
+
 def event_dedupe_key(kind: str, anchor: str, strength: float, now: datetime) -> str:
     """Event-bucketed dedupe key, NOT per-URL.
 
@@ -538,7 +575,6 @@ class DorkedSearchSource(SignalSource):
         if not name:
             return []
         domain = (account.domain or "").strip().lower().lstrip("@")
-        keys = _account_keys(account)
         now = utcnow()
         anchor = (account.domain or account.name or "").strip().lower().replace(" ", "")
 
@@ -574,14 +610,15 @@ class DorkedSearchSource(SignalSource):
                 # and on a rate-limited backend each extra request extends the block.
                 break
             for hit in hits:
-                signal = self._to_signal(dork, hit, keys=keys, anchor=anchor, now=now, seen=seen)
+                signal = self._to_signal(dork, hit, account=account, anchor=anchor, now=now,
+                                         seen=seen)
                 if signal is not None:
                     out.append(signal)
                     if len(out) >= self._max_signals:
                         return out
         return out
 
-    def _to_signal(self, dork, hit: dict, *, keys: set[str], anchor: str,
+    def _to_signal(self, dork, hit: dict, *, account: Account, anchor: str,
                    now: datetime, seen: set[str]) -> RawSignal | None:
         title = (hit.get("title") or "").strip()
         if not title:
@@ -605,7 +642,7 @@ class DorkedSearchSource(SignalSource):
             # because the article mentions them in passing. A story that is genuinely *about* a
             # company's funding round names the company in the headline; a market survey that
             # happens to list it does not. Observed against live Firecrawl results.
-            if not any(k in title.lower() for k in keys):
+            if not names_account(title, account):
                 return None
             # And it must carry the vocabulary of the event, or a company page that merely ranks for
             # the name passes as a funding round.

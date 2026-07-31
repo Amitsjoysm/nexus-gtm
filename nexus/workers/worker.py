@@ -68,12 +68,10 @@ async def _main() -> None:
     logging.basicConfig(level=logging.INFO)
     await init_db()
     from nexus.core.config import get_settings
-    from nexus.alerts.signal_alerts import register_signal_alert_subscriber
     from nexus.ingestion.crm_sync import register_crm_sync_subscribers
     from nexus.workers.state_metrics import run_state_metrics, serve_worker_metrics
 
     register_crm_sync_subscribers()
-    register_signal_alert_subscriber()
     settings = get_settings()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

@@ -377,3 +377,45 @@ async def test_a_headline_funding_story_still_scores_full_strength():
     assert len(out) == 1
     assert out[0].kind == "funding"
     assert out[0].strength == 0.9
+
+
+# ---- strict name attribution (found live) ------------------------------------------------------
+
+def test_a_multiword_name_needs_more_than_one_common_token():
+    """Live false positive: the LinkedIn title "Included Health - Member Care Advocate (MCA)" was
+    attributed to *Advocate Health Care*, because it shares "advocate", "health" and "care". Any
+    single token is too weak a match for a name built from common words."""
+    from nexus.ingestion.sources import names_account
+
+    advocate = Account(tenant_id="t", name="Advocate Health Care",
+                       domain="advocatehealth.com")
+    assert not names_account("Included Health - Member Care Advocate (MCA)", advocate)
+    # ...but the real thing still matches, by phrase or by domain root.
+    assert names_account("Advocate Health Care names a new CFO", advocate)
+    assert names_account("advocatehealth.com launches a patient portal", advocate)
+
+
+def test_a_single_token_name_matches_on_that_token():
+    """There is nothing stronger available for "Ramp" or "Vanta", and such names are distinctive
+    precisely because they are one word."""
+    from nexus.ingestion.sources import names_account
+
+    ramp = Account(tenant_id="t", name="Ramp", domain="ramp.com")
+    assert names_account("Ramp Reaches $32 Billion Valuation", ramp)
+    assert names_account("Software Engineer, GTM Platform @ Ramp", ramp)
+
+
+def test_an_unrelated_headline_is_rejected():
+    from nexus.ingestion.sources import names_account
+
+    vanta = Account(tenant_id="t", name="Vanta", domain="vanta.com")
+    assert not names_account("Okta announces new pricing", vanta)
+    assert not names_account("", vanta)
+
+
+def test_the_domain_root_is_the_strongest_evidence():
+    """Unique by construction, so it beats any name heuristic."""
+    from nexus.ingestion.sources import names_account
+
+    acct = Account(tenant_id="t", name="The Big Company Group", domain="bigco.com")
+    assert names_account("bigco.com ships a new API", acct)
