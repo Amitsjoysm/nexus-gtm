@@ -4,8 +4,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 
+from nexus.core import metrics
 from nexus.core.config import get_settings
+from nexus.core.db import utcnow
 from nexus.core.events import Event, get_event_bus
 from nexus.core.tenancy import TenantSession
 from nexus.ingestion.sources import RawSignal, SignalSource
@@ -92,17 +95,82 @@ class IngestionService:
         return created
 
     async def run_sources(self, ts: TenantSession, account: Account) -> list[SignalEvent]:
-        """Pull from all configured sources and ingest the results."""
-        timeout = get_settings().source_timeout_s
+        """Pull from all configured sources and ingest the results.
+
+        Each source's run is recorded (M16) whether or not it produced anything. Before that, a
+        source that had been failing for a week was indistinguishable from a quiet market: both
+        looked like "no new signals", and the first sign of trouble was a rep asking why an
+        obviously-funded account showed no round.
+        """
+        default_timeout = get_settings().source_timeout_s
         collected: list[RawSignal] = []
+        runs: list[dict] = []
         for src in self.sources:
+            # A source may declare its own budget. The default 8s assumes one request; a source
+            # that issues several — and deliberately spaces them so a keyless backend does not
+            # start refusing — needs longer, or it is killed mid-run every time and reports
+            # nothing, which is indistinguishable from "this account has no signals".
+            timeout = getattr(src, "timeout_s", None) or default_timeout
+            name = getattr(src, "name", str(src))
+            started = utcnow()
+            clock = time.perf_counter()
+            outcome, error, found = "ok", "", 0
             try:
-                collected.extend(await asyncio.wait_for(src.fetch(account), timeout=timeout))
+                items = await asyncio.wait_for(src.fetch(account), timeout=timeout)
+                collected.extend(items)
+                found = len(items)
+                # `empty` is not `ok`: a source that runs cleanly and finds nothing every single
+                # time is a broken source, and merging the two states hides exactly that.
+                outcome = "ok" if found else "empty"
             except asyncio.TimeoutError:
-                logger.warning("signal source %s timed out after %.1fs", src.name, timeout)
-            except Exception:  # a broken source must not stop ingestion
-                logger.warning("signal source %s failed", getattr(src, "name", src), exc_info=True)
-        return await self.ingest(ts, account, collected)
+                outcome, error = "timeout", f"timed out after {timeout:.1f}s"
+                logger.warning("signal source %s timed out after %.1fs", name, timeout)
+            except Exception as exc:  # a broken source must not stop ingestion
+                outcome, error = "error", f"{type(exc).__name__}: {exc}"[:2000]
+                logger.warning("signal source %s failed", name, exc_info=True)
+            runs.append({
+                "source": name,
+                "outcome": outcome,
+                "items_found": found,
+                "error": error,
+                "duration_ms": round((time.perf_counter() - clock) * 1000, 2),
+                "provenance": dict(getattr(src, "last_provenance", {}) or {}),
+                "started_at": started,
+                "finished_at": utcnow(),
+            })
+            metrics.record_source_run(name, outcome, found)
+
+        created = await self.ingest(ts, account, collected)
+        await self._record_runs(ts, account, runs, created)
+        return created
+
+    async def _record_runs(
+        self, ts: TenantSession, account: Account, runs: list[dict], created: list[SignalEvent]
+    ) -> None:
+        """Persist the crawl history. Never raises: bookkeeping must not lose the signals it
+        describes, so a failed write is logged and the ingested signals still stand."""
+        if not runs:
+            return
+        from nexus.models.source_run import SignalSourceRun
+
+        # Attribute new signals back to the source that produced them, so `items_new` answers
+        # "is this source finding anything we did not already have?".
+        new_by_source: dict[str, int] = {}
+        for ev in created:
+            new_by_source[ev.source or ""] = new_by_source.get(ev.source or "", 0) + 1
+        try:
+            for run in runs:
+                ts.add(
+                    SignalSourceRun(
+                        tenant_id=ts.tenant_id,
+                        account_id=account.id,
+                        items_new=new_by_source.get(run["source"], 0),
+                        **run,
+                    )
+                )
+            await ts.flush()
+        except Exception:
+            logger.warning("failed to record signal source runs", exc_info=True)
 
 
 _service: IngestionService | None = None
@@ -111,19 +179,47 @@ _service: IngestionService | None = None
 def get_ingestion_service() -> IngestionService:
     global _service
     if _service is None:
-        from nexus.ingestion.sources import DemoSignalSource, RssSignalSource, WebNewsSource
+        from nexus.ingestion.sources import (
+            DemoSignalSource,
+            DorkedSearchSource,
+            RssSignalSource,
+            WebNewsSource,
+        )
         from nexus.enrichment.browser import get_browser_provider
 
         settings = get_settings()
+        selected = settings.signal_source_list
         sources: list[SignalSource] = []
         if settings.demo_signals_active:
             # Synthetic signals: local/dev only. `demo_signals_active` is force-false in
             # staging/prod, so production can never fabricate events even if the flag is set.
             sources.append(DemoSignalSource())
         sources.append(WebNewsSource(get_browser_provider()))
+        # Dork-backed search: one precise query per signal kind, biased to recent results. ON by
+        # default because the broad query alone systematically loses the strongest signals — a
+        # funding round competing with three press mentions for six relevance-ranked slots. It
+        # runs ALONGSIDE WebNewsSource, not instead of it; they fail differently, and shared
+        # event-bucketed dedupe collapses anything both of them find.
+        #
+        # Every dork is one billed search call, so `no_dorks` is the lever for an operator who
+        # wants the cheaper pipeline back.
+        if "no_dorks" not in selected:
+            # Pace only the keyless backend: it is the one with anti-bot heuristics rather than a
+            # contractual rate limit. An operator can override either way.
+            pace = settings.signal_dork_pace_s
+            effective = (
+                settings.signal_search_provider or settings.search_provider
+            ).strip().lower()
+            if pace <= 0 and effective in ("duckduckgo", "ddg", ""):
+                pace = 1.5
+            sources.append(
+                DorkedSearchSource(
+                    max_queries=settings.signal_dork_max_queries, pace_s=pace
+                )
+            )
         # RSS/Atom company feeds (blog / newsroom / press). Opt-in via NEXUS_SIGNAL_SOURCES=...,rss
         # so the default pipeline is byte-for-byte unchanged.
-        if "rss" in settings.signal_source_list:
+        if "rss" in selected:
             sources.append(RssSignalSource())
         _service = IngestionService(sources=sources)
     return _service

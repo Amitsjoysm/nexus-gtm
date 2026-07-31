@@ -3,8 +3,11 @@ from nexus.ingestion.service import IngestionService, RawSignal, get_ingestion_s
 from nexus.ingestion.sources import (
     SIGNAL_LIBRARY,
     DemoSignalSource,
+    DorkedSearchSource,
+    RssSignalSource,
     SignalSource,
     WebNewsSource,
+    event_dedupe_key,
 )
 
 __all__ = [
@@ -16,6 +19,9 @@ __all__ = [
     "get_ingestion_service",
     "SIGNAL_LIBRARY",
     "DemoSignalSource",
+    "DorkedSearchSource",
+    "RssSignalSource",
     "SignalSource",
     "WebNewsSource",
+    "event_dedupe_key",
 ]

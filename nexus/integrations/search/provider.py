@@ -37,6 +37,24 @@ class SearchHit:
 class SearchProvider(abc.ABC):
     name: str
 
+    #: Which query dialect this backend actually understands. Measured against the live services,
+    #: not inferred from documentation — all three behaviours were observed.
+    #:
+    #: ``operator`` — a real Google-style SERP. Honours ``site:``, ``inurl:``, ``OR``, ``-site:``.
+    #: ``plain``    — keyword matching, operators unreliable. DuckDuckGo's HTML endpoint returns
+    #:   **zero results for any query containing ``site:`` or ``-site:``**, while the same query
+    #:   without them returns the right pages. It does not error; it just matches nothing, so an
+    #:   operator dork there is a source that silently finds nothing forever.
+    #: ``semantic`` — neural retrieval. Operators are read as literal words and make results
+    #:   *worse*: on Exa, ``(site:jobs.lever.co) Ramp`` returned other companies' job posts that
+    #:   merely mention Ramp the product, while "Ramp job openings" returned Ramp's own careers
+    #:   page. Domain filtering is a structured parameter here, not query text.
+    #:
+    #: ``plain`` is the conservative default: a backend that has not declared operator support gets
+    #: the query form that works everywhere. Over-claiming costs every result; under-claiming costs
+    #: only some precision.
+    query_dialect: str = "plain"
+
     @abc.abstractmethod
     async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]: ...
 
@@ -48,6 +66,29 @@ class SearchProvider(abc.ABC):
         deterministic. Adapters that can (Exa) override this.
         """
         return []
+
+    async def search_recent(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        days: int = 90,
+        include_domains: tuple[str, ...] = (),
+        exclude_domains: tuple[str, ...] = (),
+    ) -> list[SearchHit]:
+        """Search, preferring results published within ``days`` and within ``include_domains``.
+
+        Optional capability, same pattern as :meth:`find_similar` — but the default **delegates to
+        search** rather than returning ``[]``. Recency is a preference, not a requirement: a caller
+        asking for recent funding news still wants results from an engine that cannot filter by
+        date, and returning nothing would make the dork library useless on the keyless default.
+
+        The domain arguments are likewise ignored here, and correctly so: a ``keyword`` backend has
+        already received them as ``site:`` terms inside ``query``. They exist for ``semantic``
+        backends, where domain filtering is a structured parameter and putting it in the query text
+        actively degrades the results.
+        """
+        return await self.search(query, limit=limit)
 
 
 class StubSearchProvider(SearchProvider):
@@ -67,6 +108,10 @@ class DuckDuckGoSearchProvider(SearchProvider):
     """
 
     name = "duckduckgo"
+    # Measured: the HTML endpoint returns ZERO results for any query containing site: or -site:,
+    # while the same query without them returns the right pages. It also 403s after roughly ten
+    # rapid requests. Operator dorks here are a source that silently finds nothing.
+    query_dialect = "plain"
 
     def __init__(self, browser=None):
         # Defer resolving the global browser singleton until first use so tests can inject one.
@@ -113,7 +158,7 @@ def build_search_provider(name: str, *, browser=None) -> SearchProvider:
         return StubSearchProvider()
     if key in ("duckduckgo", "ddg"):
         return DuckDuckGoSearchProvider(browser=browser)
-    if key in ("exa", "brave", "serper"):
+    if key in ("exa", "brave", "serper", "firecrawl"):
         from nexus.core.config import get_settings
         from nexus.integrations.search.engines import build_engine
 

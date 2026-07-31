@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -65,6 +66,11 @@ def _strip_tags(text: str) -> str:
 
 class ExaSearchProvider(SearchProvider):
     name = "exa"
+    # Neural retrieval: it reads intent, not operators. Measured against the live API — the query
+    # "Ramp job openings" returns Ramp's own careers page, while
+    # "(site:jobs.lever.co OR site:boards.greenhouse.io) Ramp" returns *other* companies' postings
+    # that merely mention Ramp the product. Callers phrase intent and pass domains structurally.
+    query_dialect = "semantic"
     ENDPOINT = "https://api.exa.ai/search"
     ENDPOINT_SIMILAR = "https://api.exa.ai/findSimilar"
 
@@ -110,6 +116,42 @@ class ExaSearchProvider(SearchProvider):
         domains = [d for d in (exclude_domains or []) if d]
         if domains:
             payload["excludeDomains"] = domains
+        return await self._post(self.ENDPOINT, payload, limit)
+
+    async def search_recent(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        days: int = 90,
+        include_domains: tuple[str, ...] = (),
+        exclude_domains: tuple[str, ...] = (),
+    ) -> list[SearchHit]:
+        """Exa with a real published-date floor and structured domain filters.
+
+        This is the only adapter that can actually enforce recency. Elsewhere the base falls back to
+        a plain search and the dork's lexical year constraint does what it can — but "published
+        after this date" is a property of the crawl index, and no query string substitutes for it.
+
+        Domains go in ``includeDomains``/``excludeDomains``, never in the query. Exa is neural: a
+        literal ``site:jobs.lever.co`` is read as words, and measurably returns *other* companies'
+        job posts that merely mention the account name. ``includeDomains`` wins when both are given
+        — once the search is restricted to an allowlist, exclusions can only be redundant, and Exa
+        rejects some combinations of the two.
+        """
+        if not self.api_keys:
+            return []
+        floor = (datetime.now(timezone.utc) - timedelta(days=max(1, days))).date().isoformat()
+        payload: dict = {
+            "query": query,
+            "numResults": _exa_num_results(limit),
+            "startPublishedDate": floor,
+            "contents": {"text": {"maxCharacters": _SNIPPET_CAP}},
+        }
+        if include_domains:
+            payload["includeDomains"] = list(include_domains)
+        elif exclude_domains:
+            payload["excludeDomains"] = list(exclude_domains)
         return await self._post(self.ENDPOINT, payload, limit)
 
     async def find_similar(self, url: str, *, limit: int = 10) -> list[SearchHit]:
@@ -190,6 +232,8 @@ class ExaSearchProvider(SearchProvider):
 
 class BraveSearchProvider(SearchProvider):
     name = "brave"
+    # A real index with documented operator support.
+    query_dialect = "operator"
     ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 
     def __init__(self, api_key: str, *, timeout: float = _TIMEOUT):
@@ -233,6 +277,8 @@ class BraveSearchProvider(SearchProvider):
 
 class SerperSearchProvider(SearchProvider):
     name = "serper"
+    # Google SERP passthrough — operators behave exactly as they do on google.com.
+    query_dialect = "operator"
     ENDPOINT = "https://google.serper.dev/search"
 
     def __init__(self, api_key: str, *, timeout: float = _TIMEOUT):
@@ -270,11 +316,159 @@ class SerperSearchProvider(SearchProvider):
         return out
 
 
+class FirecrawlSearchProvider(SearchProvider):
+    """Firecrawl search — a keyword backend that can also fetch the page behind a result.
+
+    Added because the signal pipeline should not have a single load-bearing vendor. The keyless
+    DuckDuckGo path returns 403 after roughly ten rapid queries (measured), which is well inside a
+    single account refresh once the dork library is running, and Exa is neural — excellent, but it
+    is one company's index and it does not honour the operator dorks that the rest of the library is
+    written in. Firecrawl is Google-backed and keyword-native, so the same dorks work unchanged.
+
+    Two capabilities the others do not combine:
+
+    * ``tbs`` gives a **real recency filter on a keyword engine** (``qdr:w``/``qdr:m``), so "latest"
+      no longer depends on holding an Exa key.
+    * ``scrapeOptions`` returns page content with the result, so a thin SERP snippet can be replaced
+      by the actual text the classifier needs.
+
+    Response shape is handled defensively: v1 returned ``data`` as a list, v2 returns an object
+    keyed by source (``data.web``). Both are parsed, because a provider that silently returns
+    nothing after an API version bump is the worst failure mode for a signal source — it looks
+    exactly like "this company has no news".
+    """
+
+    name = "firecrawl"
+    # Google-backed, so the operator dorks work as written.
+    query_dialect = "operator"
+    ENDPOINT = "https://api.firecrawl.dev/v2/search"
+
+    def __init__(self, api_key: str = "", *, api_keys: list[str] | None = None,
+                 timeout: float = _TIMEOUT):
+        keys = [k.strip() for k in (api_keys or []) if k and k.strip()]
+        if not keys and api_key and api_key.strip():
+            keys = [api_key.strip()]
+        self.api_keys = keys
+        self._key_idx = 0
+        self.timeout = timeout
+
+    @property
+    def api_key(self) -> str:
+        """The key currently in use. Rotation is sticky — once a key works we stay on it until it
+        too rate-limits, so a healthy key is not abandoned after one unlucky request."""
+        return self.api_keys[self._key_idx] if self.api_keys else ""
+
+    async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]:
+        return await self._request(query, limit=limit, tbs="")
+
+    async def search_recent(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        days: int = 90,
+        include_domains: tuple[str, ...] = (),
+        exclude_domains: tuple[str, ...] = (),
+    ) -> list[SearchHit]:
+        # Domains are ignored on purpose: this is a keyword backend, so the dork already carries
+        # them as site:/-site: terms inside the query.
+        return await self._request(query, limit=limit, tbs=_tbs_for_days(days))
+
+    async def _request(self, query: str, *, limit: int, tbs: str) -> list[SearchHit]:
+        """One search, rotating across the key pool on rate-limit.
+
+        Mirrors ``ExaSearchProvider._post``: one shot per key to ride out a single key's 429, then
+        bounded backoffs, then degrade to ``[]``. A crawl issues several queries per account, so a
+        single free-tier key is exhausted quickly — and silently returning nothing would look
+        exactly like a company with no news.
+        """
+        keys = self.api_keys
+        if not keys or not query:
+            return []
+        payload: dict = {"query": query, "limit": max(1, limit)}
+        if tbs:
+            payload["tbs"] = tbs
+
+        backoff_used = 0
+        for attempt in range(len(keys) + len(_RETRY_BACKOFFS)):
+            headers = {
+                "Authorization": f"Bearer {keys[self._key_idx]}",
+                "Content-Type": "application/json",
+            }
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    resp = await client.post(self.ENDPOINT, json=payload, headers=headers)
+                if resp.status_code == 429:
+                    if len(keys) > 1:
+                        self._key_idx = (self._key_idx + 1) % len(keys)   # next key in the pool
+                    # Pause only after cycling the whole pool, to avoid hammering a hard cap.
+                    if (len(keys) == 1 or (attempt + 1) % len(keys) == 0)                             and backoff_used < len(_RETRY_BACKOFFS):
+                        await asyncio.sleep(_RETRY_BACKOFFS[backoff_used])
+                        backoff_used += 1
+                    continue
+                if resp.status_code in _RETRY_STATUS and backoff_used < len(_RETRY_BACKOFFS):
+                    await asyncio.sleep(_RETRY_BACKOFFS[backoff_used])    # transient 5xx
+                    backoff_used += 1
+                    continue
+                resp.raise_for_status()
+                return self._parse(resp.json(), limit)
+            except Exception as exc:
+                if backoff_used < len(_RETRY_BACKOFFS):
+                    await asyncio.sleep(_RETRY_BACKOFFS[backoff_used])
+                    backoff_used += 1
+                    continue
+                logger.warning("Firecrawl search failed after %d attempts: %r", attempt + 1, exc)
+                return []
+        logger.warning("Firecrawl: %d-key pool + retries all rate-limited", len(keys))
+        return []
+
+    def _parse(self, data: dict, limit: int) -> list[SearchHit]:
+        payload = data.get("data") if isinstance(data, dict) else None
+        if isinstance(payload, dict):
+            rows = payload.get("web") or payload.get("results") or []
+        elif isinstance(payload, list):
+            rows = payload
+        else:
+            rows = []
+        out: list[SearchHit] = []
+        for r in rows[:limit]:
+            if not isinstance(r, dict):
+                continue
+            # `description` is the SERP snippet; `markdown` is the scraped page when scrapeOptions
+            # was requested. Prefer the snippet — the classifier reads headlines, and a full page
+            # of markdown buries the one sentence that says what happened.
+            snippet = (r.get("description") or r.get("snippet") or r.get("markdown") or "").strip()
+            out.append(
+                SearchHit(
+                    title=(r.get("title") or "").strip(),
+                    url=(r.get("url") or r.get("link") or "").strip(),
+                    snippet=snippet[:_SNIPPET_CAP],
+                    source=self.name,
+                )
+            )
+        return out
+
+
+def _tbs_for_days(days: int) -> str:
+    """Google ``tbs`` recency token for a day window. Coarse by design — the buckets are all Google
+    offers, and asking for a narrower window than exists returns nothing rather than approximating."""
+    if days <= 1:
+        return "qdr:d"
+    if days <= 7:
+        return "qdr:w"
+    if days <= 31:
+        return "qdr:m"
+    if days <= 365:
+        return "qdr:y"
+    return ""
+
+
 # Engine token -> (provider class, settings attribute holding the key).
 _ENGINES: dict[str, tuple[type[SearchProvider], str]] = {
     "exa": (ExaSearchProvider, "exa_api_key"),
     "brave": (BraveSearchProvider, "brave_api_key"),
     "serper": (SerperSearchProvider, "serper_api_key"),
+    "firecrawl": (FirecrawlSearchProvider, "firecrawl_api_key"),
 }
 
 
@@ -290,16 +484,16 @@ def build_engine(name: str, settings, *, browser=None) -> SearchProvider:
         logger.warning("unknown search engine %r; using stub", name)
         return StubSearchProvider()
     provider_cls, attr = spec
-    if key == "exa":
-        # Exa supports a key rotation pool (exa_api_key + exa_api_keys).
-        keys = getattr(settings, "exa_api_key_list", None)
+    # Engines with a key-rotation pool (primary key + a comma-separated pool).
+    if key in ("exa", "firecrawl"):
+        keys = getattr(settings, f"{key}_api_key_list", None)
         if keys is None:
             single = (getattr(settings, attr, "") or "").strip()
             keys = [single] if single else []
         if not keys:
-            logger.warning("exa selected but no key is set; falling back to DuckDuckGo")
+            logger.warning("%s selected but no key is set; falling back to DuckDuckGo", key)
             return DuckDuckGoSearchProvider(browser=browser)
-        return ExaSearchProvider(api_keys=keys)
+        return provider_cls(api_keys=keys)
     api_key = (getattr(settings, attr, "") or "").strip()
     if not api_key:
         logger.warning("%s selected but %s is unset; falling back to DuckDuckGo", key, attr)

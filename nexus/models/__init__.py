@@ -40,6 +40,7 @@ from nexus.models.network import (
 from nexus.models.outcome import Outcome
 from nexus.models.relevance import RelevanceProfile
 from nexus.models.signal import SignalEvent
+from nexus.models.source_run import SignalSourceRun
 from nexus.models.workflow import InboxTask, ListItem, Play, PlayRun, ProspectList
 
 __all__ = [
@@ -50,6 +51,7 @@ __all__ = [
     "Account",
     "Contact",
     "SignalEvent",
+    "SignalSourceRun",
     "RelevanceProfile",
     "AccountScore",
     "AgentRun",
