@@ -350,6 +350,23 @@ source killed mid-run reports nothing, which is indistinguishable from an accoun
 Three live sources run **together**, not as alternatives; all three route dedupe through
 `event_dedupe_key`, so one funding round found by two of them is one signal.
 
+**`_classify_news` reads negation and speculation.** It used to substring-match, so "Acme raised no
+new funding" scored `funding` 0.85 — the strongest class, which creates an Inbox task and can
+trigger a play, and the rep only found out by opening the article. Two rules make the guard work:
+
+- Cues are checked **within the clause containing the needle**, not the whole headline. "raises $40M
+  Series B **with no** participation from existing investors" is a real round whose "no" belongs to
+  a different clause.
+- Needles are matched against the **original string**, with clauses used only to scope the check.
+  Splitting the text first tore `"partners with"` in half — a needle that contains a connective —
+  so partnerships silently stopped being detected.
+
+Keep `_NEGATION_CUES` short and high-precision. Every entry can suppress a true positive, which is
+why "expected", "seeking" and "aims" are deliberately absent: missing a real round costs as much as
+inventing one. Note that several inflected forms ("raising", "acquiring") are not needles at all, so
+some negated phrasings pass by luck — `tests/test_signal_classifier.py` pins them, so adding a
+needle later cannot quietly reopen the hole.
+
 - `WebNewsSource` — one broad OR-query per account. Catches events indexed under no recognisable
   phrase.
 - `DorkedSearchSource` + `dorks.py` — one high-precision query per signal *kind*, preferring recent
