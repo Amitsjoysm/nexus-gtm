@@ -71,8 +71,27 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
+    # M27: two replicas so a restart is a rolling one. Measured on a genuine `compose up` with a
+    # single replica: 1x502 even with health checks and Caddy retry, because there was no second
+    # instance to serve while the first was down. `deploy.replicas` is honoured by `docker compose
+    # up --scale` and by Swarm; the Caddyfile already load-balances across resolved instances.
+    #
+    # NOTE: `docker compose` restarts replicas together by default. The staggered restart is in
+    # `deploy/rollout.sh`, which stops and starts them one at a time and waits for health in
+    # between — that ordering is the whole point, and a plain `compose restart` does not do it.
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        order: start-first
+        delay: 10s
+      rollback_config:
+        parallelism: 1
+        order: start-first
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)"]
+      # /ready, not /health: readiness gates on the database being reachable, so a replica that is
+      # up but cannot serve is never rotated into the load balancer.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/ready', timeout=3).status==200 else 1)"]
       interval: 10s
       timeout: 5s
       retries: 12

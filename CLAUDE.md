@@ -373,6 +373,37 @@ needle later cannot quietly reopen the hole.
   results. On by default; `NEXUS_SIGNAL_SOURCES=...,no_dorks` removes it, and
   `NEXUS_SIGNAL_DORK_MAX_QUERIES` is the cost dial (each dork is one billed search call).
 - `RssSignalSource` — the company's own feed. Opt-in via `...,rss`.
+- `AtsSignalSource` + `ats.py` — the account's own job board (M17). **Keyless**: Greenhouse, Lever
+  and Ashby all serve public JSON. On by default; `no_ats` opts out.
+- `PublicApiSignalSource` + `public_apis.py` — SEC EDGAR, GitHub, Hacker News (M18–M19). Keyless;
+  each sub-source degrades independently. `no_public_apis` opts out.
+- `WebsiteWatchSignalSource` + `webwatch.py` — watch the account's own pricing/security/careers/
+  about pages and report changes (M20). Opt-in via `...,website`: it is the heaviest source
+  (up to four fetches per account) and needs a stored baseline (`page_snapshots`, migration `0031`).
+
+**Attribution is the recurring bug in this subsystem, and it has bitten five times.** Every one of
+these sources is a **global namespace searched by name**, and a name search returns whoever matches,
+not whoever you meant. Measured:
+
+| Source | What it returned | Guard now required |
+|---|---|---|
+| Greenhouse guess | `example.com` → a board owned by *Democorp*, 21 roles | owner name must match |
+| EDGAR full-text | "Stripe" → a Form D by *DCP STRIPE XXII* | exact CIK, not full-text |
+| EDGAR full-text | "Vanta" → an 8-K from **2006** | recency floor |
+| Hacker News | "Vanta" → *Vanta.js*, a 3D-graphics library, 377 pts | story URL must be the account's domain |
+| LinkedIn dork | `linkedin.com/company/vantaesports` | `require_url` path constraint |
+
+Before adding a source here, answer: **what proves this result is about this account?** If the
+answer is "the name matched", it is not a source yet. EDGAR is the sharpest illustration — moving
+from full-text search to exact CIK resolution means private companies now return `unsupported` and
+no signals at all, which is a real coverage loss and the correct trade.
+
+**Website change monitoring lives or dies on normalisation.** Hashing raw HTML is unstable across
+two fetches *seconds* apart — measured on linear.app/pricing and ramp.com/security — because pages
+carry build ids, nonces and cache-busting asset URLs. A naive watcher reports "pricing changed" on
+every run and trains people to ignore it. `webwatch.normalise` drops script/style/svg **bodies**
+before stripping tags (order matters), then lowercases, strips volatile fragments, and collapses
+whitespace. A first sighting is a **baseline, not an event**.
 
 Rules for editing `dorks.py`:
 
@@ -415,6 +446,35 @@ Rules for editing `dorks.py`:
   Default to `plain` when unsure — over-claiming costs every result, under-claiming costs only some
   precision.
 
+**ATS board discovery (M17): read the token, never guess it.** The board token is not the domain
+root — Vanta and Ramp 404 on Greenhouse because both are on Ashby, and Linear's Ashby token is
+capitalised `Linear`. A wrong guess returns 404, which is indistinguishable from "not hiring", so a
+guess-only strategy fails silently forever. The company's **own careers page** embeds the token
+(measured: vanta→`ashby:vanta`, ramp→`ashby:ramp`, linear→`ashby:Linear`, figma→`greenhouse:figma`);
+Stripe embeds none and is recovered by a domain-root guess. Cached in `Account.custom_fields`.
+
+Three rules that were each found by running it, not by reasoning:
+
+- **A guessed token must prove ownership.** `example.com` guesses the Greenhouse token `example`,
+  which is a real board with 21 open roles owned by "Democorp". So guessing is restricted to
+  providers that publish an owner name (`/v1/boards/{token}` → `name`), and the name must match the
+  account. Ashby and Lever publish none, so they are discovered or not used.
+- **200-with-empty is not 404.** "Board exists, nothing open" is real information about a company
+  that stopped hiring; "not on this ATS" is a blind spot. Never merge them.
+- **Do not parse the careers page for the jobs.** Ramp's is 3.7 MB of JavaScript whose listings come
+  from Ashby anyway.
+
+The signal is **aggregated** — one `hiring` signal per account per month carrying the count and the
+departments hiring. Vanta has 100 open roles and Stripe 542; one signal per requisition would bury
+every other signal in the inbox.
+
+**LinkedIn jobs are reached through the search index, never by scraping.** `site:linkedin.com/jobs`
+against a search provider returns publicly indexed posting pages (titles read "Vanta hiring Senior
+Copywriter"), which is a different act from fetching linkedin.com — that has no compliant API and
+bans scrapers. The dork carries `require_url="linkedin.com/jobs/"` because the same search also
+surfaces company pages: `linkedin.com/company/vantaesports` passed the name gate for an unrelated
+esports org.
+
 **No single vendor is load-bearing.** Measured limits: keyless DuckDuckGo's HTML endpoint returns
 403 after roughly ten rapid queries — inside a single account refresh — so the dork source paces
 itself on that backend and **stops the batch** on the first provider failure rather than deepening
@@ -428,6 +488,37 @@ exhausted quickly.
 (`find_similar`) plus company/ICP discovery (`search_companies`) are **Exa-only capabilities**.
 Repointing the global setting to diversify signal collection takes those down silently — the base
 `find_similar` returns `[]`, so lookalikes report "no results" with nothing in the logs.
+
+## Alerts (`nexus/alerts/`) — M21
+
+**`signal.created` had no subscriber.** It was published on every ingested signal and the only
+listener on the bus handled `account.scored`, so alerts were created in exactly three places, none
+of them from an incoming signal. Everything the collection pipeline gathered landed in a table
+nobody was notified about — a rep learned about a customer's Series F by scrolling the account page.
+`signal_alerts.register_signal_alert_subscriber()` is that wire, registered in both `main.py` and
+`workers/worker.py`.
+
+- **Not every signal is an alert.** `signal_alert_floor` (0.5) keeps the classifier's 0.4 weak-mention
+  tier off the inbox. An alert costs attention, and attention spent on a press mention is attention
+  not spent on a funding round.
+- **Every alert carries the next action**, derived deterministically from the signal kind in
+  `rules.py` — no LLM on the ingestion path, nothing invented.
+- **An unknown signal kind alerts quietly rather than vanishing** (`news`/`info`), the same bias that
+  makes an unknown billing capability resolve to allow.
+- **Alert dedupe is separate from signal dedupe.** Signals dedupe on the *event*; alerts dedupe on
+  *attention*, per category per account per day. Two different job postings are two real signals and
+  one notification.
+- **An alerting failure never rolls back ingestion.** Losing the signal to save the notification
+  would be exactly backwards.
+- `ALERT_CATEGORIES` is derived from `_RULES`, so a category a user can subscribe to but nothing ever
+  emits cannot exist.
+
+`notification_preferences` (migration `0032`) is per user, per category, per channel. **The absence
+of a row means "no preference expressed"** and the tenant-level configuration continues to apply —
+adding the table mutes nobody. Quiet hours are stored as minutes from local midnight so the
+overnight wrap (22:00 → 07:00) is arithmetic rather than a special case; a naive `start <= now < end`
+silently disables quiet hours for exactly the people who set them overnight. Critical alerts override
+quiet hours by default, and the user owns that trade.
 
 ## Frontend skills — USE THESE for any UI work
 

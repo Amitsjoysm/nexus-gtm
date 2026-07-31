@@ -43,3 +43,7 @@ crash.log
 backups/
 *.dump
 *.sql
+# ...except the partitioning runbook, which is documentation rather than a dump. The blanket
+# *.sql rule exists to keep database exports out; this file is the procedure for a maintenance
+# window and must survive a fresh clone (tests/test_retention.py asserts it is present).
+!scripts/partition_usage_events.sql

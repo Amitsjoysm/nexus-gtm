@@ -23,6 +23,7 @@ Run inside the app image: ``python scripts/bootstrap_db.py``.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import subprocess
 import sys
 
@@ -53,8 +54,55 @@ def _alembic(*args: str) -> None:
     subprocess.run([sys.executable, "-m", "alembic", *args], check=True)
 
 
+# A stable arbitrary 63-bit key for the schema lock. Distinct from the scheduler's
+# (nexus/workers/scheduler.py) so the two never contend.
+_SCHEMA_LOCK_KEY = 0x4E455853_5343484D & 0x7FFFFFFFFFFFFFFF
+
+
+@asynccontextmanager
+async def _schema_lock():
+    """Serialize schema work across app replicas.
+
+    Since M27 the app runs TWO replicas and both start with NEXUS_RUN_MIGRATIONS=1. Without this,
+    two concurrent `alembic upgrade head` runs race on one `alembic_version` row — which is how a
+    half-applied schema happens, on the deploy where you least want one.
+
+    A **session** advisory lock, not a transaction one: it spans the alembic subprocess, and
+    Postgres releases it automatically if the process dies, so a replica that crashes mid-migration
+    cannot wedge every future deploy. Non-Postgres backends are single-process by construction and
+    take no lock.
+    """
+    from sqlalchemy import text
+
+    from nexus.core.db import get_sessionmaker
+
+    async with get_sessionmaker()() as session:
+        if session.get_bind().dialect.name != "postgresql":
+            yield
+            return
+        print("[bootstrap] waiting for the schema lock...")
+        # Blocking, not `try_`: the other replica IS migrating, and the right behaviour is to wait
+        # for it and then observe an already-current schema — not to skip and start serving.
+        await session.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _SCHEMA_LOCK_KEY})
+        try:
+            yield
+        finally:
+            try:
+                await session.execute(
+                    text("SELECT pg_advisory_unlock(:k)"), {"k": _SCHEMA_LOCK_KEY}
+                )
+            except Exception:  # a failed unlock self-heals when the connection closes
+                pass
+
+
 async def main() -> None:
     import nexus.models  # noqa: F401  (register all mappers)
+
+    async with _schema_lock():
+        await _run()
+
+
+async def _run() -> None:
     from nexus.core.db import init_db
 
     action = decide(await _table_names())

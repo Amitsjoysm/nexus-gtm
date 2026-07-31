@@ -300,10 +300,31 @@ with postings is seen.
 kinds, or extend the taxonomy deliberately — inventing kinds that no play trigger or alert rule
 matches on would produce signals nothing acts upon.
 
-**Social media is not a substitute here.** LinkedIn is where organisations post jobs socially and it
-has no compliant public API — CLAUDE.md already records this for the network subsystem, which is why
-LinkedIn ingestion there uses a member-supplied CSV export. Scraping it means ToS violation and IP
-bans. The compliant open-API sources (GitHub, Hacker News, Product Hunt, Bluesky) are M19.
+**LinkedIn: through the search index, not by scraping.** Fetching linkedin.com is off the table —
+no compliant API, and it bans scrapers; CLAUDE.md already records this for the network subsystem,
+which is why LinkedIn ingestion there uses a member-supplied CSV export. But LinkedIn *job pages are
+publicly indexed*, and asking a search provider about them is a different act from hitting
+LinkedIn's servers. Verified live: `site:linkedin.com/jobs "Vanta" hiring` returns posting pages
+whose titles read "Vanta hiring Senior Copywriter" — the company name is in the title, so the
+existing precision gate applies unchanged. Shipped as the `hiring_linkedin` dork with
+`require_url="linkedin.com/jobs/"`, because the same query also surfaces company pages and
+`linkedin.com/company/vantaesports` passed the name gate for an unrelated esports org.
+
+The other compliant open-API social sources (GitHub, Hacker News, Product Hunt, Bluesky) are M19.
+
+**As built.** `nexus/ingestion/ats.py` (discovery + fetch + ownership verification) and
+`AtsSignalSource`. On by default, `no_ats` opts out. The signal is aggregated — one `hiring` signal
+per account per month with the role count and departments — because Vanta has 100 open roles and
+Stripe 542, and one signal per requisition would bury everything else in the inbox. Live output for
+Vanta: *"100 open roles on ashby. Hiring in: Revenue (54), Software Engineering (20), Marketing (7),
+People (5)"*.
+
+Deferred deliberately rather than faked: **tech extraction from job text** needs per-posting fetches
+(the list endpoints carry no description), and **surge / new-function / seniority-shift** need a
+stored baseline. `signal_source_runs.items_found` is the natural baseline and makes the comparison
+real rather than heuristic — a follow-up, not a guess. The taxonomy question stands: those three
+names are not in `SIGNAL_KINDS`, so they map onto `hiring` until the taxonomy is extended
+deliberately.
 
 ## M18 — Funding and filings (SEC EDGAR + funding classification)
 
@@ -324,6 +345,17 @@ is optional and raises it to 5000; the source degrades rather than fails without
 (ignore nav, timestamps, CSRF tokens); emit `website.pricing_changed`,
 `website.careers_changed`; store previous hash + diff summary. This is ours end to end — no
 third party, no key.
+
+**As built (2026-07-31).** `nexus/ingestion/webwatch.py` + `WebsiteWatchSignalSource` +
+`page_snapshots` (migration `0031`). Opt-in via `NEXUS_SIGNAL_SOURCES=...,website` because it is the
+heaviest source in the pipeline. New `website_change` signal kind; pricing changes carry 0.75, other
+pages 0.55. A first sighting establishes a baseline and emits nothing.
+
+The normaliser was the whole milestone. **Raw-HTML hashing is unstable across two fetches seconds
+apart** on 2 of 3 live pages tested (linear.app/pricing, ramp.com/security), so a naive watcher
+would have reported "pricing changed" on every single run. Dropping script/style/svg *bodies*
+before stripping tags, lowercasing, removing build ids / ISO timestamps / cache-busters, then
+collapsing whitespace, was stable on all three. Every nuisance is pinned by a test.
 
 **Measured caveat (2026-07-31).** Sitemap-based change detection is a fallback, not the mechanism:
 `linear.app` publishes 900 `<lastmod>` entries, `vanta.com` publishes 3,149 URLs with **zero**
@@ -349,6 +381,33 @@ environment**, so "users choose where alerts are delivered" is not currently pos
 
 **Preserves:** existing tenant-level channels keep working as the fallback when a user has
 expressed no preference.
+
+**As built (2026-07-31) — core delivered, extensions deferred.**
+
+Delivered: `alerts/rules.py` (signal→alert decision, category, severity, suggested next action),
+`alerts/routing.py` (per-user channel + quiet hours), `alerts/signal_alerts.py` (the missing
+subscriber), `notification_preferences` + migration **`0032`** — note the plan said `0030`, which
+was taken by `signal_source_runs` in M16.
+
+The confirmed root finding: `signal.created` was published on every ingested signal and **nothing
+subscribed to it**. Verified by grep — the only subscriber on the bus was CRM sync listening for
+`account.scored`.
+
+Four decisions worth recording:
+
+1. *A floor, not "alert on everything".* Weak mentions (the classifier's 0.4 tier) are recorded and
+   visible but never interrupt. An alert costs attention.
+2. *Alert dedupe is separate from signal dedupe* — the former is per category per account per day,
+   because two distinct job postings are two real signals and one notification.
+3. *An unknown signal kind alerts quietly rather than vanishing*, matching the billing engine's
+   unknown-capability-resolves-to-allow bias.
+4. *Quiet hours are minutes from local midnight*, so the overnight wrap is arithmetic. A naive
+   `start <= now < end` disables quiet hours for exactly the people who set them overnight.
+
+Deferred rather than stubbed: **ICP-match linkage on alerts**, the **digest delivery worker** (the
+`digest` mode is decided and stored but a sweep must still send it), and the **inert WhatsApp /
+Teams / Discord / Web Push / SMS adapters**. Each is additive on top of what shipped; none of them
+is load-bearing for the gap this milestone existed to close.
 
 ---
 
@@ -409,3 +468,74 @@ anything touching tenancy, money, or auth.
 
 **Regression checklist per milestone:** full suite green · ruff clean · single alembic head ·
 chain replays · RLS posture unchanged · live smoke on the deployed stack.
+
+
+---
+
+# As-built notes, M22–M27 (2026-07-31)
+
+## M22 — proration, trial expiry, pause/resume
+
+`nexus/billing/lifecycle.py`, pure functions so the money arithmetic is testable without a database.
+**Rounding is toward the customer** — the credit rounds up, the charge rounds down. Any rounding
+rule loses a fraction of a cent somewhere; losing it in the customer's favour makes it a policy
+rather than an overcharge they can dispute and be right about.
+
+An expired trial **without** a payment method is cancelled, not flipped to `active`. Activating one
+would manufacture receivables that can never be collected and pollute MRR with revenue that does not
+exist. Pausing a `past_due` subscription is refused: `suspended` is a status the dunning sweep
+ignores, so allowing it would be a way to make a real debt stop being chased.
+
+## M23 — revenue reporting
+
+`nexus/billing/revenue.py` + `GET /admin/billing/revenue`. **Derived at read time**, never stored: a
+stored MRR figure is a second source of truth that drifts from the subscriptions it describes, and
+reconciling the two becomes somebody's month-end job forever. Annual plans divide by 12; trials are
+a live logo and zero revenue; `past_due` still counts, because dropping it makes a dunning problem
+look like churn. Runs through the platform sessionmaker — under the RLS-bound role a cross-tenant
+aggregate silently returns zero rows and would report an MRR of $0.
+
+## M24 — feature-flag evaluation
+
+`nexus/billing/flags.py` + `billing_feature_flags` (migration `0033`). Resolution is narrowest-first:
+tenant override → environment override → default. **An unknown flag is ON**, matching the engine's
+existing bias (unknown capability → allow). A flag named on an entitlement but never created must
+not silently disable a capability the customer is paying for.
+
+## M25 — impersonation
+
+Time-boxed, **read-only**, attributable, audited *before* the token is minted. Gated on a new
+`users.impersonate` permission that is deliberately **not** part of `users.manage`: resetting
+someone's MFA and becoming them are different powers. Read-only is enforced at the RBAC choke point
+rather than in the UI — a banner is a courtesy, a 403 is a control — and `run_agents` /
+`run_orchestration` are refused because they spend the customer's money.
+
+Deferred: suspend/reactivate, merge-duplicates and ownership transfer.
+
+## M26 — usage retention
+
+`nexus/billing/retention.py` prunes only events that are **both** rolled up and outside the
+retention window. An unrolled event is uncounted usage, and deleting one silently reduces a
+customer's bill. Filters on `occurred_at` (the billing fact, and the indexed column), not
+`created_at` (row insert time) — caught in testing.
+
+**Partitioning is documented, not migrated** (`scripts/partition_usage_events.sql`). Postgres cannot
+`ALTER` a table into a partitioned one; it needs a copy-and-swap under lock, which is a maintenance
+window on the table recording what customers are billed for and is not the additive, replayable
+migration this project requires. The script flags the two things most easily forgotten in that
+window: RLS is **not** inherited by the rename, and counts must match before dropping the original.
+
+## M27 — zero-downtime deploys
+
+Two replicas, `/ready` (not `/health`) as the health probe so a replica that is up but cannot reach
+the database is never rotated in, and `deploy/rollout.sh` for a genuinely staggered restart —
+`docker compose restart` stops every replica at once, which is exactly the measured 1x502 this
+exists to prevent.
+
+**A race this introduced and had to fix:** with two replicas, both start with
+`NEXUS_RUN_MIGRATIONS=1`, so two concurrent `alembic upgrade head` runs would race on one
+`alembic_version` row. `scripts/bootstrap_db.py` now takes a Postgres **session** advisory lock —
+session rather than transaction so it spans the alembic subprocess, and so a replica crashing
+mid-migration releases it automatically instead of wedging every future deploy. It blocks rather
+than skipping: the right behaviour when another replica is migrating is to wait and then observe an
+already-current schema, not to start serving against a half-applied one.
