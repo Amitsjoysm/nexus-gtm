@@ -65,11 +65,84 @@ def _account_keys(account: Account) -> set[str]:
     return keys
 
 
+# Words that mean the event did not happen, or has not happened yet. Checked within the *clause*
+# that contains the matched needle, because a bare substring match scored "Acme raised no new
+# funding" as a real round at 0.85 — the strongest class in the system, so it created an Inbox task
+# and could trigger a play, and a rep only discovered otherwise by opening the article.
+#
+# Deliberately short and high-precision. Every entry here can suppress a true positive, so words
+# that merely *co-occur* with real rounds ("expected", "seeking", "aims") are left out: missing a
+# real round is as costly as inventing one.
+_NEGATION_CUES = frozenset({
+    # the event did not happen
+    "no", "not", "never", "without", "denies", "denied", "deny",
+    "isn't", "isnt", "doesn't", "doesnt", "didn't", "didnt", "won't", "wont",
+    "declined", "refused",
+    # ...or has not happened yet. Speculation is not a buying signal: a rep cannot congratulate
+    # someone on a round they have not raised.
+    "rumored", "rumoured", "reportedly", "allegedly", "may", "might", "could",
+    "plans", "planning",
+})
+
+# Clause boundaries. Negation scopes to a clause, not a headline: "Acme raises $40M Series B with
+# no participation from existing investors" is a real round whose "no" belongs to a different
+# clause entirely. Splitting here is what keeps the guard from eating true positives.
+_CLAUSE_BOUNDARY = re.compile(
+    r"[,;:—–]|\s+(?:and|with|but|despite|after|before|that|while|whilst|though|although|because|"
+    r"as|since|unless)\s+"
+)
+_WORD = re.compile(r"[a-z']+")
+
+
+def _is_negated(clause: str) -> bool:
+    """Whether a clause negates or merely speculates about the event it mentions.
+
+    Word-level, not substring: "notable" is not "not", and "nowhere" is not "no".
+    """
+    return any(w in _NEGATION_CUES for w in _WORD.findall(clause))
+
+
+def _clause_bounds(low: str) -> list[tuple[int, int]]:
+    """Clause ranges over the ORIGINAL string, as (start, end) index pairs.
+
+    Ranges rather than split fragments: some needles contain a connective themselves
+    (``"partners with"``), and splitting the text would tear them in half so they never match
+    again. The text is matched whole; clauses only scope the negation check.
+    """
+    bounds: list[tuple[int, int]] = []
+    cursor = 0
+    for m in _CLAUSE_BOUNDARY.finditer(low):
+        if m.start() > cursor:
+            bounds.append((cursor, m.start()))
+        cursor = m.end()
+    bounds.append((cursor, len(low)))
+    return bounds
+
+
 def _classify_news(text: str) -> tuple[str, float]:
+    """Classify a headline into (kind, strength). First match wins — the ordering in
+    ``_NEWS_PATTERNS`` is deliberate, so a headline that is both a round and an acquisition is a
+    funding signal first.
+
+    A needle inside a negated or speculative clause does not count as a match. The headline still
+    lands as a weak "news" mention: the information is real even when the event is not, and at 0.4
+    it stays on the timeline without creating an Inbox task.
+    """
     low = text.lower()
+    bounds = _clause_bounds(low)
     for kind, needles, strength in _NEWS_PATTERNS:
-        if any(n in low for n in needles):
-            return kind, strength
+        for needle in needles:
+            start = low.find(needle)
+            while start != -1:
+                end = start + len(needle)
+                for c_start, c_end in bounds:
+                    if c_start <= start < c_end:
+                        # Extend to cover the needle itself when it straddles a boundary, so the
+                        # words inside a matched phrase are always part of what is examined.
+                        if not _is_negated(low[c_start:max(c_end, end)]):
+                            return kind, strength
+                        break
+                start = low.find(needle, start + 1)
     return "news", 0.4
 
 
