@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,10 +76,12 @@ async def get_tenant_session(
             set_current_tenant(None)
 
 
-# Permissions an impersonating admin may still exercise. Only genuinely read-only ones: every
-# other Permission either writes tenant data or spends the customer's money (`run_agents` and
-# `run_orchestration` make billable LLM calls, which would appear on their invoice).
-_READ_PERMISSIONS = frozenset({Permission.view_analytics})
+# HTTP methods that cannot change state. An impersonation session is limited by METHOD, not by
+# permission name: this codebase's RBAC is coarse — `manage_accounts` gates both *listing* and
+# *creating* accounts — so refusing by permission blocked GET /api/accounts, which is exactly the
+# read an admin impersonates in order to perform. Verified live; the permission-based version
+# looked correct in unit tests and was useless in practice.
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 async def require_writable(principal: Principal = Depends(get_principal)) -> Principal:
@@ -101,15 +103,18 @@ async def require_writable(principal: Principal = Depends(get_principal)) -> Pri
 def require(permission: Permission) -> Callable[[Principal], Principal]:
     """Dependency factory enforcing an RBAC permission."""
 
-    def _checker(principal: Principal = Depends(get_principal)) -> Principal:
+    def _checker(
+        request: Request, principal: Principal = Depends(get_principal)
+    ) -> Principal:
         if not has_permission(Role(principal.role), permission):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, f"Role '{principal.role}' lacks {permission.value}"
             )
-        # An impersonation session may read whatever the user can read, and change nothing. Placed
-        # here because every mutating tenant endpoint already passes through an RBAC check, so
-        # there is no route that can quietly skip it.
-        if principal.read_only and permission not in _READ_PERMISSIONS:
+        # An impersonation session may read whatever the user can read, and change nothing.
+        # Checked here because every RBAC-gated tenant endpoint passes through this, so no route
+        # can quietly skip it — and on the METHOD, because the permissions are too coarse to say
+        # whether a given call reads or writes.
+        if principal.read_only and request.method not in _SAFE_METHODS:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
                 "this is a read-only impersonation session; end it to make changes",

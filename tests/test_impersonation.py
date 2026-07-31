@@ -103,33 +103,37 @@ async def test_require_writable_allows_a_normal_session():
     assert (await require_writable(_principal(False))).read_only is False
 
 
-def test_a_mutating_rbac_permission_is_refused_under_impersonation():
-    """Enforced at the RBAC choke point, because every mutating tenant endpoint already passes
-    through one — so no route can quietly skip the check."""
+class _Req:
+    """Minimal stand-in for a Starlette Request — only the method is consulted."""
+
+    def __init__(self, method: str):
+        self.method = method
+
+
+def test_a_mutating_request_is_refused_under_impersonation():
+    """Enforced at the RBAC choke point, because every RBAC-gated tenant endpoint passes through
+    one — so no route can quietly skip the check."""
     from nexus.api.deps import require
     from nexus.core.rbac import Permission
 
     checker = require(Permission.manage_accounts)
-    with pytest.raises(HTTPException) as exc:
-        checker(_principal(True))
-    assert exc.value.status_code == 403
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        with pytest.raises(HTTPException) as exc:
+            checker(_Req(method), _principal(True))
+        assert exc.value.status_code == 403
 
 
-def test_reading_analytics_is_still_permitted():
+def test_a_read_is_permitted_even_behind_a_write_named_permission():
+    """The flaw live testing caught. This codebase's RBAC is coarse — `manage_accounts` gates both
+    LISTING and creating — so refusing by permission name blocked `GET /api/accounts`, which is
+    exactly the read an admin impersonates in order to perform. The unit-test version of the
+    permission-based rule looked correct and was useless in practice."""
     from nexus.api.deps import require
     from nexus.core.rbac import Permission
 
-    assert require(Permission.view_analytics)(_principal(True)).read_only is True
-
-
-def test_running_agents_is_refused_because_it_spends_the_customers_money():
-    """`run_agents` makes billable LLM calls that would appear on the customer's invoice."""
-    from nexus.api.deps import require
-    from nexus.core.rbac import Permission
-
-    for permission in (Permission.run_agents, Permission.run_orchestration):
-        with pytest.raises(HTTPException):
-            require(permission)(_principal(True))
+    for permission in (Permission.manage_accounts, Permission.view_analytics,
+                       Permission.run_agents):
+        assert require(permission)(_Req("GET"), _principal(True)).read_only is True
 
 
 def test_a_normal_session_is_unaffected_by_any_of_this():
@@ -137,9 +141,8 @@ def test_a_normal_session_is_unaffected_by_any_of_this():
     from nexus.api.deps import require
     from nexus.core.rbac import Permission
 
-    for permission in (Permission.manage_accounts, Permission.run_agents,
-                       Permission.view_analytics):
-        assert require(permission)(_principal(False)) is not None
+    for method in ("GET", "POST", "DELETE"):
+        assert require(Permission.manage_accounts)(_Req(method), _principal(False)) is not None
 
 
 # ---- the permission -----------------------------------------------------------------------------
