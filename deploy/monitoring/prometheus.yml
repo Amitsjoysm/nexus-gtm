@@ -1,5 +1,12 @@
 # Prometheus scrape + alerting config for the NEXUS GTM stack.
-# The app exposes /metrics only when NEXUS_METRICS_ENABLED=true (prometheus-fastapi-instrumentator).
+#
+# Run it with the monitoring overlay:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.monitoring.yml up -d
+#
+# Both targets are compose service names on the shared network. The app job was pointed at
+# `api:8000` until M15 — a service that does not exist in docker-compose.prod.yml, so every scrape
+# failed and every alert below evaluated against no data. An alert that cannot fire is worse than
+# no alert: it reads as "all clear".
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -15,11 +22,21 @@ alerting:
         - targets: ["alertmanager:9093"]
 
 scrape_configs:
+  # HTTP metrics + the billing decision/webhook counters. Aggregated across both uvicorn workers
+  # via PROMETHEUS_MULTIPROC_DIR (set on the app service).
   - job_name: nexus-app
     metrics_path: /metrics
     static_configs:
-      - targets: ["api:8000"]
+      - targets: ["app:8000"]
         labels: { service: nexus-app }
+
+  # Job outcomes and the state gauges. A separate process with no HTTP surface of its own, so it
+  # exports on its own port rather than through the API.
+  - job_name: nexus-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["worker:9100"]
+        labels: { service: nexus-worker }
 
   # Self-scrape so Prometheus's own health is visible on the dashboard.
   - job_name: prometheus

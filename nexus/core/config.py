@@ -207,8 +207,37 @@ class Settings(BaseSettings):
     # Once an address is verified 'valid', re-verification of that email is allowed only after
     # this many days — a confirmed verdict doesn't decay faster, and repeat checks burn quota.
     email_reverify_cooldown_days: int = 30
-    signal_sources: str = "demo"               # ordered signal sources
-    search_provider: str = "duckduckgo"        # web-search backend: duckduckgo|exa|brave|serper
+    # Opt-in signal sources, comma separated. `rss` adds the company's own feed; `no_dorks`
+    # removes the dork-backed search source (which is otherwise on, alongside the broad web query).
+    # Default is the REAL sources (M16). It was "demo", which meant the out-of-the-box pipeline
+    # emitted synthetic fixtures — so every alert, play and score built on it described events that
+    # never happened. `demo` is now a test double: `demo_signals_active` keeps it out of
+    # staging/prod, and `_reject_synthetic_signals_in_production` refuses to start rather than
+    # disabling it silently. The offline suite injects DemoSignalSource explicitly and is unaffected.
+    signal_sources: str = "web,rss"
+    # How many dorks to run per account refresh, best first (see nexus/ingestion/dorks.py). Each
+    # one is a billed search call, so this is the cost dial: 4 covers funding, hiring, exec change
+    # and one corporate event. Raising it finds more and costs proportionally more.
+    signal_dork_max_queries: int = 4
+    # Seconds between dork queries. Keyless DuckDuckGo scrapes an HTML endpoint and 403s after
+    # ~10 rapid requests, which one account refresh can reach alone; keyed engines are limited by
+    # contract instead and need no spacing. Auto-selected per provider unless set.
+    signal_dork_pace_s: float = 0.0
+    # Dedicated search backend for SIGNAL collection only. Empty (the default) means "use
+    # `search_provider`", so behaviour is unchanged until an operator sets it.
+    #
+    # It exists because `search_provider` is global, and several features depend on capabilities
+    # only Exa implements — `find_similar` (lookalikes) and `search_companies` (company discovery,
+    # ICP auto-discovery). Repointing the global one at Firecrawl to diversify signal collection
+    # would silently strip those: `find_similar` falls back to the base class and returns [], and
+    # lookalikes degrade to "no results" with nothing in the logs to explain it. This slot keeps
+    # the two decisions independent.
+    signal_search_provider: str = ""
+    # Web-search backend: duckduckgo|exa|brave|serper|firecrawl. Keyless DuckDuckGo is the
+    # default; it 403s after ~10 rapid queries, so any real crawl volume needs a keyed engine.
+    # `firecrawl` and `serper` are keyword/Google-backed (the operator dorks work as written and
+    # `tbs` gives real recency); `exa` is neural (dorks switch to their phrase form automatically).
+    search_provider: str = "duckduckgo"
     research_provider: str = "stub"            # account-research backend
     # Email-deliverability backend: "stub" (syntax only, offline default) | "dns" (free DNS/MX
     # domain check, no infra) | "reacher" (full SMTP mailbox probe, needs an off-host verifier).
@@ -299,10 +328,21 @@ class Settings(BaseSettings):
     # enqueue it every tick without double-sending.
     digest_interval_hours: int = 24
 
-    # Prometheus /metrics. OFF by default: the instrumentator wraps every request, so a
-    # FastAPI/instrumentator version mismatch becomes a 500 on every endpoint. Enable only
-    # with compatible pinned versions and a scraper in front.
-    metrics_enabled: bool = False
+    # Prometheus /metrics. ON by default since M15: a deployment that cannot see queue lag,
+    # 402 rates, dunning depth or webhook failures is not operable, and "observability is opt-in"
+    # in practice means "nobody turned it on".
+    #
+    # It was off because an unpinned build once pulled a FastAPI whose routers the instrumentator
+    # could not introspect, and every endpoint 500ed. Two things changed: pyproject pins both
+    # sides against exactly that pair, and `_maybe_enable_metrics` wraps instrumentation so an
+    # incompatible install degrades to "no metrics" instead of breaking the app. Set false to opt
+    # out; the app is unaffected either way.
+    metrics_enabled: bool = True
+    # The worker serves no HTTP, so it exports its own registry here — job outcomes and the state
+    # gauges (queue depth, dead letters, dunning depth). Bound inside the compose network; never
+    # published. 0 disables the listener while leaving metrics_enabled alone.
+    worker_metrics_port: int = 9100
+    worker_metrics_interval_s: float = 30.0
 
     # ---- Billing platform (commercial OS) --------------------------------------------------
     # Enforcement mode is the master kill switch (docs/billing/15-Migration-Strategy.md §1):
@@ -339,6 +379,14 @@ class Settings(BaseSettings):
     exa_api_keys: str = ""
     brave_api_key: str = ""
     serper_api_key: str = ""
+    # Firecrawl: Google-backed keyword search + page scraping. Inert until keyed. Added so the
+    # signal pipeline is not dependent on any single vendor — keyless DuckDuckGo 403s under crawl
+    # volume, and Exa is one company's neural index that does not honour the operator dorks.
+    firecrawl_api_key: str = ""
+    # Rotation pool, same semantics as `exa_api_keys`: comma-separated, primary first, tried in
+    # turn when one key rate-limits. A single free-tier key is exhausted quickly by a crawl that
+    # issues several queries per account.
+    firecrawl_api_keys: str = ""
 
     # Orchestration engine
     orch_max_attempts: int = 2          # per-step retries before a step is marked failed
@@ -420,11 +468,38 @@ class Settings(BaseSettings):
     def groq_api_key_list(self) -> list[str]:
         return self._key_pool(self.groq_api_key, self.groq_api_keys)
 
+    @property
+    def firecrawl_api_key_list(self) -> list[str]:
+        return self._key_pool(self.firecrawl_api_key, self.firecrawl_api_keys)
+
     @model_validator(mode="after")
     def _reject_insecure_prod(self) -> "Settings":
         if self.env in ("staging", "prod") and self.secret_key == _INSECURE_SECRET:
             raise ValueError(
                 "NEXUS_SECRET_KEY must be set to a strong value outside local/test"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_synthetic_signals_in_production(self) -> "Settings":
+        """Refuse to start a live deployment that asks for fabricated signals.
+
+        ``demo_signals_active`` already forces synthetic signals off in staging/prod, but it does so
+        **silently** — an operator who put ``demo`` in NEXUS_SIGNAL_SOURCES sees no demo signals, no
+        error, and concludes signal collection is broken. Worse, the reverse reading is available
+        too: someone can believe the pipeline is fed by a source that is not running.
+
+        Failing at startup is the honest version. It costs one clear error message on a config that
+        could never have worked, and it is the difference between "signals are fabricated" and
+        "signals are real" being a checkable property of the deployment.
+        """
+        if self.env not in ("staging", "prod"):
+            return self
+        if "demo" in [t.strip().lower() for t in self.signal_sources.split(",")]:
+            raise ValueError(
+                "NEXUS_SIGNAL_SOURCES lists 'demo' but NEXUS_ENV is "
+                f"'{self.env}'. Synthetic signals must never reach a live tenant; remove 'demo' "
+                "(the real sources are 'web' and 'rss')."
             )
         return self
 

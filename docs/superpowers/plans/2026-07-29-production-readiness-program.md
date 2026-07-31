@@ -201,6 +201,51 @@ synthetic fixtures**. Alerts built on it therefore have no business value.
 **Preserves:** `tests/conftest.py` keeps injecting the demo source explicitly, so the offline
 suite is unaffected. This is a default change, called out in release notes.
 
+**As built — deviations and additions.**
+
+1. *No `SourceResult` return type.* Changing what `SignalSource.fetch` returns would break every
+   source and every injected double for no gain. The structured record is the **run row**
+   (`signal_source_runs`), written by `IngestionService` around each source, with the rendered
+   queries kept as `provenance`. Sources stay ignorant, exactly as handlers did in M11.
+2. *Two guards, not one.* `demo_signals_active` already forced synthetic signals off in
+   staging/prod, but silently. A startup validator now refuses to boot when
+   `NEXUS_SIGNAL_SOURCES` names `demo` there, because "asked for demo signals, got none" and
+   "pipeline is broken" were previously the same observation.
+3. *`empty` is a distinct outcome from `ok`.* A source that runs cleanly and returns nothing every
+   single time is broken; folding the two together hides precisely the case this milestone exists
+   to surface.
+4. *Per-source timeout is a source-declared `timeout_s`*, not a config key per source. The shared
+   8s default assumes one request; a multi-query source needs more, and one killed mid-run reports
+   nothing — indistinguishable from an account with no signals.
+
+**Also delivered here (out of the original scope, driven by live measurement).** The dork library
+(`nexus/ingestion/dorks.py`) and `DorkedSearchSource`, because "the sources are real" is worth
+little if the queries cannot find anything. Verified against live search rather than assumed, which
+surfaced three things no test would have:
+
+- Keyless DuckDuckGo returns **403 after ~10 rapid queries** — inside one account refresh — and,
+  separately, returns **zero results for any query containing `site:` or `-site:`**. It does not
+  error either way, so an operator dork there is a source that silently finds nothing forever.
+  Hence per-provider pacing, a stop-the-batch-on-provider-failure rule, and `plain` as the default
+  dialect.
+- Exa is **semantic**: operator dorks measurably return the wrong thing there (the ATS dork returned
+  other companies' postings that mention the account name). Hence three dialects, not one.
+- `crunchbase.com` is a **directory**, not a publisher, and returned profile pages that match a
+  name perfectly and report no event.
+- Two precision rules came straight off live Firecrawl output: the account name must appear in the
+  **title** (an industry round-up mentioning Vanta scored funding 0.90), and the event must be
+  classified from the **title alone** (a product page whose body recalled an earlier round scored
+  funding 0.85).
+
+Every one of these was invisible to the test suite and would have shipped as "signal collection is
+enabled but finds nothing useful". The lesson is the same one the RLS traps taught: **the offline
+suite cannot tell you whether a real integration works.**
+
+`firecrawl` was added as a keyword-native provider so signal collection does not depend on a single
+vendor, and `NEXUS_SIGNAL_SEARCH_PROVIDER` keeps that choice separate from the global
+`search_provider` — lookalikes and company discovery need Exa-only capabilities, and repointing the
+global setting would have taken them down silently.
+
 ## M17 — Hiring-board signals (Greenhouse, Lever, Ashby)
 
 Public JSON boards, no key, no ToS risk. Highest GTM signal-to-effort: hiring reveals budget,
@@ -209,6 +254,56 @@ growth direction, and tech stack.
 **Deliverables:** board discovery from company domain; per-role parsing; signals for
 `hiring.surge`, `hiring.new_function`, `hiring.seniority_shift`; tech extraction from job text
 into `account.tech_stack`; dedupe on `(board, req_id)`.
+
+### Revised design — measured, 2026-07-31
+
+Two corrections to the sketch above, both from probing the live endpoints.
+
+**1. "Board discovery from company domain" does not work by guessing.** The token is not the
+domain root: Vanta and Ramp 404 on Greenhouse (they are on Ashby), and Linear's Ashby token is
+capitalised `Linear`. Guessing fails silently — a 404 is indistinguishable from "not hiring".
+
+What *does* work is crawling the company's **own careers page** and reading the board token out of
+the HTML, which is where the page embeds its ATS:
+
+| Careers page | Token recovered |
+|---|---|
+| vanta.com/careers | `ashby: vanta` |
+| ramp.com/careers | `ashby: ramp` |
+| linear.app/careers | `ashby: Linear` |
+| figma.com/careers | `greenhouse: figma` |
+| stripe.com/jobs | none (custom site) — but the domain-root guess hits Greenhouse |
+
+So discovery is a waterfall: careers page → token → keyless board; then the domain-root guess; then
+sitemap/careers diffing for Workday and bespoke sites; then the dork library, which already
+backstops everything. Cache the result in `Account.custom_fields` so this runs once per account,
+not once per refresh.
+
+**2. Do not parse the careers page for the jobs themselves.** Ramp's is 3.7 MB of JavaScript shell
+and the postings it renders come from Ashby anyway. Reverse-engineering a SPA to obtain data that is
+one unauthenticated GET away is strictly worse.
+
+**Outcome semantics.** A board returning HTTP 200 with an empty list ("exists, nothing open") is a
+real business signal and must not be confused with 404 ("not on this ATS"). This maps onto the
+`empty` vs `error` outcomes already in `signal_source_runs` from M16.
+
+**Verified shapes.** Greenhouse `boards-api.greenhouse.io/v1/boards/{token}/jobs` → `{jobs, meta}`,
+542 for `stripe`, fields `title/location/absolute_url/updated_at/requisition_id`. Ashby
+`api.ashbyhq.com/posting-api/job-board/{token}` → `{jobs, apiVersion}`, fields
+`title/department/team/employmentType/location/publishedAt` — `publishedAt` gives real recency.
+**Lever's populated shape is unverified**: every token tried returned 404 or 200-with-zero, so its
+field names come from documentation, not measurement. Treat it as unconfirmed until a live board
+with postings is seen.
+
+**Taxonomy note.** `hiring.surge` / `hiring.new_function` / `hiring.seniority_shift` do not exist in
+`SIGNAL_KINDS`, which is a flat set. Either map them onto the existing `job_posting` / `hiring`
+kinds, or extend the taxonomy deliberately — inventing kinds that no play trigger or alert rule
+matches on would produce signals nothing acts upon.
+
+**Social media is not a substitute here.** LinkedIn is where organisations post jobs socially and it
+has no compliant public API — CLAUDE.md already records this for the network subsystem, which is why
+LinkedIn ingestion there uses a member-supplied CSV export. Scraping it means ToS violation and IP
+bans. The compliant open-API sources (GitHub, Hacker News, Product Hunt, Bluesky) are M19.
 
 ## M18 — Funding and filings (SEC EDGAR + funding classification)
 
@@ -229,6 +324,11 @@ is optional and raises it to 5000; the source degrades rather than fails without
 (ignore nav, timestamps, CSRF tokens); emit `website.pricing_changed`,
 `website.careers_changed`; store previous hash + diff summary. This is ours end to end — no
 third party, no key.
+
+**Measured caveat (2026-07-31).** Sitemap-based change detection is a fallback, not the mechanism:
+`linear.app` publishes 900 `<lastmod>` entries, `vanta.com` publishes 3,149 URLs with **zero**
+`<lastmod>`, and `ramp.com` serves no sitemap at all. Page-hash diffing on a named shortlist of URLs
+is the reliable path; sitemap `<lastmod>` is an optimisation where it happens to exist.
 
 ## M21 — Alert engine v2 and notification routing
 

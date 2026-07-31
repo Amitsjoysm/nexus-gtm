@@ -76,13 +76,22 @@ class TaskQueue(abc.ABC):
     async def aclose(self) -> None:  # pragma: no cover - default no-op
         return None
 
+    async def depth(self) -> int | None:
+        """Jobs waiting to be picked up, or None if this backend cannot say.
+
+        Concrete rather than abstract so adding it does not break any queue implementation that
+        predates it. None means "unknown", which a metric must render as absent — reporting 0 for
+        an unmeasurable queue would look exactly like a healthy empty one.
+        """
+        return None
+
 
 class InMemoryTaskQueue(TaskQueue):
     def __init__(self) -> None:
         self._q: asyncio.Queue[Job] = asyncio.Queue()
 
     async def enqueue(self, job: Job) -> None:
-        increment_job_counter("enqueued")
+        increment_job_counter("enqueued", job=job.name)
         await self._q.put(job)
 
     async def dequeue(self, *, timeout: float | None = None) -> Job | None:
@@ -100,6 +109,9 @@ class InMemoryTaskQueue(TaskQueue):
         except asyncio.TimeoutError:
             return None
 
+    async def depth(self) -> int | None:
+        return self._q.qsize()
+
 
 class RedisTaskQueue(TaskQueue):
     def __init__(self, redis_url: str, key: str = _QUEUE_KEY) -> None:
@@ -109,7 +121,7 @@ class RedisTaskQueue(TaskQueue):
         self._key = key
 
     async def enqueue(self, job: Job) -> None:
-        increment_job_counter("enqueued")
+        increment_job_counter("enqueued", job=job.name)
         await self._redis.rpush(self._key, job.to_json())
 
     async def dequeue(self, *, timeout: float | None = None) -> Job | None:
@@ -119,6 +131,14 @@ class RedisTaskQueue(TaskQueue):
             return None
         _, raw = res
         return Job.from_json(raw)
+
+    async def depth(self) -> int | None:
+        """LLEN, not a tracked counter: the list is the truth, and a counter would drift the
+        moment a worker died holding a job."""
+        try:
+            return int(await self._redis.llen(self._key))
+        except Exception:
+            return None
 
     async def aclose(self) -> None:
         await self._redis.aclose()

@@ -71,7 +71,7 @@ async def record_job_failure(queue: TaskQueue, job: Job, error: str) -> str:
             base_s=settings.job_retry_base_delay_s,
             max_s=settings.job_retry_max_delay_s,
         )
-        increment_job_counter("retried")
+        increment_job_counter("retried", job=job.name)
         logger.warning(
             "job %s failed (attempt %s/%s): %s — retrying in %.1fs",
             job.name, job.attempts, job.max_attempts, error, delay,
@@ -79,7 +79,7 @@ async def record_job_failure(queue: TaskQueue, job: Job, error: str) -> str:
         await _schedule_retry(queue, job, delay)
         return "retried"
 
-    increment_job_counter("dead_lettered")
+    increment_job_counter("dead_lettered", job=job.name)
     logger.error(
         "job %s exhausted %s attempts: %s — dead-lettering payload %s",
         job.name, job.attempts, error, job.payload,

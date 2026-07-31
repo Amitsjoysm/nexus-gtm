@@ -58,6 +58,14 @@ services:
       # Real signals only in production: never fabricate demo funding/hiring events for live
       # tenants. Redundant with the env-based fail-safe in config (NEXUS_ENV=prod), kept explicit.
       NEXUS_DEMO_SIGNALS_ENABLED: "false"
+      # /metrics aggregates both uvicorn workers. Without this each worker keeps its own registry
+      # and a scrape reports roughly half the traffic, flapping between the two. The entrypoint
+      # empties the directory on start (stale per-process files are never reclaimed). Set on the
+      # app only — the worker is single-process and this variable would blank its registry.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+    tmpfs:
+      # In-memory: these files are per-container-run and must not survive a restart.
+      - /tmp/prometheus
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,6 +91,12 @@ services:
       NEXUS_QUEUE_BACKEND: redis
       # The worker runs the automation heartbeat (which ingests signals) — keep demo signals off.
       NEXUS_DEMO_SIGNALS_ENABLED: "false"
+      # The worker serves no HTTP, so it exports its own registry here: job outcomes plus the
+      # state gauges (queue depth, dead letters, dunning depth). Reachable only on the compose
+      # network — deliberately not published to the host.
+      NEXUS_WORKER_METRICS_PORT: "9100"
+    expose:
+      - "9100"
     depends_on:
       postgres:
         condition: service_healthy

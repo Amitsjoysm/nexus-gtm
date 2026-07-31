@@ -11,6 +11,7 @@ import logging
 
 from fastapi import APIRouter, Header, Request, Response, status
 
+from nexus.core import metrics
 from nexus.core.db import get_platform_sessionmaker
 
 logger = logging.getLogger("nexus.billing.webhooks")
@@ -54,6 +55,16 @@ async def stripe_webhook(
         # Log the reason, return a generic message: a precise error tells someone probing the
         # endpoint exactly which check they still need to defeat.
         logger.warning("rejected stripe webhook: %s", exc)
+        # A rejection writes NO row — the dedupe table only records events that verified. So this
+        # counter is the only trace it leaves. Without it, a wrong signing secret presents as
+        # "subscriptions stopped updating", and the first report is a customer asking why they
+        # were charged for a plan they cancelled.
+        metrics.record_webhook_event(
+            "stripe",
+            "bad_signature" if isinstance(exc, SignatureError)
+            else "stale" if isinstance(exc, StaleWebhookError)
+            else "error",
+        )
         response.status_code = status.HTTP_400_BAD_REQUEST
         return {"error": "invalid_webhook"}
 
@@ -63,6 +74,7 @@ async def stripe_webhook(
         if await already_processed(session, event.event_id):
             # Idempotent success. The provider retries aggressively and a replay must not
             # re-apply the effect, but it also should not look like a failure.
+            metrics.record_webhook_event("stripe", "duplicate")
             return {"received": True, "duplicate": True, "event": event.event_type}
 
         try:
@@ -78,7 +90,15 @@ async def stripe_webhook(
             # 500 so the provider retries. Recording it as processed here would silently drop a
             # real payment event.
             logger.exception("failed to apply stripe webhook %s", event.event_id)
+            metrics.record_webhook_event("stripe", "error")
             response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
             return {"error": "processing_failed"}
 
+    # "ignored" is a success, not a failure: the event verified and was recorded, it just changed
+    # nothing — an event type we deliberately do not act on, or one with no matching invoice.
+    # Separating it keeps "we are receiving events but applying none of them" visible, which is
+    # what a mis-scoped webhook endpoint looks like.
+    metrics.record_webhook_event(
+        "stripe", "processed" if outcome.get("applied") else "ignored"
+    )
     return {"received": True, "duplicate": False, **outcome}

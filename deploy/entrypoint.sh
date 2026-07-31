@@ -38,4 +38,14 @@ PY
   echo "[entrypoint] database ready."
 fi
 
+# Prometheus multiprocess mode: uvicorn runs 2 workers, each with its own registry, so without a
+# shared directory a scrape hits one at random and reports roughly half the traffic. The files are
+# per-process and stale ones are never reclaimed, so the directory MUST be emptied on start —
+# otherwise counters from workers that died in a previous container keep being summed in forever.
+if [ -n "${PROMETHEUS_MULTIPROC_DIR:-}" ]; then
+  mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
+  rm -f "$PROMETHEUS_MULTIPROC_DIR"/*.db 2>/dev/null || true
+  echo "[entrypoint] prometheus multiprocess dir ready at $PROMETHEUS_MULTIPROC_DIR"
+fi
+
 exec "$@"

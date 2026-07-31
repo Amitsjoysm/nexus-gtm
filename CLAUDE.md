@@ -149,11 +149,11 @@ touches Account/Contact/Inbox/Cadence.
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0029_admin_permissions`. The chain is
+Alembic under `migrations/versions/`. Head: `0030_signal_source_runs`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
-`mfa_recovery_codes`) → `0029` (`platform_admins.permissions`). Every tenant-scoped table
-automatically gets RLS via
+`mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`).
+Every tenant-scoped table automatically gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —
@@ -288,12 +288,129 @@ sends, orchestration runs — were silently lost.
 - `workers/durability.py` retries with jittered exponential backoff, then parks the job in
   `dead_letter_jobs` with its payload intact. Even a failed dead-letter *write* logs the whole
   payload at ERROR. Shutdown flushes in-flight backoffs back onto the queue.
-- Triage/replay: `GET|POST /admin/jobs/dead-letters...`, behind `require_platform_admin`, every
-  replay audited. Counters in `workers/metrics.py` (enqueued / succeeded / retried /
-  dead-lettered) — a plain dict, no new dependency; proper export is M15.
+- Triage/replay: `GET|POST /admin/jobs/dead-letters...`, gated on `jobs.manage`, every replay
+  audited. Counters in `workers/metrics.py` (enqueued / succeeded / retried / dead-lettered) —
+  a plain dict, mirrored since M15 to a Prometheus counter carrying the **job name**. The dict
+  stays unlabelled on purpose: keyed by job name it is a memory leak waiting for a name derived
+  from user input.
 - `NEXUS_JOB_RETRY_ENABLED=false` disables the retry only; the job is still dead-lettered, so the
   kill switch degrades to "fail fast, keep the evidence" — never back to losing work.
 - **Handlers stay ignorant of all of it.** No `handle_*` signature and no `HANDLERS` entry changes.
+
+## Observability (`nexus/core/metrics.py`, `nexus/workers/state_metrics.py`) — M15
+
+`/metrics` is **on by default**. It was opt-in because an unpinned build once pulled a FastAPI the
+instrumentator could not introspect and every endpoint 500ed; what prevents a repeat is the
+`try/except` around `_instrument()` plus the pins in `pyproject.toml`, not the default. A
+deployment blind to queue lag, 402 rates and dunning depth is not operable.
+
+- **Counters in the API, gauges in the worker.** The app runs uvicorn with 2 workers, so it needs
+  `PROMETHEUS_MULTIPROC_DIR` (set in compose, emptied by the entrypoint — stale per-process files
+  are never reclaimed) for counters to aggregate. In that mode `prometheus_client` reads only the
+  mmap files: **gauges need a declared mode and custom collectors are not read at all**. So state
+  lives in the worker, which is single-process and exports on `:9100`.
+- **State is refreshed on a loop, not collected at scrape time.** A collector that queries Postgres
+  per scrape lets anyone who reaches `/metrics` drive four aggregate queries at will.
+- A failed state query **leaves the previous gauge value** rather than writing 0 — a zero reads as
+  "the problem went away", which is the one thing it must not say when the truth is "we could not
+  look". An unmeasurable queue leaves the gauge **absent** for the same reason.
+- `nexus_billing_decisions_total{capability,outcome,reason}` is the point of the milestone:
+  `would_block` is what shadow mode computes on every call and used to discard, so "what happens if
+  we flip enforcement on?" was previously answerable only by flipping it. `outcome` and `reason`
+  are separate labels — a shadow-mode throttle and an enforced 429 share a reason and have opposite
+  outcomes.
+- A rejected webhook writes **no row** (the dedupe table only records events that verified), so
+  `nexus_webhook_events_total{outcome="bad_signature"}` is the only trace a stale signing secret
+  leaves.
+- Alert rules live in `deploy/monitoring/alerts.yml`; the stack runs as an **overlay**
+  (`docker compose -f docker-compose.prod.yml -f docker-compose.monitoring.yml up -d`). Before M15
+  those configs existed but nothing ran them, and the app job pointed at a service name that does
+  not exist — every rule evaluated against no data, which reads as "all clear".
+
+## Signal sources (`nexus/ingestion/`) — M16
+
+**`signal_sources` defaults to `web,rss`, not `demo`.** It was `demo`, so an out-of-the-box
+deployment scored, alerted and ran plays on **fabricated** events. `DemoSignalSource` is now a test
+double in the mould of `network/connectors/fixture.py`, with two guards: `demo_signals_active` is
+hard-false in staging/prod, and `Settings._reject_synthetic_signals_in_production` **refuses to
+start** if `NEXUS_SIGNAL_SOURCES` names `demo` there. The second exists because the first is
+silent, and an operator who asked for demo signals and got none cannot tell that from a broken
+pipeline. `tests/conftest.py` injects the double explicitly, so the offline suite is unaffected.
+
+**Every source run is recorded** in `signal_source_runs` (migration `0030`, tenant-scoped so
+`apply_rls.py` enrols it) — source, outcome, items found vs. new, duration, error, and the rendered
+queries as provenance. Written **whether or not anything was found**: previously a source broken for
+a week and a quiet market produced identical evidence, and the first sign of trouble was a rep
+asking why an obviously-funded account showed no round. `empty` is deliberately not `ok` — a source
+that runs cleanly and finds nothing every time is broken, and merging the two hides that.
+
+A source may declare `timeout_s` to override the shared 8s budget, which assumes one request. A
+source killed mid-run reports nothing, which is indistinguishable from an account with no signals.
+
+Three live sources run **together**, not as alternatives; all three route dedupe through
+`event_dedupe_key`, so one funding round found by two of them is one signal.
+
+- `WebNewsSource` — one broad OR-query per account. Catches events indexed under no recognisable
+  phrase.
+- `DorkedSearchSource` + `dorks.py` — one high-precision query per signal *kind*, preferring recent
+  results. On by default; `NEXUS_SIGNAL_SOURCES=...,no_dorks` removes it, and
+  `NEXUS_SIGNAL_DORK_MAX_QUERIES` is the cost dial (each dork is one billed search call).
+- `RssSignalSource` — the company's own feed. Opt-in via `...,rss`.
+
+Rules for editing `dorks.py`:
+
+- **Operators are limited to the intersection every engine supports** (`site:`, `-site:`,
+  `intitle:`, `inurl:`, quotes, `OR`). No Google-only `after:`/`tbs=`: the default provider is
+  DuckDuckGo HTML, and a dork that degrades to keyword soup on three of four providers is worse
+  than a plainer one that works on all of them.
+- `site:` groups must be **OR-ed inside parentheses**. Repeated bare `site:` terms read as an
+  impossible AND and return nothing, forever, silently.
+- Recency is `inurl:{year}` plus the year as a token — news CMSs put the date in the path. Real
+  date filtering needs `SearchProvider.search_recent`, which only Exa implements; the base
+  **delegates to `search`** rather than returning `[]`, or the library would be useless keyless.
+- `trust_kind` only where the **URL pattern** settles the event class (ATS boards, a company's own
+  engineering blog). Not for trade press — TechCrunch carries funding, acquisitions and launches
+  from the same paths, so trusting it stamps one kind on all three. That bug shipped and was caught
+  by `test_a_dork_does_not_inflate_a_weaker_event`.
+- Open-web dorks keep three post-filters, each added after a live false positive:
+  - **The name must be in the TITLE**, not merely somewhere on the page. Matching title+snippet let
+    an industry round-up through — *"Cybersecurity Startup Investors Pulled Back In Q3"* scored
+    funding 0.90 for Vanta because the article mentions them in passing.
+  - **The event is classified from the title alone.** A headline states what happened; a body
+    mentions everything the company has ever done. Classifying on both scored a product page,
+    *"Vanta Delivers: Vanta control framework"*, as funding 0.85 because its text recalled an
+    earlier round. The snippet still feeds `require_any` — a relevance floor and an event
+    determination are different questions.
+  - **A `require_any` vocabulary floor**: a company's own About page ranks perfectly for its name
+    and reports no event.
+  `self_evident` skips these only where the hit is about the company by construction (its own ATS
+  board, its own domain).
+- **Every dork needs both forms**, because `SearchProvider.query_dialect` has three values and all
+  three behaviours were measured against the live services:
+  - `operator` (Serper, Brave, Firecrawl — real Google-backed SERPs) gets `template`.
+  - `plain` (DuckDuckGo HTML, and the **default** for anything undeclared) gets `phrase`. Measured:
+    DDG returns **zero results for any query containing `site:` or `-site:`** while the same query
+    without them returns the right pages. It does not error, so an operator dork there is a source
+    that silently finds nothing forever. It also 403s after ~10 rapid queries.
+  - `semantic` (Exa) gets `phrase` plus the structured `sites`/`exclude` tuples. Operators there
+    return the *wrong* thing: the operator ATS dork returned other companies' postings that mention
+    the account name, the phrase form returned its own careers page.
+  Default to `plain` when unsure — over-claiming costs every result, under-claiming costs only some
+  precision.
+
+**No single vendor is load-bearing.** Measured limits: keyless DuckDuckGo's HTML endpoint returns
+403 after roughly ten rapid queries — inside a single account refresh — so the dork source paces
+itself on that backend and **stops the batch** on the first provider failure rather than deepening
+the block. `firecrawl` was added as an operator-native alternative whose `tbs` parameter gives real recency
+without an Exa key; it carries a key-rotation pool (`NEXUS_FIRECRAWL_API_KEYS`) with the same
+semantics as Exa's, because a crawl issues several queries per account and one free-tier key is
+exhausted quickly.
+
+`NEXUS_SIGNAL_SEARCH_PROVIDER` selects a backend for **signals alone**; empty means "use
+`search_provider`". Keep them separate: `search_provider` is global, and lookalikes
+(`find_similar`) plus company/ICP discovery (`search_companies`) are **Exa-only capabilities**.
+Repointing the global setting to diversify signal collection takes those down silently — the base
+`find_similar` returns `[]`, so lookalikes report "no results" with nothing in the logs.
 
 ## Frontend skills — USE THESE for any UI work
 

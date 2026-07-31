@@ -47,3 +47,115 @@ groups:
         annotations:
           summary: "No HTTP requests recorded for 15m"
           description: "The app is up but idle or not receiving traffic — verify the ingress."
+
+  # ---- Work durability (M11 + M15) ----------------------------------------------------------
+  # The worker is a separate scrape target with no HTTP surface of its own; if it stops being
+  # scraped, every rule below silently stops evaluating, so that is the first alert.
+  - name: nexus-jobs
+    rules:
+      - alert: WorkerDown
+        expr: up{job="nexus-worker"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Worker is not being scraped"
+          description: >-
+            No jobs are being processed, or the worker's metrics port is unreachable. Cadences,
+            digests, usage rollups, dunning and reconciliation all stop here.
+
+      - alert: QueueBacklogGrowing
+        # max() not sum(): each worker reports the depth of the same shared queue, so summing
+        # would multiply one backlog by the number of workers.
+        expr: max(nexus_queue_depth) > 500
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Task queue depth above 500 for 10m"
+          description: "Consumers are not keeping up. Check worker logs and DB/LLM latency."
+
+      - alert: DeadLettersAwaitingTriage
+        # A gauge, not a counter: it falls when someone replays or resolves them. Anything above
+        # zero for an hour means the evidence is sitting there unread.
+        expr: max(nexus_dead_letter_jobs) > 0
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "Dead-lettered jobs are waiting on triage"
+          description: >-
+            Jobs exhausted their retries and were parked with their payloads. Triage at
+            /api/admin/jobs/dead-letters — nothing retries them automatically.
+
+      - alert: JobFailureRateHigh
+        expr: |
+          sum(rate(nexus_jobs_total{outcome="dead_lettered"}[15m]))
+            / clamp_min(sum(rate(nexus_jobs_total{outcome=~"succeeded|dead_lettered"}[15m])), 0.001) > 0.05
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "Over 5% of jobs are being dead-lettered"
+          description: "A handler is failing systematically, not transiently. Check by `job` label."
+
+  # ---- Billing (M15) -------------------------------------------------------------------------
+  - name: nexus-billing
+    rules:
+      - alert: EntitlementEngineErroring
+        # The engine allows on any internal error. That is the right failure mode for the customer
+        # and the worst one for observability: on every other metric it looks exactly like nobody
+        # hitting a limit. This counter is the only thing that distinguishes them.
+        expr: sum(rate(nexus_billing_decisions_total{outcome="error"}[10m])) > 0
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "The entitlement engine is erroring, so everything is being allowed"
+          description: >-
+            check_and_meter is degrading to allow. Quotas are not being enforced and usage may not
+            be recorded. Check app logs for "check_and_meter failed".
+
+      - alert: WebhookSignatureFailing
+        # A rejected webhook writes no row, so this counter is its only trace. The usual cause is a
+        # rotated signing secret, and the symptom is subscriptions silently ceasing to update.
+        expr: sum(rate(nexus_webhook_events_total{outcome="bad_signature"}[10m])) > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Stripe webhook signatures are being rejected"
+          description: >-
+            Almost always a stale NEXUS_STRIPE_WEBHOOK_SECRET. Until it is fixed, cancellations and
+            payment failures never reach our database.
+
+      - alert: WebhooksVerifiedButNeverApplied
+        # Distinguishes a mis-scoped endpoint (we get events, none of them are ones we act on)
+        # from a dead one. Only meaningful while events are actually arriving.
+        expr: |
+          sum(rate(nexus_webhook_events_total{outcome="ignored"}[30m])) > 0
+            and sum(rate(nexus_webhook_events_total{outcome="processed"}[30m])) == 0
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Stripe events are verifying but none are being applied"
+          description: >-
+            Check the event types selected on the provider endpoint against SUBSCRIPTION_EVENTS and
+            INVOICE_EVENTS in nexus/billing/webhooks.py.
+
+      - alert: DunningBacklogGrowing
+        expr: max(nexus_subscriptions{status="past_due"}) > 10
+        for: 6h
+        labels: { severity: warning }
+        annotations:
+          summary: "More than 10 workspaces are past due"
+          description: >-
+            Either collection is broken or a payment provider is failing. Dunning escalates but
+            never voids a debt, so this only falls when someone acts.
+
+      - alert: EnforcementWouldBlockSpike
+        # Informational, and the reason M15 exists: shadow mode computes this on every call and
+        # used to discard it. This is the number that decides whether enforcement can be switched
+        # on — a big pre-flip spike means a plan's quota is wrong, not that customers are abusing.
+        expr: sum(rate(nexus_billing_decisions_total{outcome="would_block"}[1h])) > 1
+        for: 1h
+        labels: { severity: info }
+        annotations:
+          summary: "Shadow enforcement would be blocking real traffic"
+          description: >-
+            Review by capability before setting NEXUS_BILLING_ENFORCEMENT=on; each of these would
+            become a 402 or 429 for a paying customer.

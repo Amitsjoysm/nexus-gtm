@@ -53,7 +53,7 @@ async def run_worker(*, stop: asyncio.Event | None = None, poll_timeout: float =
                 outcome = await record_job_failure(queue, job, str(result.get("error") or ""))
                 logger.info("job %s -> %s", job.name, outcome)
             else:
-                increment_job_counter("succeeded")
+                increment_job_counter("succeeded", job=job.name)
                 logger.info("job %s -> %s", job.name, result.get("error") or "ok")
     finally:
         # Jobs asleep in a backoff have already left the queue; put them back before exiting,
@@ -67,9 +67,12 @@ async def run_worker(*, stop: asyncio.Event | None = None, poll_timeout: float =
 async def _main() -> None:
     logging.basicConfig(level=logging.INFO)
     await init_db()
+    from nexus.core.config import get_settings
     from nexus.ingestion.crm_sync import register_crm_sync_subscribers
+    from nexus.workers.state_metrics import run_state_metrics, serve_worker_metrics
 
     register_crm_sync_subscribers()
+    settings = get_settings()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -77,11 +80,20 @@ async def _main() -> None:
             loop.add_signal_handler(sig, stop.set)
         except NotImplementedError:  # Windows: signal handlers unsupported in loop
             pass
-    try:
-        await asyncio.gather(
-            run_worker(stop=stop),
-            run_scheduler(stop=stop),
+
+    coros = [run_worker(stop=stop), run_scheduler(stop=stop)]
+    # The worker serves no HTTP, so without this its job counters and state gauges are unreachable
+    # by any scraper — "are jobs failing?" stays a question you answer by grepping logs.
+    if (
+        settings.metrics_enabled
+        and settings.worker_metrics_port > 0
+        and serve_worker_metrics(settings.worker_metrics_port)
+    ):
+        coros.append(
+            run_state_metrics(stop=stop, interval_s=settings.worker_metrics_interval_s)
         )
+    try:
+        await asyncio.gather(*coros)
     finally:
         await dispose_db()
 

@@ -10,11 +10,13 @@ missing subscriptions, and internal errors all resolve to "allow".
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import select
 
+from nexus.core import metrics
 from nexus.core.tenancy import TenantSession
 from nexus.models.billing import (
     BillingCapability,
@@ -416,7 +418,9 @@ async def check_and_meter(
         return MeterResult(allowed=True, recorded=False, reason="invalid_quantity")
 
     try:
+        _t0 = time.perf_counter()
         ent = await resolve_entitlement(ts, capability_id)
+        metrics.observe_entitlement_resolve(time.perf_counter() - _t0)
 
         # One key for the whole decision, so the usage row and the credit burn either both
         # apply or both no-op on a retry. record_usage would otherwise mint its own.
@@ -453,6 +457,16 @@ async def check_and_meter(
         enforced = mode == "on"
         allowed = True if not enforced else blocked_reason is None
 
+        # The one number that decides whether enforcement can be switched on. In shadow mode the
+        # engine computes `blocked_reason` on every call and then discards it, so without this
+        # counter "what happens if we flip the switch?" can only be answered by flipping it.
+        if blocked_reason is None:
+            metrics.record_billing_decision(capability_id, "allowed")
+        else:
+            metrics.record_billing_decision(
+                capability_id, "blocked" if not allowed else "would_block", blocked_reason
+            )
+
         recorded = False
         if allowed:
             recorded = await record_usage(
@@ -470,4 +484,7 @@ async def check_and_meter(
         )
     except Exception:  # the seam must never break the product
         logger.warning("check_and_meter failed for %s", capability_id, exc_info=True)
+        # Counted, because "the engine is erroring and therefore allowing everything" looks
+        # exactly like "nobody is hitting a limit" on every other metric.
+        metrics.record_billing_decision(capability_id, "error")
         return MeterResult(allowed=True, recorded=False)

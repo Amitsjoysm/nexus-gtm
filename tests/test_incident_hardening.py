@@ -144,16 +144,49 @@ def test_demo_signals_hard_disabled_in_production(monkeypatch, env):
 
 
 @pytest.mark.asyncio
-async def test_metrics_off_by_default_and_app_serves(client):
-    """Regression: metrics must be opt-in. Auto-enabling the instrumentator put a
-    version-fragile middleware on every request — an incompatible FastAPI/instrumentator
-    pair then 500'd logins. Default app: no /metrics, normal endpoints work."""
-    assert get_settings().metrics_enabled is False
-    r = await client.get("/api/health") if False else await client.get("/health")
+async def test_instrumentation_never_breaks_the_app(client):
+    """The original incident, still guarded — but the guard has moved.
+
+    Auto-enabling the instrumentator once put a version-fragile middleware on every request, and
+    an incompatible FastAPI/instrumentator pair then 500'd logins. The fix at the time was to make
+    metrics opt-in, and this test asserted that default.
+
+    M15 flipped the default back to ON, because "observability is opt-in" in practice means nobody
+    turned it on, and a deployment blind to queue lag, 402 rates and dunning depth is not operable.
+    What actually prevents a repeat is not the default: it is that `_maybe_enable_metrics` wraps
+    instrumentation so an incompatible install degrades to "no metrics", and that pyproject pins
+    both sides against exactly that pair. So the invariant under test is the one that matters —
+    **ordinary endpoints work with instrumentation active** — rather than the flag's value.
+    """
+    assert get_settings().metrics_enabled is True
+
+    r = await client.get("/health")
     assert r.status_code == 200, r.text
+    r = await client.get("/ready")
+    assert r.status_code in (200, 503), r.text
+
     r = await client.get("/metrics")
-    # The Prometheus endpoint must not be active by default. When the SPA build is present
-    # (as in production), an unmounted /metrics falls through to the client-side-routing shell
-    # (200 text/html) rather than 404 — either way it is NOT serving Prometheus metrics.
-    assert r.status_code == 404 or r.headers.get("content-type", "").startswith("text/html")
-    assert "# TYPE" not in r.text and "# HELP" not in r.text  # no prometheus exposition
+    assert r.status_code == 200
+    assert "# HELP" in r.text or "# TYPE" in r.text
+
+
+@pytest.mark.asyncio
+async def test_a_broken_instrumentator_degrades_to_no_metrics(monkeypatch):
+    """The real protection against the original incident: if instrumenting raises, the app must
+    still be built and serve. Losing metrics is an inconvenience; 500ing every login is an
+    outage."""
+    import httpx
+
+    import nexus.main as main
+
+    def explode(_app):
+        raise RuntimeError("instrumentator/FastAPI mismatch")
+
+    # Patch the instrumentator call itself, not the wrapper, so the wrapper is what is tested.
+    monkeypatch.setattr(main, "_instrument", explode, raising=False)
+
+    app = main.create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/health")
+        assert r.status_code == 200, r.text

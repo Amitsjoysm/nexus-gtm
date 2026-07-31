@@ -78,10 +78,17 @@ async def burn_credits(
         return False
     if not allow_negative and await balance(ts) < amount:
         return False
-    return await _append(
+    applied = await _append(
         ts, -float(amount), kind="burn", reason=reason, idempotency_key=idempotency_key,
         capability_id=capability_id, period_key=period_key, actor=actor,
     )
+    if applied:
+        # Only a burn that actually landed. Counting refusals and replayed keys here would make
+        # the burn rate climb while nothing was being charged.
+        from nexus.core import metrics
+
+        metrics.record_credit_burn(capability_id or "unattributed", amount)
+    return applied
 
 
 async def history(ts: TenantSession, *, limit: int = 100) -> list[BillingCreditLedger]:

@@ -85,22 +85,33 @@ async def lifespan(app: FastAPI):
 
 
 def _maybe_enable_metrics(app: FastAPI) -> None:
-    """Expose Prometheus ``/metrics`` — only when explicitly enabled.
+    """Expose Prometheus ``/metrics``. On by default since M15.
 
-    Opt-in (NEXUS_METRICS_ENABLED, default off): the instrumentator wraps every request, so a
-    version mismatch between FastAPI and the instrumentator turns a metrics bug into a 500 on
-    *every* endpoint (it did exactly that — an unpinned build pulled a FastAPI whose router
-    objects the instrumentator couldn't introspect, and logins started 500ing). Observability
-    must never sit on the critical path by default; instrumenting is also wrapped so even an
-    enabled-but-incompatible install degrades to "no metrics" instead of breaking the app."""
+    The instrumentator wraps every request, so a version mismatch between FastAPI and the
+    instrumentator turns a metrics bug into a 500 on *every* endpoint — it did exactly that once,
+    when an unpinned build pulled a FastAPI whose router objects it could not introspect and
+    logins started 500ing. That is why this whole call is wrapped: an incompatible install
+    degrades to "no metrics" rather than breaking the app, and pyproject now pins both sides.
+
+    Under ``PROMETHEUS_MULTIPROC_DIR`` the instrumentator serves an aggregate of every uvicorn
+    worker's mmap files. That variable is not optional in production: the app runs 2 workers, so
+    without it a scrape hits one registry at random and reports roughly half the traffic. The
+    domain counters in ``nexus/core/metrics.py`` ride the same mechanism. Gauges and custom
+    collectors do NOT — they live in the worker (``nexus/workers/state_metrics.py``)."""
     if not get_settings().metrics_enabled:
         return
     try:
-        from prometheus_fastapi_instrumentator import Instrumentator
-
-        Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+        _instrument(app)
     except Exception:  # ImportError, or an instrumentator/FastAPI incompatibility
         logging.getLogger("nexus.main").warning("metrics disabled: instrumentation failed", exc_info=True)
+
+
+def _instrument(app: FastAPI) -> None:
+    """The only line that can fail. Split out so the degradation path above is testable — the
+    protection against the original incident is untested otherwise."""
+    from prometheus_fastapi_instrumentator import Instrumentator
+
+    Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 def create_app() -> FastAPI:

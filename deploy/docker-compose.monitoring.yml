@@ -1,0 +1,72 @@
+# NEXUS GTM — monitoring overlay (Prometheus + Alertmanager + Grafana).
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.monitoring.yml up -d
+#
+# An overlay rather than part of the base stack: the app must be deployable on a small VM without
+# paying for three more containers, and the metrics endpoints are useful on their own (curl
+# app:8000/metrics) whether or not anything is scraping them.
+#
+# The configs under ./monitoring/ existed before this file did, and nothing ran them — the app job
+# even pointed at a service name that does not exist, so every rule evaluated against no data. An
+# alert that cannot fire reads as "all clear", which is the most expensive kind of wrong.
+#
+# All three UIs bind to 127.0.0.1 only. Prometheus has no authentication of its own and its
+# targets expose internal metrics; reach them over an SSH tunnel:
+#   ssh -L 9090:127.0.0.1:9090 -L 3000:127.0.0.1:3000 <host>
+
+name: nexus-gtm
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 15 days is enough to investigate an incident and to sanity-check a month-end invoice
+      # against recorded usage. Longer belongs in a remote-write store, not on the app VM.
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      app:
+        condition: service_healthy
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    # Ships with an inert receiver so it starts cleanly; wire a real one before onboarding users,
+    # or every alert fires into nothing. See monitoring/alertmanager.yml.
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanagerdata:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    environment:
+      # No anonymous access even on a loopback bind: the tunnel is shared with anyone who can SSH.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  promdata:
+  alertmanagerdata:
+  grafanadata:

@@ -1,11 +1,11 @@
 """Job-outcome counters.
 
-Deliberately a module-level dict rather than a new dependency. The repo's only metrics surface
-today is ``prometheus_fastapi_instrumentator``, which instruments HTTP requests and is off by
-default (see ``nexus.main._maybe_enable_metrics``) — it has nothing to say about a worker
-process, which serves no requests at all. Exporting these properly is M15's job; M11 only needs
-the numbers to exist and be readable, so that "are jobs failing?" stops being a question you
-answer by grepping logs.
+A module-level dict, read by the admin API and by tests. M15 added the scrapable half: every
+increment is mirrored to a Prometheus counter carrying the **job name**, which this dict
+deliberately does not track — a dict keyed by (job, outcome) is a memory leak waiting for a job
+name derived from user input, whereas a Prometheus label set is bounded by the handler registry.
+
+Both are updated from the same call site, so they cannot disagree about a total.
 
 Counts are per-process and reset on restart. That is the correct semantics for a counter that a
 scraper differentiates anyway, and it keeps this file free of any storage concern.
@@ -20,12 +20,20 @@ _COUNTER_NAMES = ("enqueued", "succeeded", "retried", "dead_lettered")
 _counters: dict[str, int] = {name: 0 for name in _COUNTER_NAMES}
 
 
-def increment_job_counter(name: str, amount: int = 1) -> None:
+def increment_job_counter(name: str, amount: int = 1, *, job: str = "") -> None:
     """Bump one counter. Never raises into a caller's hot path — a metric must not be able to
-    fail the work it describes."""
+    fail the work it describes.
+
+    ``job`` is optional and keyword-only so every existing call site keeps working unchanged; it
+    only labels the Prometheus mirror, which is where per-job breakdown belongs.
+    """
     if name not in _counters:  # unknown name: record it rather than lose the signal
         _counters[name] = 0
     _counters[name] += amount
+
+    from nexus.core import metrics as _prom
+
+    _prom.record_job_outcome(job, name, amount)
 
 
 def job_counters() -> dict[str, int]:
