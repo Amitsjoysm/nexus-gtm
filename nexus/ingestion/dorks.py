@@ -107,6 +107,11 @@ class Dork:
     self_evident: bool = False
     # Cheap relevance floor for open-web dorks: a hit must contain at least one of these.
     require_any: tuple[str, ...] = ()
+    # Substring the result URL must contain. Some dorks are only meaningful on one URL shape: a
+    # LinkedIn *jobs* search also surfaces company pages, and `linkedin.com/company/vantaesports`
+    # matched the name gate for an unrelated esports org. Constraining the path is the cheapest way
+    # to keep a dork on the thing it was written to find.
+    require_url: str = ""
 
     def render(self, *, name: str, domain: str, industry: str, now: datetime,
                dialect: str = "plain") -> str:
@@ -204,6 +209,23 @@ DORKS: tuple[Dork, ...] = (
         self_evident=True,
         phrase="{bare_name} open roles we are hiring",
         sites=("{domain}",),
+    ),
+    # LinkedIn job pages are publicly indexed, so a search engine can be asked about them without
+    # touching LinkedIn itself — which has no compliant API and bans scrapers. Result titles read
+    # "Vanta hiring Senior Copywriter", so the company name is in the title and the standard
+    # precision gate applies unchanged. Only the search index is queried; the URL is handed to the
+    # rep to open.
+    Dork(
+        slug="hiring_linkedin",
+        kind="job_posting",
+        template='site:linkedin.com/jobs {name} hiring',
+        # Below a direct ATS requisition (0.7): index-derived, and a stale posting can linger in a
+        # search index after the req closes.
+        strength=0.65,
+        trust_kind=True,
+        phrase="{bare_name} hiring jobs on LinkedIn",
+        require_url="linkedin.com/jobs/",
+        require_any=("hiring", "job", "at ", "-"),
     ),
     # ---- leadership --------------------------------------------------------------------------
     # A new VP/CxO rewrites the buying committee, which is why it outranks generic news: the person

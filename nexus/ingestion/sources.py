@@ -181,6 +181,8 @@ SIGNAL_LIBRARY: dict[str, dict] = {
     "web_visit": {"category": "1st-party", "default_strength": 0.7, "desc": "Visited our site"},
     "product_usage": {"category": "1st-party", "default_strength": 0.8, "desc": "Used product"},
     "call": {"category": "1st-party", "default_strength": 0.6, "desc": "Call / meeting"},
+    "website_change": {"category": "3rd-party", "default_strength": 0.6,
+                       "desc": "Watched page changed"},
 }
 
 
@@ -588,6 +590,13 @@ class DorkedSearchSource(SignalSource):
         url = (hit.get("url") or "").strip()
         hay = f"{title} {snippet}".lower()
 
+        # URL shape first: it is the cheapest and most certain filter. A LinkedIn *jobs* dork also
+        # surfaces company pages — `linkedin.com/company/vantaesports` passed the name gate for an
+        # unrelated esports org — and no amount of text analysis fixes a result that is the wrong
+        # kind of page.
+        if dork.require_url and dork.require_url not in url.lower():
+            return None
+
         if not dork.self_evident:
             # The name must be in the TITLE, not merely somewhere in the page.
             #
@@ -632,3 +641,294 @@ class DorkedSearchSource(SignalSource):
             strength=strength,
             dedupe_key=dedupe_key,
         )
+
+
+class AtsSignalSource(SignalSource):
+    """Live source: the account's own ATS job board (``nexus/ingestion/ats.py``).
+
+    The strongest hiring evidence available and entirely keyless — Greenhouse, Lever and Ashby serve
+    public JSON. Discovery reads the board token off the company's careers page; see the ats module
+    for why guessing it does not work.
+
+    **Aggregated, not one signal per requisition.** Vanta has 100 open roles and Stripe 542; emitting
+    one signal each would bury every other signal in the inbox and tell a rep nothing they could act
+    on. One signal per account per month carries the count, the departments hiring, and a sample of
+    titles — which is the thing a rep actually opens with.
+
+    **Growth is computed from the crawl history**, not guessed: the previous run's ``items_found``
+    for this account is already recorded in ``signal_source_runs`` (M16), so "60 → 100 open roles" is
+    a real comparison rather than a heuristic. A first sighting has nothing to compare against and
+    says so instead of inventing a baseline.
+    """
+
+    name = "ats"
+
+    # Discovery costs several requests; a board fetch is one. Both are slow relative to the shared
+    # 8s budget, and a source killed mid-run reports nothing.
+    timeout_s = 25.0
+
+    def __init__(self, *, fetch=None, max_titles: int = 6, session=None) -> None:
+        self._fetch = fetch          # injectable transport, so the whole path runs offline
+        self._max_titles = max_titles
+        self._session = session      # for the growth lookup; None resolves per call
+        self.last_provenance: dict = {}
+
+    async def fetch(self, account: Account) -> list[RawSignal]:
+        from nexus.ingestion.ats import BoardRef, resolve_and_fetch
+
+        domain = (account.domain or "").strip().lower()
+        if not domain:
+            return []
+
+        cached = (getattr(account, "custom_fields", None) or {}).get("ats_board") or {}
+        configured = None
+        if cached.get("provider") and cached.get("token"):
+            configured = BoardRef(
+                provider=str(cached["provider"]), token=str(cached["token"]), via="configured"
+            )
+
+        result = await resolve_and_fetch(
+            domain, account_name=account.name or "", configured=configured, fetch=self._fetch
+        )
+        self.last_provenance = {
+            "provider": result.provider,
+            "token": result.token,
+            "outcome": result.outcome,
+            "via": result.ref.via if result.ref else "",
+            "postings": len(result.postings),
+        }
+        # Cache the discovery so the careers-page crawl happens once per account, not per refresh.
+        if result.ref is not None and hasattr(account, "custom_fields"):
+            cf = dict(account.custom_fields or {})
+            cf["ats_board"] = {"provider": result.ref.provider, "token": result.ref.token}
+            account.custom_fields = cf
+
+        if result.outcome != "ok" or not result.postings:
+            # `empty` (board exists, nothing open) is real information, but it is not an event —
+            # there is nothing for a rep to act on, and a signal saying "they are not hiring" every
+            # month would be noise. The run row records it either way.
+            return []
+
+        return [self._to_signal(account, result)]
+
+    def _to_signal(self, account, result) -> RawSignal:
+        from collections import Counter
+
+        postings = result.postings
+        departments = Counter(p.department for p in postings if p.department)
+        top = ", ".join(f"{d} ({n})" for d, n in departments.most_common(4))
+        titles = "; ".join(p.title for p in postings[: self._max_titles] if p.title)
+
+        body = f"{len(postings)} open roles on {result.provider}."
+        if top:
+            body += f" Hiring in: {top}."
+        if titles:
+            body += f" Recent: {titles}."
+
+        anchor = (account.domain or account.name or "").strip().lower().replace(" ", "")
+        now = utcnow()
+        # Strength rises with volume because a company with 100 open reqs is a materially different
+        # prospect from one with 3 — but stays under a funding round, which is a sharper event.
+        strength = 0.55 if len(postings) < 10 else (0.65 if len(postings) < 50 else 0.75)
+        return RawSignal(
+            kind="hiring",
+            source=self.name,
+            title=f"{account.name} has {len(postings)} open roles",
+            body=body,
+            url=postings[0].url or "",
+            strength=strength,
+            dedupe_key=event_dedupe_key("hiring", anchor, strength, now),
+        )
+
+
+class PublicApiSignalSource(SignalSource):
+    """Live source: SEC EDGAR, GitHub and Hacker News (``nexus/ingestion/public_apis.py``).
+
+    All three are keyless and none is scraped. They are grouped into one source because they share
+    the property that makes them dangerous: each is a **global namespace searched by name**, so the
+    binding risk — attributing a stranger's data to this account — is identical, and the guard
+    belongs in one place. Measured before the guards existed: EDGAR gave Stripe a filing by
+    "DCP STRIPE XXII", and Hacker News gave Vanta a story about Vanta.js, a 3D-graphics library.
+
+    Each sub-source degrades independently: GitHub running out of its 60/hour budget must not stop
+    EDGAR from reporting a 10-Q.
+    """
+
+    name = "public_api"
+    timeout_s = 30.0
+
+    def __init__(self, *, fetch=None, github_token: str = "") -> None:
+        self._fetch = fetch
+        self._github_token = github_token
+        self.last_provenance: dict = {}
+
+    async def fetch(self, account: Account) -> list[RawSignal]:
+        from nexus.ingestion.public_apis import (
+            edgar_filings,
+            github_activity,
+            github_org_matches,
+            hn_stories,
+        )
+
+        name = (account.name or "").strip()
+        domain = (account.domain or "").strip().lower()
+        if not name:
+            return []
+        anchor = (domain or name).lower().replace(" ", "")
+        now = utcnow()
+        out: list[RawSignal] = []
+        prov: dict = {}
+
+        filings = await edgar_filings(name, domain=domain, fetch=self._fetch)
+        prov["edgar"] = filings.outcome
+        if filings.outcome == "ok":
+            top = filings.items[0]
+            out.append(RawSignal(
+                kind="news", source=self.name,
+                title=f"{name} filed a {top['form']} with the SEC",
+                body=", ".join(f"{i['form']} on {i['filed_at']}" for i in filings.items[:4]),
+                url=top.get("url") or "",
+                # An 8-K is "something material happened" and is worth a look; it is not the sharp,
+                # specific event a funding headline is.
+                strength=0.6,
+                dedupe_key=f"sec:{anchor}:{top['form']}:{top['filed_at']}",
+            ))
+
+        stories = await hn_stories(name, domain=domain, fetch=self._fetch)
+        prov["hn"] = stories.outcome
+        if stories.outcome == "ok":
+            top = max(stories.items, key=lambda s: s["points"])
+            out.append(RawSignal(
+                kind="news", source=self.name,
+                title=f"{top['title']} ({top['points']} points on Hacker News)",
+                url=top["url"], strength=0.5,
+                dedupe_key=event_dedupe_key("news", anchor, 0.5, now),
+            ))
+
+        # GitHub last: it has the tightest budget, so when the hour's quota is gone the other two
+        # have already produced their signals.
+        if domain:
+            org = domain.split(".")[0]
+            if await github_org_matches(
+                org, name=name, domain=domain, fetch=self._fetch
+            ):
+                repos = await github_activity(org, fetch=self._fetch,
+                                              token=self._github_token)
+                prov["github"] = repos.outcome
+                if repos.outcome == "ok":
+                    langs = sorted({r["language"] for r in repos.items if r["language"]})
+                    if langs:
+                        out.append(RawSignal(
+                            kind="tech_install", source=self.name,
+                            title=f"{name} is building in {', '.join(langs[:4])}",
+                            body="Active public repos: "
+                                 + ", ".join(f"{r['name']} ({r['stars']}★)"
+                                             for r in repos.items[:4]),
+                            url=repos.items[0].get("url") or "",
+                            strength=0.55,
+                            dedupe_key=f"tech:{anchor}:{now:%Y-%m}",
+                        ))
+            else:
+                # Not an error: most companies' GitHub org is not their domain root, and an
+                # unverified slug is exactly how another org's repos would be attributed here.
+                prov["github"] = "unverified"
+
+        self.last_provenance = prov
+        return out
+
+
+class WebsiteWatchSignalSource(SignalSource):
+    """Live source: watch a company's own pages and report when they change (M20).
+
+    Entirely ours — no third party, no key, no scraping of anything non-public. The value is that a
+    pricing change is a *strategy* change, and it is the one thing a rep can open a conversation
+    about the same week it happens.
+
+    **Unlike every other source, this one needs the database.** A change is only meaningful against
+    a stored baseline, so ``fetch`` takes the tenant session through ``bind_session`` rather than
+    being a pure function of the account. The first sighting of a page establishes the baseline and
+    deliberately emits nothing — "this company has a pricing page" is not news.
+
+    Normalisation is the load-bearing part; see ``nexus/ingestion/webwatch.py`` for why raw HTML
+    hashing reports a change on every single run.
+    """
+
+    name = "website"
+    # Up to four pages, each possibly trying two or three paths.
+    timeout_s = 30.0
+
+    def __init__(self, *, fetch=None, page_kinds: tuple[str, ...] | None = None) -> None:
+        self._fetch = fetch
+        self._kinds = page_kinds
+        self._ts = None
+        self.last_provenance: dict = {}
+
+    def bind_session(self, ts):
+        """Give the source the tenant session for this run. Called by IngestionService."""
+        self._ts = ts
+        return self
+
+    async def fetch(self, account: Account) -> list[RawSignal]:
+        from nexus.ingestion.webwatch import WATCHED_PAGES, check_page, summarise_change
+        from nexus.models.page_snapshot import PageSnapshot
+
+        domain = (account.domain or "").strip().lower().lstrip("@")
+        if not domain or self._ts is None:
+            # No session means no baseline, and without a baseline every page looks new. Emitting
+            # then would announce a "change" for every page of every account on first run.
+            return []
+
+        ts = self._ts
+        now = utcnow()
+        out: list[RawSignal] = []
+        prov: dict = {}
+        pages = [p for p in WATCHED_PAGES if self._kinds is None or p[0] in self._kinds]
+
+        for page_kind, paths in pages:
+            check = await check_page(domain, page_kind, paths, fetch=self._fetch)
+            prov[page_kind] = check.outcome
+            if check.outcome != "ok":
+                continue
+
+            snapshot = await ts.first(
+                PageSnapshot,
+                PageSnapshot.account_id == account.id,
+                PageSnapshot.page_kind == page_kind,
+            )
+            if snapshot is None:
+                ts.add(PageSnapshot(
+                    tenant_id=ts.tenant_id, account_id=account.id, page_kind=page_kind,
+                    url=check.url, content_hash=check.digest, content=check.text,
+                    last_checked_at=now,
+                ))
+                prov[page_kind] = "baseline"
+                continue
+
+            snapshot.last_checked_at = now
+            if snapshot.content_hash == check.digest:
+                continue
+
+            summary = summarise_change(snapshot.content, check.text)
+            snapshot.content_hash = check.digest
+            snapshot.content = check.text
+            snapshot.url = check.url
+            snapshot.last_change_summary = summary
+            snapshot.change_count = (snapshot.change_count or 0) + 1
+            snapshot.last_changed_at = now
+            prov[page_kind] = "changed"
+
+            out.append(RawSignal(
+                kind="website_change", source=self.name,
+                title=f"{account.name} changed its {page_kind} page",
+                body=summary,
+                url=check.url,
+                # Pricing outranks the rest: it is a commercial decision, not a copy edit.
+                strength=0.75 if page_kind == "pricing" else 0.55,
+                # Keyed on the page kind and the digest, so re-running the sweep does not re-alert,
+                # but a genuinely new change does.
+                dedupe_key=f"web:{page_kind}:{domain}:{check.digest[:16]}",
+            ))
+
+        await ts.flush()
+        self.last_provenance = prov
+        return out

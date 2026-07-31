@@ -21,6 +21,7 @@ SIGNAL_KINDS = {
     "product_usage",  # 1st-party product signal
     "call",           # call/meeting signal
     "tech_install",   # added a relevant technology
+    "website_change", # a watched page (pricing/security/careers) changed
 }
 
 

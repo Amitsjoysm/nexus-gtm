@@ -111,6 +111,11 @@ class IngestionService:
             # start refusing — needs longer, or it is killed mid-run every time and reports
             # nothing, which is indistinguishable from "this account has no signals".
             timeout = getattr(src, "timeout_s", None) or default_timeout
+            # Most sources are a pure function of the account. A change detector is not: it needs
+            # the stored baseline, so it asks for the session rather than opening its own (which
+            # would sit outside the caller's transaction and its RLS binding).
+            if hasattr(src, "bind_session"):
+                src.bind_session(ts)
             name = getattr(src, "name", str(src))
             started = utcnow()
             clock = time.perf_counter()
@@ -180,10 +185,13 @@ def get_ingestion_service() -> IngestionService:
     global _service
     if _service is None:
         from nexus.ingestion.sources import (
+            AtsSignalSource,
             DemoSignalSource,
             DorkedSearchSource,
+            PublicApiSignalSource,
             RssSignalSource,
             WebNewsSource,
+            WebsiteWatchSignalSource,
         )
         from nexus.enrichment.browser import get_browser_provider
 
@@ -217,6 +225,20 @@ def get_ingestion_service() -> IngestionService:
                     max_queries=settings.signal_dork_max_queries, pace_s=pace
                 )
             )
+        # The account's own ATS board (M17). Keyless and first-party — the strongest hiring
+        # evidence there is — so it is on by default; `no_ats` opts out for a deployment that
+        # does not want the careers-page crawl.
+        if "no_ats" not in selected:
+            sources.append(AtsSignalSource())
+        # SEC EDGAR / GitHub / Hacker News (M18-M19). Keyless, and each sub-source degrades on its
+        # own — GitHub exhausting its 60/hour budget must not stop EDGAR reporting a 10-Q.
+        if "no_public_apis" not in selected:
+            sources.append(PublicApiSignalSource(github_token=settings.github_token))
+        # Website change monitoring (M20). Opt-in: it fetches up to four pages per account per
+        # refresh, which is the heaviest source in the pipeline, and it is only useful once a
+        # baseline exists — so an operator should turn it on deliberately.
+        if "website" in selected:
+            sources.append(WebsiteWatchSignalSource())
         # RSS/Atom company feeds (blog / newsroom / press). Opt-in via NEXUS_SIGNAL_SOURCES=...,rss
         # so the default pipeline is byte-for-byte unchanged.
         if "rss" in selected:

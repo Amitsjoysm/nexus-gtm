@@ -387,6 +387,18 @@ class Settings(BaseSettings):
     # turn when one key rate-limits. A single free-tier key is exhausted quickly by a crawl that
     # issues several queries per account.
     firecrawl_api_keys: str = ""
+    # Optional GitHub token. Unauthenticated GitHub allows 60 requests/hour — a handful of accounts
+    # before the budget is gone (measured: 50 remaining after three calls). A token raises it to
+    # 5,000. The source degrades to `throttled` rather than failing without one.
+    github_token: str = ""
+
+    # Signal -> alert (M21). ON by default: `signal.created` was published on every ingested signal
+    # and nothing subscribed to it, so the whole collection pipeline landed in a table nobody was
+    # notified about. The floor keeps weak mentions (the classifier's 0.4 tier) off the inbox — an
+    # alert costs attention, and attention spent on a press mention is attention not spent on a
+    # funding round. Set `signal_alerts_enabled=false` to restore the previous silence.
+    signal_alerts_enabled: bool = True
+    signal_alert_floor: float = 0.5
 
     # Orchestration engine
     orch_max_attempts: int = 2          # per-step retries before a step is marked failed

@@ -2,11 +2,14 @@ from nexus.ingestion.crm import CRMConnector, HubSpotConnector, SalesforceConnec
 from nexus.ingestion.service import IngestionService, RawSignal, get_ingestion_service
 from nexus.ingestion.sources import (
     SIGNAL_LIBRARY,
+    AtsSignalSource,
     DemoSignalSource,
     DorkedSearchSource,
+    PublicApiSignalSource,
     RssSignalSource,
     SignalSource,
     WebNewsSource,
+    WebsiteWatchSignalSource,
     event_dedupe_key,
 )
 
@@ -18,10 +21,13 @@ __all__ = [
     "RawSignal",
     "get_ingestion_service",
     "SIGNAL_LIBRARY",
+    "AtsSignalSource",
     "DemoSignalSource",
     "DorkedSearchSource",
+    "PublicApiSignalSource",
     "RssSignalSource",
     "SignalSource",
     "WebNewsSource",
+    "WebsiteWatchSignalSource",
     "event_dedupe_key",
 ]

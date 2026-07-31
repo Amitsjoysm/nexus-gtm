@@ -4,6 +4,7 @@ from nexus.models.alerts import Alert
 from nexus.models.billing import (
     BillingCapability,
     BillingCostRate,
+    BillingFeatureFlag,
     BillingCreditLedger,
     BillingInvoice,
     BillingWebhookEvent,
@@ -37,7 +38,9 @@ from nexus.models.network import (
     NetworkPerson,
     NetworkSourceAccount,
 )
+from nexus.models.notification_preference import NotificationPreference
 from nexus.models.outcome import Outcome
+from nexus.models.page_snapshot import PageSnapshot
 from nexus.models.relevance import RelevanceProfile
 from nexus.models.signal import SignalEvent
 from nexus.models.source_run import SignalSourceRun
@@ -50,6 +53,8 @@ __all__ = [
     "Membership",
     "Account",
     "Contact",
+    "NotificationPreference",
+    "PageSnapshot",
     "SignalEvent",
     "SignalSourceRun",
     "RelevanceProfile",
@@ -82,6 +87,7 @@ __all__ = [
     "NetworkIdentity",
     "NetworkEdge",
     "BillingCapability",
+    "BillingFeatureFlag",
     "BillingPlan",
     "BillingPlanEntitlement",
     "BillingSubscription",
