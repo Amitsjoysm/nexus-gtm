@@ -277,6 +277,25 @@ async def whoami(principal: Principal = Depends(get_principal)) -> WhoAmIOut:
     )
 
 
+@router.get("/revenue")
+async def revenue_report(
+    since: str = Query(default="", description="Period key floor, e.g. 2026-01"),
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
+) -> dict:
+    """MRR/ARR, plan mix, and collection health.
+
+    Derived at read time from subscriptions, plans and invoices — no stored aggregate to drift from
+    the rows it describes, and no scheduled job to fall behind. Cross-tenant by nature, so it runs
+    through the platform sessionmaker; under the RLS-bound role it would silently return zero rows
+    and report an MRR of $0.
+    """
+    from nexus.billing.revenue import collection_health, snapshot
+
+    revenue = await snapshot()
+    collection = await collection_health(since=since)
+    return {"revenue": revenue.as_dict(), "collection": collection.as_dict()}
+
+
 class PlatformAdminOut(BaseModel):
     id: str
     email: str

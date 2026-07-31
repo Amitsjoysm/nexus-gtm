@@ -125,6 +125,28 @@ class BillingPlanEntitlement(IdMixin, TimestampMixin, Base):
     trial_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class BillingFeatureFlag(TimestampMixin, Base):
+    """A named switch an entitlement can hang off.
+
+    Platform-global — no ``tenant_id``, so `apply_rls.py` leaves it alone, exactly like
+    `billing_capabilities` and `billing_plans`. Per-tenant behaviour lives in ``overrides`` rather
+    than in rows, because a flag is one concept with exceptions, not N unrelated rows: asking "is
+    beta_x on anywhere?" should be one lookup.
+
+    ``overrides`` is keyed ``tenant:<id>`` and ``env:<name>``, resolved narrowest-first in
+    ``nexus/billing/flags.py``.
+    """
+
+    __tablename__ = "billing_feature_flags"
+
+    # The flag name IS the id — it is what `BillingPlanEntitlement.feature_flag` stores, and a
+    # surrogate key would mean a join for every evaluation on the metering hot path.
+    id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    overrides: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class BillingSubscription(IdMixin, TimestampMixin, TenantScoped, Base):
     """A tenant's current plan + billing period. One active row per tenant."""
 

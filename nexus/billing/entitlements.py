@@ -115,6 +115,21 @@ async def resolve_entitlement(
         base.burst_limit = ent.burst_limit
         base.reset_policy = ent.reset_policy
         base.source = "plan"
+
+        # M24: `feature_flag` has been stored, admin-editable and copied by the custom-plan builder
+        # since the schema was written, and was never read — the same dead-config class that
+        # `burst_limit` and `depends_on` were in. A flag that is off disables the capability the
+        # same way a plan entitlement of `disabled` does, so the 402 payload and the admin debug
+        # view both explain it without a special case.
+        if ent.feature_flag:
+            from nexus.billing.flags import flag_enabled
+            from nexus.core.config import get_settings
+
+            if not await flag_enabled(ts, ent.feature_flag, env=get_settings().env):
+                base.mode = "disabled"
+                base.source = "feature_flag"
+                return base
+
         return await _apply_dependencies(ts, base, _depth)
     except Exception:  # resolution failure must degrade to allow, never to a 500
         logger.warning("entitlement resolution failed for %s", capability_id, exc_info=True)
