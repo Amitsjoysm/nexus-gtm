@@ -1,6 +1,8 @@
 """Relevance Engine endpoints: read/update the tenant's GTM profile."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -15,6 +17,8 @@ from nexus.api.schemas import (
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.relevance.engine import get_or_create_profile
+
+logger = logging.getLogger("nexus.api.relevance")
 
 router = APIRouter(prefix="/relevance", tags=["relevance"])
 
@@ -40,16 +44,45 @@ async def update_profile(
     _: Principal = Depends(require(Permission.manage_relevance)),
 ) -> RelevanceProfileOut:
     profile = await get_or_create_profile(ts)
+    icp_changed = (profile.icp or {}) != (body.icp or {})
     profile.icp = body.icp
     profile.value_props = body.value_props
     profile.product_context = body.product_context
     await ts.flush()
+    # Saving an ICP is the moment someone expects accounts to start appearing. Without this the
+    # first batch waits for the daily discovery heartbeat — up to 24 hours of an empty Accounts
+    # list, which reads as a broken product rather than a scheduled job.
+    if icp_changed and body.icp:
+        await _kick_off_discovery(ts)
     return RelevanceProfileOut(
         id=profile.id,
         icp=profile.icp,
         value_props=profile.value_props,
         product_context=profile.product_context,
     )
+
+
+async def _kick_off_discovery(ts) -> None:
+    """Clear the daily stamp and enqueue discovery so the first batch starts now.
+
+    Clearing ``icp_discovery_last_run_at`` is what lets the handler through: it is the idempotency
+    guard that stops the heartbeat re-running discovery every tick, and a freshly-defined ICP is
+    exactly the case where re-running is correct.
+
+    Best-effort — a queue failure must not fail the ICP save that succeeded. The heartbeat picks it
+    up on the next tick regardless, so the worst case is the old behaviour rather than a lost ICP.
+    """
+    try:
+        from nexus.models.identity import Tenant
+        from nexus.workers.tasks import enqueue_discover_icp_accounts
+
+        tenant = await ts.session.get(Tenant, ts.tenant_id)
+        if tenant is not None:
+            tenant.icp_discovery_last_run_at = None
+            await ts.flush()
+        await enqueue_discover_icp_accounts()
+    except Exception:
+        logger.warning("could not kick off ICP discovery for %s", ts.tenant_id, exc_info=True)
 
 
 @router.post("/title-recommendations", response_model=list[TitleRecommendationOut])

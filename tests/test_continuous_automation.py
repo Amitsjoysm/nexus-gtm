@@ -19,12 +19,18 @@ def test_automation_config_defaults():
 
 
 @pytest.mark.asyncio
-async def test_tenant_automation_flag_defaults_false():
+async def test_tenant_automation_flag_defaults_on():
+    """Flipped deliberately: it defaulted to False, which meant a brand-new workspace collected
+    NOTHING until somebody found the toggle in Settings — observed as "zero signals after 30
+    minutes" on a live deployment. A GTM tool whose premise is signal->action must not ship inert.
+
+    What makes this affordable is the per-tenant daily crawl budget
+    (`tenant_daily_source_runs`), not a switch nobody flips."""
     async with get_sessionmaker()() as s:
         t = Tenant(name="Acme", slug="acme-auto")
         s.add(t)
         await s.flush()
-        assert t.automation_enabled is False
+        assert t.automation_enabled is True
 
 
 @pytest.mark.asyncio
@@ -255,12 +261,22 @@ from tests.conftest import auth, signup
 @pytest.mark.asyncio
 async def test_automation_toggle_get_and_patch(client):
     token = await signup(client, slug="toggle", email="owner@toggle.x", company="Toggle")
-    # default off. (The endpoint also returns icp_daily_count/icp_daily_default per commit 0019;
-    # assert the specific field rather than exact dict equality so added fields don't break it.)
+    # Default is now ON. (The endpoint also returns icp_daily_count/icp_daily_default per commit
+    # 0019; assert the specific field rather than exact dict equality so added fields don't break
+    # it.) What this test protects is that the toggle round-trips in BOTH directions, so it now
+    # switches off first — the direction a user actually needs when automation is on by default.
     r = await client.get("/api/workspace/automation", headers=auth(token))
     assert r.status_code == 200, r.text
+    assert r.json()["automation_enabled"] is True
+    # turn off
+    r = await client.patch(
+        "/api/workspace/automation",
+        headers=auth(token),
+        json={"automation_enabled": False},
+    )
+    assert r.status_code == 200, r.text
     assert r.json()["automation_enabled"] is False
-    # turn on
+    # ...and back on
     r = await client.patch(
         "/api/workspace/automation",
         headers=auth(token),
@@ -277,11 +293,13 @@ async def test_automation_toggle_get_and_patch(client):
 async def test_automation_toggle_isolated_between_tenants(client):
     a = await signup(client, slug="ta", email="a@ta.x", company="TenantA")
     b = await signup(client, slug="tb", email="b@tb.x", company="TenantB")
+    # Both start ON (the new default), so isolation is now proved by A switching OFF: the setting
+    # is per-tenant, and one workspace's change must never reach another's.
     await client.patch(
-        "/api/workspace/automation", headers=auth(a), json={"automation_enabled": True}
+        "/api/workspace/automation", headers=auth(a), json={"automation_enabled": False}
     )
     r = await client.get("/api/workspace/automation", headers=auth(b))
-    assert r.json()["automation_enabled"] is False  # B unaffected
+    assert r.json()["automation_enabled"] is True   # B unaffected
 
 
 @pytest.mark.asyncio

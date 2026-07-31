@@ -223,6 +223,14 @@ class Settings(BaseSettings):
     # ~10 rapid requests, which one account refresh can reach alone; keyed engines are limited by
     # contract instead and need no spacing. Auto-selected per provider unless set.
     signal_dork_pace_s: float = 0.0
+    # Per-tenant ceiling on billed source runs per UTC day. Automation is now on by default for new
+    # workspaces, so this is what stops an enthusiastic account import from producing a surprise
+    # bill: each source run is one row in `signal_source_runs`, so the crawl history IS the budget
+    # ledger and no counter can drift from it. 0 disables the cap.
+    #
+    # 400/day at ~5 sources per account is roughly 80 account refreshes — comfortably above the
+    # 6-hourly cycle for a few hundred accounts, and a hard stop well short of a runaway.
+    tenant_daily_source_runs: int = 400
     # Dedicated search backend for SIGNAL collection only. Empty (the default) means "use
     # `search_provider`", so behaviour is unchanged until an operator sets it.
     #

@@ -1,6 +1,8 @@
 """Accounts & contacts: CRUD plus waterfall contact enrichment."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 
@@ -22,6 +24,8 @@ from nexus.integrations.company_search import domain_from_url
 from nexus.lookalike import get_lookalike_service
 from nexus.models.account import Account, Contact
 from nexus.models.intelligence import AccountScore
+
+logger = logging.getLogger("nexus.api.accounts")
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -86,7 +90,24 @@ async def create_account(
     )
     ts.add(account)
     await ts.flush()
+    # Collect signals for it now rather than waiting up to 6 hours for the refresh sweep. Adding an
+    # account is the moment a rep is looking at it, and an empty timeline then reads as "this
+    # product does not work" — the observed "zero signals after 30 minutes".
+    #
+    # Enqueued, never inline: ingestion makes ~10 outbound HTTP calls, and a POST that blocks on a
+    # live crawl would take tens of seconds and fail whenever a provider is slow.
+    await _enqueue_first_ingest(ts.tenant_id, account.id)
     return _account_out(account)
+
+
+async def _enqueue_first_ingest(tenant_id: str, account_id: str) -> None:
+    """Best-effort first crawl. A queue failure must not fail the account creation that succeeded."""
+    try:
+        from nexus.workers.tasks import enqueue_process_account
+
+        await enqueue_process_account(tenant_id, account_id)
+    except Exception:
+        logger.warning("could not enqueue first ingest for %s", account_id, exc_info=True)
 
 
 async def _latest_fit_scores(ts: TenantSession, account_ids: list[str]) -> dict[str, int]:
@@ -384,3 +405,70 @@ async def enrich_account(
     await ts.flush()
     response.headers["X-Enriched-Fields"] = ",".join(filled)
     return _account_out(account)
+
+
+@router.delete("/{account_id}")
+async def delete_account(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """Soft-delete an account, reusing the existing archive mechanism.
+
+    Deliberately NOT a row delete. Signals, alerts, inbox tasks, cadence steps and CRM links all
+    reference the account; removing it would orphan every one of them and break the timeline that
+    explains why anyone was contacted. `set_archived` is the single write-point (it dual-writes the
+    legacy `custom_fields['archived']` flag), so this reuses it rather than inventing a second
+    notion of "gone" that the list views would then have to learn about.
+
+    Idempotent — a double-clicked button is a success, not a 404.
+    """
+    account = await ts.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    if not account.is_archived:
+        account.set_archived(True, reason="deleted by user")
+        await ts.flush()
+    return {"id": account_id, "deleted": True, "restorable": True}
+
+
+@router.get("/export/csv")
+async def export_accounts(
+    include_archived: bool = False,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> Response:
+    """Export accounts as CSV.
+
+    Mounted at an explicit `/export/csv` path rather than `/export`: the router already has a
+    `/{account_id}` route, and a bare `/export` would be ambiguous with an account whose id happens
+    to be "export".
+    """
+    import csv
+    import io as _io
+
+    from sqlalchemy import select
+
+    stmt = select(Account).where(Account.tenant_id == ts.tenant_id)
+    if not include_archived:
+        stmt = stmt.where(Account.archived_at.is_(None))
+    rows = (await ts.session.scalars(stmt.order_by(Account.created_at.desc()))).all()
+
+    buf = _io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "name", "domain", "industry", "employee_count", "country", "tech_stack",
+        "archived", "created_at",
+    ])
+    for a in rows:
+        writer.writerow([
+            a.name, a.domain or "", a.industry or "", a.employee_count or "",
+            a.country or "", ";".join(a.tech_stack or []),
+            "yes" if a.is_archived else "no",
+            a.created_at.isoformat() if a.created_at else "",
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="accounts.csv"'},
+    )

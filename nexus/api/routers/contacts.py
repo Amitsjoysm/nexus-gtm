@@ -2,7 +2,7 @@
 and a free-text filter. (Per-account contacts live under /accounts/{id}/contacts.)"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, or_, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -45,6 +45,7 @@ async def reverify_contact_emails(
 async def list_contacts(
     q: str | None = None,
     account_id: str | None = None,
+    include_deleted: bool = False,
     limit: int = 200,
     offset: int = 0,
     ts: TenantSession = Depends(get_tenant_session),
@@ -55,6 +56,23 @@ async def list_contacts(
 
     Filtering and pagination are pushed into SQL: a large workspace returns one page from the
     database instead of loading its entire contact book into memory and slicing in Python."""
+    return await _query_contacts(
+        ts, q=q, account_id=account_id, include_deleted=include_deleted,
+        limit=limit, offset=offset,
+    )
+
+
+async def _query_contacts(
+    ts: TenantSession,
+    *,
+    q: str | None,
+    account_id: str | None,
+    include_deleted: bool,
+    limit: int,
+    offset: int,
+) -> list[WorkspaceContactOut]:
+    """The one contact query. Shared by the list view and the CSV export so the two can never
+    disagree — an export that does not match what is on screen is worse than no export."""
     # Tenant scoping is enforced in the query (the only reliable layer — RLS is defense-in-depth
     # and may be bypassed by the DB role). Filter Contact.tenant_id AND Account.tenant_id so a
     # cross-tenant join can never surface another workspace's people.
@@ -63,6 +81,10 @@ async def list_contacts(
         .join(Account, Account.id == Contact.account_id)
         .where(Contact.tenant_id == ts.tenant_id, Account.tenant_id == ts.tenant_id)
     )
+    # Soft-deleted contacts are hidden by default. Filtered in SQL, not in Python, so a page of
+    # 200 stays a page of 200 rather than silently shrinking as deleted rows are dropped.
+    if not include_deleted:
+        stmt = stmt.where(Contact.deleted_at.is_(None))
     if account_id:
         stmt = stmt.where(Contact.account_id == account_id)
 
@@ -110,3 +132,82 @@ async def list_contacts(
         )
         for (contact, acc_name, acc_domain) in rows
     ]
+
+
+@router.delete("/{contact_id}")
+async def delete_contact(
+    contact_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """Soft-delete a contact.
+
+    The row survives. A contact is referenced by cadence steps, call records and outreach history,
+    and removing it would orphan every one of them — so "delete" means "stop showing me this
+    person", and the audit trail of what was already sent to them stays intact and explainable.
+
+    Idempotent: deleting an already-deleted contact is a success, so a double-clicked button or a
+    retried request does not produce a confusing 404.
+    """
+    from nexus.core.db import utcnow
+
+    contact = await ts.first(Contact, Contact.id == contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    if contact.deleted_at is None:
+        contact.deleted_at = utcnow()
+        await ts.flush()
+    return {"id": contact_id, "deleted": True, "restorable": True}
+
+
+@router.post("/{contact_id}/restore")
+async def restore_contact(
+    contact_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """Undo a soft delete. The whole point of not hard-deleting."""
+    contact = await ts.first(Contact, Contact.id == contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    contact.deleted_at = None
+    await ts.flush()
+    return {"id": contact_id, "deleted": False}
+
+
+@router.get("/export")
+async def export_contacts(
+    q: str | None = None,
+    account_id: str | None = None,
+    include_deleted: bool = False,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> Response:
+    """Export the contact book as CSV, honouring the same filters as the list view.
+
+    Streamed through the same query rather than a second code path, so what you export is exactly
+    what you were looking at — an export that disagrees with the screen is worse than none.
+    """
+    import csv
+    import io as _io
+
+    rows = await _query_contacts(
+        ts, q=q, account_id=account_id, include_deleted=include_deleted, limit=0, offset=0
+    )
+    buf = _io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "full_name", "title", "seniority", "email", "email_status", "phone",
+        "linkedin_url", "account", "domain",
+    ])
+    for r in rows:
+        writer.writerow([
+            r.full_name, r.title or "", r.seniority or "", r.email or "",
+            r.email_status or "", r.phone or "", r.linkedin_url or "",
+            r.account_name or "", r.account_domain or "",
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="contacts.csv"'},
+    )

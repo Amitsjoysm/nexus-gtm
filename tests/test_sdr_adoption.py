@@ -136,8 +136,13 @@ async def test_digest_skips_quiet_and_opted_out_tenants(client, monkeypatch):
     await client.patch(
         "/api/workspace/automation", headers=auth(quiet), json={"automation_enabled": True}
     )
-    # Active but NOT opted in: no digest either.
+    # Active but explicitly opted OUT: no digest either. The opt-out is now an explicit PATCH
+    # because automation defaults to ON — previously this tenant was opted out by doing nothing,
+    # which no longer expresses the intent the test is checking.
     out = await signup(client, slug="optout", email="o@optout.x", company="OptOutCo")
+    await client.patch(
+        "/api/workspace/automation", headers=auth(out), json={"automation_enabled": False}
+    )
     acct = await client.post(
         "/api/accounts", headers=auth(out), json={"name": "A", "domain": "a.optout"}
     )

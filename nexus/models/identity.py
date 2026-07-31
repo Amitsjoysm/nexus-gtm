@@ -27,7 +27,14 @@ class Tenant(IdMixin, TimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(80), unique=True)
     # Continuous Automation opt-in: when True (and the global automation_enabled master
     # switch is on), this tenant's accounts/cadences are driven autonomously by the heartbeat.
-    automation_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # ON for new workspaces. It defaulted to False, which meant a brand-new workspace collected
+    # NOTHING until somebody found the toggle in Settings — the observed "zero signals after 30
+    # minutes". A GTM tool whose whole premise is signal->action must not ship inert.
+    #
+    # The safety that makes this affordable is a per-tenant daily crawl budget
+    # (`tenant_daily_source_runs`), not a switch nobody flips. Existing tenants keep their current
+    # value: this is a column default, so no row is rewritten.
+    automation_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # Daily ICP Auto-Discovery (sub-project H): last time the discovery driver ran for this
     # tenant — the per-interval idempotency gate so the heartbeat doesn't re-run within the day.
     icp_discovery_last_run_at: Mapped[datetime | None] = mapped_column(

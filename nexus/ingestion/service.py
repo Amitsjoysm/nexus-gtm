@@ -109,7 +109,18 @@ class IngestionService:
         looked like "no new signals", and the first sign of trouble was a rep asking why an
         obviously-funded account showed no round.
         """
-        default_timeout = get_settings().source_timeout_s
+        settings = get_settings()
+        default_timeout = settings.source_timeout_s
+        if await self._over_daily_budget(ts, settings.tenant_daily_source_runs):
+            # Refuse the crawl, not the request. Returning [] leaves existing signals intact and
+            # the next UTC day resumes automatically; raising would turn a spend guard into an
+            # outage on the account page.
+            logger.warning(
+                "tenant %s hit the daily crawl budget of %s source runs; skipping",
+                ts.tenant_id, settings.tenant_daily_source_runs,
+            )
+            metrics.record_source_run("budget", "throttled", 0)
+            return []
         collected: list[RawSignal] = []
         runs: list[dict] = []
         for src in self.sources:
@@ -155,6 +166,37 @@ class IngestionService:
         created = await self.ingest(ts, account, collected)
         await self._record_runs(ts, account, runs, created)
         return created
+
+    async def _over_daily_budget(self, ts: TenantSession, cap: int) -> bool:
+        """Whether this tenant has already spent today's crawl budget.
+
+        Counts `signal_source_runs` rows for the current UTC day. The crawl history is the ledger,
+        so the count cannot drift from what was actually spent the way a separate counter would.
+        Never raises: a budget check that fails closed would stop signal collection because of a
+        bookkeeping problem, which is the wrong trade.
+        """
+        if cap <= 0:
+            return False
+        try:
+            from datetime import datetime, time, timezone
+
+            from sqlalchemy import func, select
+
+            from nexus.models.source_run import SignalSourceRun
+
+            midnight = datetime.combine(utcnow().date(), time.min, tzinfo=timezone.utc)
+            spent = await ts.session.scalar(
+                select(func.count())
+                .select_from(SignalSourceRun)
+                .where(
+                    SignalSourceRun.tenant_id == ts.tenant_id,
+                    SignalSourceRun.started_at >= midnight,
+                )
+            )
+            return int(spent or 0) >= cap
+        except Exception:
+            logger.warning("daily crawl budget check failed; allowing", exc_info=True)
+            return False
 
     async def _record_runs(
         self, ts: TenantSession, account: Account, runs: list[dict], created: list[SignalEvent]

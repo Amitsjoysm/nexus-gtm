@@ -86,6 +86,10 @@ class Contact(IdMixin, TimestampMixin, TenantScoped, Base):
     __table_args__ = (Index("ix_contact_tenant_created", "tenant_id", "created_at"),)
 
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    # Soft delete, mirroring Account.archived_at. A contact is referenced by cadence steps, call
+    # records and outreach history; removing the row would orphan all of it, so "delete" hides the
+    # contact and leaves the audit trail intact. Restorable by clearing this column.
+    deleted_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True, index=True)
     full_name: Mapped[str] = mapped_column(String(200))
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     seniority: Mapped[str | None] = mapped_column(String(40), nullable=True)
