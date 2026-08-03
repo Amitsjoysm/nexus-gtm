@@ -50,6 +50,13 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     # page then dropping archived rows in Python (which silently shrank the page). The legacy
     # ``custom_fields['archived']`` boolean is kept mirrored during the transition for rollback
     # safety; ``set_archived`` writes both. Index supports the "active, newest-first" list scan.
+    # Link to the shared company record (nexus/models/company.py). NULLABLE on purpose: an account
+    # with no usable domain has no company and keeps being crawled per-tenant, and an account whose
+    # link is null behaves exactly as it did before this column existed.
+    company_id: Mapped[str | None] = mapped_column(
+        ForeignKey("companies.id"), nullable=True, index=True
+    )
+
     archived_at: Mapped[datetime | None] = mapped_column(
         TZDateTime(), nullable=True, index=True
     )

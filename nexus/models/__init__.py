@@ -1,6 +1,7 @@
 """ORM models. Importing this package registers all mappers."""
 from nexus.models.account import Account, Contact
 from nexus.models.alerts import Alert
+from nexus.models.company import Company, CompanySignal
 from nexus.models.billing import (
     BillingCapability,
     BillingCostRate,
@@ -87,6 +88,8 @@ __all__ = [
     "NetworkIdentity",
     "NetworkEdge",
     "BillingCapability",
+    "Company",
+    "CompanySignal",
     "BillingFeatureFlag",
     "BillingPlan",
     "BillingPlanEntitlement",
