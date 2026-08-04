@@ -116,11 +116,20 @@ def _instrument(app: FastAPI) -> None:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    # The interactive docs and the raw schema are a complete map of every endpoint, parameter and
+    # model. That is exactly what makes them useful in development and exactly what makes them a
+    # reconnaissance gift in production — an audit found both served 200 unauthenticated against a
+    # prod deployment. Off outside local/test; the OpenAPI spec is still generated in-process, so
+    # the test client and any internal tooling that introspects `app.openapi()` are unaffected.
+    _expose_docs = get_settings().env in ("local", "test")
     app = FastAPI(
         title="InfoJoy GTM",
         description="AI-powered Go-To-Market intelligence platform.",
         version="0.1.0",
         lifespan=lifespan,
+        docs_url="/docs" if _expose_docs else None,
+        redoc_url="/redoc" if _expose_docs else None,
+        openapi_url="/openapi.json" if _expose_docs else None,
     )
 
     app.add_middleware(RequestContextMiddleware)

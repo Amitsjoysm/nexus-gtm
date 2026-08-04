@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { NAV_ITEMS, canSee } from "@/app/nav";
+import { usePlatformIdentity } from "@/app/RequirePlatformAdmin";
 import { useAuth } from "@/app/AuthContext";
 import { Icons } from "@/components/ui";
 import styles from "./Sidebar.module.css";
@@ -17,6 +18,9 @@ export interface SidebarProps {
 export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse }: SidebarProps) {
   const { session } = useAuth();
   const role = session?.role;
+  // Platform admin is orthogonal to the workspace role, so it is read from its own source. Null
+  // for every ordinary member, which is what hides the staff entry.
+  const isPlatformAdmin = Boolean(usePlatformIdentity()?.is_platform_admin);
 
   return (
     <aside
@@ -47,7 +51,7 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
       </div>
 
       <nav className={styles.nav} aria-label="Main navigation">
-        {NAV_ITEMS.filter((item) => canSee(item, role)).map((item) => (
+        {NAV_ITEMS.filter((item) => canSee(item, role, isPlatformAdmin)).map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

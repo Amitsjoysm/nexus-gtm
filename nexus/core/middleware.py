@@ -28,7 +28,35 @@ _BASE_SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
 }
+# Appended below, once _CSP is defined.
 _HSTS_HEADER = ("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+# Content-Security-Policy. Today nothing can inject script — the SPA has zero
+# `dangerouslySetInnerHTML`, so React escapes every text node, and an audit confirmed stored
+# `<script>` payloads render inert. That safety rests entirely on a convention, and one
+# `dangerouslySetInnerHTML` added in a hurry would silently undo it. CSP is the control that
+# survives that mistake.
+#
+# `'unsafe-inline'` on style-src is required by the build: Vite emits inline styles and
+# framer-motion writes them at runtime. It is NOT set on script-src, which is the directive that
+# actually stops XSS — an injected `<script>` or `onerror=` handler is refused by the browser even
+# if it reaches the DOM.
+#
+# `connect-src 'self'` keeps a compromised page from exfiltrating to an attacker's host.
+# `frame-ancestors 'none'` duplicates X-Frame-Options for browsers that prefer CSP.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https:; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "object-src 'none'"
+)
+_BASE_SECURITY_HEADERS["Content-Security-Policy"] = _CSP
 
 
 def get_request_id() -> str | None:

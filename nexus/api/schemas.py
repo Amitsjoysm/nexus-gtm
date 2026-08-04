@@ -205,7 +205,7 @@ class AnalyzeWebsiteIn(BaseModel):
 
 # ---- accounts / contacts ----
 class AccountIn(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=255)
     domain: str | None = None
     industry: str | None = None
     employee_count: int | None = None
