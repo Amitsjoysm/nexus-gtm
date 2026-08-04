@@ -588,3 +588,48 @@ session rather than transaction so it spans the alembic subprocess, and so a rep
 mid-migration releases it automatically instead of wedging every future deploy. It blocks rather
 than skipping: the right behaviour when another replica is migrating is to wait and then observe an
 already-current schema, not to start serving against a half-applied one.
+
+---
+
+# Status, 2026-08-04
+
+Branch `master` created from `release/billing-platform` and pushed; it contains every feature
+branch (`feat/relationship-graph`, `feat/research-grounding-enhancements`,
+`feature/intelligence-depth`, `fix/signal-classifier-negation`) — each verified as an ancestor, so
+nothing was lost and no merge was needed. `main` is untouched and still holds only the licence
+commit. Gate: **1453 passed** in 19 minutes (parallel; ~55 min serial before `-n auto`).
+
+## Shipped since the last note
+
+| Area | State |
+|---|---|
+| M22 proration / trial expiry / pause | **Wired.** The arithmetic had shipped with zero callers |
+| M23 revenue | Endpoint + admin tab |
+| M24 feature flags | Evaluation **and** a write surface with clearable overrides |
+| M25 | **Complete** — impersonation, suspend/reactivate, merge duplicates, ownership transfer |
+| Shared company fan-out | On, gated per company by `crawl_verdict` |
+| Shared people store | Built (`0037`), email/phone Fernet-sealed, hashed index |
+| Apify seam | Built, key rotation; **only the phone actor is wired** |
+| Account dedupe | One write-point across all six creation paths |
+
+## Not built
+
+* **Crunchbase (`PPUtGNTB6xB9dJ2di`) and company-search (`ayZno82KNVAVaWMpg`) actors** — registered
+  in `ACTORS` and callable, but not connected to a firmographics path or the ICP sweep.
+* **M17 tech extraction**, **M21 digest worker + channel adapters**, **M26 partitioning**
+  (runbook only), **external source database** (designed in the company-data-layer plan).
+
+## The deployment gap nobody has started
+
+There is **no Azure configuration of any kind**. What exists is `docker-compose.prod.yml` plus a
+Caddy reverse proxy for a single host, and `deploy/rollout.sh` for a staggered restart of two local
+replicas. Azure needs, at minimum: a container registry and either Container Apps or AKS manifests;
+Azure Database for PostgreSQL (which changes the RLS bootstrap, because the `nexus_app` least-
+privilege role and `apply_rls.py` currently run against a container the compose file owns); Key
+Vault replacing the `.env` files; and a decision about where the worker runs, since it is
+single-process by design and holds the state gauges (`/metrics` on `:9100`).
+
+That last point is the one most likely to be got wrong: **the worker cannot be scaled horizontally
+as-is.** Prometheus multiprocess mode does not read gauges or custom collectors, which is exactly
+why state lives in the single-process worker (M15). Two worker replicas would double every periodic
+sweep and produce two conflicting gauge sets.
