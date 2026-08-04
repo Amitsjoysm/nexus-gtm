@@ -23,6 +23,7 @@ from nexus.workers.tasks import (
     enqueue_crawl_companies,
     enqueue_discover_icp_accounts,
     enqueue_billing_reconcile,
+    enqueue_alert_digests,
     enqueue_expire_trials,
     enqueue_dunning_sweep,
     enqueue_refresh_due_accounts,
@@ -78,6 +79,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             # A trial ends on a date, not when somebody opts into automation. Leaving this behind
             # the automation gate is how a trial runs forever in a workspace that never enabled it.
             await enqueue_expire_trials(queue=queue)
+            count += 1
+            # A digest a user asked for is due on a clock, not when somebody enables automation.
+            # The handler self-filters to preferences whose interval has actually elapsed.
+            await enqueue_alert_digests(queue=queue)
             count += 1
             # Shared company records: link new accounts, then crawl in shadow. Platform
             # maintenance rather than a tenant feature, so it runs outside the automation gate for

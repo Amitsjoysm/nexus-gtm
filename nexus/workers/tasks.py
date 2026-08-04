@@ -292,6 +292,45 @@ async def handle_sync_crm_account(payload: dict) -> dict:
     return {"account_id": aid, "ok": res.ok}
 
 
+async def handle_alert_digests(payload: dict) -> dict:
+    """Per-USER digest sweep: deliver the alerts routing held back.
+
+    Distinct from `send_daily_digests`, which is a tenant-level activity summary. This closes the
+    gap where `routing.py` decided an alert should wait for a digest and nothing ever sent it — the
+    alert existed, the routing was right, and the person was never told.
+
+    Scoped to tenants that actually hold digest-mode preferences, so the common case is one indexed
+    scan. Never raises: one bad tenant must not stop the sweep for the rest.
+    """
+    from sqlalchemy import distinct, select
+
+    from nexus.alerts.digest import run_digest_sweep
+    from nexus.models.notification_preference import NotificationPreference
+
+    async with get_sessionmaker()() as session:
+        tenant_ids = list(
+            (
+                await session.scalars(
+                    select(distinct(NotificationPreference.tenant_id)).where(
+                        NotificationPreference.mode == "digest"
+                    )
+                )
+            ).all()
+        )
+
+    totals = {"tenants": 0, "sent": 0, "empty": 0, "alerts": 0}
+    for tid in tenant_ids:
+        try:
+            async with tenant_session(tid) as ts:
+                res = await run_digest_sweep(ts)
+            totals["tenants"] += 1
+            for k in ("sent", "empty", "alerts"):
+                totals[k] += res.get(k, 0)
+        except Exception:
+            logger.warning("alert digest sweep failed for tenant %s", tid, exc_info=True)
+    return totals
+
+
 async def handle_send_daily_digests(payload: dict) -> dict:
     """Daily digest: one email-channel alert per opted-in tenant summarizing the last digest
     interval (new signals, accounts scored, open tasks). Idempotent per interval — the previous
@@ -831,6 +870,7 @@ HANDLERS: dict[str, Handler] = {
     "sync_crm_account": handle_sync_crm_account,
     "sync_crm_due_accounts": handle_sync_crm_due_accounts,
     "send_daily_digests": handle_send_daily_digests,
+    "alert_digests": handle_alert_digests,
     "discover_icp_accounts": handle_discover_icp_accounts,
     "crawl_companies": handle_crawl_companies,
     "backfill_companies": handle_backfill_companies,
@@ -895,6 +935,11 @@ async def enqueue_sync_crm_account(
 async def enqueue_sync_crm_due_accounts(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="sync_crm_due_accounts", payload={}))
+
+
+async def enqueue_alert_digests(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="alert_digests", payload={}))
 
 
 async def enqueue_send_daily_digests(*, queue: TaskQueue | None = None) -> None:

@@ -183,12 +183,12 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     # backfill_companies and crawl_companies — all enqueued every tick regardless of
     # automation_enabled, because billing accuracy and shared-company maintenance are platform
     # concerns rather than per-workspace opt-ins.
-    assert count == 11
+    assert count == 12
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "advance_cadences", "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
-        "billing_reconcile", "expire_trials", "backfill_companies", "crawl_companies",
+        "billing_reconcile", "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
     }
 
 
@@ -202,11 +202,11 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    assert count == 7
+    assert count == 8
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "rollup_usage", "roll_billing_periods", "dunning_sweep", "billing_reconcile",
-        "expire_trials", "backfill_companies", "crawl_companies",
+        "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
     }
 
 

@@ -11,10 +11,12 @@ exactly as before. That is what makes this additive — nobody's delivery change
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from nexus.core.db import Base, IdMixin, TimestampMixin
+from nexus.core.db import Base, IdMixin, TimestampMixin, TZDateTime
 from nexus.core.tenancy import TenantScoped
 
 # How eagerly a user wants a category delivered.
@@ -46,6 +48,9 @@ class NotificationPreference(IdMixin, TimestampMixin, TenantScoped, Base):
     # Minutes to add to UTC to reach the user's local time. Explicit rather than a tz name so
     # evaluation needs no timezone database and cannot fail on an unknown zone.
     utc_offset_min: Mapped[int] = mapped_column(Integer, default=0)
+    # Watermark for the digest sweep: what has this person already been told? NULL means never,
+    # and the first run uses a bounded window rather than replaying the whole alert history.
+    last_digest_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
     # A critical alert ignores quiet hours by default: someone actively evaluating vendors is a
     # short window, and a rep would rather be woken than lose it. Per-user, because that trade is
     # theirs to make.
