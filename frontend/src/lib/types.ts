@@ -1129,6 +1129,21 @@ export interface RevenueReport {
   };
 }
 
+/** One capability as a plan sees it. `configured` false = falls through to the catalog default. */
+export interface PlanEntitlement {
+  capability_id: string;
+  name: string;
+  category: string;
+  unit: string;
+  default_mode: string;
+  configured: boolean;
+  mode: string | null;
+  quota: number | null;
+  soft_limit_pct: number;
+  overage_price_credits: number | null;
+  feature_flag: string | null;
+}
+
 /** What a plan change would cost, computed without writing anything. */
 export interface ProrationPreview {
   tenant_id: string;

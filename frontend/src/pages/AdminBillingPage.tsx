@@ -3,6 +3,7 @@ import { Button } from "@/components/ui";
 import { CustomPlanDialog } from "./admin/CustomPlanDialog";
 import { TenantActionsDialog } from "./admin/TenantActionsDialog";
 import { RateCardDialog } from "./admin/RateCardDialog";
+import { PlanEntitlementsDialog } from "./admin/PlanEntitlementsDialog";
 import { PlatformAdmins } from "./admin/PlatformAdmins";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge, Card, CardHeader, EmptyState, Skeleton, Tabs, useToast } from "@/components/ui";
@@ -186,7 +187,10 @@ function RateCards() {
 
 function Plans() {
   const api = useApiClient();
+  const can = usePlatformCan();
   const plans = useApi<AdminPlan[]>((signal) => api.adminBillingPlans(signal), []);
+  const [editing, setEditing] = useState<AdminPlan | null>(null);
+  const canEdit = can(PRICING_WRITE);
 
   const columns: Column<AdminPlan>[] = [
     {
@@ -236,6 +240,22 @@ function Plans() {
       hideOnMobile: true,
       render: (r) => <span className={styles.mono}>{r.entitlement_count}</span>,
     },
+    ...(canEdit
+      ? [
+          {
+            key: "actions",
+            header: "",
+            width: "130px",
+            render: (r: AdminPlan) => (
+              <div className={styles.rowActions}>
+                <Button variant="secondary" onClick={() => setEditing(r)}>
+                  What's included
+                </Button>
+              </div>
+            ),
+          } as Column<AdminPlan>,
+        ]
+      : []),
   ];
 
   return (
@@ -247,13 +267,23 @@ function Plans() {
       empty={<EmptyState title="No plans" description="Plans are seeded on startup." />}
     >
       {(rows) => (
-        <DataTable
-          columns={columns}
-          rows={rows}
-          getRowKey={(r) => r.id}
-          caption="Plans"
-          minWidth={760}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            rows={rows}
+            getRowKey={(r) => r.id}
+            caption="Plans"
+            minWidth={canEdit ? 900 : 760}
+          />
+          <PlanEntitlementsDialog
+            open={editing !== null}
+            onClose={() => {
+              setEditing(null);
+              plans.refetch();
+            }}
+            plan={editing}
+          />
+        </>
       )}
     </DataState>
   );

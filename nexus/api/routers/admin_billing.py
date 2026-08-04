@@ -10,7 +10,7 @@ and must return false rather than 403.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -50,6 +50,63 @@ class PlanOut(BaseModel):
     trial_days: int
     sort_order: int
     entitlement_count: int
+
+
+@router.get("/plans/{plan_id}/entitlements")
+async def list_plan_entitlements(
+    plan_id: str,
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
+) -> list[dict]:
+    """Every capability, with this plan's entitlement where one exists.
+
+    Returns the FULL capability list rather than only the configured rows. An editor that shows
+    only what is already set cannot be used to add anything, and "this plan says nothing about
+    ai.email_draft" is the state an operator most needs to see — an unconfigured capability falls
+    through to the catalog default, which is easy to forget and impossible to notice from a list
+    that omits it.
+    """
+    from sqlalchemy import select as _select
+
+    from nexus.models.billing import BillingCapability, BillingPlan, BillingPlanEntitlement
+
+    async with get_sessionmaker()() as session:
+        if await session.get(BillingPlan, plan_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown plan '{plan_id}'")
+        caps = (
+            await session.scalars(
+                _select(BillingCapability)
+                .where(BillingCapability.active == True)  # noqa: E712
+                .order_by(BillingCapability.category, BillingCapability.id)
+            )
+        ).all()
+        ents = {
+            e.capability_id: e
+            for e in (
+                await session.scalars(
+                    _select(BillingPlanEntitlement).where(
+                        BillingPlanEntitlement.plan_id == plan_id
+                    )
+                )
+            ).all()
+        }
+
+    out = []
+    for cap in caps:
+        ent = ents.get(cap.id)
+        out.append({
+            "capability_id": cap.id,
+            "name": cap.name,
+            "category": cap.category,
+            "unit": cap.unit,
+            "default_mode": cap.default_mode,
+            "configured": ent is not None,
+            "mode": ent.mode if ent else None,
+            "quota": ent.quota if ent else None,
+            "soft_limit_pct": ent.soft_limit_pct if ent else 80,
+            "overage_price_credits": ent.overage_price_credits if ent else None,
+            "feature_flag": ent.feature_flag if ent else None,
+        })
+    return out
 
 
 @router.get("/capabilities", response_model=list[CapabilityOut])

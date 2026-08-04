@@ -25,6 +25,7 @@ import type {
   BillingCredits,
   BillingUsage,
   ProrationPreview,
+  PlanEntitlement,
   FeatureFlag,
   RevenueReport,
   Invoice,
@@ -810,6 +811,18 @@ export class ApiClient {
       method: "PATCH",
       body,
     });
+  }
+  /** Every capability, with this plan's entitlement where one is configured. */
+  planEntitlements(planId: string, signal?: AbortSignal) {
+    return this.request<PlanEntitlement[]>(
+      `/admin/billing/plans/${planId}/entitlements`, { signal },
+    );
+  }
+  upsertEntitlement(planId: string, capabilityId: string, body: Record<string, unknown>) {
+    return this.request<{ plan_id: string; capability_id: string; mode: string; quota: number | null }>(
+      `/admin/billing/plans/${planId}/entitlements/${capabilityId}`,
+      { method: "PUT", body },
+    );
   }
   upsertRateCard(capabilityId: string, body: Record<string, unknown>) {
     return this.request<AdminRateCard>(`/admin/billing/rates/${capabilityId}`, {
