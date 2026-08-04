@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui";
 import { CustomPlanDialog } from "./admin/CustomPlanDialog";
 import { TenantActionsDialog } from "./admin/TenantActionsDialog";
+import { RateCardDialog } from "./admin/RateCardDialog";
 import { PlatformAdmins } from "./admin/PlatformAdmins";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge, Card, CardHeader, EmptyState, Skeleton, Tabs, useToast } from "@/components/ui";
@@ -62,7 +63,12 @@ function MarginCell({ margin, exception }: { margin: number; exception: boolean 
 
 function RateCards() {
   const api = useApiClient();
+  const can = usePlatformCan();
   const rates = useApi<AdminRateCard[]>((signal) => api.adminBillingRates(signal), []);
+  const [editing, setEditing] = useState<AdminRateCard | null>(null);
+  // Repricing is `pricing.write`. A support admin reads this tab and cannot change it — the
+  // server enforces that regardless; hiding the control just stops offering an action that 403s.
+  const canReprice = can(PRICING_WRITE);
 
   const columns: Column<AdminRateCard>[] = [
     {
@@ -117,6 +123,22 @@ function RateCards() {
       sortable: true,
       sortValue: (r) => r.gross_margin,
     },
+    ...(canReprice
+      ? [
+          {
+            key: "actions",
+            header: "",
+            width: "110px",
+            render: (r: AdminRateCard) => (
+              <div className={styles.rowActions}>
+                <Button variant="secondary" onClick={() => setEditing(r)}>
+                  Reprice
+                </Button>
+              </div>
+            ),
+          } as Column<AdminRateCard>,
+        ]
+      : []),
   ];
 
   return (
@@ -147,7 +169,13 @@ function RateCards() {
               rows={rows}
               getRowKey={(r) => r.capability_id}
               caption="Rate cards"
-              minWidth={760}
+              minWidth={canReprice ? 880 : 760}
+            />
+            <RateCardDialog
+              open={editing !== null}
+              onClose={() => setEditing(null)}
+              card={editing}
+              onDone={() => rates.refetch()}
             />
           </>
         );
