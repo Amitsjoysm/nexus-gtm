@@ -152,3 +152,43 @@ async def fanout_due_companies(*, limit: int = 20) -> dict:
         logger.warning("fan-out sweep failed", exc_info=True)
         report["error"] = "sweep failed; see logs"
     return report
+
+
+async def backfill_account_from_shared(ts, account) -> int:
+    """Deliver a company's existing shared signals to ONE account, in the caller's transaction.
+
+    Without this, a rep adding an account whose company is already proven sees an empty timeline:
+    the per-tenant crawl steps aside (the shared crawl covers it) and the next fan-out sweep has not
+    run yet. That is precisely the "zero signals after 30 minutes" complaint the first-crawl-on-
+    create path exists to prevent — reintroduced by the cost optimisation.
+
+    Goes through ``IngestionService.ingest``, so per-tenant dedupe, ``signal.created`` and
+    same-transaction alerting all apply exactly as for a live crawl. Returns how many landed.
+    """
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.ingestion.service import IngestionService
+    from nexus.models.company import CompanySignal
+
+    company_id = getattr(account, "company_id", None)
+    if not company_id:
+        return 0
+    try:
+        from sqlalchemy import select as _select
+
+        async with get_platform_sessionmaker()() as session:
+            shared = (
+                await session.scalars(
+                    _select(CompanySignal).where(CompanySignal.company_id == company_id)
+                )
+            ).all()
+            raws = [_to_raw(sig) for sig in shared]
+        if not raws:
+            return 0
+        created = await IngestionService(sources=[]).ingest(ts, account, raws)
+        return len(created)
+    except Exception:
+        # Never break account creation for a backfill. Worst case the rep waits for the next sweep,
+        # which is the behaviour before this function existed.
+        logger.warning("shared backfill failed for account %s", getattr(account, "id", "?"),
+                       exc_info=True)
+        return 0

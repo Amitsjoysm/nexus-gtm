@@ -179,7 +179,11 @@ async def auto_discover_for_tenant(
     built: list[Account] = []
     seen: set[str] = set()
     for cand in candidates:
-        domain = (cand.domain or "").strip().lower()
+        # Normalised on both sides, or the same company is discovered again every day under a
+        # slightly different spelling and the rep's "net-new" list is mostly duplicates.
+        from nexus.accounts.dedupe import normalise_on_write
+
+        domain = normalise_on_write(cand.domain) or ""
         if not domain or domain in tracked or domain in seen:
             continue
         seen.add(domain)

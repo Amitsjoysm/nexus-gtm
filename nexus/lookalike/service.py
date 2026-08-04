@@ -133,7 +133,11 @@ class LookalikeService:
             if not looks_like_company(domain, title):
                 continue
             seen.add(domain)
-            candidate = Account(tenant_id=ts.tenant_id, name=title, domain=domain)
+            from nexus.accounts.dedupe import normalise_on_write
+
+            candidate = Account(
+                tenant_id=ts.tenant_id, name=title, domain=normalise_on_write(domain),
+            )
             snippet = getattr(hit, "snippet", "") or ""
             if snippet:
                 candidate.custom_fields = {"description": snippet[:500]}

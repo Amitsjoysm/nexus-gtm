@@ -197,3 +197,110 @@ async def test_recording_a_verdict_is_what_flips_the_gate():
         assert await record_verdict(s, cid, agrees=False) == "disagrees", (
             "a disagreement must be recorded, not merely withheld"
         )
+
+
+# ---- a newly-added covered account must not show an empty timeline -----------------------------------
+
+async def test_a_new_account_on_a_proven_company_is_seeded_immediately(monkeypatch):
+    """The cost optimisation must not reintroduce "zero signals after 30 minutes".
+
+    A rep adds an account whose company is already proven. The per-tenant crawl steps aside, and the
+    next fan-out sweep may be hours away — so without a first-run backfill the rep stares at an empty
+    page, which is the exact complaint first-crawl-on-create exists to prevent.
+    """
+    from datetime import datetime, timezone
+
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.ingestion.service import set_ingestion_service
+    from nexus.models.company import CompanySignal
+    from nexus.models.signal import SignalEvent
+    from nexus.pipeline import process_account
+
+    counter = _CountingIngestion()
+    set_ingestion_service(counter)
+    monkeypatch.setattr(get_settings(), "shared_company_crawl_enabled", True)
+
+    cid = await _company_with_verdict("seeded-co.com", "agrees")
+    async with get_platform_sessionmaker()() as s:
+        s.add(CompanySignal(
+            company_id=cid, kind="funding", source="test", title="Seeded Co raises $40M",
+            dedupe_key="seed:1", strength=0.9, occurred_at=datetime.now(timezone.utc),
+        ))
+        await s.commit()
+
+    tid = await make_tenant(slug="seeded", name="Seeded")
+    async with tenant_session(tid) as ts:
+        account = await _account(ts, name="Seeded Co", domain="seeded-co.com", company_id=cid)
+        await process_account(ts, account)
+        signals = await ts.list(SignalEvent, SignalEvent.account_id == account.id)
+
+    assert counter.calls == 0, "still no per-tenant crawl — the saving must survive"
+    assert len(signals) == 1, "but the rep must see the company's known history straight away"
+
+
+async def test_the_seeding_raises_alerts_like_a_normal_ingest(monkeypatch):
+    """It goes through IngestionService.ingest, so same-transaction alerting applies unchanged.
+    A signal nobody is notified about is the bug this codebase already shipped once."""
+    from datetime import datetime, timezone
+
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.ingestion.service import set_ingestion_service
+    from nexus.models.alerts import Alert
+    from nexus.models.company import CompanySignal
+    from nexus.pipeline import process_account
+
+    set_ingestion_service(_CountingIngestion())
+    monkeypatch.setattr(get_settings(), "shared_company_crawl_enabled", True)
+
+    cid = await _company_with_verdict("alerted-co.com", "agrees")
+    async with get_platform_sessionmaker()() as s:
+        s.add(CompanySignal(
+            company_id=cid, kind="funding", source="test", title="Alerted Co raises $50M",
+            dedupe_key="alert:1", strength=0.9, occurred_at=datetime.now(timezone.utc),
+        ))
+        await s.commit()
+
+    tid = await make_tenant(slug="alerted", name="Alerted")
+    async with tenant_session(tid) as ts:
+        account = await _account(ts, name="Alerted Co", domain="alerted-co.com", company_id=cid)
+        await process_account(ts, account)
+        alerts = await ts.list(Alert)
+
+    assert len(alerts) == 1, "a seeded signal must notify somebody, like any other"
+
+
+async def test_a_second_run_does_not_re_seed(monkeypatch):
+    """`last_refreshed_at` gates it, and ingest dedupes anyway — belt and braces, because a
+    re-seed on every sweep would resurrect signals a rep had dismissed."""
+    from datetime import datetime, timezone
+
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.ingestion.service import set_ingestion_service
+    from nexus.models.company import CompanySignal
+    from nexus.models.signal import SignalEvent
+    from nexus.pipeline import process_account
+
+    set_ingestion_service(_CountingIngestion())
+    monkeypatch.setattr(get_settings(), "shared_company_crawl_enabled", True)
+
+    cid = await _company_with_verdict("twice-co.com", "agrees")
+    async with get_platform_sessionmaker()() as s:
+        s.add(CompanySignal(
+            company_id=cid, kind="funding", source="test", title="Twice Co raises $10M",
+            dedupe_key="twice:1", strength=0.9, occurred_at=datetime.now(timezone.utc),
+        ))
+        await s.commit()
+
+    tid = await make_tenant(slug="twiceco", name="Twice")
+    async with tenant_session(tid) as ts:
+        account = await _account(ts, name="Twice Co", domain="twice-co.com", company_id=cid)
+        await process_account(ts, account)
+        account.last_refreshed_at = datetime.now(timezone.utc)
+        await ts.flush()
+        await process_account(ts, account)
+        signals = await ts.list(SignalEvent, SignalEvent.account_id == account.id)
+
+    assert len(signals) == 1

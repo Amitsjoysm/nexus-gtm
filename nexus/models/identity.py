@@ -58,6 +58,17 @@ class User(IdMixin, TimestampMixin, Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(String(255))
+    # Suspension lives on the USER, not the membership: a compromised account must stop being able
+    # to log in anywhere, and a per-membership flag would leave every other workspace reachable.
+    # Removing someone from one workspace is what deleting a membership already does.
+    # A timestamp rather than a boolean, so "when" is answerable without reading the audit log.
+    suspended_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    suspended_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    suspended_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    @property
+    def is_suspended(self) -> bool:
+        return self.suspended_at is not None
 
 
 class PendingRegistration(IdMixin, TimestampMixin, Base):

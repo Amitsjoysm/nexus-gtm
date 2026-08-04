@@ -26,6 +26,92 @@ logger = logging.getLogger("nexus.api.admin_users")
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
 
 
+class SuspendIn(BaseModel):
+    """Why. Optional, but it lands in the audit log — a suspension nobody can explain three months
+    later is the one that gets reversed by mistake."""
+
+    model_config = {"extra": "forbid"}
+
+    reason: str = ""
+
+
+@router.post("/{email}/suspend")
+async def suspend_user(
+    email: str,
+    body: SuspendIn | None = None,
+    principal: Principal = Depends(require_platform_permission(USERS_MANAGE)),
+) -> dict:
+    """Stop this person logging in anywhere, without destroying what they did.
+
+    The alternative before this existed was deletion, which takes the audit trail with it and
+    orphans every account they owned. Suspension is reversible and leaves the history intact.
+
+    Suspends the **user**, not one membership: a compromised account must stop working in every
+    workspace at once. Removing someone from a single workspace is what deleting a membership does.
+    """
+    from sqlalchemy import select
+
+    from nexus.core.db import utcnow
+    from nexus.models.identity import User
+
+    target = (email or "").strip().lower()
+    reason = (body.reason if body else "") or ""
+    async with get_sessionmaker()() as session:
+        user = (await session.scalars(select(User).where(User.email == target))).first()
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such user")
+        if user.suspended_at is not None:
+            # Idempotent: a double-clicked button is a success, not a confusing error.
+            return {"email": target, "suspended": True,
+                    "suspended_at": user.suspended_at.isoformat()}
+
+        before = {"suspended": False}
+        user.suspended_at = utcnow()
+        user.suspended_reason = reason[:300]
+        user.suspended_by = principal.user_id
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="user.suspend", target=target,
+            before=before, after={"suspended": True}, note=reason,
+        )
+        await session.commit()
+        return {"email": target, "suspended": True,
+                "suspended_at": user.suspended_at.isoformat()}
+
+
+@router.post("/{email}/reactivate")
+async def reactivate_user(
+    email: str,
+    body: SuspendIn | None = None,
+    principal: Principal = Depends(require_platform_permission(USERS_MANAGE)),
+) -> dict:
+    """Undo a suspension. Clears the reason too — a stale one reads as still-suspended."""
+    from sqlalchemy import select
+
+    from nexus.models.identity import User
+
+    target = (email or "").strip().lower()
+    async with get_sessionmaker()() as session:
+        user = (await session.scalars(select(User).where(User.email == target))).first()
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such user")
+        if user.suspended_at is None:
+            return {"email": target, "suspended": False}
+
+        was = {"suspended": True, "reason": user.suspended_reason}
+        user.suspended_at = None
+        user.suspended_reason = None
+        user.suspended_by = None
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="user.reactivate", target=target,
+            before=was, after={"suspended": False},
+            note=(body.reason if body else "") or "",
+        )
+        await session.commit()
+        return {"email": target, "suspended": False}
+
+
 @router.delete("/{email}/mfa")
 async def reset_user_mfa(
     email: str,

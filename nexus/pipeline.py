@@ -57,6 +57,26 @@ async def _covered_by_shared_crawl(account) -> bool:
         return False
 
 
+async def _recent_signals(ts, account, limit: int) -> list:
+    """The signals just delivered by a shared backfill, newest first.
+
+    ``ingest`` returns them, but the backfill runs behind a helper that reports a count; re-reading
+    keeps that seam narrow. Bounded by the number actually created, so this never becomes a scan.
+    """
+    from nexus.models.signal import SignalEvent
+
+    try:
+        rows = await ts.session.scalars(
+            ts.select(SignalEvent, SignalEvent.account_id == account.id)
+            .order_by(SignalEvent.occurred_at.desc())
+            .limit(limit)
+        )
+        return list(rows)
+    except Exception:
+        logger.warning("could not re-read seeded signals for %s", account.id, exc_info=True)
+        return []
+
+
 async def process_account(
     ts: TenantSession, account: Account, *, runtime: AgentRuntime | None = None
 ) -> dict:
@@ -76,7 +96,23 @@ async def process_account(
     # Fan-out (nexus/companies/fanout.py) then delivers the signals through IngestionService.ingest,
     # so per-tenant dedupe, `signal.created` and same-transaction alerting all still apply.
     shared = await _covered_by_shared_crawl(account)
-    new_signals = [] if shared else await get_ingestion_service().run_sources(ts, account)
+    if shared:
+        # A covered account skips the per-tenant crawl — but on its FIRST run it has no timeline at
+        # all, and the next fan-out sweep may be hours away. Deliver what the shared crawl already
+        # holds now, so a rep who just added the account sees history rather than an empty page.
+        # This is the "zero signals after 30 minutes" failure, which the cost optimisation would
+        # otherwise reintroduce for exactly the accounts it covers.
+        from nexus.companies.fanout import backfill_account_from_shared
+
+        new_signals = []
+        if account.last_refreshed_at is None:
+            delivered = await backfill_account_from_shared(ts, account)
+            if delivered:
+                logger.info("seeded account %s with %d shared signals", account.id, delivered)
+                # Re-read so scoring, inbox and plays below see them, exactly as after a live crawl.
+                new_signals = await _recent_signals(ts, account, delivered)
+    else:
+        new_signals = await get_ingestion_service().run_sources(ts, account)
 
     # Firmographic enrichment from the web (only when enabled, and only for accounts still
     # missing the basics) — so scoring and the UI see real industry/size/tech instead of blanks.

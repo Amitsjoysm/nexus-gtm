@@ -192,6 +192,18 @@ async def login(
     if user is None or not verify_password(req.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
 
+    # Checked AFTER the password, on purpose. Refusing a suspended account before verifying the
+    # password turns this endpoint into an account-existence oracle: an attacker learns which
+    # addresses are real by which ones answer differently. The extra hash costs a few milliseconds
+    # on a path that is already rate-limited.
+    #
+    # A suspension that does not stop login is decorative — this is the whole control.
+    if user.suspended_at is not None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This account is suspended. Contact your workspace administrator.",
+        )
+
     memberships = list(
         (
             await db.scalars(

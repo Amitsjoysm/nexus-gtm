@@ -85,11 +85,16 @@ class DiscoveryAgent(BaseAgent):
             # returns net-new candidates deduped/merged by domain with per-field provenance.
             found = await ctx.registry.company_search(icp, limit=need)
             for cand in found:
-                domain = (cand.domain or "").strip().lower()
+                # Normalised before comparing: the raw form made acme.com, www.acme.com and
+                # https://acme.com/ three separate Acme rows in one workspace.
+                from nexus.accounts.dedupe import find_existing_account, normalise_on_write
+
+                domain = normalise_on_write(cand.domain) or ""
                 if not domain or domain in seen_domains:
                     continue
-                existing = await ctx.ts.first(Account, Account.domain == domain)
-                if existing is not None:
+                # A bulk path skips silently rather than erroring: discovery running into an account
+                # the rep already has is the normal case, not a problem to report.
+                if await find_existing_account(ctx.ts, domain=domain, name=cand.name) is not None:
                     continue
                 acc = Account(
                     tenant_id=ctx.ts.tenant_id,

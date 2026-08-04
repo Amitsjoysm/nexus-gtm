@@ -6,6 +6,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 
+from pydantic import BaseModel
+
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
     AccountIn,
@@ -79,10 +81,32 @@ async def create_account(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> AccountOut:
+    from nexus.accounts.dedupe import find_existing_account, normalise_on_write
+
+    # The path a rep uses most had no duplicate check at all, and the ones that did compared raw
+    # domain strings — so acme.com, www.acme.com and https://acme.com/ became three Acme rows, each
+    # scored separately, each raising its own inbox task for the same funding round.
+    existing = await find_existing_account(ts, domain=body.domain, name=body.name)
+    if existing is not None:
+        # 409 rather than silently returning the existing row: the rep asked to create something
+        # and needs to know they did not. The id lets the UI offer "open Acme" instead of a dead
+        # error. Archived counts as existing — re-adding should restore the notes, not fork them.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "error": "duplicate_account",
+                "message": f"{existing.name} is already in this workspace.",
+                "account_id": existing.id,
+                "archived": bool(getattr(existing, "archived_at", None)),
+            },
+        )
+
     account = Account(
         tenant_id=ts.tenant_id,
         name=body.name,
-        domain=body.domain,
+        # Stored normalised so the next comparison is exact and the same company cannot be written
+        # four ways.
+        domain=normalise_on_write(body.domain),
         industry=body.industry,
         employee_count=body.employee_count,
         country=body.country,
@@ -197,6 +221,61 @@ async def archive_account(
     """Remove an account from the working list (soft, recoverable) — for 'not relevant to me'.
     History and any CRM sync are preserved; it simply stops showing in the Accounts list."""
     return await _set_archived(ts, account_id, True)
+
+
+class MergeIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    loser_id: str
+
+
+@router.post("/{account_id}/merge")
+async def merge_duplicate_account(
+    account_id: str,
+    body: MergeIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    # Manager+, not rep: a merge rewrites which row holds a whole timeline, and it is not something
+    # to undo casually. Reps report duplicates; managers resolve them.
+    _: Principal = Depends(require(Permission.manage_plays)),
+) -> dict:
+    """Fold another account into this one. ``account_id`` is the winner and survives.
+
+    References move, blanks fill, and the loser is archived rather than deleted — the signals,
+    alerts, tasks and contacts that explain why somebody was contacted have to outlive the tidy-up.
+    """
+    from nexus.accounts.merge import merge_accounts
+
+    try:
+        report = await merge_accounts(ts, winner_id=account_id, loser_id=body.loser_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return report.as_dict()
+
+
+class TransferIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    from_user_id: str
+    to_user_id: str
+
+
+@router.post("/transfer-ownership")
+async def transfer_account_ownership(
+    body: TransferIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    # Reassigning somebody else's queue is an admin act.
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> dict:
+    """Move one person's open inbox tasks to another. For when somebody leaves.
+
+    Only open work moves. Reassigning completed history would rewrite who did what, which is the
+    audit trail rather than a queue.
+    """
+    from nexus.accounts.merge import transfer_ownership
+
+    return await transfer_ownership(
+        ts, from_user_id=body.from_user_id, to_user_id=body.to_user_id
+    )
 
 
 @router.post("/{account_id}/unarchive", response_model=AccountOut)
