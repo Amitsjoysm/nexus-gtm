@@ -378,3 +378,48 @@ than an engineering one. The architecture supports either answer:
 
 Build the company layer first either way: it is unambiguously safe, it carries most of the cost
 saving, and it does not depend on this answer.
+
+---
+
+## External source database — decisions locked (2026-08-04)
+
+**Platform-wide only. Superadmin only. Dry run before activation.**
+
+Ruled out: per-tenant sources ("customer brings their own warehouse"). That is a different feature
+wearing the same clothes, and mixing them is expensive to unpick once data has landed:
+
+| | Platform-wide (building this) | Per-tenant (not building) |
+|---|---|---|
+| Results land in | `companies` / `people` — shared, no `tenant_id`, RLS deliberately skipped | `accounts` / `contacts` — tenant-scoped, RLS-enrolled |
+| Registered by | `sources.manage`, a **platform** permission | workspace owner — **tenant** RBAC, a different gate entirely |
+| Cost effect | The point: one vendor licence amortised across every tenant, tried ahead of the paid APIs | None. A customer-facing integration, valuable but not a saving |
+| Bad-mapping blast radius | Every tenant at once | One workspace |
+| Credentials held | Ours | The customer's — materially higher liability |
+
+Writing to the wrong table is not a config change: platform data in a tenant table is duplicated N
+times, tenant data in the shared store is a cross-tenant leak. Per-tenant later would reuse ~80% of
+this (introspection, mapping, dry run) plus a `tenant_id`, a different permission gate, and
+different write targets.
+
+### Build order
+
+1. **Foundation — done** (`nexus/sources/safety.py`, commit `c3c94fd`). SSRF guard on the DSN
+   (resolve-then-check, so a public name pointing at loopback is caught) and identifier validation
+   that runs on names we discovered ourselves, because a table name is attacker-controlled if the
+   attacker owns the source database.
+2. `source_databases` model + migration. DSN Fernet-sealed at rest like `network/crypto.py`;
+   `last_ok_at` / `last_error` so a source that has quietly stopped working is visible.
+3. Connection test — `validate_dsn` first, always.
+4. Schema introspection over `information_schema`, every returned name through
+   `require_identifier` before it is stored or shown.
+5. Mapping: admin picks discovered table/column onto app fields. **No SQL string ever arrives from
+   the browser** — we build parameterised queries from revalidated identifiers.
+6. **Dry run** — reads a bounded sample through the mapping and reports what it would produce,
+   writing nothing. A source is not selectable until a dry run has passed. This is the same staging
+   as the shared company crawl (shadow → diff → fan-out), for the same reason: a plausible
+   integration pointed at the wrong column is the failure mode this subsystem has shipped six times.
+7. Enrichment provider, tried before the paid APIs. **Failure posture: fall through to the paid
+   provider, never stop collection.** It is an optimisation, not a dependency.
+
+Open question for whoever picks this up: whether `allow_private` should be true in the local deploy,
+since a source database on localhost is plausible in development and refused by default.
