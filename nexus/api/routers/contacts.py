@@ -160,6 +160,71 @@ async def delete_contact(
     return {"id": contact_id, "deleted": True, "restorable": True}
 
 
+@router.post("/{contact_id}/enrich-phone")
+async def enrich_contact_phone(
+    contact_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """Find this contact's phone number. **Rep-triggered only.**
+
+    There is deliberately no background sweep: each lookup is a paid actor run, so enriching a
+    1,000-contact workspace on a schedule is a four-figure bill nobody asked for. The rep clicks the
+    person they are about to call. ``NEXUS_PHONE_ENRICH_AUTO`` exists for a future bulk path and is
+    off.
+
+    Served from the shared people record when another workspace already bought this number, which is
+    invisible to the caller and the whole point — same answer, no second actor run. Metered either
+    way: the customer is charged for the answer, not for our infrastructure.
+    """
+    from nexus.people.enrich import find_phone
+
+    contact = await ts.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+
+    account = await ts.get(Account, contact.account_id) if contact.account_id else None
+    linkedin = (getattr(contact, "linkedin_url", "") or "").strip()
+    if not linkedin and not (contact.email or "").strip():
+        # No shared identity, so nothing to look up. Say so rather than reporting "no phone found",
+        # which would read as a fact about the person instead of a gap in what we know.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This contact needs a LinkedIn URL or an email address before a phone can be found.",
+        )
+
+    result = await find_phone(
+        ts,
+        linkedin_url=linkedin,
+        email=(contact.email or "").strip(),
+        full_name=contact.full_name or "",
+        country=(getattr(contact, "country", "") or ""),
+        account_country=(getattr(account, "country", "") or "") if account else "",
+        user_id=principal.user_id,
+    )
+
+    if result.status == "unconfigured":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Phone lookup is not configured. Set NEXUS_APIFY_API_KEY.",
+        )
+
+    # Write the number onto the tenant's own contact row: the shared record is the cache, this is
+    # the workspace's copy, and a rep must be able to correct it without editing what other
+    # tenants see.
+    if result.phone and not (contact.phone or "").strip():
+        contact.phone = result.phone
+        await ts.flush()
+
+    return {
+        "contact_id": contact_id,
+        "phone": result.phone,
+        "raw": result.raw,
+        "status": result.status,
+        "cached": result.cached,
+    }
+
+
 @router.post("/{contact_id}/restore")
 async def restore_contact(
     contact_id: str,

@@ -128,3 +128,27 @@ async def diff_sample(*, limit: int = 50) -> dict:
         logger.warning("company diff sample failed", exc_info=True)
         report["error"] = "diff failed; see logs"
     return report
+
+
+async def record_verdict(session, company_id: str, agrees: bool) -> str:
+    """Persist what a comparison concluded about one company.
+
+    Read asymmetrically, exactly as ``CompanyDiff.agrees`` is: ``shared_only`` is usually fine (the
+    shared crawl ran more recently), while ``tenant_only`` is the failure — fan-out would deliver
+    less than the tenant already has.
+
+    A disagreement is recorded, not just withheld. "We compared and it was wrong" and "we never
+    compared" call for different actions, and collapsing them into one absent verdict hides the
+    former behind the latter.
+    """
+    from datetime import datetime, timezone
+
+    from nexus.models.company import Company
+
+    company = await session.get(Company, company_id)
+    if company is None:
+        return "unknown"
+    company.crawl_verdict = "agrees" if agrees else "disagrees"
+    company.verdict_at = datetime.now(timezone.utc)
+    await session.flush()
+    return company.crawl_verdict

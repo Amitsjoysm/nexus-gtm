@@ -65,6 +65,16 @@ async def fanout_company(company_id: str, *, limit_tenants: int = 500) -> dict:
 
     try:
         async with get_platform_sessionmaker()() as session:
+            # Global flag on, but each company still earns delivery individually. A company whose
+            # shared crawl has never been compared with the per-tenant one keeps its per-tenant
+            # crawl — `pipeline._covered_by_shared_crawl` tests the same condition, so an unproven
+            # company is crawled exactly as it was before this subsystem existed.
+            from nexus.models.company import Company
+
+            company = await session.get(Company, company_id)
+            if company is None or company.crawl_verdict != "agrees":
+                report["skipped"] = "unproven"
+                return report
             shared = (
                 await session.scalars(
                     select(CompanySignal).where(CompanySignal.company_id == company_id)

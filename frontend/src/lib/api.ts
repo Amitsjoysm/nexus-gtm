@@ -409,6 +409,20 @@ export class ApiClient {
       include_archived: includeArchived || undefined,
     });
   }
+  /**
+   * Find this contact's phone number. Rep-triggered only — there is no background sweep, because
+   * each lookup is a paid actor run and enriching a whole workspace on a schedule is a bill nobody
+   * asked for. `cached` true means another workspace already bought this number.
+   */
+  enrichContactPhone(contactId: string, signal?: AbortSignal) {
+    return this.request<{
+      contact_id: string;
+      phone: string;
+      raw: string;
+      status: string;
+      cached: boolean;
+    }>(`/contacts/${contactId}/enrich-phone`, { method: "POST", signal });
+  }
   deleteContact(contactId: string, signal?: AbortSignal) {
     return this.request<{ id: string; restorable: boolean }>(`/contacts/${contactId}`, {
       method: "DELETE",

@@ -448,14 +448,43 @@ async def _tenant_signals(tid: str, account_id: str):
         return await ts.list(SignalEvent, SignalEvent.account_id == account_id)
 
 
-async def test_fanout_is_off_by_default():
-    """It multiplies any attribution mistake by the number of subscribing tenants, so it stays off
-    until the diff harness reports agreement on real data."""
-    from nexus.companies.fanout import fanout_due_companies
-    from nexus.core.config import Settings
 
-    assert Settings().shared_company_crawl_enabled is False
-    assert (await fanout_due_companies()).get("skipped") == "disabled"
+async def _mark_proven(company_id: str) -> None:
+    """Record the diff verdict that earns a company fan-out delivery.
+
+    Crawling a company is not the same as proving it: `crawl_company` gathers, `diff.record_verdict`
+    concludes. The delivery tests below are about delivery, so they state the conclusion explicitly
+    rather than relying on a default.
+    """
+    from nexus.companies.diff import record_verdict
+    from nexus.core.db import get_platform_sessionmaker
+
+    async with get_platform_sessionmaker()() as s:
+        await record_verdict(s, company_id, agrees=True)
+        await s.commit()
+
+
+async def test_fanout_refuses_a_company_that_has_not_been_proven():
+    """Fan-out multiplies any attribution mistake by the number of subscribing tenants, so it is
+    gated **per company** rather than by one global switch.
+
+    The global flag is now on; what protects a company is its own `crawl_verdict`. A company nobody
+    has compared is refused, and `pipeline._covered_by_shared_crawl` tests the same condition, so
+    it simply keeps the per-tenant crawl it always had. Turning the flag on therefore changes
+    nothing until a real diff records agreement — which is the property that used to be provided
+    by leaving the flag off, and is now provided with evidence instead of abstinence.
+    """
+    from nexus.companies.fanout import fanout_company
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.company import Company
+
+    async with get_platform_sessionmaker()() as s:
+        company = Company(id="a" * 40, domain="unproven.example", name="Unproven")
+        s.add(company)
+        await s.commit()
+        assert company.crawl_verdict == "unknown", "the default must be 'keep crawling per-tenant'"
+
+    assert (await fanout_company("a" * 40)).get("skipped") == "unproven"
 
 
 async def test_fanout_delivers_one_crawl_to_every_subscribing_tenant(monkeypatch):
@@ -477,6 +506,7 @@ async def test_fanout_delivers_one_crawl_to_every_subscribing_tenant(monkeypatch
         company = await s.get(Company, company_id)
     await crawl_company(company, sources=[_Source([_raw(key="fo:funding:1")])])
 
+    await _mark_proven(company_id)
     report = await fanout_company(company_id)
     assert report["tenants"] == 2
     assert len(await _tenant_signals(a, a_id)) == 1
@@ -499,6 +529,7 @@ async def test_fanout_is_idempotent(monkeypatch):
         company = await s.get(Company, company_id)
     await crawl_company(company, sources=[_Source([_raw(key="fo:funding:2")])])
 
+    await _mark_proven(company_id)
     await fanout_company(company_id)
     await fanout_company(company_id)
     assert len(await _tenant_signals(tid, aid)) == 1
@@ -523,6 +554,7 @@ async def test_fanout_creates_alerts_like_a_normal_ingest(monkeypatch):
     await crawl_company(
         company, sources=[_Source([_raw(kind="funding", key="fo:funding:3", strength=0.9)])]
     )
+    await _mark_proven(company_id)
     await fanout_company(company_id)
 
     async with tenant_session(tid) as ts:
@@ -551,6 +583,7 @@ async def test_fanout_skips_archived_accounts(monkeypatch):
     async with get_sessionmaker()() as s:
         company = await s.get(Company, company_id)
     await crawl_company(company, sources=[_Source([_raw(key="fo:funding:4")])])
+    await _mark_proven(company_id)
     report = await fanout_company(company_id)
 
     assert report["delivered"] == 0

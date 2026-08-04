@@ -69,6 +69,7 @@ RATE_SEED: list[dict] = [
     _r("ai.chat_turn", 1, 0.0010, "groq budgeted envelope"),
     _r("ai.icp_from_website", 5, 0.010, "crawl + groq"),
     _r("ai.personalization_fetch", 8, 0.030, "apify actor"),
+    _r("enrich.phone", 8, 0.030, "apify actor run"),
     _r("discovery.account_added", 5, 0.015, "exa pool + enrich amortized"),
     _r("discovery.lookalike_company", 25, 0.10, "search + enrich + llm"),
     _r("discovery.lookalike_contact", 2, 0.0005, "in-workspace scoring"),

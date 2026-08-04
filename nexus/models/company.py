@@ -36,6 +36,8 @@ class Company(TimestampMixin, Base):
     __table_args__ = (
         # "What is due for a shared refresh?" — the crawler's only scan.
         Index("ix_company_due", "last_crawled_at"),
+        # The fan-out sweep's only scan: which companies have earned delivery.
+        Index("ix_company_verdict", "crawl_verdict"),
     )
 
     # sha1 of the normalised domain. Deterministic, so two concurrent resolvers racing on the same
@@ -54,6 +56,12 @@ class Company(TimestampMixin, Base):
     )
     source: Mapped[str] = mapped_column(String(30), default="crawl")
     last_crawled_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    # Has the shared crawl been proven equivalent to the per-tenant crawl for this company?
+    # unknown (keep crawling per-tenant) | agrees (fan-out may serve it) | disagrees (never).
+    # Fan-out AND the per-tenant skip both read this, and they must read the same value: gating one
+    # and not the other leaves an account with no crawl at all, which looks like a quiet market.
+    crawl_verdict: Mapped[str] = mapped_column(String(20), default="unknown", index=True)
+    verdict_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
 
 
 class CompanySignal(IdMixin, TimestampMixin, Base):

@@ -263,6 +263,14 @@ export const TrashIcon = (props: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+export const PhoneSearchIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <path d="M4 5a1 1 0 0 1 1-1h2.3a1 1 0 0 1 1 .8l.6 2.6a1 1 0 0 1-.3 1L7.2 9.7a12 12 0 0 0 5 5l1.3-1.4a1 1 0 0 1 1-.3l2.6.6a1 1 0 0 1 .8 1V17a1 1 0 0 1-1 1A13 13 0 0 1 4 5Z" />
+    <circle cx="17" cy="7" r="2.5" />
+    <path d="M19 9l2 2" />
+  </Svg>
+);
+
 export const DownloadIcon = (props: SVGProps<SVGSVGElement>) => (
   <Svg {...props}>
     <path d="M12 3v12M7 11l5 5 5-5M5 20h14" />

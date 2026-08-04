@@ -530,7 +530,18 @@ wrong-attribution bugs by trusting a name match.
 3. Diff (`diff.py`) — **reports, never repairs**, like `billing/reconcile.py`. Read it
    asymmetrically: `shared_only` is usually fine (the shared crawl ran more recently);
    **`tenant_only` is the failure** — fan-out would show less than the tenant has today.
-4. Fan-out (`fanout.py`) — behind `NEXUS_SHARED_COMPANY_CRAWL_ENABLED`, **default off**. It reuses
+4. Fan-out (`fanout.py`) — `NEXUS_SHARED_COMPANY_CRAWL_ENABLED` is now **default on**, but each
+   company is gated **individually** by `companies.crawl_verdict` (migration `0038`): `unknown` and
+   `disagrees` keep the per-tenant crawl, only `agrees` earns delivery. Turning the global flag on
+   therefore changes nothing until a real diff records agreement, per company — the safety that used
+   to come from leaving the flag off now comes from evidence instead of abstinence.
+
+   **`fanout_company` and `pipeline._covered_by_shared_crawl` must test the same condition.** Gate
+   delivery on the verdict but not the per-tenant skip, and an unproven company gets *neither*
+   crawl: signals simply stop, which is indistinguishable from a quiet market. Pinned by
+   `test_fanout_and_the_per_tenant_skip_gate_on_the_same_verdict`.
+
+   Fan-out itself is behind that flag, It reuses
    `IngestionService.ingest` rather than writing `signal_events` directly, so per-tenant dedupe,
    `signal.created` and same-transaction alerting all apply unchanged. A second write path would
    drift, and the first thing to drift would be alerts — signals with nobody notified, the exact
@@ -539,6 +550,51 @@ wrong-attribution bugs by trusting a name match.
 Do not enable fan-out on assertion. It multiplies any attribution mistake by the number of
 subscribing tenants, and four of this subsystem's six attribution bugs were found only by running
 against live providers.
+
+## Shared people records (`nexus/people/`) — encrypted, resolve once
+
+The companion to `nexus/companies/`. A `Contact` is per-tenant, so forty workspaces tracking one VP
+Engineering means forty rows and **forty paid phone lookups for one phone number**.
+
+- **Identity is explicit: LinkedIn URL, else normalised email. Never a name match.** A contact with
+  neither gets no shared person and stays entirely per-tenant. Getting a *person* wrong means a rep
+  phones a stranger with someone else's context — a worse failure than the six wrong-*company* bugs
+  this codebase has already shipped. LinkedIn beats email because a person keeps their profile
+  across jobs; keying on email makes every job change look like a new human, which is exactly the
+  event `job_switch` needs to detect.
+- **Email and phone are Fernet-sealed; a `sha256` column beside each is what lookups use.** Fernet is
+  randomised, so one value seals differently every time and an index over ciphertext matches
+  nothing — the hash is what makes the sealed column usable at all. The hash is an *index, not
+  anonymisation*: email space is small enough to brute-force. Name, title and company domain are
+  deliberately **not** encrypted; they are business-card facts the product must search on.
+- `people` / `person_identities` carry **no `tenant_id`** (migration `0037`), like `companies`.
+  Everything runs through `get_platform_sessionmaker()`.
+- **Erasure deletes identities explicitly**, not via `ondelete="CASCADE"`. Postgres enforces the FK
+  cascade and SQLite does not, so relying on it means erasure works in production and silently
+  leaves orphaned identity hashes in the suite. Erasure is the one operation where a
+  "passes every test, differs in prod" split is unacceptable.
+- **A recorded `not_found` is not re-purchased.** A miss is an expensive answer; re-asking every
+  crawl is the difference between a bounded monthly bill and an unbounded one.
+- **A cache hit is still metered.** The customer received an answer and is charged for the answer;
+  what the shared store improves is **COGS**, not price. Billing only on a miss would hand the saving
+  to whichever customer happened to ask second and make revenue depend on crawl ordering. Usage rows
+  carry `attrs.cached` so the margin is visible in the stream.
+
+## Apify actors (`nexus/integrations/apify.py`)
+
+The seam for lookups with no compliant public API. **Adding an actor is a line in `ACTORS`, not a new
+integration.** Key rotation (`NEXUS_APIFY_API_KEYS`) is sticky and mirrors `exa_api_keys`; a 401
+rotates past a revoked key without retrying it, a 429 rotates and backs off only after cycling the
+pool. Unkeyed raises `ApifyNotConfigured` rather than returning `[]` — "not configured" and "this
+person has no phone" must never look the same. Uses `httpx` against
+`run-sync-get-dataset-items`, which is the REST call `apify_client.actor().call()` wraps; no new
+dependency. Actor output is **not a contract**: `extract_phone` reads six key spellings plus nested
+shapes, because reading one hard-coded key makes an upstream rename look like "no phone number".
+
+Phone numbers are stored E.164 (`nexus/contacts/phone.py`). The region is a **cascade, never a
+constant**: the person's country, then the account's, then US. An unparseable number is kept raw
+rather than dropped — losing a contact's only phone number to keep a column tidy is the worse
+outcome.
 
 ## Alerts (`nexus/alerts/`) — M21
 

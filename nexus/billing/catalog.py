@@ -111,6 +111,10 @@ _DISCOVERY = [
     _cap("enrich.contact", "enrich", "Contact enrichment", default_mode="metered"),
     _cap("enrich.source_committee", "enrich", "Source buying committee", default_mode="metered"),
     _cap("enrich.linkedin_finder", "enrich", "LinkedIn URL finder", default_mode="metered"),
+    # Priced apart from `enrich.contact`: its COGS is an Apify actor run, not an API call, and the
+    # shared people store means a cache hit costs nothing to serve. Keeping them one capability
+    # would average a 3-cent lookup into a fraction-of-a-cent one and hide the margin.
+    _cap("enrich.phone", "enrich", "Phone number lookup", unit="check", default_mode="metered"),
     _cap("verify.email", "enrich", "Email verification", unit="check", default_mode="metered"),
     _cap("signal.news_scan", "signal", "News signal scan", unit="job"),
     _cap("signal.rss_scan", "signal", "RSS signal scan", unit="job"),

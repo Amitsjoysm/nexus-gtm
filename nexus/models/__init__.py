@@ -2,6 +2,7 @@
 from nexus.models.account import Account, Contact
 from nexus.models.alerts import Alert
 from nexus.models.company import Company, CompanySignal
+from nexus.models.person import Person, PersonIdentity
 from nexus.models.billing import (
     BillingCapability,
     BillingCostRate,
@@ -48,6 +49,8 @@ from nexus.models.source_run import SignalSourceRun
 from nexus.models.workflow import InboxTask, ListItem, Play, PlayRun, ProspectList
 
 __all__ = [
+    "Person",
+    "PersonIdentity",
     "Tenant",
     "Workspace",
     "User",

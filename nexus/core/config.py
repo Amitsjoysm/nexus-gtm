@@ -236,7 +236,7 @@ class Settings(BaseSettings):
     # mistake by the number of tenants subscribed to that company, and this subsystem has already
     # shipped six wrong-attribution bugs, four found only by running against live providers.
     # The shared crawl itself runs regardless — in shadow, consumed by nobody.
-    shared_company_crawl_enabled: bool = False
+    shared_company_crawl_enabled: bool = True
     # Dedicated search backend for SIGNAL collection only. Empty (the default) means "use
     # `search_provider`", so behaviour is unchanged until an operator sets it.
     #
@@ -401,6 +401,26 @@ class Settings(BaseSettings):
     # turn when one key rate-limits. A single free-tier key is exhausted quickly by a crawl that
     # issues several queries per account.
     firecrawl_api_keys: str = ""
+    # Phone enrichment is REP-TRIGGERED, never automatic. Each lookup is a paid actor run, so a
+    # background sweep across a 1,000-contact workspace is a four-figure bill nobody asked for. The
+    # rep clicks the contact they are about to call. Flipping this on enables a bulk/background
+    # path; it stays off until someone decides that spend deliberately.
+    phone_enrich_auto: bool = False
+
+    # Contact details in the shared people store are Fernet-sealed at rest. Separate from
+    # `mfa_secret_enc_key` and `network_token_enc_key` so the three rotate independently —
+    # rotating the key that protects phone numbers must not orphan every MFA seed. Blank derives
+    # one from `secret_key`, so the data is always encrypted with no extra configuration.
+    people_data_enc_key: str = ""
+
+    # Apify: actor marketplace, used for the lookups with no compliant public API (a phone number
+    # behind a LinkedIn profile, a Crunchbase organisation page). Inert until keyed — an unkeyed
+    # call raises rather than returning [], so a missing key is never read as "no results".
+    apify_api_key: str = ""
+    # Rotation pool, same semantics as `exa_api_keys` and `firecrawl_api_keys`. An actor run costs
+    # more than a search call and free-tier credit is consumed quickly, so a pool matters more here.
+    apify_api_keys: str = ""
+
     # Optional GitHub token. Unauthenticated GitHub allows 60 requests/hour — a handful of accounts
     # before the budget is gone (measured: 50 remaining after three calls). A token raises it to
     # 5,000. The source degrades to `throttled` rather than failing without one.
@@ -497,6 +517,10 @@ class Settings(BaseSettings):
     @property
     def firecrawl_api_key_list(self) -> list[str]:
         return self._key_pool(self.firecrawl_api_key, self.firecrawl_api_keys)
+
+    @property
+    def apify_api_key_list(self) -> list[str]:
+        return self._key_pool(self.apify_api_key, self.apify_api_keys)
 
     @model_validator(mode="after")
     def _reject_insecure_prod(self) -> "Settings":

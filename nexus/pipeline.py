@@ -40,9 +40,15 @@ async def _covered_by_shared_crawl(account) -> bool:
 
         async with get_platform_sessionmaker()() as session:
             company = await session.get(Company, company_id)
-            # Linked but never crawled: backfill runs long before the crawler reaches a company,
-            # and skipping on the link alone would black the account out until it caught up.
-            return company is not None and company.last_crawled_at is not None
+            if company is None or company.last_crawled_at is None:
+                # Linked but never crawled: backfill runs long before the crawler reaches a
+                # company, and skipping on the link alone would black the account out until it
+                # caught up.
+                return False
+            # Same condition fan-out uses. These two MUST agree: gate delivery on a verdict but
+            # not the skip, and an unproven company gets neither crawl — signals stop, and it
+            # looks exactly like a quiet market.
+            return getattr(company, "crawl_verdict", "unknown") == "agrees"
     except Exception:
         logger.warning(
             "shared-crawl coverage check failed for account %s; crawling per-tenant",

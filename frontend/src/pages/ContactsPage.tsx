@@ -90,6 +90,7 @@ export function ContactsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reverifying, setReverifying] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [phoneId, setPhoneId] = useState<string | null>(null);
   const [callTask, setCallTask] = useState<CallTask | null>(null);
   const [emailFor, setEmailFor] = useState<WorkspaceContact | null>(null);
   const [callingId, setCallingId] = useState<string | null>(null);
@@ -176,6 +177,37 @@ export function ContactsPage() {
       toast.error("Verify failed", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
       setBusyId(null);
+    }
+  }
+
+  /**
+   * Find a phone number for one contact, on demand.
+   *
+   * One contact at a time and only when clicked: each lookup is a paid actor run, so a "enrich all"
+   * button over a 1,000-contact list is a four-figure bill one mis-click away. If another workspace
+   * already bought this number the answer is instant and costs us nothing, which the rep never has
+   * to know about.
+   */
+  async function enrichPhone(c: WorkspaceContact) {
+    setPhoneId(c.id);
+    try {
+      const res = await api.enrichContactPhone(c.id);
+      if (res.phone || res.raw) {
+        toast.success(`Found ${res.phone || res.raw}`, `${c.full_name} · phone number added.`);
+        contacts.refetch();
+      } else {
+        // "We looked and there is nothing" is a real answer and worth stating plainly, so nobody
+        // clicks it again expecting a different result.
+        toast.toast({
+          tone: "info",
+          title: "No phone number found",
+          description: `Nothing published for ${c.full_name}. We won't re-check for a while.`,
+        });
+      }
+    } catch (err) {
+      toast.error("Couldn't look up a phone", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setPhoneId(null);
     }
   }
 
@@ -410,6 +442,16 @@ export function ContactsPage() {
             <Button
               size="sm"
               variant="ghost"
+              iconLeft={<Icons.PhoneSearchIcon />}
+              loading={phoneId === c.id}
+              disabled={Boolean(c.phone)}
+              title={c.phone ? `Already has ${c.phone}` : "Find a phone number"}
+              onClick={() => enrichPhone(c)}
+              aria-label={`Find a phone number for ${c.full_name}`}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
               iconLeft={<Icons.TrashIcon />}
               loading={busyId === c.id}
               title="Delete contact"
@@ -421,7 +463,7 @@ export function ContactsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId, callingId, similarId],
+    [busyId, callingId, similarId, phoneId],
   );
 
   return (

@@ -10,10 +10,12 @@ The conditions are deliberately narrow, because the failure mode of getting this
 account that silently stops receiving signals — indistinguishable from a quiet market:
 
 * the flag is on,
-* the account is linked to a shared company, AND
-* that company has actually been crawled at least once.
+* the account is linked to a shared company,
+* that company has actually been crawled at least once, AND
+* a recorded diff concluded the shared crawl matches the per-tenant one (`crawl_verdict`).
 
-Any of those missing and the per-tenant crawl runs exactly as before.
+Any of those missing and the per-tenant crawl runs exactly as before. The last condition is what
+makes turning the global flag on safe: it changes nothing until evidence exists, per company.
 """
 from __future__ import annotations
 
@@ -31,8 +33,8 @@ async def _account(ts, *, name="Acme", domain="acme.com", company_id=None):
     return account
 
 
-async def _company(domain="acme.com", *, crawled: bool):
-    """A shared company row, optionally already crawled."""
+async def _company(domain="acme.com", *, crawled: bool, verdict: str = "agrees"):
+    """A shared company row. Defaults to a proven one, since most tests are about the other gates."""
     from nexus.companies.resolution import company_id_for, normalise_domain
     from nexus.core.db import get_platform_sessionmaker
     from nexus.models.company import Company
@@ -42,6 +44,7 @@ async def _company(domain="acme.com", *, crawled: bool):
         company = Company(
             id=company_id_for(normalised), domain=normalised, name=normalised,
             last_crawled_at=datetime.now(timezone.utc) if crawled else None,
+            crawl_verdict=verdict,
         )
         session.add(company)
         await session.commit()
@@ -109,3 +112,88 @@ async def test_nothing_changes_while_the_flag_is_off(monkeypatch):
     """Default off. The shadow period has to leave the working pipeline exactly as it was."""
     calls, _ = await _run(monkeypatch, flag=False, company_id=True)
     assert calls == 1
+
+
+# ---- the two gates must agree ---------------------------------------------------------------------
+
+async def _company_with_verdict(domain: str, verdict: str):
+    from datetime import datetime, timezone
+
+    from nexus.companies.resolution import company_id_for, normalise_domain
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.company import Company
+
+    normalised = normalise_domain(domain)
+    async with get_platform_sessionmaker()() as s:
+        c = Company(
+            id=company_id_for(normalised), domain=normalised, name=normalised,
+            last_crawled_at=datetime.now(timezone.utc), crawl_verdict=verdict,
+        )
+        s.add(c)
+        await s.commit()
+        return c.id
+
+
+async def _crawls_for(monkeypatch, verdict: str) -> int:
+    from nexus.core.config import get_settings
+    from nexus.ingestion.service import set_ingestion_service
+    from nexus.pipeline import process_account
+
+    counter = _CountingIngestion()
+    set_ingestion_service(counter)
+    monkeypatch.setattr(get_settings(), "shared_company_crawl_enabled", True)
+
+    cid = await _company_with_verdict(f"{verdict}-co.com", verdict)
+    tid = await make_tenant(slug=f"v{verdict[:6]}", name="V")
+    async with tenant_session(tid) as ts:
+        account = await _account(ts, domain=f"{verdict}-co.com", company_id=cid)
+        await process_account(ts, account)
+    return counter.calls
+
+
+async def test_a_proven_company_stops_being_crawled_per_tenant(monkeypatch):
+    """`agrees` is the only verdict that earns the saving."""
+    assert await _crawls_for(monkeypatch, "agrees") == 0
+
+
+async def test_an_unproven_company_keeps_its_per_tenant_crawl(monkeypatch):
+    """Global flag on, but a company nobody has compared has earned nothing. This is what makes
+    turning the flag on safe: it changes nothing until evidence exists."""
+    assert await _crawls_for(monkeypatch, "unknown") == 1
+
+
+async def test_a_disagreeing_company_keeps_its_per_tenant_crawl(monkeypatch):
+    """The measured failure: fan-out would deliver less than the tenant already has."""
+    assert await _crawls_for(monkeypatch, "disagrees") == 1
+
+
+async def test_fanout_and_the_per_tenant_skip_gate_on_the_same_verdict(monkeypatch):
+    """The invariant that stops an account getting NO crawl at all.
+
+    If fan-out required `agrees` but the skip only required `last_crawled_at`, an unproven company
+    would be skipped per-tenant and refused by fan-out — signals would simply stop, which is
+    indistinguishable from a quiet market.
+    """
+    from nexus.companies.fanout import fanout_company
+    from nexus.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "shared_company_crawl_enabled", True)
+    cid = await _company_with_verdict("unproven-co.com", "unknown")
+    report = await fanout_company(cid)
+    assert report.get("skipped") == "unproven", (
+        "fan-out must refuse exactly the companies the per-tenant skip still crawls"
+    )
+
+
+async def test_recording_a_verdict_is_what_flips_the_gate():
+    from nexus.companies.diff import record_verdict
+    from nexus.core.db import get_platform_sessionmaker
+
+    cid = await _company_with_verdict("verdict-co.com", "unknown")
+    async with get_platform_sessionmaker()() as s:
+        assert await record_verdict(s, cid, agrees=True) == "agrees"
+        await s.commit()
+    async with get_platform_sessionmaker()() as s:
+        assert await record_verdict(s, cid, agrees=False) == "disagrees", (
+            "a disagreement must be recorded, not merely withheld"
+        )
