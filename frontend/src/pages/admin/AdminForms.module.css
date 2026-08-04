@@ -64,6 +64,56 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The money a plan change will move, shown before the admin commits to it. A quiet tinted panel
+   rather than a card: it belongs to the Select above it, and a card here would read as a separate
+   decision. */
+.proration {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.prorationRows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.prorationRow,
+.prorationNet {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+
+.prorationRow dd,
+.prorationNet dd {
+  margin: 0;
+}
+
+/* The net is the number the admin is actually deciding on, so it carries the weight and the rule
+   above it. The two lines feeding it stay quiet. */
+.prorationNet {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-default);
+  font-weight: var(--weight-semibold);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .tenantActions {
   display: flex;
   flex-wrap: wrap;

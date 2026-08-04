@@ -19,8 +19,11 @@ from nexus.core.db import get_sessionmaker
 from nexus.workers.queue import TaskQueue, get_task_queue
 from nexus.workers.tasks import (
     enqueue_advance_cadences,
+    enqueue_backfill_companies,
+    enqueue_crawl_companies,
     enqueue_discover_icp_accounts,
     enqueue_billing_reconcile,
+    enqueue_expire_trials,
     enqueue_dunning_sweep,
     enqueue_refresh_due_accounts,
     enqueue_roll_billing_periods,
@@ -72,6 +75,17 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             # the case where nobody has switched anything on.
             await enqueue_billing_reconcile(queue=queue)
             count += 1
+            # A trial ends on a date, not when somebody opts into automation. Leaving this behind
+            # the automation gate is how a trial runs forever in a workspace that never enabled it.
+            await enqueue_expire_trials(queue=queue)
+            count += 1
+            # Shared company records: link new accounts, then crawl in shadow. Platform
+            # maintenance rather than a tenant feature, so it runs outside the automation gate for
+            # the same reason usage rollups do. Fan-out inside the handler self-disables until
+            # `shared_company_crawl_enabled` is set, so this gathers data without delivering any.
+            await enqueue_backfill_companies(queue=queue)
+            await enqueue_crawl_companies(queue=queue)
+            count += 2
             if settings.automation_enabled:
                 await enqueue_advance_cadences(queue=queue)
                 await enqueue_refresh_due_accounts(queue=queue)

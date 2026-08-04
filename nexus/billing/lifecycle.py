@@ -147,3 +147,48 @@ def paused_extension(paused_at: datetime, resumed_at: datetime) -> timedelta:
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
+
+async def run_trial_sweep(ts, *, now: datetime | None = None) -> dict:
+    """Transition this tenant's expired trials. Returns what it did.
+
+    Only ``trialing`` rows with an explicit ``trial_end`` are considered. An open-ended trial is a
+    deliberate commercial arrangement — a design partner, a pilot — and sweeping it would cancel a
+    customer somebody promised something to.
+
+    "Has a payment method" is read as **a live provider subscription**: Checkout only produces one
+    after a card is accepted, so its presence is evidence we can actually charge. Inferring it from
+    a customer id would convert trials we cannot bill.
+    """
+    from nexus.models.billing import BillingSubscription
+
+    now = now or utc_now()
+    result = {"examined": 0, "converted": 0, "cancelled": 0}
+
+    for sub in await ts.list(BillingSubscription, BillingSubscription.status == "trialing"):
+        ends = sub.trial_end
+        if ends is None:
+            continue
+        if ends.tzinfo is None:
+            ends = ends.replace(tzinfo=timezone.utc)
+        result["examined"] += 1
+        if now < ends:
+            continue
+
+        if sub.psp_subscription_id:
+            sub.status = "active"
+            result["converted"] += 1
+        else:
+            sub.status = "canceled"
+            sub.cancel_at_period_end = False
+            result["cancelled"] += 1
+        sub.meta = {
+            **(sub.meta or {}),
+            "trial_resolved_at": now.isoformat(),
+            "trial_outcome": sub.status,
+        }
+        logger.info("trial for tenant %s resolved to %s", ts.tenant_id, sub.status)
+
+    if result["converted"] or result["cancelled"]:
+        await ts.flush()
+    return result
+

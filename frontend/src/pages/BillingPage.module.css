@@ -31,6 +31,55 @@
   color: var(--text-default);
 }
 
+.summaryBadge {
+  margin-left: var(--space-2);
+  vertical-align: middle;
+}
+
+/* ---- subscription notice ---------------------------------------------------------------
+   Rendered only when the subscription needs the customer to know something. A tinted panel
+   with a full border, never a side stripe: the colour is a second signal behind the words,
+   which carry the meaning on their own. */
+.notice {
+  margin-bottom: var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.notice_info {
+  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+  background: var(--info-quiet);
+}
+
+.notice_warn {
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  background: var(--warning-quiet);
+}
+
+.notice_danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: var(--danger-quiet);
+}
+
+.noticeTitle {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+.noticeBody {
+  /* Capped for readability; the notice sits in a full-width card. */
+  max-width: 68ch;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-base);
+  line-height: var(--leading);
+  color: var(--text-default);
+  text-wrap: pretty;
+}
+
 /* ---- usage meters --------------------------------------------------------------------- */
 .meters {
   display: flex;
@@ -174,6 +223,15 @@
 
 .lineAmount {
   white-space: nowrap;
+}
+
+/* The net of a plan change: the number the customer will actually see move. Ruled off from the
+   two lines that produce it, so it reads as a total rather than a third charge. */
+.lineNet {
+  margin-top: var(--space-1);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-weight: var(--weight-semibold);
 }
 
 @media (max-width: 640px) {

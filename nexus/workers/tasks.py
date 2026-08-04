@@ -707,6 +707,45 @@ async def handle_dunning_sweep(payload: dict) -> dict:
     return totals
 
 
+async def handle_expire_trials(payload: dict) -> dict:
+    """Periodic driver: resolve trials whose end date has passed.
+
+    A trial with no transition sits in ``trialing`` forever — a live subscription contributing zero
+    revenue, which is the product being given away to everyone who ever signed up. Scoped to
+    tenants that actually hold a trialing subscription, so the common case is one indexed scan.
+
+    Never raises: one bad tenant must not stop the sweep for the rest.
+    """
+    from sqlalchemy import distinct, select
+
+    from nexus.billing.lifecycle import run_trial_sweep
+    from nexus.models.billing import BillingSubscription
+
+    async with get_sessionmaker()() as session:
+        tenant_ids = list(
+            (
+                await session.scalars(
+                    select(distinct(BillingSubscription.tenant_id)).where(
+                        BillingSubscription.status == "trialing",
+                        BillingSubscription.trial_end.is_not(None),
+                    )
+                )
+            ).all()
+        )
+
+    totals = {"tenants": 0, "examined": 0, "converted": 0, "cancelled": 0}
+    for tid in tenant_ids:
+        try:
+            async with tenant_session(tid) as ts:
+                res = await run_trial_sweep(ts)
+            totals["tenants"] += 1
+            for k in ("examined", "converted", "cancelled"):
+                totals[k] += res.get(k, 0)
+        except Exception:
+            logger.warning("trial sweep failed for tenant %s", tid, exc_info=True)
+    return totals
+
+
 async def handle_billing_reconcile(payload: dict) -> dict:
     """Periodic driver: report where our subscription state disagrees with the provider's.
 
@@ -748,6 +787,41 @@ async def handle_billing_reconcile(payload: dict) -> dict:
     return totals
 
 
+async def handle_crawl_companies(payload: dict) -> dict:
+    """Shared company crawl + fan-out driver.
+
+    The crawl runs whenever there are companies to crawl — it is shadow work, consumed by nobody
+    until `shared_company_crawl_enabled` is set, so it is safe to gather data continuously and
+    decide later. Fan-out self-disables on that flag.
+    """
+    from nexus.companies.crawl import crawl_due_companies
+    from nexus.companies.fanout import fanout_due_companies
+
+    crawled = await crawl_due_companies(
+        limit=payload.get("limit", 20), max_age_hours=payload.get("max_age_hours", 6)
+    )
+    delivered = await fanout_due_companies(limit=payload.get("limit", 20))
+    return {"crawl": crawled, "fanout": delivered}
+
+
+async def handle_backfill_companies(payload: dict) -> dict:
+    """Link unlinked accounts to shared company records. Idempotent, so the heartbeat can enqueue
+    it freely; it only ever fills a NULL."""
+    from nexus.companies.backfill import backfill_companies
+
+    return await backfill_companies(limit=payload.get("limit", 1000))
+
+
+async def enqueue_crawl_companies(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="crawl_companies", payload={}))
+
+
+async def enqueue_backfill_companies(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="backfill_companies", payload={}))
+
+
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
@@ -758,11 +832,14 @@ HANDLERS: dict[str, Handler] = {
     "sync_crm_due_accounts": handle_sync_crm_due_accounts,
     "send_daily_digests": handle_send_daily_digests,
     "discover_icp_accounts": handle_discover_icp_accounts,
+    "crawl_companies": handle_crawl_companies,
+    "backfill_companies": handle_backfill_companies,
     "sync_network_account": handle_sync_network_account,
     "rollup_usage": handle_rollup_usage,
     "roll_billing_periods": handle_roll_billing_periods,
     "dunning_sweep": handle_dunning_sweep,
     "billing_reconcile": handle_billing_reconcile,
+    "expire_trials": handle_expire_trials,
 }
 
 
@@ -869,6 +946,11 @@ def is_job_failure(result: dict) -> bool:
 async def enqueue_billing_reconcile(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="billing_reconcile", payload={}))
+
+
+async def enqueue_expire_trials(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="expire_trials", payload={}))
 
 
 async def dispatch(job: Job) -> dict:

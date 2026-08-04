@@ -23,8 +23,10 @@ from nexus.models.billing import (
     BillingCapability,
     BillingPlan,
     BillingPlanEntitlement,
+    BillingProrationAdjustment,
     BillingSubscription,
     BillingUsageRollup,
+    proration_sort_key,
 )
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -40,11 +42,28 @@ class CapabilityUsageOut(BaseModel):
     mode: str
 
 
+class ProrationLineOut(BaseModel):
+    kind: str
+    description: str
+    amount_cents: int
+    days_remaining: int
+    days_in_period: int
+
+
 class UsageOut(BaseModel):
     plan: str | None
     plan_name: str | None
     period: str
     capabilities: list[CapabilityUsageOut]
+    # Subscription state the customer needs in order to read the rest of this page: a paused
+    # plan shows zero quota everywhere, and without the status that looks like a bug.
+    status: str | None = None
+    trial_end: str | None = None
+    period_end: str | None = None
+    # Mid-cycle plan changes already committed to this period's invoice. Surfaced before the
+    # invoice arrives, because "why is my bill different" is the question this answers.
+    pending_proration_cents: int = 0
+    proration_lines: list[ProrationLineOut] = []
 
 
 @router.get("/usage", response_model=UsageOut)
@@ -64,7 +83,13 @@ async def get_usage(
     key = period_key(now, "period")
 
     subs = await ts.list(BillingSubscription, limit=5)
+    # A live subscription wins, but a paused one still has to be shown. Selecting only the live
+    # statuses sent a suspended workspace down the "no subscription" path: no plan name, no status,
+    # no capabilities — a blank page that reads as a broken account rather than as a pause, and
+    # gives the customer no way to find out what happened.
     sub = next((s for s in subs if s.status in ("trialing", "active", "past_due")), None)
+    if sub is None:
+        sub = next((s for s in subs if s.status == "suspended"), None)
     plan = await ts.session.get(BillingPlan, sub.plan_id) if sub else None
 
     ents: dict[str, BillingPlanEntitlement] = {}
@@ -135,11 +160,27 @@ async def get_usage(
                 mode=ent.mode if ent else c.default_mode,
             )
         )
+    adjustments = await ts.list(
+        BillingProrationAdjustment, BillingProrationAdjustment.period_key == key
+    )
     return UsageOut(
         plan=sub.plan_id if sub else None,
         plan_name=plan.name if plan else None,
         period=key,
         capabilities=out,
+        status=sub.status if sub else None,
+        trial_end=sub.trial_end.isoformat() if sub and sub.trial_end else None,
+        period_end=(
+            sub.current_period_end.isoformat() if sub and sub.current_period_end else None
+        ),
+        pending_proration_cents=sum(a.amount_cents for a in adjustments),
+        proration_lines=[
+            ProrationLineOut(
+                kind=a.kind, description=a.description, amount_cents=a.amount_cents,
+                days_remaining=a.days_remaining, days_in_period=a.days_in_period,
+            )
+            for a in sorted(adjustments, key=proration_sort_key)
+        ],
     )
 
 

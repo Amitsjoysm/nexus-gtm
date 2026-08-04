@@ -8,15 +8,29 @@ import styles from "./Toast.module.css";
 
 export type ToastTone = "success" | "error" | "info";
 
+/** An optional single action, used for undoing something the user just did. */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface Toast {
   id: number;
   tone: ToastTone;
   title: string;
   description?: string;
+  action?: ToastAction;
 }
 
 interface ToastApi {
-  toast: (t: { tone?: ToastTone; title: string; description?: string }) => void;
+  toast: (t: {
+    tone?: ToastTone;
+    title: string;
+    description?: string;
+    action?: ToastAction;
+    /** Override the auto-dismiss delay. An undo needs longer than a plain confirmation. */
+    durationMs?: number;
+  }) => void;
   success: (title: string, description?: string) => void;
   error: (title: string, description?: string) => void;
 }
@@ -39,11 +53,21 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const push = useCallback(
-    (t: { tone?: ToastTone; title: string; description?: string }) => {
+    (t: {
+      tone?: ToastTone;
+      title: string;
+      description?: string;
+      action?: ToastAction;
+      durationMs?: number;
+    }) => {
       const id = ++idRef.current;
-      const toast: Toast = { id, tone: t.tone ?? "info", title: t.title, description: t.description };
+      const toast: Toast = {
+        id, tone: t.tone ?? "info", title: t.title, description: t.description, action: t.action,
+      };
       setToasts((list) => [...list, toast]);
-      window.setTimeout(() => remove(id), t.tone === "error" ? 6000 : 4000);
+      // An action needs long enough to notice and reach: 4s is not enough to undo a deletion.
+      const fallback = t.action ? 8000 : t.tone === "error" ? 6000 : 4000;
+      window.setTimeout(() => remove(id), t.durationMs ?? fallback);
     },
     [remove],
   );
@@ -90,6 +114,18 @@ function ToastViewport({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id:
             <div className={styles.content}>
               <p className={styles.title}>{t.title}</p>
               {t.description && <p className={styles.desc}>{t.description}</p>}
+              {t.action && (
+                <button
+                  type="button"
+                  className={styles.action}
+                  onClick={() => {
+                    t.action?.onClick();
+                    onDismiss(t.id);
+                  }}
+                >
+                  {t.action.label}
+                </button>
+              )}
             </div>
             <IconButton
               label="Dismiss notification"

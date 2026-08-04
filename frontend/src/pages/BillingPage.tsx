@@ -33,6 +33,103 @@ function periodLabel(key: string): string {
   return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 }
 
+/** Whole days from now until `iso`, negative once it has passed. */
+function daysUntil(iso: string): number {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return 0;
+  return Math.ceil((then - Date.now()) / 86_400_000);
+}
+
+function shortDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? "—"
+    : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/**
+ * The one line about this subscription the customer needs before reading anything else.
+ *
+ * Rendered only when there is something to say. A permanent "everything is fine" strip trains
+ * people to ignore the space, and then the message that matters arrives in a place nobody looks.
+ * A paused workspace especially: every meter below reads zero, and without this that looks like
+ * a bug rather than a deliberate state.
+ */
+function SubscriptionNotice({ data }: { data: BillingUsage }) {
+  const trialDays = data.trial_end ? daysUntil(data.trial_end) : null;
+
+  let tone: "warn" | "danger" | "info" | null = null;
+  let headline = "";
+  let detail = "";
+
+  if (data.status === "suspended") {
+    tone = "warn";
+    headline = "This workspace is paused";
+    detail =
+      "Billing is stopped and features are unavailable. Your plan, usage history and data are kept. Contact your account manager to resume.";
+  } else if (data.status === "past_due") {
+    tone = "danger";
+    headline = "A payment did not go through";
+    detail =
+      "We will retry automatically. Update your card in the customer portal to avoid interruption.";
+  } else if (data.status === "trialing" && trialDays !== null) {
+    tone = trialDays <= 3 ? "warn" : "info";
+    headline =
+      trialDays <= 0
+        ? "Your trial has ended"
+        : `Your trial ends in ${trialDays} day${trialDays === 1 ? "" : "s"}`;
+    detail =
+      data.trial_end != null
+        ? `On ${shortDate(data.trial_end)} this workspace moves to ${
+            data.plan_name ?? "your plan"
+          } if a payment method is on file, or is cancelled if not.`
+        : "";
+  }
+
+  if (tone === null) return null;
+
+  return (
+    <div className={cn(styles.notice, styles[`notice_${tone}`])} role="status">
+      <p className={styles.noticeTitle}>{headline}</p>
+      {detail && <p className={styles.noticeBody}>{detail}</p>}
+    </div>
+  );
+}
+
+/**
+ * Mid-cycle plan changes already committed to this period's invoice.
+ *
+ * Shown before the invoice exists, because "why is my bill different this month" is exactly the
+ * question this answers, and answering it after the charge is a support conversation instead.
+ */
+function ProrationCard({ data }: { data: BillingUsage }) {
+  if (data.proration_lines.length === 0) return null;
+  const net = data.pending_proration_cents;
+
+  return (
+    <Card padding="lg">
+      <CardHeader
+        title="Plan change this period"
+        subtitle="Charged for the days you used, credited for the days you did not."
+      />
+      <ul className={styles.lineList}>
+        {data.proration_lines.map((ln, i) => (
+          <li key={`${ln.kind}-${i}`} className={styles.line}>
+            <span className={styles.lineDesc}>{ln.description}</span>
+            <span className={cn(styles.mono, styles.lineAmount)}>{money(ln.amount_cents)}</span>
+          </li>
+        ))}
+        <li className={cn(styles.line, styles.lineNet)}>
+          <span className={styles.lineDesc}>
+            {net >= 0 ? "Added to this period" : "Credited to this period"}
+          </span>
+          <span className={cn(styles.mono, styles.lineAmount)}>{money(net)}</span>
+        </li>
+      </ul>
+    </Card>
+  );
+}
+
 /**
  * A quota meter. The bar communicates one thing: how close this workspace is to a limit.
  * Colour is state, not decoration — neutral until the soft limit, warning past it, danger at
@@ -154,27 +251,51 @@ export function BillingPage() {
             skeleton={<Skeleton width="100%" height={72} />}
           >
             {(data) => (
-              <div className={styles.summary}>
-                <div className={styles.summaryItem}>
-                  <span className={styles.summaryLabel}>Plan</span>
-                  <span className={styles.summaryValue}>
-                    {data.plan_name ?? "No plan assigned"}
-                  </span>
+              <>
+                <SubscriptionNotice data={data} />
+                <div className={styles.summary}>
+                  <div className={styles.summaryItem}>
+                    <span className={styles.summaryLabel}>Plan</span>
+                    <span className={styles.summaryValue}>
+                      {data.plan_name ?? "No plan assigned"}
+                      {data.status === "suspended" && (
+                        <Badge tone="warning" dot className={styles.summaryBadge}>
+                          paused
+                        </Badge>
+                      )}
+                    </span>
+                  </div>
+                  <div className={styles.summaryItem}>
+                    <span className={styles.summaryLabel}>Billing period</span>
+                    <span className={styles.summaryValue}>{periodLabel(data.period)}</span>
+                  </div>
+                  <div className={styles.summaryItem}>
+                    <span className={styles.summaryLabel}>
+                      {data.status === "trialing" ? "Trial ends" : "Renews"}
+                    </span>
+                    <span className={styles.summaryValue}>
+                      {data.status === "trialing"
+                        ? data.trial_end
+                          ? shortDate(data.trial_end)
+                          : "No end date"
+                        : data.period_end
+                          ? shortDate(data.period_end)
+                          : "—"}
+                    </span>
+                  </div>
+                  <div className={styles.summaryItem}>
+                    <span className={styles.summaryLabel}>Credit balance</span>
+                    <span className={styles.summaryValue}>
+                      {credits.data ? formatNumber(credits.data.balance) : "—"}
+                    </span>
+                  </div>
                 </div>
-                <div className={styles.summaryItem}>
-                  <span className={styles.summaryLabel}>Billing period</span>
-                  <span className={styles.summaryValue}>{periodLabel(data.period)}</span>
-                </div>
-                <div className={styles.summaryItem}>
-                  <span className={styles.summaryLabel}>Credit balance</span>
-                  <span className={styles.summaryValue}>
-                    {credits.data ? formatNumber(credits.data.balance) : "—"}
-                  </span>
-                </div>
-              </div>
+              </>
             )}
           </DataState>
         </Card>
+
+        {usage.data && <ProrationCard data={usage.data} />}
 
         <Card padding="lg">
           <CardHeader

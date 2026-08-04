@@ -88,6 +88,16 @@ async def resolve_entitlement(
             return await _apply_dependencies(ts, base, _depth)
         base.plan_id = sub.plan_id
 
+        if sub.status == "suspended":
+            # A pause that keeps full access is free service — the same failure as a trial that
+            # never ends. Note this is still subject to NEXUS_BILLING_ENFORCEMENT: in the default
+            # shadow mode it is recorded and not blocked, so arming pause and arming enforcement
+            # stay one decision rather than two.
+            base.mode = "disabled"
+            base.quota = 0
+            base.source = "suspended"
+            return base
+
         plan = await ts.session.get(BillingPlan, sub.plan_id)
         if plan is not None and plan.plan_class in _UNLIMITED_CLASSES:
             base.mode = "unlimited"

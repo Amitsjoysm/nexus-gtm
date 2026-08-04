@@ -231,6 +231,12 @@ class Settings(BaseSettings):
     # 400/day at ~5 sources per account is roughly 80 account refreshes — comfortably above the
     # 6-hourly cycle for a few hundred accounts, and a hard stop well short of a runaway.
     tenant_daily_source_runs: int = 400
+    # Shared company crawl fan-out (docs/superpowers/plans/2026-07-31-master-company-data-layer.md).
+    # OFF until the diff harness reports agreement on real data: fan-out multiplies any attribution
+    # mistake by the number of tenants subscribed to that company, and this subsystem has already
+    # shipped six wrong-attribution bugs, four found only by running against live providers.
+    # The shared crawl itself runs regardless — in shadow, consumed by nobody.
+    shared_company_crawl_enabled: bool = False
     # Dedicated search backend for SIGNAL collection only. Empty (the default) means "use
     # `search_provider`", so behaviour is unchanged until an operator sets it.
     #

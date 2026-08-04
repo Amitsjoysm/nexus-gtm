@@ -20,9 +20,11 @@ from nexus.models.billing import (
     BillingInvoiceLine,
     BillingPlan,
     BillingPlanEntitlement,
+    BillingProrationAdjustment,
     BillingRateCard,
     BillingSubscription,
     BillingUsageRollup,
+    proration_sort_key,
 )
 
 logger = logging.getLogger("nexus.billing.rating")
@@ -182,13 +184,33 @@ async def rate_period(ts: TenantSession, *, period_key: str) -> BillingInvoice:
                 quantity=over, unit_credits=unit_credits, amount_cents=amount,
             ))
 
+    # 3. Mid-cycle plan changes. Read, never consumed: rating rebuilds lines from scratch, so a
+    # row that were marked "applied" would vanish from the second pass and the invoice would
+    # silently change. Both the credit and the charge are shown — an invoice carrying only the
+    # charge reads as a second full month.
+    for adj in sorted(
+        await ts.list(
+            BillingProrationAdjustment, BillingProrationAdjustment.period_key == period_key
+        ),
+        key=proration_sort_key,
+    ):
+        if not adj.amount_cents:
+            continue
+        lines.append(BillingInvoiceLine(
+            invoice_id=invoice.id, kind="proration", description=adj.description,
+            quantity=1, unit_credits=0, amount_cents=adj.amount_cents,
+        ))
+
     for ln in lines:
         ts.add(ln)
     await ts.flush()
 
     subtotal = sum(ln.amount_cents for ln in lines)
     invoice.subtotal_cents = subtotal
-    invoice.total_cents = subtotal
+    # A net credit is real, but it must never reach the payment provider as a negative charge.
+    # The subtotal keeps the true arithmetic; the total is what we would collect, and you cannot
+    # collect less than nothing. The remainder stays visible as the gap between the two.
+    invoice.total_cents = max(0, subtotal)
     invoice.currency = plan.currency if plan else "USD"
     await ts.flush()
     return invoice

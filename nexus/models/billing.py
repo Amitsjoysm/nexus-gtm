@@ -356,6 +356,52 @@ class BillingInvoiceLine(IdMixin, TimestampMixin, TenantScoped, Base):
     amount_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+def proration_sort_key(adj) -> tuple:
+    """Credit before charge, oldest change first.
+
+    Reading order is "here is what you got back for the plan you left, here is what the new one
+    costs for the days that remain". Alphabetical order on ``kind`` puts the charge first, which
+    reads as a bill with an apology attached. Shared by the invoice and the customer-facing page so
+    the two can never disagree about the order of the same two rows.
+    """
+    return (adj.effective_at, 0 if adj.kind == "proration_credit" else 1)
+
+
+class BillingProrationAdjustment(IdMixin, TimestampMixin, TenantScoped, Base):
+    """A day-weighted credit or charge produced by a mid-cycle plan change.
+
+    Stored rather than applied immediately because ``rate_period`` rebuilds an invoice's lines from
+    scratch on every run — that is what makes re-rating a pure function of current data. An
+    adjustment written here is *read* by every subsequent rating pass and never consumed, so
+    re-rating the same period twice cannot bill the change twice.
+
+    Two rows per change, never one netted row. An invoice that shows only "$47.00" for an upgrade
+    reads as a second full charge; showing the credit beside it is the difference between an
+    invoice a customer understands and one they dispute.
+    """
+
+    __tablename__ = "billing_proration_adjustments"
+    __table_args__ = (
+        Index("ix_proration_tenant_period", "tenant_id", "period_key"),
+    )
+
+    # Which period's invoice this lands on. Stripe puts proration on the next invoice; we put it on
+    # the one for the period in which the change happened, because that is the period whose base
+    # fee it corrects.
+    period_key: Mapped[str] = mapped_column(String(40), index=True)
+    kind: Mapped[str] = mapped_column(String(24))     # proration_credit | proration_charge
+    description: Mapped[str] = mapped_column(String(300), default="")
+    # SIGNED cents: a credit is negative. Summing lines must give the net without the reader
+    # having to know which kinds are subtracted.
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    from_plan_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    to_plan_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    days_remaining: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    days_in_period: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    effective_at: Mapped[datetime] = mapped_column(TZDateTime(), nullable=False)
+    actor: Mapped[str] = mapped_column(String(120), default="system")
+
+
 class BillingAuditLog(IdMixin, TimestampMixin, Base):
     """Every platform-admin mutation, with before/after snapshots.
 

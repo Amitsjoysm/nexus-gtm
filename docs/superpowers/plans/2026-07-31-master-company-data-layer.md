@@ -113,6 +113,26 @@ Additive throughout, no rewrite of `accounts`:
 5. Flip fan-out on behind `NEXUS_SHARED_COMPANY_CRAWL=true`, per-tenant crawl becomes the fallback
    for accounts with no `company_id`.
 
+### Progress (2026-08-03)
+
+Steps 1–3 are built. Step 4 (`diff.py`) is built but has **not been run against real data**, which
+is the gate that step 5 waits on, and it needs a deployed shadow period rather than a green test run.
+
+**Step 5's missing half, now built.** Fan-out alone does not save anything: `process_account` still
+crawled every account per tenant regardless of `company_id`, so the shared crawl was **pure
+additional cost** — forty workspaces tracking Stripe meant forty per-tenant crawls *plus* the shared
+one. `pipeline._covered_by_shared_crawl` is the seam that makes the saving real. It skips the
+per-tenant crawl only when all three hold: the flag is on, the account is linked, **and the company
+has actually been crawled at least once**. The third condition is the one that is easy to miss —
+backfill links accounts long before the crawler reaches them, and skipping on the link alone would
+black out every newly-linked account until the shared crawl caught up. Scoring, inbox and plays are
+untouched; only the duplicated crawl is shared. The result carries `signals_source`, because
+otherwise "0 new signals" means both "nothing happened at this company" and "the shared crawler owns
+this account", which are opposite problems.
+
+Still gated, deliberately: `NEXUS_SHARED_COMPANY_CRAWL_ENABLED` remains **off**. The saving is now
+implemented, not enabled.
+
 Steps 3–4 are the whole point. The failure mode of this project's history is shipping a plausible
 integration and discovering in production that it was pointed at the wrong company — six times in
 the signal subsystem alone. A shared store multiplies that blast radius by the number of tenants, so

@@ -1075,11 +1075,69 @@ export interface CapabilityUsage {
   mode: string;
 }
 
+/** One side of a mid-cycle plan change. `amount_cents` is signed: a credit is negative. */
+export interface ProrationLine {
+  kind: string;
+  description: string;
+  amount_cents: number;
+  days_remaining: number;
+  days_in_period: number;
+}
+
 export interface BillingUsage {
   plan: string | null;
   plan_name: string | null;
   period: string;
   capabilities: CapabilityUsage[];
+  /** trialing | active | past_due | suspended | canceled. Null when no subscription exists. */
+  status: string | null;
+  trial_end: string | null;
+  period_end: string | null;
+  /** Net of every adjustment already committed to this period's invoice. */
+  pending_proration_cents: number;
+  proration_lines: ProrationLine[];
+}
+
+/** A named switch a plan entitlement can hang off. Platform-global, not per-tenant. */
+export interface FeatureFlag {
+  id: string;
+  description: string;
+  enabled: boolean;
+  /** Keyed `tenant:<id>` / `env:<name>`, resolved narrowest-first by the server. */
+  overrides: Record<string, boolean>;
+  /** Plans whose entitlements name this flag. Empty means flipping it affects nobody. */
+  used_by_plans: string[];
+}
+
+export interface RevenueReport {
+  revenue: {
+    mrr_cents: number;
+    arr_cents: number;
+    paying_tenants: number;
+    trialing_tenants: number;
+    past_due_tenants: number;
+    by_plan: Record<string, { tenants: number; mrr_cents: number }>;
+  };
+  collection: {
+    invoiced_cents: number;
+    paid_cents: number;
+    outstanding_cents: number;
+    invoices: number;
+    paid_invoices: number;
+    failed_invoices: number;
+    collection_rate: number;
+  };
+}
+
+/** What a plan change would cost, computed without writing anything. */
+export interface ProrationPreview {
+  tenant_id: string;
+  plan_id: string;
+  credit_cents: number;
+  charge_cents: number;
+  net_cents: number;
+  days_remaining: number;
+  days_in_period: number;
 }
 
 export interface CreditEntry {

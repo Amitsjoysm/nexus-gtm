@@ -40,6 +40,7 @@ _PLAN_FIELDS = (
     "name", "status", "base_price_cents", "seat_price_cents", "included_credits",
     "max_seats", "trial_days", "sort_order",
 )
+_FLAG_FIELDS = ("description", "enabled", "overrides")
 _ENT_FIELDS = (
     "mode", "quota", "soft_limit_pct", "hard_limit", "burst_limit",
     "overage_price_credits", "reset_policy",
@@ -94,6 +95,28 @@ class SubscriptionIn(BaseModel):
     model_config = {"extra": "forbid"}
 
     plan_id: str
+
+
+class FeatureFlagIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = True
+    description: str = ""
+
+
+class FeatureFlagOverrideIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    enabled: bool
+
+
+class PauseIn(BaseModel):
+    """Why a subscription was paused. Optional, but it lands in the audit log — a pause with no
+    stated reason is the one support cannot explain three months later."""
+
+    model_config = {"extra": "forbid"}
+
+    reason: str = ""
 
 
 class CreditGrantIn(BaseModel):
@@ -257,6 +280,244 @@ async def set_tenant_subscription(
         )
         await session.commit()
         return {"tenant_id": tenant_id, "plan_id": sub.plan_id, "status": sub.status}
+
+
+@router.get("/flags")
+async def list_feature_flags(
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> list[dict]:
+    """Every flag, with the plans whose entitlements name it.
+
+    The usage list is the point. A flag nobody references is safe to delete or flip; one wired into
+    a paid plan's entitlement is a switch that turns a customer's feature off, and an operator
+    should not have to grep the catalog to tell those two apart.
+    """
+    from sqlalchemy import select as _select
+
+    from nexus.models.billing import BillingFeatureFlag
+
+    async with get_sessionmaker()() as session:
+        flags = (
+            await session.scalars(_select(BillingFeatureFlag).order_by(BillingFeatureFlag.id))
+        ).all()
+        ents = (
+            await session.scalars(
+                _select(BillingPlanEntitlement).where(
+                    BillingPlanEntitlement.feature_flag.is_not(None)
+                )
+            )
+        ).all()
+
+    used: dict[str, set[str]] = {}
+    for e in ents:
+        used.setdefault(e.feature_flag or "", set()).add(e.plan_id)
+
+    return [
+        {
+            "id": f.id,
+            "description": f.description,
+            "enabled": f.enabled,
+            "overrides": f.overrides or {},
+            "used_by_plans": sorted(used.get(f.id, set())),
+        }
+        for f in flags
+    ]
+
+
+@router.put("/flags/{flag_id}")
+async def upsert_feature_flag(
+    flag_id: str,
+    body: FeatureFlagIn,
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> dict:
+    """Create or update a flag's default. Idempotent — the name is the primary key."""
+    from nexus.models.billing import BillingFeatureFlag
+
+    async with get_sessionmaker()() as session:
+        flag = await session.get(BillingFeatureFlag, flag_id)
+        before = snapshot(flag, _FLAG_FIELDS) if flag is not None else None
+        if flag is None:
+            flag = BillingFeatureFlag(id=flag_id, overrides={})
+            session.add(flag)
+        flag.enabled = body.enabled
+        if body.description:
+            flag.description = body.description
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="flag.upsert", target=flag_id,
+            before=before, after=snapshot(flag, _FLAG_FIELDS), note=body.description,
+        )
+        await session.commit()
+        return {
+            "id": flag.id, "description": flag.description, "enabled": flag.enabled,
+            "overrides": flag.overrides or {},
+        }
+
+
+@router.put("/flags/{flag_id}/overrides/{scope}/{key}")
+async def set_feature_flag_override(
+    flag_id: str,
+    scope: str,
+    key: str,
+    body: FeatureFlagOverrideIn,
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> dict:
+    """Override a flag for one tenant or one environment.
+
+    Stored on the flag rather than as its own row so "is this flag on anywhere?" stays one lookup —
+    see the model docstring. Scope is whitelisted because the key format is what
+    ``flags.flag_enabled`` parses; a typo'd scope would write an override that is never read.
+    """
+    from nexus.models.billing import BillingFeatureFlag
+
+    if scope not in ("tenant", "env"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "scope must be tenant or env")
+
+    async with get_sessionmaker()() as session:
+        flag = await session.get(BillingFeatureFlag, flag_id)
+        if flag is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown flag '{flag_id}'")
+        before = snapshot(flag, _FLAG_FIELDS)
+        # Reassign rather than mutate: SQLAlchemy does not track in-place changes to a JSON dict,
+        # so `overrides[k] = v` would flush nothing and the override would silently not exist.
+        flag.overrides = {**(flag.overrides or {}), f"{scope}:{key}": bool(body.enabled)}
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="flag.override.set",
+            target=f"{flag_id}:{scope}:{key}",
+            subject_tenant_id=key if scope == "tenant" else None,
+            before=before, after=snapshot(flag, _FLAG_FIELDS),
+        )
+        await session.commit()
+        return {"id": flag.id, "overrides": flag.overrides}
+
+
+@router.delete("/flags/{flag_id}/overrides/{scope}/{key}")
+async def clear_feature_flag_override(
+    flag_id: str,
+    scope: str,
+    key: str,
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> dict:
+    """Remove an override so the flag falls back to its default.
+
+    Without this a beta grant is permanent: setting ``tenant:X`` to false would be the only way
+    back, which is not the same thing as "follow the default from now on".
+    """
+    from nexus.models.billing import BillingFeatureFlag
+
+    async with get_sessionmaker()() as session:
+        flag = await session.get(BillingFeatureFlag, flag_id)
+        if flag is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown flag '{flag_id}'")
+        before = snapshot(flag, _FLAG_FIELDS)
+        remaining = {k: v for k, v in (flag.overrides or {}).items() if k != f"{scope}:{key}"}
+        flag.overrides = remaining
+        await session.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="flag.override.clear",
+            target=f"{flag_id}:{scope}:{key}",
+            subject_tenant_id=key if scope == "tenant" else None,
+            before=before, after=snapshot(flag, _FLAG_FIELDS),
+        )
+        await session.commit()
+        return {"id": flag.id, "overrides": flag.overrides}
+
+
+@router.get("/tenants/{tenant_id}/proration-preview")
+async def preview_tenant_proration(
+    tenant_id: str,
+    plan_id: str,
+    principal: Principal = Depends(require_platform_permission(SUBSCRIPTIONS_WRITE)),
+) -> dict:
+    """What moving this tenant to ``plan_id`` would credit and charge. Writes nothing.
+
+    An admin changing a plan is committing real money on a customer's behalf. Being able to see
+    the number first is the difference between a decision and a surprise on somebody's invoice.
+    """
+    from nexus.billing.subscriptions import preview_proration
+
+    async with get_sessionmaker()() as session:
+        if await session.get(BillingPlan, plan_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown plan '{plan_id}'")
+        await apply_rls(session, tenant_id)
+        ts = TenantSession(session, tenant_id)
+        p = await preview_proration(ts, plan_id=plan_id)
+        # Deliberately no commit: a preview that writes is not a preview.
+        await session.rollback()
+
+    return {
+        "tenant_id": tenant_id,
+        "plan_id": plan_id,
+        "credit_cents": p.credit_cents,
+        "charge_cents": p.charge_cents,
+        "net_cents": p.net_cents,
+        "days_remaining": p.days_remaining,
+        "days_in_period": p.days_in_period,
+    }
+
+
+@router.post("/tenants/{tenant_id}/pause")
+async def pause_tenant_subscription(
+    tenant_id: str,
+    body: PauseIn | None = None,
+    principal: Principal = Depends(require_platform_permission(SUBSCRIPTIONS_WRITE)),
+) -> dict:
+    """Pause billing and access, keeping the plan terms and history intact.
+
+    The alternative a customer asking to pause used to get was cancellation, which loses their
+    negotiated terms and their timeline.
+    """
+    from nexus.billing.errors import BillingError
+    from nexus.billing.subscriptions import pause_subscription
+
+    reason = (body.reason if body else "") or ""
+    async with get_sessionmaker()() as session:
+        await apply_rls(session, tenant_id)
+        ts = TenantSession(session, tenant_id)
+        try:
+            sub = await pause_subscription(ts, actor=principal.user_id)
+        except BillingError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        await record_admin_action(
+            session, actor=principal.user_id, action="subscription.pause",
+            target=sub.plan_id, subject_tenant_id=tenant_id,
+            before={"status": "active"}, after={"status": sub.status}, note=reason,
+        )
+        await session.commit()
+        return {"tenant_id": tenant_id, "plan_id": sub.plan_id, "status": sub.status,
+                "paused_at": (sub.meta or {}).get("paused_at")}
+
+
+@router.post("/tenants/{tenant_id}/resume")
+async def resume_tenant_subscription(
+    tenant_id: str,
+    body: PauseIn | None = None,
+    principal: Principal = Depends(require_platform_permission(SUBSCRIPTIONS_WRITE)),
+) -> dict:
+    """Resume, pushing the period end out by however long the pause lasted."""
+    from nexus.billing.errors import BillingError
+    from nexus.billing.subscriptions import resume_subscription
+
+    async with get_sessionmaker()() as session:
+        await apply_rls(session, tenant_id)
+        ts = TenantSession(session, tenant_id)
+        try:
+            sub = await resume_subscription(ts, actor=principal.user_id)
+        except BillingError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        await record_admin_action(
+            session, actor=principal.user_id, action="subscription.resume",
+            target=sub.plan_id, subject_tenant_id=tenant_id,
+            before={"status": "suspended"}, after={"status": sub.status},
+            note=(body.reason if body else "") or "",
+        )
+        await session.commit()
+        return {
+            "tenant_id": tenant_id, "plan_id": sub.plan_id, "status": sub.status,
+            "period_end": sub.current_period_end.isoformat() if sub.current_period_end else None,
+            "days_returned": (sub.meta or {}).get("last_pause_days", 0),
+        }
 
 
 @router.post("/tenants/{tenant_id}/credits")

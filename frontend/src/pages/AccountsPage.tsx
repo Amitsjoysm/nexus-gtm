@@ -54,6 +54,7 @@ export function AccountsPage() {
   const [source, setSource] = useState(ALL);
   const [minFit, setMinFit] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
@@ -71,16 +72,53 @@ export function AccountsPage() {
     }
   }
 
+  /**
+   * Soft delete, with the undo attached to the confirmation.
+   *
+   * The row is kept because signals, alerts, inbox tasks and cadence steps all reference it —
+   * removing it would orphan the history that explains why anyone was ever contacted. Undo in the
+   * toast rather than a separate "deleted items" screen: the mistake is noticed within seconds,
+   * and a screen nobody visits is not a safety net.
+   */
   async function removeAccount(a: Account) {
     setBusyId(a.id);
     try {
-      await api.archiveAccount(a.id);
-      toast.success("Removed", `${a.name} is hidden from your list.`);
+      await api.deleteAccount(a.id);
       accounts.refetch();
+      toast.toast({
+        tone: "success",
+        title: "Account deleted",
+        description: `${a.name} is hidden from your list. Its history is kept.`,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await api.restoreAccount(a.id);
+              accounts.refetch();
+            } catch (err) {
+              toast.error(
+                "Couldn't restore",
+                err instanceof ApiError ? err.detail : "Try again.",
+              );
+            }
+          },
+        },
+      });
     } catch (err) {
-      toast.error("Couldn't remove", err instanceof ApiError ? err.detail : "Try again.");
+      toast.error("Couldn't delete", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function exportAccounts() {
+    setExporting(true);
+    try {
+      await api.exportAccounts();
+    } catch (err) {
+      toast.error("Couldn't export", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -176,8 +214,8 @@ export function AccountsPage() {
               iconLeft={<Icons.TrashIcon />}
               loading={busyId === a.id}
               onClick={() => removeAccount(a)}
-              title="Remove account"
-              aria-label={`Remove ${a.name}`}
+              title="Delete account"
+              aria-label={`Delete ${a.name}`}
             />
           </span>
         ),
@@ -236,9 +274,19 @@ export function AccountsPage() {
         title="Accounts"
         description="The companies in your territory, enriched and scored against your ICP."
         actions={
-          <Button iconLeft={<Icons.PlusIcon />} onClick={() => setModalOpen(true)}>
-            New account
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              iconLeft={<Icons.DownloadIcon />}
+              onClick={exportAccounts}
+              loading={exporting}
+            >
+              Export CSV
+            </Button>
+            <Button iconLeft={<Icons.PlusIcon />} onClick={() => setModalOpen(true)}>
+              New account
+            </Button>
+          </>
         }
       />
 

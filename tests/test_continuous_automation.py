@@ -179,29 +179,34 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", True)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    # +4 for rollup_usage, roll_billing_periods, dunning_sweep and billing_reconcile,
-    # enqueued every tick regardless of automation_enabled: billing is not an automation opt-in.
-    assert count == 8
+    # +6 for rollup_usage, roll_billing_periods, dunning_sweep, billing_reconcile,
+    # backfill_companies and crawl_companies — all enqueued every tick regardless of
+    # automation_enabled, because billing accuracy and shared-company maintenance are platform
+    # concerns rather than per-workspace opt-ins.
+    assert count == 11
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "advance_cadences", "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
-        "billing_reconcile",
+        "billing_reconcile", "expire_trials", "backfill_companies", "crawl_companies",
     }
 
 
 @pytest.mark.asyncio
 async def test_enqueue_due_noop_when_disabled(monkeypatch):
-    """With automation off, only the automation-gated drivers are skipped. Usage rollups and
-    billing-period rolls still run every tick for every workspace — billing accuracy is not an
-    automation opt-in."""
+    """With automation off, only the automation-gated drivers are skipped. Usage rollups,
+    billing-period rolls, trial expiry and shared-company maintenance still run every tick — billing
+    accuracy and the shared company store are platform concerns, not per-workspace opt-ins. A trial
+    ends on a date; gating that on automation is how a trial runs forever in a workspace that never
+    switched automation on."""
     monkeypatch.setattr(get_settings(), "automation_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    assert count == 4
+    assert count == 7
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "rollup_usage", "roll_billing_periods", "dunning_sweep", "billing_reconcile",
+        "expire_trials", "backfill_companies", "crawl_companies",
     }
 
 

@@ -99,9 +99,11 @@ async def backfill_subscriptions() -> dict:
     return {"created": created}
 
 
-async def _active(ts: TenantSession) -> BillingSubscription | None:
+async def _active(
+    ts: TenantSession, *, statuses: tuple[str, ...] = ACTIVE_STATUSES,
+) -> BillingSubscription | None:
     subs = await ts.session.scalars(
-        ts.select(BillingSubscription, BillingSubscription.status.in_(ACTIVE_STATUSES))
+        ts.select(BillingSubscription, BillingSubscription.status.in_(statuses))
         .order_by(BillingSubscription.created_at.desc(), BillingSubscription.id.desc())
     )
     return subs.first()
@@ -121,6 +123,7 @@ async def change_plan(ts: TenantSession, plan_id: str, *, actor: str = "system")
         return await ensure_subscription(ts, plan_id=plan_id)
 
     previous = sub.plan_id
+    adjustments = await _record_proration(ts, sub, old_plan_id=previous, new_plan=plan, actor=actor)
     sub.plan_id = plan_id
     sub.status = "active"
     sub.currency = plan.currency
@@ -133,7 +136,173 @@ async def change_plan(ts: TenantSession, plan_id: str, *, actor: str = "system")
         "previous_plan_id": previous,
         "changed_by": actor,
         "changed_at": utcnow().isoformat(),
+        "last_proration_cents": sum(a.amount_cents for a in adjustments),
     }
+    await ts.flush()
+    return sub
+
+
+async def preview_proration(ts: TenantSession, *, plan_id: str, at: datetime | None = None):
+    """What a plan change would cost, without writing anything.
+
+    An admin changing a customer's plan is committing real money on that customer's behalf; being
+    able to see the number first is the difference between a decision and a surprise.
+    """
+    from nexus.billing.lifecycle import Proration, prorate
+
+    plan = await ts.session.get(BillingPlan, plan_id)
+    sub = await _active(ts)
+    if plan is None or sub is None:
+        return Proration()
+    old_plan = await ts.session.get(BillingPlan, sub.plan_id)
+    if not _proratable(sub, old_plan_id=sub.plan_id, new_plan_id=plan_id):
+        return Proration()
+    return prorate(
+        old_monthly_cents=(old_plan.base_price_cents if old_plan else 0),
+        new_monthly_cents=plan.base_price_cents,
+        period_start=_aware(sub.current_period_start),
+        period_end=_aware(sub.current_period_end),
+        at=at or utcnow(),
+    )
+
+
+def _aware(value: datetime | None) -> datetime:
+    """SQLite hands back naive datetimes; proration arithmetic compares them against ``utcnow``."""
+    if value is None:
+        return utcnow()
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _proratable(sub: BillingSubscription, *, old_plan_id: str, new_plan_id: str) -> bool:
+    """Whether WE should prorate this change.
+
+    Three deliberate refusals:
+
+    * **Same plan** — a no-op write must not produce two lines that cancel out.
+    * **No billing period** — nothing has been paid for, so there is nothing to day-weight.
+    * **Provider-owned subscription** — Stripe prorates its own changes. Adding our lines on top
+      bills the difference twice, once on their invoice and once on ours, and the customer would
+      be right to dispute it. This is why the Stripe webhook writes ``sub.plan_id`` directly
+      rather than calling ``change_plan``.
+    """
+    if old_plan_id == new_plan_id:
+        return False
+    if sub.current_period_start is None or sub.current_period_end is None:
+        return False
+    if sub.psp_subscription_id:
+        return False
+    return True
+
+
+async def _record_proration(
+    ts: TenantSession, sub: BillingSubscription, *, old_plan_id: str, new_plan, actor: str,
+) -> list:
+    """Write the credit/charge pair for a mid-cycle change. Returns the rows written."""
+    from nexus.billing.lifecycle import prorate
+    from nexus.billing.rollups import period_key
+    from nexus.models.billing import BillingProrationAdjustment
+
+    if not _proratable(sub, old_plan_id=old_plan_id, new_plan_id=new_plan.id):
+        return []
+
+    old_plan = await ts.session.get(BillingPlan, old_plan_id)
+    now = utcnow()
+    p = prorate(
+        old_monthly_cents=(old_plan.base_price_cents if old_plan else 0),
+        new_monthly_cents=new_plan.base_price_cents,
+        period_start=_aware(sub.current_period_start),
+        period_end=_aware(sub.current_period_end),
+        at=now,
+    )
+    if p.credit_cents == 0 and p.charge_cents == 0:
+        return []
+
+    pk = period_key(now, "period")
+    common = dict(
+        period_key=pk, from_plan_id=old_plan_id, to_plan_id=new_plan.id,
+        days_remaining=p.days_remaining, days_in_period=p.days_in_period,
+        effective_at=now, actor=actor,
+    )
+    rows = [
+        # Signed negative: summing the lines gives the net with no special-casing by kind.
+        BillingProrationAdjustment(
+            kind="proration_credit", amount_cents=-p.credit_cents,
+            description=(
+                f"Unused {old_plan.name if old_plan else old_plan_id} "
+                f"({p.days_remaining} of {p.days_in_period} days)"
+            ),
+            **common,
+        ),
+        BillingProrationAdjustment(
+            kind="proration_charge", amount_cents=p.charge_cents,
+            description=(
+                f"{new_plan.name} for the rest of the period "
+                f"({p.days_remaining} of {p.days_in_period} days)"
+            ),
+            **common,
+        ),
+    ]
+    for row in rows:
+        ts.add(row)
+    await ts.flush()
+    logger.info(
+        "prorated %s -> %s for tenant %s: credit %d, charge %d",
+        old_plan_id, new_plan.id, ts.tenant_id, -p.credit_cents, p.charge_cents,
+    )
+    return rows
+
+
+async def pause_subscription(ts: TenantSession, *, actor: str = "system") -> BillingSubscription:
+    """Pause billing and access. Raises ``BillingError`` when the status forbids it.
+
+    Records ``paused_at`` so ``resume_subscription`` can give the paused days back — without that
+    the customer pays for thirty days and receives sixteen, which is the same overcharge proration
+    exists to prevent.
+    """
+    from nexus.billing.errors import BillingError
+    from nexus.billing.lifecycle import can_pause
+
+    sub = await _active(ts)
+    if sub is None:
+        raise BillingError("no subscription to pause")
+    ok, why = can_pause(sub.status)
+    if not ok:
+        raise BillingError(why)
+
+    sub.status = "suspended"
+    sub.meta = {**(sub.meta or {}), "paused_at": utcnow().isoformat(), "paused_by": actor}
+    await ts.flush()
+    return sub
+
+
+async def resume_subscription(ts: TenantSession, *, actor: str = "system") -> BillingSubscription:
+    """Un-pause and push the period end out by however long the pause lasted."""
+    from nexus.billing.errors import BillingError
+    from nexus.billing.lifecycle import can_resume, paused_extension
+
+    sub = await _active(ts, statuses=("suspended", *ACTIVE_STATUSES))
+    if sub is None:
+        raise BillingError("no subscription to resume")
+    ok, why = can_resume(sub.status)
+    if not ok:
+        raise BillingError(why)
+
+    now = utcnow()
+    meta = dict(sub.meta or {})
+    paused_raw = meta.pop("paused_at", None)
+    if paused_raw and sub.current_period_end is not None:
+        try:
+            paused_at = datetime.fromisoformat(str(paused_raw))
+        except ValueError:
+            paused_at = now
+        extension = paused_extension(_aware(paused_at), now)
+        sub.current_period_end = _aware(sub.current_period_end) + extension
+        meta["last_pause_days"] = extension.days
+
+    sub.status = "active"
+    meta["resumed_at"] = now.isoformat()
+    meta["resumed_by"] = actor
+    sub.meta = meta
     await ts.flush()
     return sub
 

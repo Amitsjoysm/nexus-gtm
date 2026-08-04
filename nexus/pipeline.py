@@ -4,6 +4,8 @@ This is the orchestration seam wired by the API (synchronously) and the worker (
 """
 from __future__ import annotations
 
+import logging
+
 from nexus.agents.runtime import AgentRuntime, get_agent_runtime
 from nexus.core.config import get_settings
 from nexus.core.events import Event, get_event_bus
@@ -14,13 +16,61 @@ from nexus.models.account import Account
 from nexus.models.workflow import Play
 from nexus.plays.engine import get_plays_engine
 
+logger = logging.getLogger("nexus.pipeline")
+
+
+async def _covered_by_shared_crawl(account) -> bool:
+    """Whether the shared company crawl already covers this account's signals.
+
+    Reads the shared table through the platform sessionmaker: ``companies`` carries no
+    ``tenant_id``, so a TenantSession would be the wrong scope and, under RLS, would silently see
+    nothing — which here would read as "not covered" and quietly undo the saving.
+
+    Never raises. A lookup failure falls back to crawling per-tenant, which costs money rather than
+    losing signals; the opposite default would drop a customer's coverage on a database blip.
+    """
+    if not get_settings().shared_company_crawl_enabled:
+        return False
+    company_id = getattr(account, "company_id", None)
+    if not company_id:
+        return False
+    try:
+        from nexus.core.db import get_platform_sessionmaker
+        from nexus.models.company import Company
+
+        async with get_platform_sessionmaker()() as session:
+            company = await session.get(Company, company_id)
+            # Linked but never crawled: backfill runs long before the crawler reaches a company,
+            # and skipping on the link alone would black the account out until it caught up.
+            return company is not None and company.last_crawled_at is not None
+    except Exception:
+        logger.warning(
+            "shared-crawl coverage check failed for account %s; crawling per-tenant",
+            getattr(account, "id", "?"), exc_info=True,
+        )
+        return False
+
 
 async def process_account(
     ts: TenantSession, account: Account, *, runtime: AgentRuntime | None = None
 ) -> dict:
     runtime = runtime or get_agent_runtime()
 
-    new_signals = await get_ingestion_service().run_sources(ts, account)
+    # The shared company crawl only saves money if it REPLACES this crawl rather than adding to it.
+    # Until it did, forty workspaces tracking Stripe crawled it forty-one times: forty per-tenant
+    # crawls plus the shared one.
+    #
+    # Three conditions, all required, because the failure mode of being wrong here is an account
+    # that quietly stops receiving signals — which looks exactly like a quiet market:
+    #   * the flag is on (default off; the shadow period must change nothing),
+    #   * the account is linked to a shared company, and
+    #   * that company has actually been crawled at least once. Backfill links accounts long
+    #     before the crawler reaches them, so skipping on the link alone would black out every
+    #     newly-linked account until the shared crawl caught up.
+    # Fan-out (nexus/companies/fanout.py) then delivers the signals through IngestionService.ingest,
+    # so per-tenant dedupe, `signal.created` and same-transaction alerting all still apply.
+    shared = await _covered_by_shared_crawl(account)
+    new_signals = [] if shared else await get_ingestion_service().run_sources(ts, account)
 
     # Firmographic enrichment from the web (only when enabled, and only for accounts still
     # missing the basics) — so scoring and the UI see real industry/size/tech instead of blanks.
@@ -48,6 +98,7 @@ async def process_account(
             "inbox_tasks_created": [],
             "plays_executed": [],
             "icp_screened": True,
+            "signals_source": "shared_company" if shared else "tenant",
         }
 
     score = await runtime.run("scoring", ts, account_id=account.id, persist=True)
@@ -94,4 +145,7 @@ async def process_account(
         "scoring_status": score.status,
         "inbox_tasks_created": task_ids,
         "plays_executed": play_run_ids,
+        # Which crawl fed this run. Without it "0 new signals" means both "nothing happened at this
+        # company" and "the shared crawler owns this account", which are opposite problems.
+        "signals_source": "shared_company" if shared else "tenant",
     }

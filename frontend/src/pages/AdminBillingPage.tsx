@@ -4,16 +4,23 @@ import { CustomPlanDialog } from "./admin/CustomPlanDialog";
 import { TenantActionsDialog } from "./admin/TenantActionsDialog";
 import { PlatformAdmins } from "./admin/PlatformAdmins";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Badge, Card, CardHeader, EmptyState, Skeleton, Tabs } from "@/components/ui";
+import { Badge, Card, CardHeader, EmptyState, Skeleton, Tabs, useToast } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { usePlatformCan } from "@/app/RequirePlatformAdmin";
-import { ADMINS_MANAGE, SUBSCRIPTIONS_WRITE } from "@/lib/permissions";
+import { ADMINS_MANAGE, PRICING_WRITE, SUBSCRIPTIONS_WRITE } from "@/lib/permissions";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
-import type { AdminPlan, AdminRateCard, AdminSubscription } from "@/lib/types";
+import type {
+  AdminPlan,
+  AdminRateCard,
+  AdminSubscription,
+  FeatureFlag,
+  RevenueReport,
+} from "@/lib/types";
+import { ApiError } from "@/lib/api";
 import styles from "./AdminBillingPage.module.css";
 
 const MARGIN_FLOOR = 0.5;
@@ -251,10 +258,15 @@ function Subscriptions() {
                 ? "danger"
                 : r.status === "trialing"
                   ? "info"
-                  : "neutral"
+                  : // A paused workspace is a deliberate state somebody must act on to undo, so it
+                    // must not sit in the same grey as `canceled`.
+                    r.status === "suspended"
+                    ? "warning"
+                    : "neutral"
           }
+          dot
         >
-          {r.status}
+          {r.status === "suspended" ? "paused" : r.status}
         </Badge>
       ),
     },
@@ -347,6 +359,256 @@ function Subscriptions() {
   );
 }
 
+/**
+ * Revenue, derived at read time.
+ *
+ * Deliberately a definition list rather than a row of hero metric cards: the operator reading this
+ * is checking figures against a finance sheet, and four big numbers in boxes make that harder. On
+ * trial sits beside paying workspaces because a trial is a live logo and zero revenue, and merging
+ * the two is how a pipeline number gets reported as an MRR number.
+ */
+function Revenue() {
+  const api = useApiClient();
+  const report = useApi<RevenueReport>((signal) => api.adminBillingRevenue(undefined, signal), []);
+
+  return (
+    <DataState
+      state={report}
+      errorTitle="Couldn't load revenue"
+      skeleton={<Skeleton width="100%" height={220} />}
+    >
+      {(data) => {
+        const r = data.revenue;
+        const c = data.collection;
+        const planRows = Object.entries(r.by_plan)
+          .filter(([, v]) => v.tenants > 0)
+          .sort((a, b) => b[1].mrr_cents - a[1].mrr_cents);
+        return (
+          <div className={styles.revenue}>
+            <section>
+              <h3 className={styles.sectionTitle}>Recurring revenue</h3>
+              <dl className={styles.figures}>
+                <div>
+                  <dt>MRR</dt>
+                  <dd className={styles.mono}>{money(r.mrr_cents)}</dd>
+                </div>
+                <div>
+                  <dt>ARR</dt>
+                  <dd className={styles.mono}>{money(r.arr_cents)}</dd>
+                </div>
+                <div>
+                  <dt>Paying workspaces</dt>
+                  <dd className={styles.mono}>{formatNumber(r.paying_tenants)}</dd>
+                </div>
+                <div>
+                  <dt>On trial</dt>
+                  <dd className={styles.mono}>{formatNumber(r.trialing_tenants)}</dd>
+                </div>
+                <div>
+                  <dt>Past due</dt>
+                  <dd className={cn(styles.mono, r.past_due_tenants > 0 && styles.marginBad)}>
+                    {formatNumber(r.past_due_tenants)}
+                  </dd>
+                </div>
+              </dl>
+              <p className={styles.subtle}>
+                Annual plans are divided by twelve, so one annual signature does not make MRR jump a
+                year and fall back the next. Past due still counts as revenue: dropping it would
+                make a collection problem look like churn.
+              </p>
+            </section>
+
+            <section>
+              <h3 className={styles.sectionTitle}>Collection</h3>
+              <dl className={styles.figures}>
+                <div>
+                  <dt>Invoiced</dt>
+                  <dd className={styles.mono}>{money(c.invoiced_cents)}</dd>
+                </div>
+                <div>
+                  <dt>Collected</dt>
+                  <dd className={styles.mono}>{money(c.paid_cents)}</dd>
+                </div>
+                <div>
+                  <dt>Outstanding</dt>
+                  <dd className={cn(styles.mono, c.outstanding_cents > 0 && styles.marginBad)}>
+                    {money(c.outstanding_cents)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Collection rate</dt>
+                  <dd className={styles.mono}>{(c.collection_rate * 100).toFixed(1)}%</dd>
+                </div>
+                <div>
+                  <dt>Failed invoices</dt>
+                  <dd className={cn(styles.mono, c.failed_invoices > 0 && styles.marginBad)}>
+                    {formatNumber(c.failed_invoices)}
+                  </dd>
+                </div>
+              </dl>
+              <p className={styles.subtle}>
+                Draft invoices are excluded. They have not been presented to anyone, so counting
+                them as uncollected would make every open period look like a failure.
+              </p>
+            </section>
+
+            <section>
+              <h3 className={styles.sectionTitle}>Revenue by plan</h3>
+              {planRows.length === 0 ? (
+                <p className={styles.subtle}>No workspace is on a priced plan yet.</p>
+              ) : (
+                <ul className={styles.planMix}>
+                  {planRows.map(([plan, v]) => (
+                    <li key={plan} className={styles.planRow}>
+                      <span>{plan}</span>
+                      <span className={styles.subtle}>
+                        {v.tenants} workspace{v.tenants === 1 ? "" : "s"}
+                      </span>
+                      <span className={styles.mono}>{money(v.mrr_cents)}/mo</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </div>
+        );
+      }}
+    </DataState>
+  );
+}
+
+/**
+ * Feature flags: the switch a plan entitlement hangs off.
+ *
+ * The Used by column is the one that matters. A flag nothing references is free to flip; one wired
+ * into a paid plan turns a customer feature off, and an operator should not have to read the
+ * catalog to tell those apart. An unreferenced flag says so in words, not with an empty cell.
+ */
+function FeatureFlags() {
+  const api = useApiClient();
+  const toast = useToast();
+  const flags = useApi<FeatureFlag[]>((signal) => api.adminBillingFlags(signal), []);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function toggle(flag: FeatureFlag) {
+    setBusy(flag.id);
+    try {
+      await api.upsertFeatureFlag(flag.id, { enabled: !flag.enabled });
+      toast.success(
+        `${flag.id} turned ${flag.enabled ? "off" : "on"}`,
+        flag.used_by_plans.length > 0
+          ? `Affects ${flag.used_by_plans.join(", ")}.`
+          : "No plan references this flag yet.",
+      );
+      flags.refetch();
+    } catch (err) {
+      toast.error("Couldn't change the flag", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const columns: Column<FeatureFlag>[] = [
+    {
+      key: "id",
+      header: "Flag",
+      render: (f) => (
+        <div className={styles.stackCell}>
+          <span>{f.id}</span>
+          {f.description && <span className={styles.subtle}>{f.description}</span>}
+        </div>
+      ),
+      sortable: true,
+      sortValue: (f) => f.id,
+    },
+    {
+      key: "enabled",
+      header: "Default",
+      width: "120px",
+      render: (f) => (
+        <Badge tone={f.enabled ? "success" : "neutral"} dot>
+          {f.enabled ? "on" : "off"}
+        </Badge>
+      ),
+    },
+    {
+      key: "used_by_plans",
+      header: "Used by",
+      render: (f) =>
+        f.used_by_plans.length === 0 ? (
+          <span className={styles.subtle}>No plan references this</span>
+        ) : (
+          <span>{f.used_by_plans.join(", ")}</span>
+        ),
+    },
+    {
+      key: "overrides",
+      header: "Overrides",
+      width: "120px",
+      align: "right",
+      hideOnMobile: true,
+      render: (f) => {
+        const keys = Object.keys(f.overrides ?? {});
+        return keys.length === 0 ? (
+          <span className={styles.subtle}>None</span>
+        ) : (
+          <span className={styles.mono} title={keys.join(", ")}>
+            {keys.length}
+          </span>
+        );
+      },
+    },
+    {
+      key: "actions",
+      header: "",
+      width: "140px",
+      render: (f) => (
+        <div className={styles.rowActions}>
+          <Button
+            variant="secondary"
+            loading={busy === f.id}
+            onClick={() => toggle(f)}
+            aria-label={`Turn ${f.id} ${f.enabled ? "off" : "on"}`}
+          >
+            Turn {f.enabled ? "off" : "on"}
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <DataState
+      state={flags}
+      errorTitle="Couldn't load feature flags"
+      skeleton={<Skeleton width="100%" height={200} />}
+      isEmpty={(d) => d.length === 0}
+      empty={
+        <EmptyState
+          title="No feature flags"
+          description="A flag appears here once an operator sets its default. Until then, an entitlement naming it stays enabled."
+        />
+      }
+    >
+      {(rows) => (
+        <>
+          <p className={styles.notice} role="status">
+            A flag that has never been created resolves to <strong>on</strong>. That is deliberate:
+            naming a flag must never silently disable a capability a customer is paying for.
+          </p>
+          <DataTable
+            columns={columns}
+            rows={rows}
+            getRowKey={(f) => f.id}
+            caption="Feature flags"
+            minWidth={880}
+          />
+        </>
+      )}
+    </DataState>
+  );
+}
+
 export function AdminBillingPage() {
   const [tab, setTab] = useState("rates");
   const can = usePlatformCan();
@@ -356,6 +618,10 @@ export function AdminBillingPage() {
     { value: "rates", label: "Rate cards" },
     { value: "plans", label: "Plans" },
     { value: "subs", label: "Subscriptions" },
+    { value: "revenue", label: "Revenue" },
+    // Flags change what customers can do, so this follows pricing-write rather than being visible
+    // to every reader.
+    ...(can(PRICING_WRITE) ? [{ value: "flags", label: "Feature flags" }] : []),
     ...(can(ADMINS_MANAGE) ? [{ value: "access", label: "Access" }] : []),
   ];
 
@@ -375,6 +641,8 @@ export function AdminBillingPage() {
           {tab === "rates" && <RateCards />}
           {tab === "plans" && <Plans />}
           {tab === "subs" && <Subscriptions />}
+          {tab === "revenue" && <Revenue />}
+          {tab === "flags" && can(PRICING_WRITE) && <FeatureFlags />}
           {tab === "access" && can(ADMINS_MANAGE) && <PlatformAdmins />}
         </div>
       </Card>

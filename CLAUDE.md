@@ -114,7 +114,15 @@ Superpowers analysis summarizes all major systems so you don't re-derive archite
   Runs fully offline (SQLite + stub LLM + in-memory queue) for tests.
 - `frontend/` — **the production React + TypeScript + Vite frontend** (the UI). `npm run build`
   emits the static bundle to `nexus/web/dist/`, which FastAPI serves with SPA fallback.
-- `tests/` — pytest (`asyncio_mode=auto`). Keep the suite green.
+- `tests/` — pytest (`asyncio_mode=auto`). Keep the suite green. **Runs parallel by default**
+  (`addopts = "-n auto --dist loadfile"` in `pyproject.toml`): ~1,350 tests where `fresh_db` drops
+  and recreates every table before each one, so the run is dominated by per-test schema work that
+  parallelises almost perfectly — serial it is ~55 min. `conftest.py` gives each worker its own
+  SQLite file via `PYTEST_XDIST_WORKER`, which is what makes this safe; without it one worker's
+  `drop_all` would wipe another's tables mid-test. `--dist loadfile` keeps a file on one worker,
+  because several suites share module-level state (ingestion service, agent runtime, seeded
+  catalogs) and splitting a file turns that into flaky cross-talk. Use `-n0` when debugging — serial
+  tracebacks are easier to read.
 - `docs/` — specs and design docs.
 
 ## Backend conventions
@@ -488,6 +496,49 @@ exhausted quickly.
 (`find_similar`) plus company/ICP discovery (`search_companies`) are **Exa-only capabilities**.
 Repointing the global setting to diversify signal collection takes those down silently — the base
 `find_similar` returns `[]`, so lookalikes report "no results" with nothing in the logs.
+
+## Shared company records (`nexus/companies/`)
+
+One row per real-world company, shared across every tenant, so forty workspaces tracking Stripe
+crawl it **once**. Measured motivation: 133 account rows resolved to 115 distinct domains (13.5%
+duplication) in a small, mostly-disjoint dataset; the rate rises with tenant count and ICP overlap.
+Design and costing: `docs/superpowers/plans/2026-07-31-master-company-data-layer.md`.
+
+**Identity is the normalised domain and nothing else.** Free mail, reserved names, link shorteners
+and bare labels resolve to nothing, and an account with no usable domain gets **no** company and
+keeps being crawled per-tenant. That is not a gap to close later — name-based resolution across
+tenants is how one workspace's data reaches another's, and this subsystem has already shipped six
+wrong-attribution bugs by trusting a name match.
+
+- `companies` / `company_signals` carry **no `tenant_id`**, so `apply_rls.py` leaves them alone.
+  Enrolling them would make the shared crawler see zero rows — silent under RLS, not an error.
+  Everything here runs through `get_platform_sessionmaker()`.
+- Ids are `sha1(domain)`. Deterministic, so two workers racing on one company produce the same key:
+  one insert wins, the other re-reads, instead of both succeeding and splitting the timeline.
+- Firmographics only ever **fill blanks**; `tech_stack` is unioned, never replaced. A tenant's
+  correction must not rewrite what every other tenant sees — per-tenant overrides stay on `accounts`.
+- `accounts.company_id` is **nullable**, and a null link behaves exactly as before the column
+  existed. Pinned by test.
+
+**The rollout is staged on purpose, and the stages are not interchangeable:**
+
+1. Backfill (`backfill.py`) — idempotent, only ever fills a NULL, bounded, has a dry run.
+2. Shadow crawl (`crawl.py`) — writes `company_signals`, **read by nobody**. Reuses the existing
+   per-tenant sources; a second crawler would drift and the diff would compare two bugs.
+   `test_nothing_reads_company_signals_yet` asserts the shadow property *structurally* by scanning
+   the tree, so it stays true by test rather than by memory.
+3. Diff (`diff.py`) — **reports, never repairs**, like `billing/reconcile.py`. Read it
+   asymmetrically: `shared_only` is usually fine (the shared crawl ran more recently);
+   **`tenant_only` is the failure** — fan-out would show less than the tenant has today.
+4. Fan-out (`fanout.py`) — behind `NEXUS_SHARED_COMPANY_CRAWL_ENABLED`, **default off**. It reuses
+   `IngestionService.ingest` rather than writing `signal_events` directly, so per-tenant dedupe,
+   `signal.created` and same-transaction alerting all apply unchanged. A second write path would
+   drift, and the first thing to drift would be alerts — signals with nobody notified, the exact
+   bug that shipped once already.
+
+Do not enable fan-out on assertion. It multiplies any attribution mistake by the number of
+subscribing tenants, and four of this subsystem's six attribution bugs were found only by running
+against live providers.
 
 ## Alerts (`nexus/alerts/`) — M21
 

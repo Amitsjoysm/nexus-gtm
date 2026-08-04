@@ -486,6 +486,41 @@ would manufacture receivables that can never be collected and pollute MRR with r
 exist. Pausing a `past_due` subscription is refused: `suspended` is a status the dunning sweep
 ignores, so allowing it would be a way to make a real debt stop being chased.
 
+### Wired up (2026-08-03) — the arithmetic had no callers
+
+The milestone above shipped `lifecycle.py` with 23 passing tests and **nothing calling it**. The
+calculator was correct and every customer was still billed a full month for two days of service:
+exactly the dead-config failure the billing engine exists to prevent, committed by the engine's own
+author. What closed it:
+
+* **`billing_proration_adjustments`** (migration `0036`, tenant-scoped so `apply_rls.py` enrols it).
+  `change_plan` writes a signed credit/charge pair; `rate_period` **reads** them on every pass and
+  never consumes them, which is what keeps re-rating a pure function of current data — a row marked
+  "applied" would vanish from the second pass and the invoice would silently change.
+* **Two rows, never one netted row.** An invoice showing only `$52.66` for an upgrade reads as a
+  second full month. The credit beside it is the difference between an invoice a customer
+  understands and one they dispute.
+* **We do not prorate a provider-owned subscription.** Stripe prorates its own changes, so adding
+  our lines bills the difference twice. This is why the webhook writes `sub.plan_id` directly
+  instead of calling `change_plan` — that asymmetry is now load-bearing, not incidental.
+* **`invoice.total_cents` is clamped at zero** while `subtotal_cents` keeps the true arithmetic. A
+  net credit is real, but it must never reach the payment provider as a negative charge.
+* **`expire_trials`** worker job + scheduler entry, outside the automation gate: a trial ends on a
+  date, and gating it on automation is how a trial runs forever in a workspace that never switched
+  automation on.
+* **Pause suspends entitlements**, per the original deliverable. `resolve_entitlement` returns
+  `mode="disabled", source="suspended"`. Still subject to `NEXUS_BILLING_ENFORCEMENT`, so arming
+  pause and arming enforcement stay one decision rather than two.
+* **UI**: proration preview in `TenantActionsDialog` before the admin commits, pause/resume with an
+  audited reason, and a tenant-facing trial countdown, paused banner and pending-proration panel.
+
+**A bug the 1,352-test suite did not catch, found by clicking the page.** `/billing/usage` selected
+only `trialing|active|past_due`, so a paused workspace fell down the "no subscription" branch: no
+plan, no status, no capabilities. The screen read `No plan assigned` with an empty page —
+indistinguishable from a broken account, and the customer had no way to learn they had been paused.
+Pinned by `test_a_paused_workspace_still_sees_its_plan_and_status`. That is now the seventh defect in
+this project found by running the thing rather than by testing it.
+
 ## M23 — revenue reporting
 
 `nexus/billing/revenue.py` + `GET /admin/billing/revenue`. **Derived at read time**, never stored: a
@@ -495,7 +530,21 @@ a live logo and zero revenue; `past_due` still counts, because dropping it makes
 look like churn. Runs through the platform sessionmaker — under the RLS-bound role a cross-tenant
 aggregate silently returns zero rows and would report an MRR of $0.
 
+**UI added 2026-08-03** — a Revenue tab on the billing console. A definition list, not a row of hero
+metric cards: the operator reading it is reconciling against a finance sheet, and boxes get in the
+way of comparison down a column. "On trial" sits beside "paying workspaces" so a pipeline number is
+never read as an MRR number.
+
 ## M24 — feature-flag evaluation
+
+**Write surface added 2026-08-03.** M24 made `feature_flag` *evaluated*, which fixed half the
+problem: an operator could name a flag on an entitlement but had no way to create it or turn it off,
+and an unknown flag is ON by design — so naming one changed nothing. The feature stayed in the exact
+dead-config shape it was built to escape. `GET/PUT /admin/billing/flags`, plus per-tenant and
+per-environment overrides that can be **cleared**, not only set (without that, a beta grant is
+permanent: forcing `tenant:X` false is not the same as "follow the default from now on"). The list
+reports `used_by_plans`, because a flag nothing references is free to flip and one wired into a paid
+plan turns a customer's feature off. All writes audited. Admin UI is a tab on the billing console.
 
 `nexus/billing/flags.py` + `billing_feature_flags` (migration `0033`). Resolution is narrowest-first:
 tenant override → environment override → default. **An unknown flag is ON**, matching the engine's

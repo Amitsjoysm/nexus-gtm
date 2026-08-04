@@ -24,6 +24,9 @@ import type {
   AdminSubscription,
   BillingCredits,
   BillingUsage,
+  ProrationPreview,
+  FeatureFlag,
+  RevenueReport,
   Invoice,
   PlatformAdmin,
   PlatformIdentity,
@@ -202,6 +205,48 @@ export class ApiClient {
     return data as T;
   }
 
+  /**
+   * Download a CSV the server generated, honouring the current filters.
+   *
+   * Goes through `fetch` rather than pointing the browser at the URL: the export endpoints are
+   * bearer-authenticated, and a plain link or `window.open` sends no Authorization header, so it
+   * would 401. The object URL is revoked immediately after the click — a leaked one pins the whole
+   * file in memory for the life of the tab.
+   */
+  private async download(
+    path: string,
+    filename: string,
+    query?: RequestOptions["query"],
+  ): Promise<void> {
+    const headers: Record<string, string> = {};
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    let res: Response;
+    try {
+      res = await fetch(this.buildUrl(path, query), { headers });
+    } catch {
+      throw new ApiError(0, "Network error — couldn't reach the server.");
+    }
+    if (res.status === 401) this.onUnauthorized?.();
+    if (!res.ok) {
+      const text = await res.text();
+      const data = text ? safeJsonParse(text) : null;
+      const detail =
+        (data && typeof data === "object" && "detail" in data
+          ? String((data as { detail: unknown }).detail)
+          : null) || res.statusText || "Export failed";
+      throw new ApiError(res.status, detail);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   // ---- auth ----
   signup(body: SignupRequest, signal?: AbortSignal) {
     return this.request<TokenResponse>("/auth/signup", { method: "POST", body, signal });
@@ -345,6 +390,37 @@ export class ApiClient {
   }
   archiveAccount(accountId: string, signal?: AbortSignal) {
     return this.request<Account>(`/accounts/${accountId}/archive`, { method: "POST", signal });
+  }
+  /**
+   * Soft delete. Signals, alerts, inbox tasks and cadence steps all reference the account, so the
+   * row stays and only stops being listed — which is also what makes `restoreAccount` possible.
+   */
+  deleteAccount(accountId: string, signal?: AbortSignal) {
+    return this.request<{ id: string; restorable: boolean }>(`/accounts/${accountId}`, {
+      method: "DELETE",
+      signal,
+    });
+  }
+  restoreAccount(accountId: string, signal?: AbortSignal) {
+    return this.request<Account>(`/accounts/${accountId}/unarchive`, { method: "POST", signal });
+  }
+  exportAccounts(includeArchived = false) {
+    return this.download("/accounts/export/csv", "accounts.csv", {
+      include_archived: includeArchived || undefined,
+    });
+  }
+  deleteContact(contactId: string, signal?: AbortSignal) {
+    return this.request<{ id: string; restorable: boolean }>(`/contacts/${contactId}`, {
+      method: "DELETE",
+      signal,
+    });
+  }
+  restoreContact(contactId: string, signal?: AbortSignal) {
+    return this.request<Contact>(`/contacts/${contactId}/restore`, { method: "POST", signal });
+  }
+  /** Exports exactly what the list is showing — an export that disagrees is worse than none. */
+  exportContacts(query?: { q?: string; account_id?: string; include_deleted?: boolean }) {
+    return this.download("/contacts/export", "contacts.csv", query);
   }
   findLookalikes(accountId: string, limit = 10, signal?: AbortSignal) {
     return this.request<LookalikeResponse>(
@@ -726,6 +802,52 @@ export class ApiClient {
       method: "PUT",
       body,
     });
+  }
+  adminBillingRevenue(since?: string, signal?: AbortSignal) {
+    return this.request<RevenueReport>("/admin/billing/revenue", {
+      query: { since },
+      signal,
+    });
+  }
+  adminBillingFlags(signal?: AbortSignal) {
+    return this.request<FeatureFlag[]>("/admin/billing/flags", { signal });
+  }
+  upsertFeatureFlag(flagId: string, body: { enabled: boolean; description?: string }) {
+    return this.request<FeatureFlag>(`/admin/billing/flags/${encodeURIComponent(flagId)}`, {
+      method: "PUT",
+      body,
+    });
+  }
+  setFeatureFlagOverride(flagId: string, scope: "tenant" | "env", key: string, enabled: boolean) {
+    return this.request<{ id: string; overrides: Record<string, boolean> }>(
+      `/admin/billing/flags/${encodeURIComponent(flagId)}/overrides/${scope}/${encodeURIComponent(key)}`,
+      { method: "PUT", body: { enabled } },
+    );
+  }
+  clearFeatureFlagOverride(flagId: string, scope: "tenant" | "env", key: string) {
+    return this.request<{ id: string; overrides: Record<string, boolean> }>(
+      `/admin/billing/flags/${encodeURIComponent(flagId)}/overrides/${scope}/${encodeURIComponent(key)}`,
+      { method: "DELETE" },
+    );
+  }
+  /** What moving this workspace to `planId` would credit and charge. Writes nothing. */
+  prorationPreview(tenantId: string, planId: string, signal?: AbortSignal) {
+    return this.request<ProrationPreview>(
+      `/admin/billing/tenants/${tenantId}/proration-preview?plan_id=${encodeURIComponent(planId)}`,
+      { signal },
+    );
+  }
+  pauseTenantSubscription(tenantId: string, reason: string) {
+    return this.request<{ plan_id: string; status: string; paused_at: string | null }>(
+      `/admin/billing/tenants/${tenantId}/pause`,
+      { method: "POST", body: { reason } },
+    );
+  }
+  resumeTenantSubscription(tenantId: string, reason: string) {
+    return this.request<{ plan_id: string; status: string; days_returned: number }>(
+      `/admin/billing/tenants/${tenantId}/resume`,
+      { method: "POST", body: { reason } },
+    );
   }
   setTenantSubscription(tenantId: string, planId: string) {
     return this.request<{ plan_id: string; status: string }>(

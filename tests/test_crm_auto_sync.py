@@ -357,10 +357,11 @@ async def test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled(monkeypatch):
     q = InMemoryTaskQueue()
     await _enqueue_due(q)
     jobs = await _drain(q)
-    # The billing drivers always ride along — they are not an automation/crm-sync opt-in.
+    # The billing and shared-company drivers always ride along — neither is an automation or
+    # crm-sync opt-in.
     assert {j.name for j in jobs} == {
         "sync_crm_due_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
-        "billing_reconcile",
+        "billing_reconcile", "expire_trials", "backfill_companies", "crawl_companies",
     }
 
 
@@ -375,7 +376,7 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
     assert {j.name for j in jobs} == {
         "advance_cadences", "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
-        "billing_reconcile",
+        "billing_reconcile", "expire_trials", "backfill_companies", "crawl_companies",
     }
 
 

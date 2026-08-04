@@ -58,3 +58,63 @@
   gap: var(--space-2);
   justify-content: flex-end;
 }
+
+/* ---- revenue ---------------------------------------------------------------------------
+   Figures an operator reconciles against a finance sheet. A definition list, not metric
+   cards: the reading task is comparison down a column, and boxes get in the way of that. */
+.revenue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.sectionTitle {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+.figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-5) var(--space-8);
+  margin: 0 0 var(--space-3);
+}
+
+.figures dt {
+  margin-bottom: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.figures dd {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+.planMix {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Plan, tenant count, money — the money column right-aligned so figures compare down the page. */
+.planRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-4);
+  align-items: baseline;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-base);
+  color: var(--text-default);
+}
+
+.planRow:last-child {
+  border-bottom: none;
+}

@@ -33,6 +33,8 @@
 }
 
 .content {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
 }
@@ -64,4 +66,30 @@
 }
 .info .icon {
   color: var(--accent);
+}
+
+/* Undo, and nothing else. A toast action is a second chance at a destructive step, so it is a
+   real button with a focus ring rather than an underlined span — it must be reachable by keyboard
+   in the seconds the toast is on screen. */
+.action {
+  align-self: flex-start;
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.action:hover {
+  background: rgba(127, 127, 127, 0.14);
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }

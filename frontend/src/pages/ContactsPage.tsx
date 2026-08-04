@@ -89,6 +89,7 @@ export function ContactsPage() {
   const [statusFilter, setStatusFilter] = useState(ALL);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reverifying, setReverifying] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [callTask, setCallTask] = useState<CallTask | null>(null);
   const [emailFor, setEmailFor] = useState<WorkspaceContact | null>(null);
   const [callingId, setCallingId] = useState<string | null>(null);
@@ -175,6 +176,55 @@ export function ContactsPage() {
       toast.error("Verify failed", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
       setBusyId(null);
+    }
+  }
+
+  /**
+   * Soft delete, with undo on the confirmation.
+   *
+   * The row survives because cadence enrolments, call activity and campaign sends all point at it;
+   * a hard delete would break the record of what was actually sent to whom.
+   */
+  async function removeContact(c: WorkspaceContact) {
+    setBusyId(c.id);
+    try {
+      await api.deleteContact(c.id);
+      contacts.refetch();
+      toast.toast({
+        tone: "success",
+        title: "Contact deleted",
+        description: `${c.full_name} is hidden from your list. Their history is kept.`,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await api.restoreContact(c.id);
+              contacts.refetch();
+            } catch (err) {
+              toast.error(
+                "Couldn't restore",
+                err instanceof ApiError ? err.detail : "Try again.",
+              );
+            }
+          },
+        },
+      });
+    } catch (err) {
+      toast.error("Couldn't delete", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  /** Exports what the search box is currently filtering to, not the whole workspace. */
+  async function exportContacts() {
+    setExporting(true);
+    try {
+      await api.exportContacts({ q: query.trim() || undefined });
+    } catch (err) {
+      toast.error("Couldn't export", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -357,6 +407,15 @@ export function ContactsPage() {
               onClick={() => startCall(c)}
               aria-label={`Call ${c.full_name}`}
             />
+            <Button
+              size="sm"
+              variant="ghost"
+              iconLeft={<Icons.TrashIcon />}
+              loading={busyId === c.id}
+              title="Delete contact"
+              onClick={() => removeContact(c)}
+              aria-label={`Delete ${c.full_name}`}
+            />
           </span>
         ),
       },
@@ -370,6 +429,16 @@ export function ContactsPage() {
       <PageHeader
         title="Contacts"
         description="Every person across this workspace. Click a row to open their account."
+        actions={
+          <Button
+            variant="secondary"
+            iconLeft={<Icons.DownloadIcon />}
+            onClick={exportContacts}
+            loading={exporting}
+          >
+            Export CSV
+          </Button>
+        }
       />
 
       <div className={styles.toolbar}>

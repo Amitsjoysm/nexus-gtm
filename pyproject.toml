@@ -58,3 +58,15 @@ filterwarnings = ["ignore::DeprecationWarning"]
 # instead of hanging the whole run forever. Thread method is required on Windows (no SIGALRM).
 timeout = 120
 timeout_method = "thread"
+# Parallel by default (pytest-xdist). The suite is ~1350 tests and `fresh_db` drops and recreates
+# every table before each one, so the run is dominated by per-test schema work that parallelises
+# almost perfectly. `conftest.py` already gives each worker its own SQLite file via
+# PYTEST_XDIST_WORKER, which is what makes this safe — without that, one worker's drop_all would
+# wipe another's tables mid-test.
+#
+# `--dist loadfile` keeps every test in a file on the same worker. Several suites share
+# module-level state (the ingestion service, the agent runtime, seeded catalogs), and splitting a
+# file across workers turns that into flaky cross-talk that only reproduces under -n.
+#
+# Override with `-p no:xdist` or `-n0` when debugging: tracebacks are easier to read serially.
+addopts = "-n auto --dist loadfile"
