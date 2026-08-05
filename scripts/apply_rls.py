@@ -30,6 +30,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 APP_ROLE = "nexus_app"
+
+# Provisioning lock, held while this script rewrites roles, grants and policies. A stable
+# arbitrary 63-bit key, distinct from bootstrap_db's schema lock and the scheduler's, so the
+# three never contend with each other.
+_PROVISION_LOCK_KEY = 0x4E455853_524C5301 & 0x7FFFFFFFFFFFFFFF
 # Auth/identity tables read or written without a tenant context — never put RLS on these.
 RLS_EXCLUDE = {"memberships", "workspaces"}
 
@@ -75,6 +80,24 @@ async def main() -> None:
     engine = create_async_engine(url, isolation_level="AUTOCOMMIT")
     try:
         async with engine.connect() as conn:
+            # Serialize across replicas, for the same reason bootstrap_db.py does. The app runs
+            # TWO replicas (M27) and both entrypoints run this script; `GRANT ... ON ALL TABLES`
+            # and `ALTER DEFAULT PRIVILEGES` rewrite shared catalog rows, and two of them at once
+            # is `tuple concurrently updated` — which crashes the container and, because it is
+            # raised from the ENTRYPOINT, takes both replicas down rather than one.
+            #
+            # `deploy/rollout.sh` staggers restarts and so never hit this, but a plain
+            # `docker compose up` starts replicas together and does — the deploy path most likely
+            # to be used in a hurry.
+            #
+            # Blocking rather than `try_`, and a distinct key from bootstrap's: the other replica
+            # IS provisioning, and the right behaviour is to wait and then re-apply an idempotent
+            # script, not to skip and start serving with privileges half-granted. Postgres drops
+            # a session lock automatically if the process dies, so a crash cannot wedge a deploy.
+            print("[apply_rls] waiting for the provisioning lock...")
+            await conn.execute(
+                text("SELECT pg_advisory_lock(:k)"), {"k": _PROVISION_LOCK_KEY}
+            )
             dbname = (await conn.execute(text("SELECT current_database()"))).scalar()
 
             # 1. Least-privilege app role (create once, then always reconcile password + flags).
@@ -136,6 +159,12 @@ async def main() -> None:
                 f"[apply_rls] role '{APP_ROLE}' reconciled; RLS enforced on {len(tables)} tables "
                 f"(excluded: {', '.join(sorted(RLS_EXCLUDE))})."
             )
+            try:
+                await conn.execute(
+                    text("SELECT pg_advisory_unlock(:k)"), {"k": _PROVISION_LOCK_KEY}
+                )
+            except Exception:  # a failed unlock self-heals when the connection closes
+                pass
     finally:
         await engine.dispose()
 
