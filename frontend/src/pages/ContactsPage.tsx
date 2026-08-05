@@ -16,6 +16,7 @@ import {
   useToast,
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
+import { ProviderIcon } from "@/components/ui/providerIcons";
 import { CallConsole } from "@/components/CallConsole";
 import { EmailComposer } from "@/components/EmailComposer";
 import { useApi } from "@/hooks/useApi";
@@ -54,19 +55,10 @@ const PROVIDER_FULL: Record<string, string> = {
 };
 const providerFull = (p?: string | null) =>
   (p ? PROVIDER_FULL[p] ?? PROVIDER_LABELS[p] ?? p : "");
-// Ultra-tiny provider "favicon": a brand-colored letter badge (G, M, O, …).
-const PROVIDER_INITIAL: Record<string, string> = {
-  gsuite: "G",
-  office365: "M",
-  outlook: "O",
-  yahoo: "Y",
-  zoho: "Z",
-  proton: "P",
-  custom: "C",
-  disposable: "!",
-};
-const providerInitial = (p?: string | null) =>
-  (p ? PROVIDER_INITIAL[p] ?? (PROVIDER_LABELS[p]?.[0]?.toUpperCase() ?? "?") : "");
+// The badge used to be a brand-coloured letter (G, M, O, …). A letter has to be READ, and at 9px
+// a Microsoft "M" sat one glyph away from a Gmail "G" — so the one question an SDR actually asks
+// of this column ("Google shop or Microsoft shop?") needed a second look every time. Real marks
+// are recognised in peripheral vision instead. See components/ui/providerIcons.tsx.
 
 // Mirrors NEXUS_EMAIL_REVERIFY_COOLDOWN_DAYS: a confirmed-valid address is re-checkable only
 // after this window (the backend enforces it with a 429; this just saves the click).
@@ -308,9 +300,10 @@ export function ContactsPage() {
                   className={styles.provider}
                   data-provider={c.email_provider}
                   title={`Mailbox provider: ${providerFull(c.email_provider)}`}
+                  role="img"
                   aria-label={`Mailbox provider: ${providerFull(c.email_provider)}`}
                 >
-                  {providerInitial(c.email_provider)}
+                  <ProviderIcon provider={c.email_provider} />
                 </span>
               )}
               <span className={styles.mono} title={c.email}>

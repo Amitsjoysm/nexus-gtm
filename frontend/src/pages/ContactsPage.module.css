@@ -70,38 +70,41 @@
   gap: 6px;
   min-width: 0;
 }
+/* The mark carries its own brand colour, so the badge is just a fixed-size slot that keeps every
+   row's address on the same x-position. No background: a coloured tile behind a logo reads as a
+   second, competing element at this size. */
 .provider {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 15px;
-  height: 15px;
-  border-radius: 4px;
-  font-size: 9px;
-  font-weight: var(--weight-bold, 700);
-  line-height: 1;
-  color: #fff;
-  background: var(--text-subtle);
+  width: 16px;
+  height: 16px;
+  line-height: 0;
 }
-.provider[data-provider="gsuite"] {
-  background: #ea4335;
+.provider svg {
+  display: block;
 }
-.provider[data-provider="office365"],
-.provider[data-provider="outlook"] {
-  background: #0078d4;
+/* Brand marks are fixed colours and do not adapt to a dark background. A hairline keeps the white
+   fields inside the Gmail and Outlook envelopes from bleeding into a dark surface. */
+@media (prefers-color-scheme: dark) {
+  .provider svg {
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 12%);
+  }
 }
-.provider[data-provider="yahoo"] {
-  background: #6001d2;
+:root[data-theme="dark"] .provider svg {
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 12%);
 }
-.provider[data-provider="proton"] {
-  background: #6d4aff;
+:root[data-theme="light"] .provider svg {
+  box-shadow: none;
 }
-.provider[data-provider="zoho"] {
-  background: #e42527;
-}
+/* A disposable address is the one case that is a warning rather than an identification, so it
+   keeps a tint behind it to pull the eye. */
 .provider[data-provider="disposable"] {
-  background: var(--danger, #c0392b);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger, #c0392b) 12%, transparent);
 }
 
 /* Recognizable LinkedIn "in" badge link. */

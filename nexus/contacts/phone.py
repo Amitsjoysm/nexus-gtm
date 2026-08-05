@@ -68,6 +68,51 @@ _NON_DIAL = re.compile(r"[^\d+]")
 _EXTENSION = re.compile(r"(?:\s*(?:x|ext\.?|extension)\s*\d+)\s*$", re.I)
 
 
+# Values a scraper puts in a phone field when it has no phone. Every one of these was accepted as
+# a phone number before this check existed: they are non-empty strings, so "did we find something?"
+# said yes, the lookup was recorded as `found`, and the junk was cached in the SHARED person record
+# — suppressing re-lookup for every tenant until the TTL expired. A miss has to look like a miss.
+_SENTINELS = frozenset({
+    "n/a", "na", "n.a.", "none", "null", "nil", "-", "--", "—", "unknown", "not available",
+    "notavailable", "not found", "notfound", "no phone", "nophone", "unavailable", "hidden",
+    "private", "redacted", "premium", "premium feature", "upgrade", "locked", "restricted",
+    "0", "00", "000", "false", "true", "undefined",
+})
+
+# A dialable number, once any extension is removed: an optional +, then digits and the separators
+# real data actually uses. Deliberately rejects letters — a vanity number ("1-800-FLOWERS") is not
+# something a dialler can place, and letters are overwhelmingly a sign the field holds prose.
+_PHONE_SHAPE = re.compile(r"^\+?[\d(][\d\s().\-/+]*\d$")
+
+# E.164 allows at most 15 digits. Fewer than 7 cannot be a routable international number, and short
+# strings are where junk concentrates ("0", "123", a row id that landed in the wrong column).
+_MIN_DIGITS, _MAX_DIGITS = 7, 15
+
+
+def looks_like_phone(value: str | None) -> bool:
+    """Whether ``value`` is plausibly a phone number at all.
+
+    This is a *shape and sanity* gate, not validation — it runs before ``normalise_phone`` and its
+    job is to keep non-numbers out of the pipeline entirely. Being wrong in the strict direction
+    costs one lookup that reports `not_found` and will be retried; being wrong in the loose
+    direction writes a scraper's "Premium feature" string into the shared person store as a phone
+    number, where it is both wrong and cached.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return False
+    if raw.lower() in _SENTINELS:
+        return False
+    body = _EXTENSION.sub("", raw).strip()
+    if not body or not _PHONE_SHAPE.match(body):
+        return False
+    digits = re.sub(r"\D", "", body)
+    if not (_MIN_DIGITS <= len(digits) <= _MAX_DIGITS):
+        return False
+    # "0000000000", "1111111111" — placeholder rows that satisfy every check above.
+    return len(set(digits)) > 1
+
+
 @dataclass(slots=True)
 class NormalisedPhone:
     """The canonical form plus what came in.

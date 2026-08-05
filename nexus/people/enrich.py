@@ -54,46 +54,120 @@ def _fresh(last_enriched_at: datetime | None, ttl_days: int) -> bool:
     return datetime.now(timezone.utc) - stamped < timedelta(days=ttl_days)
 
 
-def extract_phone(items: list[dict]) -> str:
-    """Pull the first usable phone number out of an actor's dataset.
+_PHONE_KEYS = ("phone", "phone_number", "phoneNumber", "mobile", "mobile_number", "telephone")
+_PHONE_LIST_KEYS = ("phoneNumbers", "phones", "contact_numbers")
+# Where an actor puts the profile the row is about. Several spellings, same reason as the phone
+# keys: actor output is not a contract.
+_PROFILE_KEYS = (
+    "linkedin_url", "linkedinUrl", "linkedinProfileUrl", "profile_url", "profileUrl",
+    "linkedin", "profile", "url", "inputUrl", "input_url",
+)
 
-    Actors are third-party code and their output shape is not a contract: the same actor has been
-    seen returning ``phone``, ``phone_number``, ``phoneNumbers`` (a list) and a nested ``contact``
-    object. Reading one hard-coded key would make an upstream rename look like "this person has no
-    phone number", which is silent and indistinguishable from the truth.
-    """
-    keys = ("phone", "phone_number", "phoneNumber", "mobile", "mobile_number", "telephone")
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        for key in keys:
-            value = item.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-            if isinstance(value, list) and value:
-                first = value[0]
-                if isinstance(first, str) and first.strip():
-                    return first.strip()
-                if isinstance(first, dict):
-                    for nested in keys:
-                        if isinstance(first.get(nested), str) and first[nested].strip():
-                            return first[nested].strip()
-        for plural in ("phoneNumbers", "phones", "contact_numbers"):
-            value = item.get(plural)
-            if isinstance(value, list) and value:
-                first = value[0]
-                if isinstance(first, str) and first.strip():
-                    return first.strip()
-                if isinstance(first, dict):
-                    for nested in keys:
-                        if isinstance(first.get(nested), str) and first[nested].strip():
-                            return first[nested].strip()
-        nested_contact = item.get("contact")
-        if isinstance(nested_contact, dict):
-            found = extract_phone([nested_contact])
-            if found:
-                return found
+
+def _first_phone_in(item: dict) -> str:
+    """The first value in this one row that actually looks like a phone number."""
+    from nexus.contacts.phone import looks_like_phone
+
+    def _take(value) -> str:
+        if isinstance(value, str) and looks_like_phone(value):
+            return value.strip()
+        if isinstance(value, list):
+            for entry in value:
+                if isinstance(entry, str) and looks_like_phone(entry):
+                    return entry.strip()
+                if isinstance(entry, dict):
+                    for nested in _PHONE_KEYS:
+                        got = entry.get(nested)
+                        if isinstance(got, str) and looks_like_phone(got):
+                            return got.strip()
+        return ""
+
+    for key in (*_PHONE_KEYS, *_PHONE_LIST_KEYS):
+        found = _take(item.get(key))
+        if found:
+            return found
+    nested_contact = item.get("contact")
+    if isinstance(nested_contact, dict):
+        return _first_phone_in(nested_contact)
     return ""
+
+
+def _row_is_about(item: dict, expect: str) -> bool:
+    """Whether this dataset row is about the profile we asked for.
+
+    ``expect`` is an already-normalised LinkedIn URL. Compared against every spelling of the
+    profile field an actor might use, each normalised the same way, so
+    ``https://www.linkedin.com/in/x/`` and ``linkedin.com/in/x`` match.
+    """
+    from nexus.people.store import normalise_linkedin
+
+    for key in _PROFILE_KEYS:
+        value = item.get(key)
+        if isinstance(value, str) and normalise_linkedin(value) == expect:
+            return True
+        # Some actors nest the echoed input one level down.
+        if isinstance(value, dict):
+            for nested in _PROFILE_KEYS:
+                got = value.get(nested)
+                if isinstance(got, str) and normalise_linkedin(got) == expect:
+                    return True
+    return False
+
+
+def extract_phone(items: list[dict], *, expect_linkedin_url: str = "") -> str:
+    """Pull a usable phone number out of an actor's dataset.
+
+    Two things this must get right, and it got neither before:
+
+    **1. The row has to be about the person we asked for.** The actor is called with a LIST of
+    profile URLs and returns a dataset; taking ``items[0]``'s phone means that whenever it returns
+    more than one row — a partial match, a suggested profile, a stale row from a batched run — we
+    attach a stranger's number to a contact. That is the same wrong-attribution class as the six
+    bugs in `nexus/companies/`, and it is worse here: a rep phones a real person with someone
+    else's context. When ``expect_linkedin_url`` is given, rows that identify a *different*
+    profile are skipped outright. Rows that identify **no** profile are used only as a fallback,
+    because a single-result actor that echoes nothing back is the common, benign case — but a row
+    that names someone else is never a fallback.
+
+    **2. The value has to look like a phone number.** Actor output is not a contract, so this
+    reads six key spellings plus nested and list shapes — but every candidate now passes
+    ``looks_like_phone`` first. Without it, ``{"phone": "Premium feature"}`` was returned as a
+    phone number, recorded as a successful lookup, and cached in the shared person record where it
+    suppressed re-lookup for every tenant until the TTL expired.
+    """
+    from nexus.people.store import normalise_linkedin
+
+    expect = normalise_linkedin(expect_linkedin_url) if expect_linkedin_url else ""
+    rows = [i for i in items if isinstance(i, dict)]
+
+    if expect:
+        matched = [i for i in rows if _row_is_about(i, expect)]
+        if matched:
+            for item in matched:
+                found = _first_phone_in(item)
+                if found:
+                    return found
+            return ""
+        # Nothing identified itself as our profile. Fall back only to rows that name no profile at
+        # all; a row naming a different person is discarded rather than used.
+        rows = [i for i in rows if not _identifies_a_profile(i)]
+
+    for item in rows:
+        found = _first_phone_in(item)
+        if found:
+            return found
+    return ""
+
+
+def _identifies_a_profile(item: dict) -> bool:
+    """Whether the row names any LinkedIn profile at all (whoever it belongs to)."""
+    from nexus.people.store import normalise_linkedin
+
+    for key in _PROFILE_KEYS:
+        value = item.get(key)
+        if isinstance(value, str) and normalise_linkedin(value):
+            return True
+    return False
 
 
 async def find_phone(
@@ -211,7 +285,9 @@ async def _run_phone_actor(
     except ApifyNotConfigured:
         return PhoneResult(status="unconfigured")
 
-    found = extract_phone(items)
+    # Pass the profile we asked about, so a dataset row belonging to somebody else can never
+    # supply the number. See extract_phone.
+    found = extract_phone(items, expect_linkedin_url=linkedin_url)
     if not found:
         return PhoneResult(status="not_found")
 
