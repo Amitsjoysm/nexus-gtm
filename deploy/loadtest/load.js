@@ -7,6 +7,7 @@
 import http from "k6/http";
 import { check, sleep } from "k6";
 import { Rate } from "k6/metrics";
+import { setupTokens } from "./auth.js";
 
 const BASE = __ENV.BASE_URL || "http://localhost:8000";
 const errors = new Rate("business_errors");
@@ -31,19 +32,10 @@ export const options = {
   },
 };
 
-// One workspace + token for the whole test (created once).
+// One token for the whole test (acquired once). See auth.js for why this is a login and not
+// a signup.
 export function setup() {
-  const slug = `load-${Date.now()}`;
-  const res = http.post(
-    `${BASE}/api/auth/signup`,
-    JSON.stringify({
-      company_name: "Load Co", company_slug: slug, full_name: "Load Rep",
-      email: `rep@${slug}.example`, password: "password123",
-    }),
-    { headers: { "Content-Type": "application/json" } },
-  );
-  check(res, { "signup 201": (r) => r.status === 201 });
-  return { token: res.json("access_token") };
+  return setupTokens(BASE);
 }
 
 export default function (data) {
@@ -53,13 +45,17 @@ export default function (data) {
   const health = http.get(`${BASE}/health`);
   check(health, { "health 200": (r) => r.status === 200 }) || errors.add(1);
 
-  const responses = http.batch([
+  const reads = [
     ["GET", `${BASE}/api/accounts?limit=50`, null, authHeaders],
     ["GET", `${BASE}/api/signals?limit=50`, null, authHeaders],
     ["GET", `${BASE}/api/inbox`, null, authHeaders],
-    ["GET", `${BASE}/api/analytics/overview`, null, authHeaders],
-  ]);
-  for (const r of responses) {
+  ];
+  // Analytics is manager+; including it on a rep token measures RBAC, not latency.
+  if (data.analyticsToken) {
+    reads.push(["GET", `${BASE}/api/analytics/overview`, null,
+      { headers: { Authorization: `Bearer ${data.analyticsToken}` } }]);
+  }
+  for (const r of http.batch(reads)) {
     check(r, { "read 2xx": (x) => x.status >= 200 && x.status < 300 }) || errors.add(1);
   }
 

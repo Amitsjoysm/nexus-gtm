@@ -7,6 +7,7 @@
 // drift upward over the run. Default 15m for a quick local check; use 24h before a real launch.
 import http from "k6/http";
 import { check, sleep } from "k6";
+import { setupTokens } from "./auth.js";
 
 const BASE = __ENV.BASE_URL || "http://localhost:8000";
 
@@ -26,17 +27,7 @@ export const options = {
 };
 
 export function setup() {
-  const slug = `soak-${Date.now()}`;
-  const res = http.post(
-    `${BASE}/api/auth/signup`,
-    JSON.stringify({
-      company_name: "Soak Co", company_slug: slug, full_name: "Soak Rep",
-      email: `rep@${slug}.example`, password: "password123",
-    }),
-    { headers: { "Content-Type": "application/json" } },
-  );
-  check(res, { "signup 201": (r) => r.status === 201 });
-  return { token: res.json("access_token") };
+  return setupTokens(BASE);
 }
 
 export default function (data) {
