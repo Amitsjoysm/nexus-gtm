@@ -157,11 +157,13 @@ touches Account/Contact/Inbox/Cadence.
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0030_signal_source_runs`. The chain is
+Alembic under `migrations/versions/`. Head: `0041_source_databases`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
-`mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`).
-Every tenant-scoped table automatically gets RLS via
+`mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
+`0031`–`0040` (page snapshots, notification preferences, feature flags, contact soft-delete,
+`companies`, proration, shared `people`, `crawl_verdict`, user suspension, digest delivery) →
+`0041` (`source_databases`). Every tenant-scoped table automatically gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —
@@ -580,6 +582,77 @@ Engineering means forty rows and **forty paid phone lookups for one phone number
   to whichever customer happened to ask second and make revenue depend on crawl ordering. Usage rows
   carry `attrs.cached` so the margin is visible in the stream.
 
+## External source databases (`nexus/sources/`) — platform-wide, superadmin only
+
+A superadmin registers a **read-only** DSN to somebody else's Postgres; we discover its tables,
+map columns onto app fields, and prove the mapping with a dry run before anything consumes it. It
+becomes an enrichment provider tried *ahead* of the paid APIs — which is where the cost saving is.
+Locked decisions and build order: `docs/superpowers/plans/2026-07-31-master-company-data-layer.md`.
+
+**Per-tenant sources are explicitly ruled out.** Results land in the shared `companies` / `people`
+stores, so a mis-mapped source is wrong for **every tenant at once**. Platform data in a tenant
+table is duplicated N times; tenant data in the shared store is a cross-tenant leak — and which one
+you built is not a config change afterwards.
+
+- **`source_databases` carries no `tenant_id`** (migration `0041`), like `companies` / `people`.
+  Everything runs through `get_platform_sessionmaker()`.
+- **The DSN is an SSRF primitive** (`safety.py`). A form that accepts a DSN and reports whether it
+  connected is a port scanner; pointed at the container network or a metadata endpoint, successful
+  introspection is a read oracle. Resolve-then-check, so a public name pointing at loopback is
+  caught. `source_db_allow_private` is a **local-dev setting, never a request parameter** — an
+  admin must not be able to switch off the guard from the form the guard protects — and
+  `Settings._reject_private_source_dsn_in_production` refuses to start with it on in staging/prod.
+- **Read-only three times over**: `default_transaction_read_only` at the driver, allowlisted
+  statements built in code, and `test_connection` *asserts* read-only rather than assuming it. Any
+  one alone is one mistake away from a write into a customer's production database.
+- **`require_identifier` runs at query-build time, not just at discovery.** A name returned by
+  introspection is attacker-controlled if the attacker owns the source database, and re-reading it
+  from our own JSON column does not make it ours. "It was safe when we stored it" is exactly the
+  assumption that makes stored-value injection work.
+- **The status ladder is the safety story**: `registered → connected → introspected → mapped →
+  verified`. Only the service functions advance `status`; a request body never carries one, or an
+  admin could set `verified` and skip the dry run. Re-introspecting or re-mapping **clears the
+  proof** — a source that stays `verified` after its table was rebuilt is the wrong-attribution bug.
+- **A dry run that returns rows but no identities does not verify**, and is *not* `failed`: the
+  source is reachable and the query ran, so "failed" would send an operator to check the network
+  instead of the columns. `usable_rows`, not `rows`, is the number that matters.
+- **Verification and activation are separate.** A passing dry run does not switch the source on;
+  `enabled` starts false so an operator gets to read the output first. Disabling is never refused —
+  during an incident, "stop reading this" must not be blocked by a state machine.
+- **Identity mirrors the shared stores**: a company mapping requires `domain`, a person mapping
+  requires `linkedin_url` or `email`. A name is not an identity — that is how this subsystem
+  shipped six wrong-attribution bugs.
+- Gated on **`sources.manage`**, deliberately not folded into `admins.manage`: registering a data
+  source and granting platform power are different acts, and only the `superadmin` preset has it.
+  Every mutation is audited; the DSN is Fernet-sealed and is in **no** response model.
+- Still to build (step 7): the enrichment provider itself. **Failure posture when it lands: fall
+  through to the paid provider, never stop collection.** It is an optimisation, not a dependency.
+
+## Plan-gated navigation (`frontend/src/app/EntitlementsContext.tsx`)
+
+The sidebar was blind to entitlements, so a `free` workspace saw Network and Campaigns and found
+out by clicking and getting a 402. `GET /billing/entitlements` resolves the `module.*` gates
+through the real engine and drives the nav.
+
+**The trap is bigger than the bug.** `NEXUS_BILLING_ENFORCEMENT` defaults to `shadow`, which
+resolves every entitlement and then **allows anyway**. A UI that hid an item because the policy said
+"disabled" would hide a feature that still works — turning a rollout mode whose entire promise is
+"changes nothing" into a visible regression. So the endpoint returns `gating_active` (true only when
+enforcement is `on`) and the client gates on **that**, never on `included` alone. On today's default
+deployment this change is a strict no-op.
+
+- **Hide or upsell? Both — decided by agency.** `admin`/`owner` can change the plan, so a locked
+  item is actionable and is the upsell; `rep`/`manager` cannot, so for them it is a permanent
+  advertisement for something they may not buy, and it is hidden. Nav is already role-dependent
+  (`minRole`), so this is the established model rather than a new concept. To make it uniform,
+  change `navState` in `app/nav.tsx` — nothing else moves.
+- A locked item routes to **/settings/billing**, not to the feature: sending someone to a page the
+  server will 402 is the dead end this change exists to remove.
+- Missing/in-flight/errored entitlements resolve to **not locked**, matching the engine's own bias
+  that unknown means allow. A billing endpoint blip must never delete the customer's navigation.
+- Only coarse `module.*` gates belong in nav. Per-action quotas stay on the action — a menu that
+  greyed out at 19 of 20 drafts would be lying about a feature the customer still has.
+
 ## Apify actors (`nexus/integrations/apify.py`)
 
 The seam for lookups with no compliant public API. **Adding an actor is a line in `ACTORS`, not a new
@@ -702,5 +775,12 @@ Three comprehensive guides were generated and are always available for reference
 
 - **After pulling code**: `code-review-graph update` (incremental re-index)
 - **After major refactoring**: `code-review-graph build` (full re-index)
+- **The indexer only sees git-TRACKED files.** A brand-new file is invisible to it — including to a
+  full `build` — until it is at least `git add`ed. Measured 2026-08-04: after adding nine files for
+  the source-database subsystem, both `update` and `build` reported success and indexed **none** of
+  them; `git add -N` then `build` picked all nine up (517→528 files, 4916→5076 nodes). Incremental
+  `update` is worse still: it re-indexes *modified* tracked files only, so it silently misses new
+  ones even when they are staged. After adding files, run `git add` then `build`, and verify a new
+  symbol is actually present rather than trusting the summary line.
 - The `.code-review-graph/` directory is gitignored; never commit it.
 - If MCP tools aren't visible, restart Claude to load the server.
