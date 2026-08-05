@@ -18,6 +18,7 @@ bill and an unbounded one.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -64,31 +65,70 @@ _PROFILE_KEYS = (
 )
 
 
-def _first_phone_in(item: dict) -> str:
-    """The first value in this one row that actually looks like a phone number."""
+# Any key whose NAME suggests it holds a phone number. This is the fallback after the explicit
+# list above, and it is what stops this function needing an edit every time an actor is swapped.
+#
+# Measured 2026-08-05: code_crafter/mobile-finder returns `first_mobile_number` and
+# `mobile_numbers` — neither of which was in the explicit list, so a working actor returning the
+# right number extracted nothing. An exhaustive hand-maintained list of key spellings is a losing
+# game; what makes a loose search SAFE is `looks_like_phone` rejecting anything that is not a
+# number, so a `phone_status` or `mobile_url` key cannot contribute a value.
+_PHONE_KEY_HINT = re.compile(r"(phone|mobile|tel|msisdn|whatsapp)", re.I)
+# ...except these, which contain a hint word but never hold a number.
+_PHONE_KEY_EXCLUDE = re.compile(
+    r"(status|state|type|kind|country|code|valid|verified|score|count|url|link|carrier|"
+    r"provider|region|format|error|message|id$|_id$)", re.I
+)
+
+
+def _looks_like_phone_key(key: str) -> bool:
+    return bool(_PHONE_KEY_HINT.search(key)) and not _PHONE_KEY_EXCLUDE.search(key)
+
+
+def _first_phone_in(item: dict, _depth: int = 0) -> str:
+    """The first value in this one row that actually looks like a phone number.
+
+    Explicit keys are tried first so a row carrying both a primary and a secondary number yields
+    the primary; everything phone-shaped is then swept. The depth guard exists because actor output
+    nests arbitrarily and a self-referential blob must not recurse forever inside an enrichment run.
+    """
     from nexus.contacts.phone import looks_like_phone
 
-    def _take(value) -> str:
+    def _take(value, depth: int) -> str:
         if isinstance(value, str) and looks_like_phone(value):
             return value.strip()
         if isinstance(value, list):
             for entry in value:
                 if isinstance(entry, str) and looks_like_phone(entry):
                     return entry.strip()
-                if isinstance(entry, dict):
-                    for nested in _PHONE_KEYS:
-                        got = entry.get(nested)
-                        if isinstance(got, str) and looks_like_phone(got):
-                            return got.strip()
+                if isinstance(entry, dict) and depth < 3:
+                    found = _first_phone_in(entry, depth + 1)
+                    if found:
+                        return found
         return ""
 
+    if _depth > 3:
+        return ""
+
+    # 1. Known keys, in priority order.
     for key in (*_PHONE_KEYS, *_PHONE_LIST_KEYS):
-        found = _take(item.get(key))
+        found = _take(item.get(key), _depth)
         if found:
             return found
-    nested_contact = item.get("contact")
-    if isinstance(nested_contact, dict):
-        return _first_phone_in(nested_contact)
+
+    # 2. Any other key that names a phone. Safe because the value must still pass the shape gate.
+    for key, value in item.items():
+        if isinstance(key, str) and _looks_like_phone_key(key):
+            found = _take(value, _depth)
+            if found:
+                return found
+
+    # 3. Nested containers that do not themselves name a phone (`contact`, `person`, `data`, ...).
+    for key, value in item.items():
+        if isinstance(value, dict) and _depth < 3:
+            found = _first_phone_in(value, _depth + 1)
+            if found:
+                return found
     return ""
 
 

@@ -148,3 +148,74 @@ def test_empty_and_malformed_input():
     assert extract_phone([{"name": "Derek"}]) == ""
     assert extract_phone([{"phone": ""}]) == ""
     assert extract_phone(["not a dict", None, 42]) == ""  # type: ignore[list-item]
+
+
+# ---- the real actor's output shape -----------------------------------------------------------
+#
+# Captured live from code_crafter/mobile-finder (actor 5lnEEZaNNBD8VeFAN) on 2026-08-05. Both of
+# its keys — `first_mobile_number` and `mobile_numbers` — were absent from the hand-maintained key
+# list, so a working actor returning the correct number extracted NOTHING. The failure was silent
+# and looked exactly like "this person has no phone", which is the precise outcome the module
+# docstring warns about.
+#
+# The lesson is not "add two more keys": it is that an exhaustive list of spellings is a losing
+# game against third-party output. Extraction now sweeps any key that NAMES a phone, and what
+# makes that safe is `looks_like_phone` rejecting anything that is not one.
+
+LIVE_ROW = {
+    "linkedin_url": "https://www.linkedin.com/in/walterbenvenuto",
+    "first_mobile_number": "17148033540",
+    "mobile_numbers": ["17148033540"],
+}
+
+
+def test_the_live_actor_shape_extracts():
+    from nexus.contacts.phone import normalise_phone
+
+    got = extract_phone([LIVE_ROW], expect_linkedin_url=LIVE_ROW["linkedin_url"])
+    assert got == "17148033540"
+    assert normalise_phone(got).e164 == "+17148033540"
+
+
+@pytest.mark.parametrize("key", [
+    "first_mobile_number", "mobile_numbers", "secondary_phone", "work_phone", "cell_phone",
+    "personal_mobile", "whatsapp_number", "msisdn", "tel_number",
+])
+def test_unanticipated_phone_key_spellings_are_swept(key):
+    """The point of the sweep: a new actor with a new key name must not read as 'no phone'."""
+    value = ["+14155552671"] if key.endswith("s") else "+14155552671"
+    assert extract_phone([{key: value}]) == "+14155552671"
+
+
+@pytest.mark.parametrize("key,value", [
+    ("phone_status", "valid"),
+    ("phone_verified", "true"),
+    ("mobile_country_code", "1"),
+    ("phone_type", "mobile"),
+    ("phone_carrier", "Verizon"),
+    ("mobile_url", "https://example.com/12345678"),
+    ("phone_score", "95"),
+    ("phone_id", "1234567890"),
+    ("telco_region", "9876543210"),
+])
+def test_lookalike_keys_do_not_contribute_a_number(key, value):
+    """A loose key sweep is only safe because the VALUE still has to be a phone number. These are
+    the keys that name a phone but hold something else — a country code that is a plausible short
+    number, an id that is ten digits, a URL with digits in it."""
+    assert extract_phone([{key: value}]) == ""
+
+
+def test_nested_actor_output_is_reached():
+    """Some actors wrap the row in `data` or `result`."""
+    assert extract_phone([{"data": {"first_mobile_number": "+14155552671"}}]) == "+14155552671"
+
+
+def test_deeply_recursive_output_terminates():
+    """A self-referential blob must not hang an enrichment run."""
+    blob: dict = {"person": {}}
+    node = blob["person"]
+    for _ in range(30):
+        node["person"] = {}
+        node = node["person"]
+    node["phone"] = "+14155552671"
+    assert extract_phone([blob]) == ""      # beyond the depth guard, and it returns rather than hangs
