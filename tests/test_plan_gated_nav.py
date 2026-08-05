@@ -140,3 +140,79 @@ async def test_a_workspace_with_no_subscription_keeps_its_product_modules(client
     for cap in ("module.network", "module.calling", "module.outreach", "module.integrations"):
         assert modules[cap]["included"] is True, cap
     assert modules["module.api"]["included"] is False
+
+
+# ---- end-to-end through the REAL seeded plans ------------------------------------------------
+#
+# The `_fake_resolve` test above proves the endpoint reports whatever the engine says. These prove
+# the SEED actually says the right thing — that `free` and `starter` really do disable the modules
+# the sidebar keys on. Without these, the seed could stop disabling a module and every test would
+# still pass while the nav quietly stopped gating.
+
+
+async def _tenant_on_plan(client, slug: str, plan_id: str) -> str:
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from nexus.models.billing import BillingSubscription
+    from nexus.workers.tasks import tenant_session
+    from tests.conftest import principal_from_token
+
+    await sync_catalog()
+    await sync_plans()
+    token = await signup(client, slug=slug, email=f"o@{slug}.com", company=slug.upper())
+    async with tenant_session(principal_from_token(token).tenant_id) as ts:
+        ts.add(BillingSubscription(plan_id=plan_id, status="active"))
+        await ts.flush()
+    return token
+
+
+async def test_the_free_plan_really_disables_the_modules_the_nav_keys_on(client):
+    """Free disables all five product modules in the seed. If that ever stops being true, the
+    sidebar silently stops gating and nobody finds out."""
+    token = await _tenant_on_plan(client, "entf", "free")
+    r = await client.get("/api/billing/entitlements", headers=auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["plan"] == "free"
+    modules = {m["capability_id"]: m for m in body["modules"]}
+    for cap in ("module.network", "module.outreach", "module.calling",
+                "module.discovery", "module.integrations"):
+        assert modules[cap]["included"] is False, cap
+        assert modules[cap]["source"] == "plan", cap
+
+
+async def test_the_starter_plan_disables_only_network_and_calling(client):
+    """Starter is the partial case, and it is the one that would catch an over-broad gate:
+    outreach must stay included, or Campaigns/Cadences vanish for a paying customer."""
+    token = await _tenant_on_plan(client, "ents", "starter")
+    modules = {
+        m["capability_id"]: m
+        for m in (await client.get("/api/billing/entitlements",
+                                   headers=auth(token))).json()["modules"]
+    }
+    assert modules["module.network"]["included"] is False
+    assert modules["module.calling"]["included"] is False
+    # Still included — these drive Campaigns, Cadences and Integrations in the sidebar.
+    assert modules["module.outreach"]["included"] is True
+    assert modules["module.integrations"]["included"] is True
+    assert modules["module.discovery"]["included"] is True
+
+
+async def test_free_is_still_not_gated_while_enforcement_is_shadow(client):
+    """The whole safety property, end to end on real seed data: a Free workspace resolves five
+    disabled modules AND is told not to act on it, because the server would still serve them."""
+    token = await _tenant_on_plan(client, "entg", "free")
+    body = (await client.get("/api/billing/entitlements", headers=auth(token))).json()
+    assert any(m["included"] is False for m in body["modules"])
+    assert body["gating_active"] is False
+
+
+async def test_free_is_gated_once_enforcement_is_on(client, monkeypatch):
+    from nexus.core.config import get_settings
+
+    token = await _tenant_on_plan(client, "enth", "free")
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "on")
+    body = (await client.get("/api/billing/entitlements", headers=auth(token))).json()
+    assert body["gating_active"] is True
+    modules = {m["capability_id"]: m for m in body["modules"]}
+    assert modules["module.network"]["included"] is False
