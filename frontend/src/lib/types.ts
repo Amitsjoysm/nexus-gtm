@@ -1229,6 +1229,31 @@ export interface AdminPlan {
   entitlement_count: number;
 }
 
+export interface ModuleEntitlement {
+  capability_id: string;
+  name: string;
+  mode: string;
+  /** Whether the plan includes it at all. NOT the same as "the server will let you through". */
+  included: boolean;
+  source: string;
+}
+
+export interface Entitlements {
+  plan: string | null;
+  plan_name: string | null;
+  status: string | null;
+  enforcement: string;
+  /**
+   * True only when the server will genuinely refuse a call.
+   *
+   * Enforcement defaults to `shadow`, which resolves every entitlement and then allows anyway.
+   * Gating navigation on `included` alone would therefore hide features that still work — a
+   * visible regression produced by a rollout mode whose whole promise is "changes nothing".
+   */
+  gating_active: boolean;
+  modules: ModuleEntitlement[];
+}
+
 export interface PlatformIdentity {
   email: string;
   is_platform_admin: boolean;

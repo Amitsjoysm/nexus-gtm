@@ -24,6 +24,7 @@ import type {
   AdminSubscription,
   BillingCredits,
   BillingUsage,
+  Entitlements,
   ProrationPreview,
   PlanEntitlement,
   FeatureFlag,
@@ -766,6 +767,10 @@ export class ApiClient {
   }
   billingCredits(signal?: AbortSignal) {
     return this.request<BillingCredits>("/billing/credits", { signal });
+  }
+  /** Module gates for the current workspace. Drives navigation; see `EntitlementsContext`. */
+  billingEntitlements(signal?: AbortSignal) {
+    return this.request<Entitlements>("/billing/entitlements", { signal });
   }
   billingInvoices(signal?: AbortSignal) {
     return this.request<Invoice[]>("/billing/invoices", { signal });

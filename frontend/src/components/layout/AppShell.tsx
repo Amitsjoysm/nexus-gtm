@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/app/AuthContext";
+import { EntitlementsProvider } from "@/app/EntitlementsContext";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import styles from "./AppShell.module.css";
@@ -50,34 +51,38 @@ export function AppShell() {
   }
 
   return (
-    <div className={styles.shell}>
-      <a className="skip-link" href="#main">
-        Skip to content
-      </a>
+    // Wraps the whole shell, not just the sidebar: page-level empty states and headers ask the
+    // same "is this in our plan?" question, and one fetch answers all of them.
+    <EntitlementsProvider>
+      <div className={styles.shell}>
+        <a className="skip-link" href="#main">
+          Skip to content
+        </a>
 
-      <Sidebar
-        open={drawerOpen}
-        collapsed={collapsed}
-        onNavigate={() => setDrawerOpen(false)}
-        onToggleCollapse={toggleCollapse}
-      />
-
-      {drawerOpen && (
-        <button
-          className={styles.scrim}
-          aria-label="Close menu"
-          onClick={() => setDrawerOpen(false)}
+        <Sidebar
+          open={drawerOpen}
+          collapsed={collapsed}
+          onNavigate={() => setDrawerOpen(false)}
+          onToggleCollapse={toggleCollapse}
         />
-      )}
 
-      <div className={styles.body}>
-        <Topbar title={title} onMenuClick={() => setDrawerOpen(true)} />
-        <main id="main" className={styles.main} tabIndex={-1}>
-          <div className={styles.container} key={tenantEpoch}>
-            <Outlet />
-          </div>
-        </main>
+        {drawerOpen && (
+          <button
+            className={styles.scrim}
+            aria-label="Close menu"
+            onClick={() => setDrawerOpen(false)}
+          />
+        )}
+
+        <div className={styles.body}>
+          <Topbar title={title} onMenuClick={() => setDrawerOpen(true)} />
+          <main id="main" className={styles.main} tabIndex={-1}>
+            <div className={styles.container} key={tenantEpoch}>
+              <Outlet />
+            </div>
+          </main>
+        </div>
       </div>
-    </div>
+    </EntitlementsProvider>
   );
 }

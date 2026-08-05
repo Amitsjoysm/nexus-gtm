@@ -293,6 +293,13 @@ export const ShieldCheckIcon = (props: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+export const LockIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <rect x="4.5" y="10.5" width="15" height="9.5" rx="2" />
+    <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+  </Svg>
+);
+
 export const TrophyIcon = (props: SVGProps<SVGSVGElement>) => (
   <Svg {...props}>
     <path d="M7 4h10v4a5 5 0 0 1-10 0V4Z" />

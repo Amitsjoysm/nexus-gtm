@@ -1,7 +1,8 @@
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
-import { NAV_ITEMS, canSee } from "@/app/nav";
+import { NAV_ITEMS, canSee, navState } from "@/app/nav";
 import { usePlatformIdentity } from "@/app/RequirePlatformAdmin";
+import { useEntitlements, isLocked } from "@/app/EntitlementsContext";
 import { useAuth } from "@/app/AuthContext";
 import { Icons } from "@/components/ui";
 import styles from "./Sidebar.module.css";
@@ -21,6 +22,9 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
   // Platform admin is orthogonal to the workspace role, so it is read from its own source. Null
   // for every ordinary member, which is what hides the staff entry.
   const isPlatformAdmin = Boolean(usePlatformIdentity()?.is_platform_admin);
+  // Null until loaded, and null on error — `isLocked` reads that as "nothing is locked", so a
+  // slow or failing billing endpoint never deletes the customer's navigation.
+  const entitlements = useEntitlements();
 
   return (
     <aside
@@ -51,20 +55,56 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
       </div>
 
       <nav className={styles.nav} aria-label="Main navigation">
-        {NAV_ITEMS.filter((item) => canSee(item, role, isPlatformAdmin)).map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            onClick={onNavigate}
-            title={collapsed ? item.label : undefined}
-            className={({ isActive }) => cn(styles.link, isActive && styles.active)}
-          >
-            <span className={styles.icon} aria-hidden="true">
-              {item.icon}
-            </span>
-            <span className={styles.linkLabel}>{item.label}</span>
-          </NavLink>
-        ))}
+        {NAV_ITEMS.filter((item) => canSee(item, role, isPlatformAdmin)).map((item) => {
+          const state = navState(role, isLocked(entitlements, item.capability));
+          if (state === "hidden") return null;
+
+          if (state === "locked") {
+            // Routed to Billing rather than to the feature: the item is an upsell, and sending
+            // someone to a page the server will 402 is the dead end this whole change exists to
+            // remove. `aria-describedby` (not the label) carries the reason, so a screen reader
+            // announces "Network, not included in your plan" instead of a bare link.
+            return (
+              <NavLink
+                key={item.to}
+                to="/settings/billing"
+                onClick={onNavigate}
+                title={`${item.label} is not included in your plan — view upgrade options`}
+                className={cn(styles.link, styles.locked)}
+                aria-describedby={`nav-lock-${item.to.replace(/\W/g, "")}`}
+              >
+                <span className={styles.icon} aria-hidden="true">
+                  {item.icon}
+                </span>
+                <span className={styles.linkLabel}>{item.label}</span>
+                <span className={styles.lockBadge} aria-hidden="true">
+                  <Icons.LockIcon />
+                </span>
+                <span
+                  id={`nav-lock-${item.to.replace(/\W/g, "")}`}
+                  className={styles.srOnly}
+                >
+                  not included in your plan
+                </span>
+              </NavLink>
+            );
+          }
+
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              onClick={onNavigate}
+              title={collapsed ? item.label : undefined}
+              className={({ isActive }) => cn(styles.link, isActive && styles.active)}
+            >
+              <span className={styles.icon} aria-hidden="true">
+                {item.icon}
+              </span>
+              <span className={styles.linkLabel}>{item.label}</span>
+            </NavLink>
+          );
+        })}
       </nav>
 
       <div className={styles.footer}>

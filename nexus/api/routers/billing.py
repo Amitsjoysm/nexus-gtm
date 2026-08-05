@@ -462,3 +462,94 @@ async def create_portal(
         id=str(session_out.get("id", "")), url=str(session_out.get("url", "")),
         provider=str(session_out.get("provider", provider.name)),
     )
+
+
+# ---- entitlements: what this workspace's plan actually includes -------------------------------
+#
+# The sidebar was blind to entitlements, so a `free` workspace saw Network and Campaigns and
+# found out by clicking and getting a 402. This endpoint is what lets navigation tell the truth.
+#
+# The trap it has to avoid is bigger than the bug it fixes. `NEXUS_BILLING_ENFORCEMENT` defaults
+# to `shadow`, which evaluates every entitlement and then ALLOWS regardless. A UI that hid a nav
+# item because the *policy* said "disabled" would hide a feature that still works perfectly —
+# turning a shadow-mode rollout, whose entire promise is "changes nothing", into a visible product
+# regression. So this endpoint reports the resolved policy AND `gating_active`, and the client is
+# expected to gate only when the server would actually block.
+#
+# `gating_active` is computed here rather than left to the client to derive from `enforcement`,
+# because that derivation is exactly the sort of thing two callers get subtly different.
+
+
+class EntitlementOut(BaseModel):
+    capability_id: str
+    name: str
+    mode: str
+    # Whether the policy permits this capability at all. Distinct from "will the server let you
+    # through right now" — see `gating_active`.
+    included: bool
+    # Where the answer came from (plan_class | plan | catalog | feature_flag | dependency |
+    # suspended | unknown), so a support conversation can start from a fact.
+    source: str
+
+
+class EntitlementsOut(BaseModel):
+    plan: str | None
+    plan_name: str | None
+    status: str | None
+    enforcement: str
+    # True only when the server will genuinely refuse a call. The UI must gate on THIS, never on
+    # `included` alone, or shadow mode starts hiding working features.
+    gating_active: bool
+    modules: list[EntitlementOut]
+
+
+@router.get("/entitlements", response_model=EntitlementsOut)
+async def get_entitlements(
+    ts: TenantSession = Depends(get_tenant_session),
+    # Rep-level, like /usage: every member's navigation depends on this, and it exposes no money.
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> EntitlementsOut:
+    """The module gates for this workspace, resolved through the real entitlement engine.
+
+    Only `module.*` capabilities: navigation is coarse, and resolving the whole catalog on every
+    page load would be a lot of work to answer a question about eight menu items. Per-action
+    quotas stay where they belong — on the action, via `check_and_meter`.
+    """
+    from nexus.billing.entitlements import resolve_entitlement
+    from nexus.core.config import get_settings
+
+    subs = await ts.list(BillingSubscription, limit=5)
+    sub = next((s for s in subs if s.status in ("trialing", "active", "past_due")), None)
+    sub = sub or (subs[0] if subs else None)
+    plan = await ts.session.get(BillingPlan, sub.plan_id) if sub else None
+
+    rows = (
+        await ts.session.scalars(
+            select(BillingCapability).where(BillingCapability.category == "module")
+        )
+    ).all()
+
+    modules: list[EntitlementOut] = []
+    for cap in sorted(rows, key=lambda c: c.id):
+        ent = await resolve_entitlement(ts, cap.id)
+        modules.append(
+            EntitlementOut(
+                capability_id=cap.id,
+                name=cap.name or cap.id,
+                mode=ent.mode,
+                # `enterprise` is "talk to us", not "you have it". Treated as not included so a
+                # self-serve plan does not advertise a module it cannot actually turn on.
+                included=ent.mode not in ("disabled", "enterprise"),
+                source=ent.source,
+            )
+        )
+
+    enforcement = get_settings().billing_enforcement
+    return EntitlementsOut(
+        plan=sub.plan_id if sub else None,
+        plan_name=plan.name if plan else None,
+        status=sub.status if sub else None,
+        enforcement=enforcement,
+        gating_active=enforcement == "on",
+        modules=modules,
+    )
