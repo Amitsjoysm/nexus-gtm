@@ -407,19 +407,37 @@ different write targets.
    (resolve-then-check, so a public name pointing at loopback is caught) and identifier validation
    that runs on names we discovered ourselves, because a table name is attacker-controlled if the
    attacker owns the source database.
-2. `source_databases` model + migration. DSN Fernet-sealed at rest like `network/crypto.py`;
+2. **`source_databases` model + migration — done** (`nexus/models/source_db.py`, migration
+   `0041_source_databases`). DSN Fernet-sealed under its own key (`nexus/sources/crypto.py`);
    `last_ok_at` / `last_error` so a source that has quietly stopped working is visible.
-3. Connection test — `validate_dsn` first, always.
-4. Schema introspection over `information_schema`, every returned name through
-   `require_identifier` before it is stored or shown.
-5. Mapping: admin picks discovered table/column onto app fields. **No SQL string ever arrives from
-   the browser** — we build parameterised queries from revalidated identifiers.
-6. **Dry run** — reads a bounded sample through the mapping and reports what it would produce,
-   writing nothing. A source is not selectable until a dry run has passed. This is the same staging
-   as the shared company crawl (shadow → diff → fan-out), for the same reason: a plausible
-   integration pointed at the wrong column is the failure mode this subsystem has shipped six times.
-7. Enrichment provider, tried before the paid APIs. **Failure posture: fall through to the paid
-   provider, never stop collection.** It is an optimisation, not a dependency.
+3. **Connection test — done** (`engine.test_connection`). `validate_dsn` first, always, and it
+   *asserts* the session is read-only rather than assuming it.
+4. **Schema introspection — done** (`engine.introspect`). Over `information_schema`; every returned
+   name through `require_identifier` before it is stored or shown, and an unsafely-named table is
+   skipped rather than failing the whole pass.
+5. **Mapping — done** (`engine.validate_mapping` / `engine.build_select`). Admin picks discovered
+   table/column onto app fields. **No SQL string ever arrives from the browser** — we build
+   parameterised queries from revalidated identifiers, and revalidate again at build time because
+   a mapping loaded back from our own JSON column is not thereby trustworthy.
+6. **Dry run — done** (`engine.dry_run`, `service.run_dry_run`). Reads a bounded sample through the
+   mapping and reports what it would produce, writing nothing. A source is not selectable until a
+   dry run has passed. Same staging as the shared company crawl (shadow → diff → fan-out), for the
+   same reason: a plausible integration pointed at the wrong column is the failure mode this
+   subsystem has shipped six times.
+7. **Enrichment provider — NOT built yet.** Tried before the paid APIs. **Failure posture: fall
+   through to the paid provider, never stop collection.** It is an optimisation, not a dependency.
+   Deliberately left out of the same change as steps 2–6: shipping the consumer alongside the
+   ladder makes it possible to skip the proof by accident.
 
-Open question for whoever picks this up: whether `allow_private` should be true in the local deploy,
-since a source database on localhost is plausible in development and refused by default.
+**Open question — answered.** `allow_private` is a **setting** (`NEXUS_SOURCE_DB_ALLOW_PRIVATE`),
+false everywhere by default, and never a request parameter: an admin must not be able to switch off
+the guard from the form the guard exists to protect. It may be turned on for local development,
+where a source database on localhost is genuinely plausible, and
+`Settings._reject_private_source_dsn_in_production` **refuses to start** if it is true while
+`NEXUS_ENV` is `staging` or `prod` — the same shape as `_reject_synthetic_signals_in_production`,
+because a guard silently ignored is worse than one that was never there.
+
+**Status ladder as built.** `registered → connected → introspected → mapped → verified`, advanced
+only by `nexus/sources/service.py` and never from a request body. Re-introspecting or re-mapping
+clears the dry-run proof. Verification does not activate: `enabled` starts false and enabling below
+`verified` is refused, while disabling is never refused. Pinned by `tests/test_source_databases.py`.

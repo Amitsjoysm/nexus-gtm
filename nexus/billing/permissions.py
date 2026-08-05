@@ -31,11 +31,17 @@ USERS_MANAGE = "users.manage"            # reset a user's MFA, account recovery
 # powers: the first is account recovery a support agent does daily, the second is reading a
 # customer's data as them. Bundling would grant the second to everyone who needs the first.
 USERS_IMPERSONATE = "users.impersonate"  # time-boxed, read-only, audited session as a user
+# Deliberately NOT folded into `admins.manage`. Registering a data source and granting platform
+# power are different acts, and the blast radius is different in kind: a bad admin grant is
+# revocable, whereas a source database mapped onto the wrong column writes wrong facts into the
+# SHARED company/person stores — wrong for every tenant at once, and indistinguishable from real
+# data afterwards. It is also the one permission that carries a live third-party credential.
+SOURCES_MANAGE = "sources.manage"        # register/introspect/map/dry-run external source DBs
 
 ALL_PERMISSIONS = (
     BILLING_READ, PRICING_WRITE, SUBSCRIPTIONS_WRITE, CREDITS_GRANT,
     CREDITS_GRANT_CAPPED, INVOICES_COLLECT, JOBS_MANAGE, ADMINS_MANAGE, USERS_MANAGE,
-    USERS_IMPERSONATE,
+    USERS_IMPERSONATE, SOURCES_MANAGE,
 )
 
 # Role presets. `superadmin` is everything; the other two are deliberately narrower.

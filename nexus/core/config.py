@@ -413,6 +413,27 @@ class Settings(BaseSettings):
     # one from `secret_key`, so the data is always encrypted with no extra configuration.
     people_data_enc_key: str = ""
 
+    # External source databases (nexus/sources/). A registered DSN is a live credential to
+    # somebody else's database, so it is Fernet-sealed at rest under its own key — rotating the
+    # key that protects third-party database credentials must not orphan MFA seeds or network
+    # OAuth tokens. Blank derives one from `secret_key`, so a DSN is always encrypted.
+    source_db_dsn_enc_key: str = ""
+    # Whether a source DSN may point at a private/loopback address. FALSE everywhere by default:
+    # the SSRF guard in `sources/safety.py` is the whole reason a DSN form is safe to expose, and
+    # the credential being typed in usually belongs to a customer rather than to the admin typing
+    # it. This is the plan's open question, answered: it is a *setting* and never a request
+    # parameter, so an admin cannot switch off the guard from the form the guard protects.
+    # `_reject_private_source_dsn_in_production` below refuses to start if it is true in
+    # staging/prod, mirroring how demo signal sources are handled.
+    source_db_allow_private: bool = False
+    # Ceiling on rows a dry run reads. A dry run exists to prove a mapping, not to move data; an
+    # unbounded "sample" against a vendor's production table is a load test they did not agree to.
+    source_db_dry_run_limit: int = 25
+    # Per-statement timeout for anything we run against a source database. Someone else's
+    # database is not something we can tune, and an introspection query that hangs would pin a
+    # request worker for as long as they let it.
+    source_db_statement_timeout_s: int = 10
+
     # Apify: actor marketplace, used for the lookups with no compliant public API (a phone number
     # behind a LinkedIn profile, a Crunchbase organisation page). Inert until keyed — an unkeyed
     # call raises rather than returning [], so a missing key is never read as "no results".
@@ -550,6 +571,30 @@ class Settings(BaseSettings):
                 "NEXUS_SIGNAL_SOURCES lists 'demo' but NEXUS_ENV is "
                 f"'{self.env}'. Synthetic signals must never reach a live tenant; remove 'demo' "
                 "(the real sources are 'web' and 'rss')."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_private_source_dsn_in_production(self) -> "Settings":
+        """Refuse to start a live deployment with the source-database SSRF guard switched off.
+
+        ``source_db_allow_private`` exists because a source database genuinely does live on
+        localhost in development, and refusing it there makes the feature untestable. In a live
+        deployment it is the opposite: the guard is the only thing standing between a DSN form and
+        a read oracle over our own container network and cloud metadata endpoint — and the
+        credential typically belongs to a customer, so the admin typing it may not own what it
+        points at.
+
+        Same shape, and the same reasoning, as ``_reject_synthetic_signals_in_production``:
+        silently ignoring the flag would leave an operator believing a guard is off when it is on,
+        or (far worse) the reverse. One clear error at startup on a configuration that must never
+        have shipped.
+        """
+        if self.env in ("staging", "prod") and self.source_db_allow_private:
+            raise ValueError(
+                "NEXUS_SOURCE_DB_ALLOW_PRIVATE is true but NEXUS_ENV is "
+                f"'{self.env}'. That disables the SSRF guard on admin-supplied connection "
+                "strings; it is a local-development affordance only."
             )
         return self
 

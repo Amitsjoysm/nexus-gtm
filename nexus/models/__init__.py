@@ -45,6 +45,7 @@ from nexus.models.outcome import Outcome
 from nexus.models.page_snapshot import PageSnapshot
 from nexus.models.relevance import RelevanceProfile
 from nexus.models.signal import SignalEvent
+from nexus.models.source_db import SourceDatabase
 from nexus.models.source_run import SignalSourceRun
 from nexus.models.workflow import InboxTask, ListItem, Play, PlayRun, ProspectList
 
@@ -61,6 +62,7 @@ __all__ = [
     "PageSnapshot",
     "SignalEvent",
     "SignalSourceRun",
+    "SourceDatabase",
     "RelevanceProfile",
     "AccountScore",
     "AgentRun",
