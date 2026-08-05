@@ -62,10 +62,25 @@ class StubPersonalizationProvider(PersonalizationProvider):
 
 def build_personalization_provider(name: str) -> PersonalizationProvider:
     """Construct the configured provider. Unknown/blank keys fail safe to the offline stub.
-    A future Apify provider registers here (``if key == 'apify': return ApifyPersonalizationProvider(...)``)."""
+
+    An unknown name returning the stub rather than raising is deliberate: a typo in
+    ``NEXUS_PERSONALIZATION_PROVIDER`` costs personalization, not the ability to send email at all.
+    It is logged, because silently running the stub when someone asked for Apify is exactly the
+    "configured but doing nothing" state this codebase keeps having to diagnose.
+    """
     key = (name or "").strip().lower()
     if key in ("", "stub", "none"):
         return StubPersonalizationProvider()
+    if key == "apify":
+        from nexus.personalization.apify_provider import ApifyPersonalizationProvider
+
+        return ApifyPersonalizationProvider()
+    import logging
+
+    logging.getLogger("nexus.personalization").warning(
+        "unknown NEXUS_PERSONALIZATION_PROVIDER %r; using the offline stub (no social insights)",
+        name,
+    )
     return StubPersonalizationProvider()
 
 

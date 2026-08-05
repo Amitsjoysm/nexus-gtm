@@ -46,6 +46,12 @@ ACTORS: dict[str, str] = {
     "crunchbase_org": "PPUtGNTB6xB9dJ2di",
     # Country / employee size / industry / name -> company list, for net-new ICP discovery.
     "company_search": "ayZno82KNVAVaWMpg",
+    # LinkedIn profile URL(s) -> headline, summary, recent posts, interests. Feeds person-level
+    # personalization for email and call scripts (nexus/personalization/apify_provider.py).
+    # NOTE: like phone_finder, this actor requires its permissions to be approved once per Apify
+    # account in the console before any run succeeds — an unapproved account gets a 403, not a
+    # bad-key error.
+    "linkedin_profile": "2SyF0bVxmgGr8IVCZ",
 }
 
 

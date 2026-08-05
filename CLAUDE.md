@@ -709,6 +709,63 @@ constant**: the person's country, then the account's, then US. An unparseable nu
 rather than dropped — losing a contact's only phone number to keep a column tidy is the worse
 outcome.
 
+**Read actor keys by meaning, not by a hand-written list** (`nexus/core/keys.py`). Measured
+2026-08-05: `phone_finder` returns `first_mobile_number` / `mobile_numbers`, neither of which was
+in the key list, so a working actor extracted **nothing** — silently, reading as "this person has
+no phone". A fixed list of spellings loses against output that is not a contract. Extraction now
+sweeps any key whose *segments* name the thing wanted, and what makes that safe is that the
+**value** must still pass a shape gate (`looks_like_phone`), so `phone_status: "valid"` and
+`mobile_country_code: "1"` contribute nothing. Both halves are required: the sweep alone is
+reckless, the gate alone missed a real number.
+
+Match on segments, never substrings. `updates` contains **`date`**, so a substring exclusion built
+to skip `lastPostDate` silently dropped one of the commonest activity-feed key names; and
+`activities` singularises to `activity` only with an `-ies` rule, not by stripping an `s`. Both
+were real misses, caught by tests rather than by reasoning.
+
+**Every actor row must prove it is about the person asked for.** The actors take a *list* of
+profile URLs and return a dataset, so taking row zero attaches a stranger's phone — or reads a
+stranger's posts onto a call script. Rows naming a different profile are discarded and are never a
+fallback; rows naming no profile are used, because a single-result actor that does not echo the
+input is the common benign case.
+
+**Actor permissions are approved per Apify account, not per key.** Several actors (`phone_finder`,
+`linkedin_profile`) demand *full account access* and 403 with `full-permission-actor-not-approved`
+until someone clicks approve in the console. That is not a bad key, and reporting it as one — or
+worse as a rate limit, which the code used to do — sends an operator to rotate credentials that
+were never wrong. `_describe_error` carries Apify's own `error.type` into the log and the raised
+exception.
+
+Registered actors and their state:
+
+| Logical name | Actor | Consumer |
+|---|---|---|
+| `phone_finder` | `code_crafter/mobile-finder` | `people/enrich.py` — live, verified end-to-end |
+| `linkedin_profile` | `dev_fusion/Linkedin-Profile-Scraper` | `personalization/apify_provider.py` |
+| `crunchbase_org` | `pratikdani/crunchbase-companies-scraper` | **none** |
+| `company_search` | `bhansalisoft/crunchbase-scraper-without-login` | **none** |
+
+The last two are registered and called by nothing. Before wiring `company_search`, note it has 42
+total runs across 2 users — an abandoned actor is a dependency that disappears without notice.
+
+## Person-level personalization (`nexus/personalization/`)
+
+A contact's headline, recent posts and interests, fetched once and folded into both the email
+(`agents/messaging.py`) and the call script (`agents/call_script.py`) via `brief.to_prompt`. The
+whole chain existed from the start except the provider: `build_personalization_provider` carried a
+comment describing the Apify branch and returned the stub for every input, so
+`NEXUS_PERSONALIZATION_PROVIDER=apify` silently did nothing. An unknown provider name still falls
+back to the stub — a typo must cost personalization, not the ability to send email — but it now
+logs, because "configured and doing nothing" is the state this codebase keeps having to diagnose.
+
+- **A post has to be worth saying out loud.** `_is_substantive` rejects reactions, reshare stubs
+  and single-emoji replies. An SDR opening "I saw your post" and then referencing a thumbs-up reads
+  as automation, which is worse than referencing nothing — the failure is louder here than
+  elsewhere because the text is *spoken on a call*.
+- Long posts are **trimmed, not dropped**: the opening sentences carry the subject, and an essay
+  would dominate the prompt and the token bill.
+- Reshares are de-duplicated on a text prefix, or the same story appears three times.
+
 ## Alerts (`nexus/alerts/`) — M21
 
 **`signal.created` had no subscriber.** It was published on every ingested signal and the only

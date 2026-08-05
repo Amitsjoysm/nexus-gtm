@@ -18,7 +18,7 @@ bill and an unbounded one.
 from __future__ import annotations
 
 import logging
-import re
+from nexus.core.keys import key_matches
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -73,16 +73,18 @@ _PROFILE_KEYS = (
 # right number extracted nothing. An exhaustive hand-maintained list of key spellings is a losing
 # game; what makes a loose search SAFE is `looks_like_phone` rejecting anything that is not a
 # number, so a `phone_status` or `mobile_url` key cannot contribute a value.
-_PHONE_KEY_HINT = re.compile(r"(phone|mobile|tel|msisdn|whatsapp)", re.I)
-# ...except these, which contain a hint word but never hold a number.
-_PHONE_KEY_EXCLUDE = re.compile(
-    r"(status|state|type|kind|country|code|valid|verified|score|count|url|link|carrier|"
-    r"provider|region|format|error|message|id$|_id$)", re.I
-)
+# Matched by SEGMENT, not substring: a substring list collides with real key names in ways that
+# are invisible until a working actor returns nothing (see nexus/core/keys.py).
+_PHONE_WANTED = frozenset({"phone", "mobile", "tel", "telephone", "msisdn", "whatsapp", "cell"})
+# ...keys that name a phone but hold something that is not one.
+_PHONE_UNWANTED = frozenset({
+    "status", "state", "type", "kind", "country", "code", "valid", "verified", "score", "count",
+    "url", "link", "carrier", "provider", "region", "format", "error", "message", "id", "total",
+})
 
 
 def _looks_like_phone_key(key: str) -> bool:
-    return bool(_PHONE_KEY_HINT.search(key)) and not _PHONE_KEY_EXCLUDE.search(key)
+    return key_matches(key, wanted=_PHONE_WANTED, unwanted=_PHONE_UNWANTED)
 
 
 def _first_phone_in(item: dict, _depth: int = 0) -> str:
