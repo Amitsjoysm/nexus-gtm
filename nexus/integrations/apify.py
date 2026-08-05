@@ -62,6 +62,23 @@ class ApifyNotConfigured(ApifyError):
     """
 
 
+def _describe_error(resp) -> str:
+    """Apify's own error text, so the reason survives into our exception.
+
+    Apify returns ``{"error": {"type": ..., "message": ...}}``. The type is the actionable part:
+    `full-permission-actor-not-approved` needs a click in the console, a genuinely bad token needs
+    a new token, and the two are indistinguishable from the status code alone.
+    """
+    try:
+        err = (resp.json() or {}).get("error") or {}
+        kind, message = err.get("type", ""), err.get("message", "")
+        if kind and message:
+            return f"{kind}: {message}"
+        return kind or message or f"HTTP {resp.status_code}"
+    except Exception:
+        return (resp.text or f"HTTP {resp.status_code}")[:200]
+
+
 class ApifyClient:
     """Runs Apify actors with a rotating key pool."""
 
@@ -95,6 +112,7 @@ class ApifyClient:
         url = f"{_BASE}/{actor_id}/run-sync-get-dataset-items"
         keys = self.api_keys
         backoff_used = 0
+        last_auth_error = ""
 
         for attempt in range(len(keys) + len(_RETRY_BACKOFFS)):
             try:
@@ -105,11 +123,21 @@ class ApifyClient:
                 if resp.status_code in (401, 403):
                     # A bad key is not a transient failure. Rotate past it — one revoked key in a
                     # pool must not take the whole integration down — but never retry it.
-                    logger.warning("Apify key %d rejected for actor %s", self._key_idx, actor_id)
+                    #
+                    # Carry the provider's own reason forward. 401 and 403 arrive here together but
+                    # mean different things and need different fixes, and the most common 403 is
+                    # not a bad key at all: `full-permission-actor-not-approved`, where the actor
+                    # demands full account access nobody has approved in the Apify console. An
+                    # operator told "key rejected" rotates credentials that were never wrong.
+                    last_auth_error = _describe_error(resp)
+                    logger.warning("Apify key %d rejected (%s) for actor %s: %s",
+                                   self._key_idx, resp.status_code, actor_id, last_auth_error)
                     if len(keys) > 1:
                         self._key_idx = (self._key_idx + 1) % len(keys)
                         continue
-                    raise ApifyError(f"Apify rejected the API key for actor {actor_id}")
+                    raise ApifyError(
+                        f"Apify refused actor {actor_id} ({resp.status_code}): {last_auth_error}"
+                    )
                 if resp.status_code == 429:
                     if len(keys) > 1:
                         self._key_idx = (self._key_idx + 1) % len(keys)
@@ -139,6 +167,13 @@ class ApifyClient:
                                actor_id, attempt + 1, exc)
                 raise ApifyError(f"Apify actor {actor_id} failed: {exc}") from exc
 
+        # Blaming rate limits unconditionally is how a permanent auth problem gets read as a
+        # transient one: every key 403ing on `full-permission-actor-not-approved` produced
+        # "pool exhausted by rate limits", which sends an operator to wait rather than to fix.
+        if last_auth_error:
+            raise ApifyError(
+                f"Apify actor {actor_id}: all {len(keys)} key(s) refused — {last_auth_error}"
+            )
         raise ApifyError(f"Apify actor {actor_id}: {len(keys)}-key pool exhausted by rate limits")
 
 

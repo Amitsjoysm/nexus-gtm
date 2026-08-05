@@ -135,3 +135,84 @@ async def test_the_key_pool_reads_primary_then_rotation_list():
     finally:
         object.__setattr__(s, "apify_api_key", "")
         object.__setattr__(s, "apify_api_keys", "")
+
+
+# ---- what an auth failure actually says ------------------------------------------------------
+#
+# Measured against the live API 2026-08-05: the phone_finder actor (code_crafter/mobile-finder)
+# 403s with `full-permission-actor-not-approved` until someone approves its permissions in the
+# Apify console. Both keys were valid and both could see the actor — so "key rejected", and worse
+# the pool-exhaustion message that followed, sent the reader to rotate credentials and then to
+# wait for a rate limit that did not exist. The provider's own reason has to survive.
+
+async def test_a_permission_403_reports_the_real_reason_not_a_rate_limit(monkeypatch):
+    import httpx
+
+    from nexus.integrations.apify import ApifyClient, ApifyError
+
+    body = {
+        "error": {
+            "type": "full-permission-actor-not-approved",
+            "message": "This Actor requires full access to your account.",
+        }
+    }
+
+    class _Resp:
+        status_code = 403
+        text = str(body)
+
+        def json(self):
+            return body
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FakeClient())
+    client = ApifyClient(api_keys=["k1", "k2"])
+
+    with pytest.raises(ApifyError) as exc:
+        await client.run_actor("phone_finder", {"linkedin_url": ["x"]})
+
+    message = str(exc.value)
+    assert "full-permission-actor-not-approved" in message
+    # The specific regression: a permanent auth problem must not be reported as a transient one.
+    assert "rate limit" not in message.lower()
+
+
+async def test_a_genuine_rate_limit_still_reports_as_one(monkeypatch):
+    """The fix must not swing the other way — a real 429 pool exhaustion still says so."""
+    import httpx
+
+    from nexus.integrations.apify import ApifyClient, ApifyError
+
+    class _Resp:
+        status_code = 429
+        text = ""
+
+        def json(self):
+            return {}
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FakeClient())
+    monkeypatch.setattr("nexus.integrations.apify._RETRY_BACKOFFS", (0, 0))
+    client = ApifyClient(api_keys=["k1", "k2"])
+
+    with pytest.raises(ApifyError) as exc:
+        await client.run_actor("phone_finder", {"linkedin_url": ["x"]})
+    assert "rate limits" in str(exc.value).lower()
