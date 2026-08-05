@@ -71,6 +71,7 @@ class IngestionService:
                 account_id=account.id,
                 contact_id=r.contact_id,
                 kind=r.kind,
+                subtype=r.subtype,
                 source=_clamp(r.source, _MAX_SOURCE),
                 title=_clamp(r.title, _MAX_TITLE),
                 body=r.body,

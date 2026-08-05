@@ -42,6 +42,13 @@ class SignalEvent(IdMixin, TimestampMixin, TenantScoped, Base):
         ForeignKey("contacts.id"), nullable=True
     )
     kind: Mapped[str] = mapped_column(String(40), index=True)
+    # Finer grain WITHIN a kind, nullable (migration 0043). `hiring` carries `surge` /
+    # `new_function` / `seniority_shift` (M17). Deliberately not new entries in SIGNAL_KINDS:
+    # every existing INTENT_WEIGHT, play condition and alert rule keys on `kind` and keeps
+    # working, and anything wanting the detail opts in. NULL means "no finer grain known" — for
+    # hiring that is the honest answer on an account's first crawl, where there is no previous
+    # month to compare against.
+    subtype: Mapped[str | None] = mapped_column(String(40), index=True, nullable=True)
     source: Mapped[str] = mapped_column(String(60))
     title: Mapped[str] = mapped_column(String(400))
     body: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -229,6 +229,9 @@ class RawSignal:
     source: str
     title: str
     dedupe_key: str
+    # Finer grain within the kind; see nexus/models/signal.py. Optional, so no existing source
+    # that constructs a RawSignal needs to change.
+    subtype: str | None = None
     body: str | None = None
     url: str | None = None
     strength: float | None = None  # falls back to library default
@@ -751,12 +754,24 @@ class AtsSignalSource(SignalSource):
     def _to_signal(self, account, result) -> RawSignal:
         from collections import Counter
 
+        from nexus.ingestion import hiring
+
         postings = result.postings
         departments = Counter(p.department for p in postings if p.department)
         top = ", ".join(f"{d} ({n})" for d, n in departments.most_common(4))
         titles = "; ".join(p.title for p in postings[: self._max_titles] if p.title)
 
+        # M17: what KIND of hiring this is. A delta against last month's snapshot, so the first
+        # crawl of an account yields no subtype — there is nothing to compare against, and
+        # inventing one would be a guess a rep would repeat to a prospect.
+        current = hiring.snapshot(postings)
+        subtype, reason = hiring.classify(current, hiring.read_snapshot(account))
+        hiring.write_snapshot(account, current)
+
         body = f"{len(postings)} open roles on {result.provider}."
+        if reason:
+            # First, because it is the part a rep actually acts on.
+            body = f"{reason.capitalize()}. " + body
         if top:
             body += f" Hiring in: {top}."
         if titles:
@@ -766,16 +781,45 @@ class AtsSignalSource(SignalSource):
         now = utcnow()
         # Strength rises with volume because a company with 100 open reqs is a materially different
         # prospect from one with 3 — but stays under a funding round, which is a sharper event.
+        #
+        # The subtype deliberately does NOT change it. Strength feeds `inbox_min_signal_strength`
+        # and `signal_alert_floor`, so bumping it for a subtype would silently change which
+        # accounts reach the inbox and how many alerts fire — a behaviour change smuggled in with
+        # a taxonomy change. A play that wants to treat a `new_function` differently keys on the
+        # subtype directly.
         strength = 0.55 if len(postings) < 10 else (0.65 if len(postings) < 50 else 0.75)
         return RawSignal(
             kind="hiring",
+            subtype=subtype,
             source=self.name,
-            title=f"{account.name} has {len(postings)} open roles",
+            title=self._title(account, postings, subtype, reason),
             body=body,
             url=postings[0].url or "",
             strength=strength,
+            # Unchanged by the subtype: still one hiring signal per account per month. A subtype is
+            # a description of that month's hiring, not a separate event, so letting it into the
+            # key would produce two "hiring" signals in a month the character of hiring changed.
             dedupe_key=event_dedupe_key("hiring", anchor, strength, now),
         )
+
+    @staticmethod
+    def _title(account, postings, subtype: str | None, reason: str) -> str:
+        """The headline a rep reads in the inbox.
+
+        "Acme has 12 open roles" is true of almost every growing company and tells a rep nothing.
+        When the subtype is known, the headline says what CHANGED, because that is the thing worth
+        opening a conversation with.
+        """
+        from nexus.ingestion import hiring
+
+        count = len(postings)
+        if subtype == hiring.NEW_FUNCTION and reason:
+            return f"{account.name} is hiring its {reason.split(' — ')[0]}"
+        if subtype == hiring.SENIORITY_SHIFT:
+            return f"{account.name} is hiring leadership ({count} open roles)"
+        if subtype == hiring.SURGE:
+            return f"{account.name} is ramping hiring — {count} open roles"
+        return f"{account.name} has {count} open roles"
 
 
 class PublicApiSignalSource(SignalSource):
