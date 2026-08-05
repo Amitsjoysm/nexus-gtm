@@ -107,16 +107,21 @@ tuning is worth doing before concluding what the architecture must become.
 
 ### Reproducing the heartbeat measurement
 
-The 500k-row database is built in a scratch database beside the live one, so nothing touches real
-data, and the benchmark forces `NEXUS_QUEUE_BACKEND=memory` so it never enqueues onto live Valkey:
+The 500k-row database is built beside the live one, so nothing touches real data, and the
+benchmark forces `NEXUS_QUEUE_BACKEND=memory` so it never enqueues onto live Valkey. The name is
+deliberately unmistakable — a scratch database one keystroke away from `nexus` is an accident
+waiting for a tired evening:
 
 ```bash
-docker exec nexus-gtm-postgres-1 psql -U nexus -d postgres -c "CREATE DATABASE nexus_lt OWNER nexus;"
+docker exec nexus-gtm-postgres-1 psql -U nexus -d postgres -c "CREATE DATABASE nexus_loadtest_scratch OWNER nexus;"
 ```
 
-Then `alembic upgrade head` against `nexus_lt`, seed with `generate_series` (500 tenants ×
-1000 accounts, `last_refreshed_at` spread over 12 h so ~half is due), and run the benchmark with
-`NEXUS_DATABASE_URL` pointed at `nexus_lt`. Drop the database afterwards.
+Then `alembic upgrade head` against it, seed with `generate_series` (500 tenants × 1000 accounts,
+`last_refreshed_at` spread over 12 h so ~half is due), and run `bench_heartbeat.py` with
+`NEXUS_DATABASE_URL` pointed at it. Seeding takes ~40 s.
+
+On the dev stack this database already exists at `nexus_loadtest_scratch` (305 MB, migration 0041),
+kept so the heartbeat numbers above stay re-checkable rather than having to be believed.
 
 ## Interpreting results
 
