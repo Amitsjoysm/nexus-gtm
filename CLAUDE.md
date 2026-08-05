@@ -157,13 +157,13 @@ touches Account/Contact/Inbox/Cadence.
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0041_source_databases`. The chain is
+Alembic under `migrations/versions/`. Head: `0042_account_next_refresh`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
 `0031`–`0040` (page snapshots, notification preferences, feature flags, contact soft-delete,
 `companies`, proration, shared `people`, `crawl_verdict`, user suspension, digest delivery) →
-`0041` (`source_databases`). Every tenant-scoped table automatically gets RLS via
+`0041` (`source_databases`) → `0042` (`accounts.next_refresh_at`). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —
@@ -581,6 +581,46 @@ Engineering means forty rows and **forty paid phone lookups for one phone number
   what the shared store improves is **COGS**, not price. Billing only on a miss would hand the saving
   to whichever customer happened to ask second and make revenue depend on crawl ordering. Usage rows
   carry `attrs.cached` so the margin is visible in the stream.
+
+## Account refresh: tiered, and claimed off a stored due-time
+
+Every account used to be refreshed on the same 6h cycle. Measured, that is what made the pipeline
+unaffordable: 500 tenants x 1000 accounts demands **23.15 accounts/sec** against a measured drain of
+**0.036/sec** on one serial worker. Most of that spend re-crawled accounts where nothing had
+happened in months. Numbers, method and what is still open: `deploy/loadtest/README.md`.
+
+- **`accounts.next_refresh_at` is stored, not derived** (migration `0042`). The old claim
+  (`last_refreshed_at IS NULL OR <= cutoff`, `ORDER BY ... ASC NULLS FIRST`) cannot use a btree —
+  measured at 500k accounts it seq-scanned and sorted 261k rows through a **26 MB external merge on
+  disk** to return 100, every tick. Storing the answer makes it an index scan that stops at the
+  limit: **489ms → 5-8ms warm**, O(batch) instead of O(estate). NOT NULL defaulting to now, because
+  a nullable column would reintroduce the NULLS FIRST ordering that made the old index useless.
+- **The claim stamps a conservative 6h default before the pipeline runs**, and the pipeline
+  re-stamps the real tier at the end. So an account whose processing dies part-way comes back on
+  the old cycle rather than stalling forever — the tier can only ever push it further out from a
+  schedule that already exists.
+- **`tiering.classify` is biased toward hot, deliberately.** Hot if the crawl just found something,
+  or there is a signal in the last `account_hot_signal_window_days`, or it is in an active cadence,
+  or it is on a list. Cold is only what is left. Wrongly hot costs one crawl; wrongly cold means a
+  rep learns about a funding round three days late, which is the failure the product exists to
+  prevent — the same asymmetry as `_NEGATION_CUES` in the signal classifier. A classification
+  failure returns **hot**, which is the pre-tiering behaviour.
+- Ordered cheapest-first and short-circuits: new signals in hand means **zero queries**.
+- `last_refreshed_at` is untouched and still written — `pipeline.process_account` reads it to
+  decide whether to seed an account from the shared company crawl.
+
+**Sources run concurrently** (`signal_sources_concurrent`, default on). Per-account crawl
+**26.98s → 14.94s (1.81x)**, measured as sum-vs-max over 355 real crawls. **Session-bound sources
+are excluded from the gather and that is not optional**: a change detector borrows the caller's
+TenantSession via `bind_session`, and SQLAlchemy's AsyncSession is not safe for concurrent use —
+two coroutines awaiting on one session interleave on a single connection and raise, or return each
+other's rows. They run sequentially, after the network-only ones. `_run_one` is shared by both
+paths so a source's recorded outcome, timing and provenance cannot drift with the schedule.
+
+**`run_worker` is still strictly serial** (measured effective concurrency 0.99) and there is one
+replica. That is the remaining gap: ~15.65s per account is 0.064/s against 5.11/s demand at a 15%
+hot ratio. Bounded in-flight concurrency is the obvious next lever — `process_account` is ~99%
+await-on-network — but it must be capped by the DB pool, since each in-flight job holds a session.
 
 ## External source databases (`nexus/sources/`) — platform-wide, superadmin only
 

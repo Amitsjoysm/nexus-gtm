@@ -12,6 +12,7 @@ from nexus.core.events import Event, get_event_bus
 from nexus.core.tenancy import TenantSession
 from nexus.inbox.service import get_inbox_service
 from nexus.ingestion.service import get_ingestion_service
+from nexus.ingestion.tiering import schedule_next_refresh
 from nexus.models.account import Account
 from nexus.models.workflow import Play
 from nexus.plays.engine import get_plays_engine
@@ -132,6 +133,10 @@ async def process_account(
     from nexus.discovery.auto import rescreen_discovered_account
 
     if await rescreen_discovered_account(ts, account):
+        # An archived account is the coldest thing there is — it is out of the ICP and off the
+        # rep's list. Still scheduled rather than left alone, so it re-enters the cycle if its
+        # headcount later brings it back into band.
+        tier = await schedule_next_refresh(ts, account, new_signals=new_signals)
         return {
             "account_id": account.id,
             "new_signals": len(new_signals),
@@ -141,6 +146,7 @@ async def process_account(
             "plays_executed": [],
             "icp_screened": True,
             "signals_source": "shared_company" if shared else "tenant",
+            "refresh_tier": tier,
         }
 
     score = await runtime.run("scoring", ts, account_id=account.id, persist=True)
@@ -180,6 +186,11 @@ async def process_account(
         )
     )
 
+    # Re-tier now that the crawl's outcome is known. The claim already stamped a conservative
+    # 6h default, so this can only ever push a quiet account further out — an account whose
+    # processing dies before reaching here keeps the pre-tiering schedule rather than stalling.
+    tier = await schedule_next_refresh(ts, account, new_signals=new_signals)
+
     return {
         "account_id": account.id,
         "new_signals": len(new_signals),
@@ -190,4 +201,7 @@ async def process_account(
         # Which crawl fed this run. Without it "0 new signals" means both "nothing happened at this
         # company" and "the shared crawler owns this account", which are opposite problems.
         "signals_source": "shared_company" if shared else "tenant",
+        # Why this account will not be looked at again for a while. Without it, "my account is
+        # stale" has no answer an operator can check.
+        "refresh_tier": tier,
     }

@@ -287,8 +287,24 @@ class Settings(BaseSettings):
     # cadence_enabled) so the test suite stays deterministic and zero-network.
     automation_enabled: bool = False            # global master switch for the heartbeat
     automation_tick_interval_s: int = 60        # heartbeat period (seconds)
-    account_refresh_interval_s: int = 21600     # staleness threshold before re-processing (6h)
+    account_refresh_interval_s: int = 21600     # HOT accounts: staleness before re-processing (6h)
+    # COLD accounts: nothing has happened here in a month, nobody has it in a cadence, and it is
+    # on no list. Measured motivation: a uniform 6h cycle over 500 tenants x 1000 accounts demands
+    # 23.15 accounts/sec against a measured 0.036/sec drain. Most of that is spent re-crawling
+    # accounts where nothing has changed for months. See nexus/ingestion/tiering.py for the rules
+    # and for why they are biased toward hot.
+    account_refresh_interval_cold_s: int = 259200   # 72h
+    # How far back a signal still counts as "this account is live". A month is long enough that a
+    # quarterly-cadence company stays hot between events, and short enough that a genuinely dormant
+    # account does eventually cool.
+    account_hot_signal_window_days: int = 30
     account_refresh_batch_size: int = 100       # max accounts claimed per tick across tenants
+    # Run an account's signal sources concurrently rather than one after another. Measured over 355
+    # real crawls: sum of the five sources is 26.98s, the slowest single source is 14.94s â€” a 1.81x
+    # cut in per-account wall time for no extra CPU, because the pipeline is ~99% await-on-network.
+    # A kill switch rather than a rollout flag: if a provider turns out to rate-limit on
+    # concurrency, this restores the old behaviour without a deploy.
+    signal_sources_concurrent: bool = True
 
     # Person-level personalization (sub-project I): a social-enrichment provider that fetches a
     # contact's posts/comments/profile (LinkedIn etc.) to deepen email/call personalization.

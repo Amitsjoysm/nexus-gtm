@@ -14,7 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from nexus.core.db import Base, IdMixin, TimestampMixin, TZDateTime
+from nexus.core.db import Base, IdMixin, TimestampMixin, TZDateTime, utcnow
 from nexus.core.tenancy import TenantScoped
 
 
@@ -38,6 +38,22 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     # NULL = never refreshed (always due). Stamped when the refresh driver claims the account.
     last_refreshed_at: Mapped[datetime | None] = mapped_column(
         TZDateTime(), nullable=True, index=True
+    )
+    # When this account is next due for a refresh. Written by the claim (a conservative default)
+    # and refined by the pipeline once it knows whether anything is happening at this account.
+    #
+    # This exists because "is it due?" was previously derived — `last_refreshed_at IS NULL OR
+    # last_refreshed_at <= cutoff`, ordered `ASC NULLS FIRST`. That predicate cannot use a btree:
+    # measured at 500k accounts it seq-scanned and sorted 261k rows through a 26 MB external merge
+    # on disk to return 100, every tick, growing with the estate. Storing the answer instead makes
+    # the claim `WHERE next_refresh_at <= now ORDER BY next_refresh_at LIMIT n` — an index scan
+    # that stops at the limit, 489 ms -> 44 ms measured on the same 500k rows.
+    #
+    # NOT NULL with a default of "now", deliberately: a nullable column would reintroduce the
+    # NULLS FIRST ordering that made the old index useless, and a new account being due
+    # immediately is the behaviour we already had.
+    next_refresh_at: Mapped[datetime] = mapped_column(
+        TZDateTime(), nullable=False, default=utcnow, index=True
     )
     # CRM Auto-Sync: when this account's state was last pushed to the CRM. NULL = never synced
     # (always due). Stamped on a successful push; the account is due again only when updated_at

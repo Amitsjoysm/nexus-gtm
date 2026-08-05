@@ -177,11 +177,23 @@ async def main() -> None:
     async with get_sessionmaker()() as session:
         total = await session.scalar(select(func.count()).select_from(Account))
     print(f"accounts      : {total:,}")
-    print(f"steady-state demand   : "
-          f"{total / settings.account_refresh_interval_s:.2f} accounts/sec")
+    print(f"cold interval : {settings.account_refresh_interval_cold_s}s")
     print(f"config enqueue ceiling: "
           f"{settings.account_refresh_batch_size / settings.automation_tick_interval_s:.2f} "
           f"accounts/sec")
+
+    # Demand is no longer one number: it depends on how much of the estate is HOT, which is a
+    # property of the customer's data rather than of the config. Printed as a curve so the target
+    # can be read against a real hot ratio instead of assuming the worst case, and so the untiered
+    # figure stays visible as the thing being improved on.
+    hot_s = settings.account_refresh_interval_s
+    cold_s = settings.account_refresh_interval_cold_s
+    print(f"\nsteady-state demand (accounts/sec), by share of the estate that is HOT:")
+    print(f"  {'hot %':>6}  {'demand':>8}")
+    for pct in (100, 50, 25, 15, 10, 5, 0):
+        hot = total * pct / 100
+        print(f"  {pct:>5}%  {hot / hot_s + (total - hot) / cold_s:>8.2f}"
+              f"{'   <- untiered' if pct == 100 else ''}")
 
     await bench_claim_driver(int(os.environ.get("BENCH_CLAIM_REPS", 5)))
     await bench_process_account(int(os.environ.get("BENCH_PROC_N", 30)))

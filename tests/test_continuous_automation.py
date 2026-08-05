@@ -72,16 +72,19 @@ async def test_refresh_selects_only_stale_in_opted_in_tenants(monkeypatch):
     q = InMemoryTaskQueue()
     set_task_queue(q)
     now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
-    stale = now - timedelta(hours=7)   # older than 6h interval → due
-    fresh = now - timedelta(hours=1)   # within interval → not due
+    overdue = now - timedelta(hours=1)      # due-time has passed
+    later = now + timedelta(hours=5)        # scheduled into the future
 
     async with get_sessionmaker()() as s:
         t = Tenant(name="Opted", slug="opted", automation_enabled=True)
         s.add(t)
         await s.flush()
-        never = Account(tenant_id=t.id, name="Never", domain="never.x", last_refreshed_at=None)
-        old = Account(tenant_id=t.id, name="Old", domain="old.x", last_refreshed_at=stale)
-        recent = Account(tenant_id=t.id, name="Recent", domain="recent.x", last_refreshed_at=fresh)
+        # Due-ness is read from `next_refresh_at` (migration 0042) rather than derived from
+        # `last_refreshed_at IS NULL OR <= cutoff` — a predicate no btree could serve. A brand-new
+        # account defaults to "due now", which is exactly what a NULL last_refreshed_at meant.
+        never = Account(tenant_id=t.id, name="Never", domain="never.x", next_refresh_at=now)
+        old = Account(tenant_id=t.id, name="Old", domain="old.x", next_refresh_at=overdue)
+        recent = Account(tenant_id=t.id, name="Recent", domain="recent.x", next_refresh_at=later)
         s.add_all([never, old, recent])
         await s.commit()
         never_id, old_id, recent_id = never.id, old.id, recent.id
@@ -92,13 +95,19 @@ async def test_refresh_selects_only_stale_in_opted_in_tenants(monkeypatch):
     jobs = await _drain(q)
     enqueued_ids = {j.payload["account_id"] for j in jobs}
     assert all(j.name == "process_account" for j in jobs)
-    assert enqueued_ids == {never_id, old_id}      # recent excluded
+    assert enqueued_ids == {never_id, old_id}      # the future-scheduled one is excluded
 
-    # claimed accounts were stamped to `now`
     async with get_sessionmaker()() as s:
+        # `last_refreshed_at` is still stamped — the pipeline reads it to decide whether to seed
+        # an account from the shared company crawl.
         assert (await s.get(Account, never_id)).last_refreshed_at == now
         assert (await s.get(Account, old_id)).last_refreshed_at == now
-        assert (await s.get(Account, recent_id)).last_refreshed_at == fresh
+        # And the claim pushed both out by the conservative hot interval, so a job that never
+        # completes cannot leave the account stalled.
+        assert (await s.get(Account, never_id)).next_refresh_at > now
+        # Untouched.
+        assert (await s.get(Account, recent_id)).last_refreshed_at is None
+        assert (await s.get(Account, recent_id)).next_refresh_at == later
     set_task_queue(None)
 
 
@@ -112,7 +121,7 @@ async def test_refresh_is_idempotent_within_interval(monkeypatch):
         t = Tenant(name="Idem", slug="idem", automation_enabled=True)
         s.add(t)
         await s.flush()
-        s.add(Account(tenant_id=t.id, name="A", domain="a.x", last_refreshed_at=None))
+        s.add(Account(tenant_id=t.id, name="A", domain="a.x", next_refresh_at=now))
         await s.commit()
 
     first = await handle_refresh_due_accounts({"now_iso": now.isoformat()})
@@ -153,8 +162,8 @@ async def test_refresh_is_tenant_isolated(monkeypatch):
         not_opted = Tenant(name="Out", slug="out-iso", automation_enabled=False)
         s.add_all([opted, not_opted])
         await s.flush()
-        a_in = Account(tenant_id=opted.id, name="In", domain="in.x", last_refreshed_at=None)
-        a_out = Account(tenant_id=not_opted.id, name="Out", domain="out.x", last_refreshed_at=None)
+        a_in = Account(tenant_id=opted.id, name="In", domain="in.x", next_refresh_at=now)
+        a_out = Account(tenant_id=not_opted.id, name="Out", domain="out.x", next_refresh_at=now)
         s.add_all([a_in, a_out])
         await s.commit()
         in_id, out_id = a_in.id, a_out.id

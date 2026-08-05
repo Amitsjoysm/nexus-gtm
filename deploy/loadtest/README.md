@@ -89,21 +89,46 @@ scoring agent's LLM rationale (3107 real `agent_runs`) — **~27.7 s per account
 That gives a hard ceiling of `21600 / 27.7` ≈ **780 accounts** for the whole platform on a 6h
 refresh cycle. The live stack has 142, which is why this has never been visible.
 
-Two measured levers before any architecture change:
+### What has been fixed since, and what it measured
 
-* **Sources run sequentially** (`for src in self.sources` in `ingestion/service.py`), so an account
-  costs the *sum* of its sources. Same 355 crawls, sum vs max: **26.98 s → 14.94 s, a 1.81×**
-  speedup from running them concurrently. `process_account` is ~99% await-on-network, so a bounded
-  in-flight limit in `run_worker` multiplies throughput almost linearly for near-zero CPU.
-* **The claim query does not use an index.** At 500k accounts it seq-scans `accounts` and sorts
-  261k rows through a **26 MB external merge on disk** to return 100 — 489 ms warm, 4.58 s cold,
-  every tick, growing with the estate. `ix_accounts_last_refreshed_at` cannot serve it because
-  `ORDER BY last_refreshed_at ASC NULLS FIRST` is the opposite of a default btree's null ordering.
-  Adding `(last_refreshed_at ASC NULLS FIRST)` changed the plan to an index scan that stops at 100:
-  **489 ms → 44 ms (11×)**, and makes the cost O(batch) instead of O(estate).
+Three changes landed (2026-08-05), each re-measured against the same 500k-account database:
 
-Neither of those closes a 640× gap on its own. Read them as: the pipeline is not tuned, and the
-tuning is worth doing before concluding what the architecture must become.
+* **Tiered refresh** (`nexus/ingestion/tiering.py`). Demand was the assumption nobody had
+  questioned: every account on the same 6 h cycle. An account is now HOT (6 h) if the crawl just
+  found something, or it has a signal in the last 30 days, or it is in an active cadence, or it is
+  on a list — and COLD (72 h) otherwise. Every rule is a reason to stay hot, because wrongly hot
+  costs one crawl and wrongly cold means a rep learns about a funding round three days late.
+
+  | share of estate HOT | demand |
+  |---|---|
+  | 100% (untiered) | 23.15/s |
+  | 25% | 7.23/s |
+  | 15% | 5.11/s |
+  | 10% | 4.05/s |
+
+* **The claim query is now an index scan.** Rather than adding an index to fit the old predicate,
+  the due-time is stored (`accounts.next_refresh_at`, migration `0042`) instead of derived from
+  `last_refreshed_at IS NULL OR <= cutoff ORDER BY ... ASC NULLS FIRST` — which no btree can serve.
+  Measured on the same 500k rows: **489 ms → 5-8 ms warm** (4.58 s → 95 ms cold), and the plan is
+  an index scan that stops at the limit instead of a seq scan plus a 26 MB external merge on disk.
+  The cost is now O(batch), not O(estate). The driver's remaining ~1.3 s is its 100 sequential
+  stamp round-trips, not the query.
+
+* **Sources run concurrently** (`signal_sources_concurrent`, default on, kill switch). Per-account
+  crawl **26.98 s → 14.94 s (1.81×)**, from the same 355 crawls' sum-vs-max. Session-bound sources
+  are deliberately excluded from the gather: a change detector borrows the caller's TenantSession,
+  and SQLAlchemy's AsyncSession is not safe for concurrent use.
+
+**This does not close the gap, and it was wrong to suggest it would.** Supply is still one serial
+worker: ~15.65 s per account (14.94 crawl + 0.53 scoring + DB) = **0.064 accounts/sec**, against
+5.11/s demand at a 15% hot ratio. That is **80×**, down from 640×.
+
+The remaining lever is the one the numbers have pointed at throughout: **bounded in-flight
+concurrency in `run_worker`**, which is still strictly serial (measured effective concurrency
+0.99). `process_account` is ~99% await-on-network, so N in-flight jobs is ~N× throughput for
+almost no CPU — bounded by the DB pool, since each in-flight job holds a session
+(`pool_size=10 + max_overflow=20` = 25-ish usable). At ~25 in flight that is ~1.6/s per worker,
+so **3-4 worker replicas** reach 5.11/s. Three or four containers is a normal answer; 623 was not.
 
 ### Reproducing the heartbeat measurement
 
