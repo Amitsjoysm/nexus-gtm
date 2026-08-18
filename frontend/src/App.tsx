@@ -60,6 +60,10 @@ const CampaignsPage = lazyPage(() => import("@/pages/CampaignsPage"), "Campaigns
 const CadencesPage = lazyPage(() => import("@/pages/CadencesPage"), "CadencesPage");
 const SettingsPage = lazyPage(() => import("@/pages/SettingsPage"), "SettingsPage");
 const BillingPage = lazyPage(() => import("@/pages/BillingPage"), "BillingPage");
+const AdminHealthPage = lazyPage(
+  () => import("@/pages/AdminHealthPage"),
+  "AdminHealthPage",
+);
 const AdminBillingPage = lazyPage(
   () => import("@/pages/AdminBillingPage"),
   "AdminBillingPage",
@@ -227,6 +231,14 @@ export function App() {
                   element={
                     <RequirePlatformAdmin>
                       <AdminBillingPage />
+                    </RequirePlatformAdmin>
+                  }
+                />
+                <Route
+                  path="/admin/health"
+                  element={
+                    <RequirePlatformAdmin>
+                      <AdminHealthPage />
                     </RequirePlatformAdmin>
                   }
                 />

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  ActivityIcon,
   AlertTriangleIcon,
   BellIcon,
   BoltIcon,
@@ -88,6 +89,12 @@ export const NAV_ITEMS: NavItem[] = [
     to: "/admin/billing",
     label: "Control plane",
     icon: <ShieldCheckIcon />,
+    platformOnly: true,
+  },
+  {
+    to: "/admin/health",
+    label: "Platform health",
+    icon: <ActivityIcon />,
     platformOnly: true,
   },
 ];

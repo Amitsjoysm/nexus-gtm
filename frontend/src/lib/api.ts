@@ -27,6 +27,11 @@ import type {
   Entitlements,
   ProrationPreview,
   PlanEntitlement,
+  PlatformHealth,
+  ImpersonationSession,
+  MfaResetResult,
+  UserReactivateResult,
+  UserSuspendResult,
   FeatureFlag,
   RevenueReport,
   Invoice,
@@ -212,8 +217,7 @@ export class ApiClient {
    *
    * Goes through `fetch` rather than pointing the browser at the URL: the export endpoints are
    * bearer-authenticated, and a plain link or `window.open` sends no Authorization header, so it
-   * would 401. The object URL is revoked immediately after the click — a leaked one pins the whole
-   * file in memory for the life of the tab.
+   * would 401. The object URL is revoked on a later task, not immediately — see below.
    */
   private async download(
     path: string,
@@ -246,7 +250,19 @@ export class ApiClient {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // Revoke on a LATER task, never on this one.
+    //
+    // `a.click()` only *schedules* the download; the browser reads the object URL afterwards, on
+    // its own turn of the event loop. Revoking synchronously on the next line destroys the blob
+    // before it has been read, and the file lands empty — which is exactly what "exports are
+    // always blank" was. Measured in the browser: with the blob verified at 1179 bytes and 11 data
+    // rows, `fetch(url)` on the line after the revoke already threw TypeError, i.e. the URL was
+    // dead while the download still needed it.
+    //
+    // The delay is generous on purpose. The cost of holding a few KB for a minute is nothing; the
+    // cost of being marginally too quick is a silently empty export, and the failure gives the
+    // user no clue that anything went wrong.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   // ---- auth ----
@@ -787,6 +803,40 @@ export class ApiClient {
     return this.request<AdminSubscription[]>("/admin/billing/subscriptions", { signal });
   }
   /** Answers "am I a platform admin?" — returns false rather than 403. */
+  /** Live dependency probes + route inventory. Slow by nature: it calls Stripe and Apify. */
+  platformHealth(signal?: AbortSignal) {
+    return this.request<PlatformHealth>("/admin/health/endpoints", { signal });
+  }
+  // ---- platform-admin user administration ----
+  //
+  // The endpoints existed and had NO caller: the whole admin_users router was reachable only by
+  // someone who knew the URL. Every one of these is audited server-side with the reason supplied.
+  suspendUser(email: string, reason: string) {
+    return this.request<UserSuspendResult>(
+      `/admin/users/${encodeURIComponent(email)}/suspend`,
+      { method: "POST", body: { reason } },
+    );
+  }
+  reactivateUser(email: string) {
+    return this.request<UserReactivateResult>(
+      `/admin/users/${encodeURIComponent(email)}/reactivate`,
+      { method: "POST", body: {} },
+    );
+  }
+  /** Account recovery: clears every factor and recovery code. Deletes rather than deactivates. */
+  resetUserMfa(email: string) {
+    return this.request<MfaResetResult>(
+      `/admin/users/${encodeURIComponent(email)}/mfa`,
+      { method: "DELETE" },
+    );
+  }
+  /** Mint a time-boxed READ-ONLY session as this user. The reason is mandatory server-side. */
+  impersonateUser(email: string, reason: string, ttlMin = 30) {
+    return this.request<ImpersonationSession>(
+      `/admin/users/${encodeURIComponent(email)}/impersonate`,
+      { method: "POST", body: { reason, ttl_min: ttlMin } },
+    );
+  }
   platformWhoAmI(signal?: AbortSignal) {
     return this.request<PlatformIdentity>("/admin/billing/whoami", { signal });
   }

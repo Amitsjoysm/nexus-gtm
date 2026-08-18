@@ -1254,6 +1254,71 @@ export interface Entitlements {
   modules: ModuleEntitlement[];
 }
 
+/** Platform health console (`GET /admin/health/endpoints`). */
+export type HealthStatus = "ok" | "degraded" | "unconfigured" | "error";
+export type RouteProbeStatus = "ok" | "error" | "not_probed";
+
+export interface HealthDependency {
+  name: string;
+  status: HealthStatus;
+  detail: string;
+  latency_ms: number | null;
+}
+
+export interface HealthRoute {
+  method: string;
+  path: string;
+  auth: "public" | "authenticated" | "platform-admin";
+  status: RouteProbeStatus;
+  http_status: number | null;
+  /** Why it was not probed. Present exactly when `status === "not_probed"`. */
+  reason: string;
+  latency_ms: number | null;
+}
+
+export interface PlatformHealth {
+  generated_at: string;
+  overall: HealthStatus;
+  dependencies: HealthDependency[];
+  routes: HealthRoute[];
+  summary: {
+    routes_total: number;
+    routes_probed: number;
+    routes_failing: number;
+    routes_not_probed: number;
+    dependencies_total: number;
+    dependencies_ok: number;
+    dependencies_degraded: number;
+    dependencies_failing: number;
+  };
+}
+
+/** Platform-admin user administration (`/admin/users/...`). */
+export interface UserSuspendResult {
+  email: string;
+  suspended: boolean;
+  suspended_at?: string | null;
+}
+
+export interface UserReactivateResult {
+  email: string;
+  suspended: boolean;
+}
+
+export interface MfaResetResult {
+  email: string;
+  cleared: boolean;
+}
+
+export interface ImpersonationSession {
+  access_token: string;
+  token_type: string;
+  expires_in_min: number;
+  read_only: boolean;
+  impersonating: string;
+  tenant_id: string;
+}
+
 export interface PlatformIdentity {
   email: string;
   is_platform_admin: boolean;
