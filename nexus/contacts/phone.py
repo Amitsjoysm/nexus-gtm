@@ -109,8 +109,35 @@ def looks_like_phone(value: str | None) -> bool:
     digits = re.sub(r"\D", "", body)
     if not (_MIN_DIGITS <= len(digits) <= _MAX_DIGITS):
         return False
+    if _is_year_range(digits):
+        return False
     # "0000000000", "1111111111" — placeholder rows that satisfy every check above.
     return len(set(digits)) > 1
+
+
+def _is_year_range(digits: str) -> bool:
+    """Two concatenated years — a date range that a loose phone regex swallowed.
+
+    Measured on live contacts: `20092013`, `19992003`, `19821984`, `20132014` were all stored as
+    phone numbers. They came from LinkedIn snippets like "Education 2009 - 2013", matched by a
+    regex looking for digits-and-separators and then stripped of its separators. Every one of them
+    passes the digit-count, letter and repeated-digit checks above, so nothing else here catches
+    it — and a rep dialling `20092013` gets a wrong number or a dead line.
+
+    Deliberately narrow: exactly 8 digits forming two plausible years. That is the shape this
+    actually produces, and widening it would start rejecting real numbers.
+
+    The trade-off is real but one-sided. Some countries do issue 8-digit local numbers, so this
+    can reject a genuine one whose two halves both look like years — but those plans (Singapore,
+    Hong Kong, Denmark, Norway) start their subscriber numbers at 2-9, not at `19` or `20`, so the
+    overlap is tiny. Losing one improbable number costs a re-lookup; keeping a date range costs a
+    rep phoning a stranger with someone else's context, which is the failure this codebase keeps
+    paying for.
+    """
+    if len(digits) != 8:
+        return False
+    first, second = int(digits[:4]), int(digits[4:])
+    return 1900 <= first <= 2099 and 1900 <= second <= 2099
 
 
 @dataclass(slots=True)

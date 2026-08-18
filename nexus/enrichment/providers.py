@@ -12,7 +12,33 @@ from nexus.models.account import Account, Contact
 from nexus.verification import STATUS_INVALID, STATUS_VALID, EmailVerification
 
 _EMAIL = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+# Deliberately loose: it runs over search-result prose, so it must catch a number in any
+# formatting. Loose means it also matches things that are NOT numbers — measured on live contacts,
+# it swallowed "Education 2009 - 2013" and stored `20092013`. The regex is the CANDIDATE finder;
+# `looks_like_phone` is what decides, and every hit must pass it (see `_first_usable_phone`).
 _PHONE = re.compile(r"(?:\+?\d[\d\-\s().]{7,}\d)")
+
+
+def _first_usable_phone(blob: str) -> str:
+    """The first regex hit in ``blob`` that is actually a phone number, canonicalised.
+
+    Two things this path was missing entirely. It took `phones[0]` — the FIRST match, whether or
+    not it was a number — and it validated nothing, so a year range scraped from an education
+    snippet became a contact's phone. Scanning past the junk matters as much as rejecting it: a
+    profile that mentions "2009 - 2013" before the real number would otherwise yield the date.
+
+    Canonicalises through the same `normalise_phone` the rest of the product uses, so this path
+    stops being the one that writes bare digit soup into the column.
+    """
+    from nexus.contacts.phone import looks_like_phone, normalise_phone
+
+    for hit in _PHONE.findall(blob):
+        candidate = re.sub(r"[\s().\-]", "", hit)
+        if not looks_like_phone(candidate):
+            continue
+        normalised = normalise_phone(candidate)
+        return normalised.e164 or candidate
+    return ""
 
 
 def _local_part(name: str) -> str:
@@ -90,9 +116,9 @@ class SearchEnrichmentProvider(EnrichmentProvider):
                 break
             if not result.email:
                 result.email, result.email_confidence, result.found = em, 0.55, True
-        phones = _PHONE.findall(blob)
-        if phones:
-            result.phone = re.sub(r"[\s().\-]", "", phones[0])
+        phone = _first_usable_phone(blob)
+        if phone:
+            result.phone = phone
             result.phone_confidence = 0.5
             result.found = True
         return result

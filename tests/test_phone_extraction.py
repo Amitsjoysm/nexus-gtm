@@ -219,3 +219,60 @@ def test_deeply_recursive_output_terminates():
         node = node["person"]
     node["phone"] = "+14155552671"
     assert extract_phone([blob]) == ""      # beyond the depth guard, and it returns rather than hangs
+
+
+# ---- date ranges masquerading as phone numbers ------------------------------------------------
+#
+# Found in LIVE contact data, not by reasoning: roop@marketjoy.com had the phone `20092013`, and
+# four other contacts had `19992003`, `19821984`, `20132014`, `19982001`. Every one is a LinkedIn
+# education/employment year range — "Education 2009 - 2013" — matched by the loose candidate regex
+# in `nexus/enrichment/providers.py` and then stripped of its separators.
+#
+# They pass every other check here: 8 digits is inside the E.164 bounds, there are no letters, and
+# the digits are not all the same. So without this rule a rep dials a dead number.
+
+@pytest.mark.parametrize("value", [
+    "20092013",   # the reported one
+    "19992003", "19821984", "20132014", "19982001",
+    "2009 - 2013", "1999-2003", "2013 – 2014",
+])
+def test_a_year_range_is_not_a_phone_number(value):
+    assert not looks_like_phone(value), value
+
+
+@pytest.mark.parametrize("value", [
+    "+14155552671",     # E.164
+    "4155552671",       # 10-digit US
+    "20135551234",      # 11 digits and STARTS like a year — length is what saves it
+    "+442079460958",
+    "+6598765432",      # 8-digit Singapore mobile, with country code
+])
+def test_real_numbers_are_not_caught_by_the_year_rule(value):
+    """The rule is exactly-8-digits-that-are-two-years. Anything longer, or an 8-digit number
+    that does not decompose into two plausible years, is untouched."""
+    assert looks_like_phone(value), value
+
+
+def test_an_eight_digit_number_that_is_not_two_years_still_passes():
+    """Singapore/Hong Kong style local numbers start at 2-9, so they do not collide."""
+    assert looks_like_phone("87654321")
+    assert looks_like_phone("61234567")
+
+
+def test_the_enrichment_provider_skips_a_date_and_finds_the_real_number():
+    """THE regression. The old code took the FIRST regex hit with no validation, so a profile
+    mentioning a date range before the number stored the date."""
+    from nexus.enrichment.providers import _first_usable_phone
+
+    assert _first_usable_phone("Education 2009 - 2013 at University") == ""
+    assert _first_usable_phone(
+        "Worked 2009 - 2013, reach me on +1 (415) 555-2671"
+    ) == "+14155552671"
+
+
+def test_the_enrichment_provider_canonicalises_what_it_finds():
+    """This path used to write bare digit soup; it now goes through normalise_phone like the
+    rest of the product."""
+    from nexus.enrichment.providers import _first_usable_phone
+
+    assert _first_usable_phone("ring (415) 555-2671 today") == "+14155552671"
