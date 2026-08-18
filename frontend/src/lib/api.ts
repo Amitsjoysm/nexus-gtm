@@ -32,6 +32,7 @@ import type {
   MfaResetResult,
   UserReactivateResult,
   UserSuspendResult,
+  UserActivity,
   FeatureFlag,
   RevenueReport,
   Invoice,
@@ -835,6 +836,13 @@ export class ApiClient {
     return this.request<ImpersonationSession>(
       `/admin/users/${encodeURIComponent(email)}/impersonate`,
       { method: "POST", body: { reason, ttl_min: ttlMin } },
+    );
+  }
+  /** One user's activity. Attribution is partial — see `attribution_note` in the payload. */
+  userActivity(email: string, limit = 50, signal?: AbortSignal) {
+    return this.request<UserActivity>(
+      `/admin/users/${encodeURIComponent(email)}/activity`,
+      { query: { limit }, signal },
     );
   }
   platformWhoAmI(signal?: AbortSignal) {

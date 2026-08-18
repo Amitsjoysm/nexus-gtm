@@ -1319,6 +1319,27 @@ export interface ImpersonationSession {
   tenant_id: string;
 }
 
+export interface UserActivity {
+  email: string;
+  suspended: boolean;
+  suspended_at: string | null;
+  suspended_reason: string;
+  memberships: { tenant_id: string; tenant_name: string; slug: string; role: string }[];
+  /** Actions attributed to THIS user. The only true user-level trail. */
+  metered_actions: {
+    capability_id: string; quantity: number; unit: string; source: string;
+    occurred_at: string | null; tenant_id: string; attrs: Record<string, unknown>;
+  }[];
+  /** What platform staff did TO this account. */
+  admin_actions: { action: string; actor: string; note: string; at: string | null }[];
+  /** Tenant-wide context. `attributed` says whether the row names a person at all. */
+  workspace_activity: {
+    capability_id: string; user_id: string; attributed: boolean; source: string;
+    occurred_at: string | null; tenant_id: string;
+  }[];
+  attribution_note: string;
+}
+
 export interface PlatformIdentity {
   email: string;
   is_platform_admin: boolean;

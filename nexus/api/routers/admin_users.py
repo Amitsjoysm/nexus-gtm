@@ -253,3 +253,134 @@ async def impersonate_user(
             "impersonating": target,
             "tenant_id": membership.tenant_id,
         }
+
+
+@router.get("/{email}/activity")
+async def user_activity(
+    email: str,
+    limit: int = 50,
+    principal: Principal = Depends(require_platform_permission(USERS_MANAGE)),
+) -> dict:
+    """What this person has been doing, for the support question "what did they actually do?"
+
+    **Attribution here is genuinely partial, and the response says so rather than implying
+    completeness.** Only `billing_usage_events` carries a `user_id`; signals, agent runs, inbox
+    tasks, calls and alerts are tenant-scoped with no actor column, and on the live data even the
+    usage events are only sometimes attributed (measured: 1 of 7 rows had a `user_id`). A console
+    that silently merged tenant-wide activity into "this user's activity" would let a support
+    agent tell a customer that a named person did something a colleague did, which is worse than
+    admitting the gap.
+
+    So the payload is three clearly separated lists:
+
+    * ``metered_actions`` — actions attributed to THIS user. The only true user-level trail.
+    * ``admin_actions`` — what platform staff did TO this account. Answers "why can't I log in?",
+      which is the other half of most tickets, and it is the trail that must never be missing.
+    * ``workspace_activity`` — recent tenant-wide events, labelled as such. Context, not attribution.
+
+    Read-only and `users.manage`-gated: it exposes one person's behaviour, so it sits behind the
+    same permission as suspending them rather than behind plain `billing.read`.
+    """
+    from sqlalchemy import desc, or_, select
+
+    from nexus.models.billing import BillingAuditLog, BillingUsageEvent
+    from nexus.models.identity import Membership, Tenant, User
+
+    target = (email or "").strip().lower()
+    limit = max(1, min(int(limit or 50), 200))
+
+    # Platform session throughout: this reads ACROSS tenants by design, and the app's RLS-bound
+    # role would silently return zero rows rather than an error.
+    from nexus.core.db import get_platform_sessionmaker
+
+    async with get_platform_sessionmaker()() as session:
+        user = (await session.scalars(select(User).where(User.email == target))).first()
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such user")
+
+        rows = (
+            await session.execute(
+                select(Membership.role, Tenant.id, Tenant.name, Tenant.slug)
+                .join(Tenant, Tenant.id == Membership.tenant_id)
+                .where(Membership.user_id == user.id)
+            )
+        ).all()
+        memberships = [
+            {"tenant_id": tid, "tenant_name": name, "slug": slug, "role": role}
+            for role, tid, name, slug in rows
+        ]
+        tenant_ids = [m["tenant_id"] for m in memberships]
+
+        metered = (
+            await session.scalars(
+                select(BillingUsageEvent)
+                .where(BillingUsageEvent.user_id == user.id)
+                .order_by(desc(BillingUsageEvent.occurred_at))
+                .limit(limit)
+            )
+        ).all()
+
+        # Actions taken against this account. `target` is the email for user-scoped actions.
+        admin_rows = (
+            await session.scalars(
+                select(BillingAuditLog)
+                .where(or_(BillingAuditLog.target == target,
+                           BillingAuditLog.target == f"user:{target}"))
+                .order_by(desc(BillingAuditLog.created_at))
+                .limit(limit)
+            )
+        ).all()
+
+        workspace = []
+        if tenant_ids:
+            workspace = list(
+                (
+                    await session.scalars(
+                        select(BillingUsageEvent)
+                        .where(BillingUsageEvent.tenant_id.in_(tenant_ids))
+                        .order_by(desc(BillingUsageEvent.occurred_at))
+                        .limit(limit)
+                    )
+                ).all()
+            )
+
+    def _iso(value) -> str | None:
+        return value.isoformat() if value else None
+
+    return {
+        "email": target,
+        "suspended": user.suspended_at is not None,
+        "suspended_at": _iso(user.suspended_at),
+        "suspended_reason": user.suspended_reason or "",
+        "memberships": memberships,
+        "metered_actions": [
+            {
+                "capability_id": e.capability_id, "quantity": float(e.quantity or 0),
+                "unit": e.unit, "source": e.source, "occurred_at": _iso(e.occurred_at),
+                "tenant_id": e.tenant_id, "attrs": e.attrs or {},
+            }
+            for e in metered
+        ],
+        "admin_actions": [
+            {
+                "action": a.action, "actor": a.actor, "note": a.note or "",
+                "at": _iso(a.created_at),
+            }
+            for a in admin_rows
+        ],
+        "workspace_activity": [
+            {
+                "capability_id": e.capability_id, "user_id": e.user_id or "",
+                "attributed": bool(e.user_id), "source": e.source,
+                "occurred_at": _iso(e.occurred_at), "tenant_id": e.tenant_id,
+            }
+            for e in workspace
+        ],
+        # Stated in the payload, not just the docstring: whoever renders this has to be able to
+        # tell the operator that "no activity" may mean "not recorded against a user".
+        "attribution_note": (
+            "Only metered actions carry a user id. Signals, agent runs, inbox tasks and calls are "
+            "recorded per workspace with no actor, so workspace_activity is context, not proof "
+            "that this person did it."
+        ),
+    }

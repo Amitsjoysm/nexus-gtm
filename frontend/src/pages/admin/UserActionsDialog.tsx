@@ -5,6 +5,7 @@ import { useApiClient, useAuth } from "@/app/AuthContext";
 import { usePlatformCan } from "@/app/RequirePlatformAdmin";
 import { useToast } from "@/components/ui/Toast";
 import { ApiError } from "@/lib/api";
+import type { UserActivity } from "@/lib/types";
 import { USERS_IMPERSONATE, USERS_MANAGE } from "@/lib/permissions";
 import styles from "./UserActionsDialog.module.css";
 
@@ -43,12 +44,27 @@ export function UserActionsDialog({ open, onClose, initialEmail = "" }: Props) {
   const [reason, setReason] = useState("");
   const [ttl, setTtl] = useState(30);
   const [busy, setBusy] = useState<string | null>(null);
+  const [activity, setActivity] = useState<UserActivity | null>(null);
+  const [loadingActivity, setLoadingActivity] = useState(false);
 
   const target = email.trim().toLowerCase();
   const canManage = can(USERS_MANAGE);
   const canImpersonate = can(USERS_IMPERSONATE);
   // The server enforces this; mirroring it here turns a 422 into a disabled button.
   const reasonTooShort = reason.trim().length < 8;
+
+  async function loadActivity() {
+    if (!target) return;
+    setLoadingActivity(true);
+    setActivity(null);
+    try {
+      setActivity(await api.userActivity(target));
+    } catch (err) {
+      fail(`Couldn't load activity for ${target}`, err);
+    } finally {
+      setLoadingActivity(false);
+    }
+  }
 
   function fail(what: string, err: unknown) {
     toast.error(what, err instanceof ApiError ? err.detail : "Please try again.");
@@ -202,6 +218,93 @@ export function UserActionsDialog({ open, onClose, initialEmail = "" }: Props) {
               <p className={styles.blocked}>
                 A reason of at least 8 characters is required before impersonating.
               </p>
+            )}
+          </section>
+        )}
+
+        {canManage && (
+          <section className={styles.group}>
+            <h3 className={styles.groupTitle}>Activity</h3>
+            <p className={styles.groupNote}>
+              What this person has done, plus anything staff have done to their account.
+            </p>
+            <div>
+              <Button
+                variant="secondary"
+                disabled={!target}
+                loading={loadingActivity}
+                onClick={loadActivity}
+              >
+                Load activity
+              </Button>
+            </div>
+
+            {activity && (
+              <div className={styles.activity}>
+                <p className={styles.meta}>
+                  {activity.suspended ? (
+                    <>
+                      <strong>Suspended</strong>
+                      {activity.suspended_reason ? ` — ${activity.suspended_reason}` : ""}
+                    </>
+                  ) : (
+                    "Active"
+                  )}
+                  {activity.memberships.length > 0 && (
+                    <>
+                      {" · "}
+                      {activity.memberships
+                        .map((m) => `${m.tenant_name} (${m.role})`)
+                        .join(", ")}
+                    </>
+                  )}
+                </p>
+
+                {/* The attribution caveat sits ABOVE the lists, not in a footnote: an operator who
+                    reads "no activity" and stops has been misled, because most product actions
+                    carry no user id at all. */}
+                <p className={styles.caveat}>{activity.attribution_note}</p>
+
+                <h4 className={styles.subTitle}>
+                  Their actions ({activity.metered_actions.length})
+                </h4>
+                {activity.metered_actions.length === 0 ? (
+                  <p className={styles.groupNote}>
+                    Nothing recorded against this user. That is not the same as having done
+                    nothing.
+                  </p>
+                ) : (
+                  <ul className={styles.list}>
+                    {activity.metered_actions.slice(0, 12).map((a, i) => (
+                      <li key={`${a.capability_id}-${i}`}>
+                        <code>{a.capability_id}</code>
+                        <span className={styles.when}>
+                          {a.occurred_at ? new Date(a.occurred_at).toLocaleString() : "—"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <h4 className={styles.subTitle}>
+                  Staff actions on this account ({activity.admin_actions.length})
+                </h4>
+                {activity.admin_actions.length === 0 ? (
+                  <p className={styles.groupNote}>None.</p>
+                ) : (
+                  <ul className={styles.list}>
+                    {activity.admin_actions.slice(0, 12).map((a, i) => (
+                      <li key={`${a.action}-${i}`}>
+                        <code>{a.action}</code>
+                        {a.note && <span className={styles.note}>{a.note}</span>}
+                        <span className={styles.when}>
+                          {a.at ? new Date(a.at).toLocaleString() : "—"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </section>
         )}
