@@ -232,6 +232,13 @@ async def find_phone(
     from nexus.core.db import get_platform_sessionmaker
     from nexus.people.store import read_person, record_phone_lookup, resolve_person_record
 
+    # What the failure log names. It has to be the identity we ACTUALLY looked up, which is not
+    # always the one passed in: a contact carrying only an email resolves through the shared person
+    # to a LinkedIn URL some other tenant supplied, and that is the URL the actor is called with.
+    # Logging the parameter instead printed "phone enrichment failed for " with nothing after it —
+    # measured on three contacts sharing one shared person, where it was the only clue available.
+    probed = linkedin_url or email or "(no identity)"
+
     try:
         # 1. Resolve and read the shared record. Platform connection only.
         async with get_platform_sessionmaker()() as session:
@@ -245,6 +252,7 @@ async def find_phone(
                 return PhoneResult(status="no_identity")
             person_id = person.id
             stored_linkedin = person.linkedin_url or linkedin_url
+            probed = stored_linkedin or probed
             await session.commit()
             view = await read_person(session, person_id)
 
@@ -280,7 +288,7 @@ async def find_phone(
             await _meter_lookup(ts, user_id=user_id, cached=False)
         return result
     except Exception:
-        logger.warning("phone enrichment failed for %s", linkedin_url, exc_info=True)
+        logger.warning("phone enrichment failed for %s", probed, exc_info=True)
         return PhoneResult(status="failed")
 
 

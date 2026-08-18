@@ -190,6 +190,45 @@ async def test_a_failing_actor_never_breaks_the_caller():
         set_apify_client(None)
 
 
+async def test_the_failure_log_names_the_identity_actually_probed(caplog):
+    """When the actor is down, this log line is the ONLY evidence of which person failed.
+
+    A contact carrying just an email resolves through the shared person to a LinkedIn URL some
+    other tenant supplied, and THAT is the URL the actor is called with. Logging the parameter
+    instead printed `phone enrichment failed for ` with nothing after it — measured against a live
+    403 across three contacts sharing one shared person, where it was all we had to go on.
+    """
+    import logging
+
+    await _seed_billing()
+
+    class _Boom(_StubApify):
+        async def run_actor(self, actor, run_input, *, timeout=None):
+            raise RuntimeError("actor exploded")
+
+    set_apify_client(_Boom())
+    try:
+        tid = await make_tenant(slug="pe14", name="PE Fourteen")
+        # Seed the shared person by LinkedIn URL, the way the tenant that HAS the URL would.
+        async with get_platform_sessionmaker()() as session:
+            await resolve_person_record(
+                session, linkedin_url=LINKEDIN, email="derek@lemoine.example",
+                full_name="Derek Lemoine",
+            )
+            await session.commit()
+
+        # Now ask as a tenant that only knows the email.
+        with caplog.at_level(logging.WARNING, logger="nexus.people.enrich"):
+            async with tenant_session(tid) as ts:
+                await find_phone(ts, linkedin_url="", email="derek@lemoine.example")
+
+        logged = [r.getMessage() for r in caplog.records if "phone enrichment failed" in r.getMessage()]
+        assert logged, "the failure must be logged at all"
+        assert "derek-lemoine" in logged[0], f"log names nothing useful: {logged[0]!r}"
+    finally:
+        set_apify_client(None)
+
+
 # ---- reading third-party output ------------------------------------------------------------------------
 
 def test_the_extractor_survives_the_shapes_actors_actually_return():
