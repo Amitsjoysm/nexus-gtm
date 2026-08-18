@@ -109,6 +109,21 @@ async def _active(
     return subs.first()
 
 
+async def _any_subscription(ts: TenantSession) -> BillingSubscription | None:
+    """This tenant's subscription whatever its status, newest first.
+
+    Distinct from `_active` on purpose: `_active` answers "what is billing this tenant right now",
+    which correctly excludes suspended and canceled rows. This answers "does a row exist at all",
+    which is what an admin moving a dormant tenant onto a new plan needs to know.
+    """
+    subs = await ts.session.scalars(
+        ts.select(BillingSubscription).order_by(
+            BillingSubscription.created_at.desc(), BillingSubscription.id.desc()
+        )
+    )
+    return subs.first()
+
+
 async def change_plan(ts: TenantSession, plan_id: str, *, actor: str = "system"):
     """Move a tenant to another plan, in place.
 
@@ -120,7 +135,17 @@ async def change_plan(ts: TenantSession, plan_id: str, *, actor: str = "system")
         raise ValueError(f"unknown plan: {plan_id}")
     sub = await _active(ts)
     if sub is None:
-        return await ensure_subscription(ts, plan_id=plan_id)
+        # No LIVE subscription — but that does not mean no subscription. `_active` matches only
+        # ACTIVE_STATUSES, so a `suspended`, `canceled` or `incomplete` tenant lands here while a
+        # row plainly exists, and `ensure_subscription` then returns None because it refuses to
+        # touch an existing one. The caller was left holding None and read `.plan_id` off it: a
+        # 500 on exactly the tenants an admin most needs to move — somebody suspended for
+        # non-payment who has just paid, or a win-back off `canceled`.
+        sub = await _any_subscription(ts)
+        if sub is None:
+            return await ensure_subscription(ts, plan_id=plan_id)
+        # Fall through and switch the dormant row in place. Opening a second row instead would
+        # break "one subscription per tenant", which is what makes rating unambiguous.
 
     previous = sub.plan_id
     adjustments = await _record_proration(ts, sub, old_plan_id=previous, new_plan=plan, actor=actor)
