@@ -37,11 +37,15 @@ USERS_IMPERSONATE = "users.impersonate"  # time-boxed, read-only, audited sessio
 # SHARED company/person stores — wrong for every tenant at once, and indistinguishable from real
 # data afterwards. It is also the one permission that carries a live third-party credential.
 SOURCES_MANAGE = "sources.manage"        # register/introspect/map/dry-run external source DBs
+# Operational visibility: the endpoint/dependency health console. Read-only by construction — it
+# probes, it never mutates — so it is the one platform permission `support` can hold safely, and
+# the people who most need it during an incident are exactly the ones without billing power.
+SYSTEM_READ = "system.read"              # live endpoint + dependency health
 
 ALL_PERMISSIONS = (
     BILLING_READ, PRICING_WRITE, SUBSCRIPTIONS_WRITE, CREDITS_GRANT,
     CREDITS_GRANT_CAPPED, INVOICES_COLLECT, JOBS_MANAGE, ADMINS_MANAGE, USERS_MANAGE,
-    USERS_IMPERSONATE, SOURCES_MANAGE,
+    USERS_IMPERSONATE, SOURCES_MANAGE, SYSTEM_READ,
 )
 
 # Role presets. `superadmin` is everything; the other two are deliberately narrower.
@@ -54,8 +58,11 @@ ROLE_PRESETS: dict[str, tuple[str, ...]] = {
     "superadmin": ALL_PERMISSIONS,
     "finance": (
         BILLING_READ, PRICING_WRITE, SUBSCRIPTIONS_WRITE, CREDITS_GRANT, INVOICES_COLLECT,
+        SYSTEM_READ,
     ),
-    "support": (BILLING_READ, CREDITS_GRANT_CAPPED, USERS_MANAGE),
+    # Support gets SYSTEM_READ: "is the platform up?" is the first question on every ticket, and
+    # making them escalate to find out turns a 10-second answer into a queue.
+    "support": (BILLING_READ, CREDITS_GRANT_CAPPED, USERS_MANAGE, SYSTEM_READ),
 }
 
 

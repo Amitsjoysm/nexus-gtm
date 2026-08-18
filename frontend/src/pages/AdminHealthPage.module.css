@@ -1,0 +1,270 @@
+/* Muted text throughout this page is `color-mix(--text-muted 72%, --text)`, not --text-muted or
+   --text-subtle. Measured in the browser: --text-subtle is 2.92:1 and plain --text-muted 4.49:1 on
+   the tinted table surface, both under the 4.5:1 floor. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+}
+
+/* ---- overall verdict -------------------------------------------------------------------------
+   One line of plain language, not a metric tile. The number of failing dependencies is already in
+   the section below; repeating it as a big figure would be the hero-metric template. */
+.verdictBar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.bar_ok {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  background: color-mix(in srgb, var(--success-quiet) 60%, var(--surface));
+}
+.bar_degraded,
+.bar_unconfigured {
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+  background: color-mix(in srgb, var(--warning-quiet) 55%, var(--surface));
+}
+.bar_error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger-quiet) 60%, var(--surface));
+}
+.verdictLabel {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+.verdictCopy {
+  margin: 2px 0 0;
+  color: color-mix(in srgb, var(--text-muted) 72%, var(--text));
+  font-size: var(--text-sm);
+}
+.stamp {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- sections --------------------------------------------------------------------------------- */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.sectionHead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.sectionTitle {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+.sectionNote {
+  margin: 0;
+  max-width: 72ch;
+  color: color-mix(in srgb, var(--text-muted) 72%, var(--text));
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+/* ---- dependencies ----------------------------------------------------------------------------
+   A list, not a card grid: these rows carry variable-length findings ("NO WEBHOOK ENDPOINT
+   REGISTERED — checkout will complete at Stripe and…") and equal-sized cards would truncate the
+   one sentence an operator needs. */
+.depList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface);
+}
+.dep {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+}
+.dep + .dep {
+  border-top: 1px solid var(--border);
+}
+
+/* A small round marker, not a left border-stripe. */
+.depMarker {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--text-subtle);
+}
+.dep_ok .depMarker {
+  background: var(--success);
+}
+.dep_degraded .depMarker {
+  background: var(--warning);
+}
+.dep_error .depMarker {
+  background: var(--danger);
+}
+/* Unconfigured is an absence, not a fault: hollow, so it reads as "nothing here" at a glance. */
+.dep_unconfigured .depMarker {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-subtle);
+}
+
+.depBody {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.depTop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.depName {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+.depDetail {
+  margin: 0;
+  max-width: 78ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+.depLatency {
+  color: color-mix(in srgb, var(--text-muted) 72%, var(--text));
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- route table ------------------------------------------------------------------------------ */
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.filters {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.filter {
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.filter:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.filterOn {
+  border-color: var(--accent);
+  background: var(--accent-quiet);
+  color: var(--accent);
+}
+.search input {
+  min-height: 34px;
+  min-width: 220px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.search input::placeholder {
+  color: var(--text-muted);
+}
+
+.method,
+.path {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.method {
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+/* GET is the only method that gets probed, so it is the only one that reads as active. */
+.m_GET {
+  color: var(--accent);
+}
+.path {
+  color: var(--text);
+  word-break: break-all;
+}
+.auth {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.reason {
+  color: color-mix(in srgb, var(--text-muted) 72%, var(--text));
+  font-size: var(--text-sm);
+}
+.verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* THE honesty affordance. An unprobed route has no verdict, so it gets no badge, no dot and no
+   colour — an em-rule and muted text, which cannot be misread as a pass at a glance. */
+.unprobed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* The honesty affordance has to be READ, so it gets full muted-body contrast. Rendering the
+     most load-bearing label on the page as the faintest text was exactly backwards. */
+  color: color-mix(in srgb, var(--text-muted) 72%, var(--text));
+  font-size: var(--text-sm);
+}
+.rule {
+  color: var(--text-muted);
+  font-weight: var(--weight-semibold);
+}
+.unprobedText {
+  font-style: italic;
+}
+
+@media (max-width: 720px) {
+  .controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .search input {
+    width: 100%;
+  }
+}
