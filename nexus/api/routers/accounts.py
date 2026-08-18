@@ -523,31 +523,26 @@ async def export_accounts(
     `/{account_id}` route, and a bare `/export` would be ambiguous with an account whose id happens
     to be "export".
     """
-    import csv
-    import io as _io
-
     from sqlalchemy import select
+
+    from nexus.api.csv_export import csv_response, csv_timestamp
 
     stmt = select(Account).where(Account.tenant_id == ts.tenant_id)
     if not include_archived:
         stmt = stmt.where(Account.archived_at.is_(None))
     rows = (await ts.session.scalars(stmt.order_by(Account.created_at.desc()))).all()
 
-    buf = _io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([
-        "name", "domain", "industry", "employee_count", "country", "tech_stack",
-        "archived", "created_at",
-    ])
-    for a in rows:
-        writer.writerow([
-            a.name, a.domain or "", a.industry or "", a.employee_count or "",
-            a.country or "", ";".join(a.tech_stack or []),
-            "yes" if a.is_archived else "no",
-            a.created_at.isoformat() if a.created_at else "",
-        ])
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="accounts.csv"'},
+    return csv_response(
+        "accounts.csv",
+        ["name", "domain", "industry", "employee_count", "country", "tech_stack",
+         "archived", "created_at"],
+        (
+            [
+                a.name, a.domain or "", a.industry or "", a.employee_count or "",
+                a.country or "", "; ".join(a.tech_stack or []),
+                "yes" if a.is_archived else "no",
+                csv_timestamp(a.created_at),
+            ]
+            for a in rows
+        ),
     )

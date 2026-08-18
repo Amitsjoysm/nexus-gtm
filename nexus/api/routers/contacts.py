@@ -253,26 +253,21 @@ async def export_contacts(
     Streamed through the same query rather than a second code path, so what you export is exactly
     what you were looking at — an export that disagrees with the screen is worse than none.
     """
-    import csv
-    import io as _io
+    from nexus.api.csv_export import csv_response
 
     rows = await _query_contacts(
         ts, q=q, account_id=account_id, include_deleted=include_deleted, limit=0, offset=0
     )
-    buf = _io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([
-        "full_name", "title", "seniority", "email", "email_status", "phone",
-        "linkedin_url", "account", "domain",
-    ])
-    for r in rows:
-        writer.writerow([
-            r.full_name, r.title or "", r.seniority or "", r.email or "",
-            r.email_status or "", r.phone or "", r.linkedin_url or "",
-            r.account_name or "", r.account_domain or "",
-        ])
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="contacts.csv"'},
+    return csv_response(
+        "contacts.csv",
+        ["full_name", "title", "seniority", "email", "email_status", "phone",
+         "linkedin_url", "account", "domain"],
+        (
+            [
+                r.full_name, r.title or "", r.seniority or "", r.email or "",
+                r.email_status or "", r.phone or "", r.linkedin_url or "",
+                r.account_name or "", r.account_domain or "",
+            ]
+            for r in rows
+        ),
     )
