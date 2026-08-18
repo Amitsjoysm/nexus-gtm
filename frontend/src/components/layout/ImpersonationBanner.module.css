@@ -1,0 +1,47 @@
+/* Warning-toned, full width, above everything in the shell. Not an alert (nothing is wrong) and
+   not neutral (something unusual is true) — the warning ramp is the honest middle. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--warning-quiet);
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  /* Above the sticky sidebar/topbar: a disclosure that can be covered is not a disclosure. */
+  position: relative;
+  z-index: var(--z-sticky, 30);
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.text {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  /* Pushed toward ink: --text-muted on the warning tint measures under 4.5:1. */
+  color: color-mix(in srgb, var(--text-muted) 60%, var(--text));
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.text strong {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+@media (max-width: 640px) {
+  .banner {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .text {
+    flex-basis: 100%;
+    order: 2;
+  }
+}

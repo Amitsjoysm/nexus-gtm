@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/app/AuthContext";
 import { EntitlementsProvider } from "@/app/EntitlementsContext";
+import { ImpersonationBanner } from "./ImpersonationBanner";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import styles from "./AppShell.module.css";
@@ -54,6 +55,7 @@ export function AppShell() {
     // Wraps the whole shell, not just the sidebar: page-level empty states and headers ask the
     // same "is this in our plan?" question, and one fetch answers all of them.
     <EntitlementsProvider>
+      <ImpersonationBanner />
       <div className={styles.shell}>
         <a className="skip-link" href="#main">
           Skip to content

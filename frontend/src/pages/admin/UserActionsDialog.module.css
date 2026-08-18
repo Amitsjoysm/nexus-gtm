@@ -1,0 +1,56 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Grouped by consequence, not by endpoint. Clearing MFA is routine support work; suspending
+   changes what someone can do; impersonating reads their data. Equal-weight buttons in one flat
+   list would make all three look equally casual. */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.groupTitle {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.groupNote {
+  margin: 0;
+  max-width: 62ch;
+  color: color-mix(in srgb, var(--text-muted) 72%, var(--text));
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.groupNote strong {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+
+.ttl {
+  max-width: 110px;
+}
+
+/* Says why the button is disabled. A disabled control with no explanation reads as a bug. */
+.blocked {
+  margin: 0;
+  color: var(--warning);
+  font-size: var(--text-sm);
+}

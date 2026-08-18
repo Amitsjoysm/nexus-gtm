@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui";
 import { CustomPlanDialog } from "./admin/CustomPlanDialog";
 import { TenantActionsDialog } from "./admin/TenantActionsDialog";
+import { UserActionsDialog } from "./admin/UserActionsDialog";
 import { RateCardDialog } from "./admin/RateCardDialog";
 import { PlanEntitlementsDialog } from "./admin/PlanEntitlementsDialog";
 import { PlatformAdmins } from "./admin/PlatformAdmins";
@@ -12,7 +13,13 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { usePlatformCan } from "@/app/RequirePlatformAdmin";
-import { ADMINS_MANAGE, PRICING_WRITE, SUBSCRIPTIONS_WRITE } from "@/lib/permissions";
+import {
+  ADMINS_MANAGE,
+  PRICING_WRITE,
+  SUBSCRIPTIONS_WRITE,
+  USERS_IMPERSONATE,
+  USERS_MANAGE,
+} from "@/lib/permissions";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
 import type {
@@ -667,6 +674,31 @@ function FeatureFlags() {
   );
 }
 
+/**
+ * Entry point for the `admin_users` API, which shipped with no caller at all.
+ *
+ * Deliberately not a user *list*: there is no cross-tenant user-search endpoint, and inventing a
+ * client-side one would mean pulling every user in the platform to the browser to filter. Support
+ * arrives from a ticket already knowing the address, so an email field is the honest surface until
+ * a real search exists server-side.
+ */
+function UserAdmin() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+      <p style={{ margin: 0, maxWidth: "68ch", color: "var(--text-muted)", lineHeight: 1.55 }}>
+        Suspend or reactivate an account, clear a locked-out user's MFA, or open a time-boxed
+        read-only session as them. Every action is recorded in the audit log with the reason you
+        give.
+      </p>
+      <div>
+        <Button onClick={() => setOpen(true)}>Manage a user</Button>
+      </div>
+      <UserActionsDialog open={open} onClose={() => setOpen(false)} />
+    </div>
+  );
+}
+
 export function AdminBillingPage() {
   const [tab, setTab] = useState("rates");
   const can = usePlatformCan();
@@ -681,6 +713,11 @@ export function AdminBillingPage() {
     // to every reader.
     ...(can(PRICING_WRITE) ? [{ value: "flags", label: "Feature flags" }] : []),
     ...(can(ADMINS_MANAGE) ? [{ value: "access", label: "Access" }] : []),
+    // Gated on the user-admin permissions, NOT on admins.manage: `support` holds users.manage
+    // and is precisely who does MFA resets, but must never reach the admin-granting surface.
+    ...(can(USERS_MANAGE) || can(USERS_IMPERSONATE)
+      ? [{ value: "users", label: "Users" }]
+      : []),
   ];
 
   return (
@@ -702,6 +739,9 @@ export function AdminBillingPage() {
           {tab === "revenue" && <Revenue />}
           {tab === "flags" && can(PRICING_WRITE) && <FeatureFlags />}
           {tab === "access" && can(ADMINS_MANAGE) && <PlatformAdmins />}
+          {tab === "users" && (can(USERS_MANAGE) || can(USERS_IMPERSONATE)) && (
+            <UserAdmin />
+          )}
         </div>
       </Card>
     </div>

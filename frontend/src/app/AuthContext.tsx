@@ -10,6 +10,7 @@ import {
 import type { ReactNode } from "react";
 import { ApiClient } from "@/lib/api";
 import type {
+  ImpersonationSession,
   LoginRequest,
   NewWorkspaceRequest,
   RegisterStartResponse,
@@ -21,6 +22,10 @@ interface Session {
   token: string;
   role: Role;
   tenantId: string;
+  /** Set only while impersonating: the session is read-only and every mutation 403s server-side. */
+  readOnly?: boolean;
+  /** Email of the user being impersonated, for the banner. */
+  impersonating?: string;
 }
 
 interface AuthApi {
@@ -45,11 +50,24 @@ interface AuthApi {
   switchTenant: (tenantId: string) => Promise<void>;
   /** Create a new workspace (tenant) owned by the user and switch into it. */
   createWorkspace: (body: NewWorkspaceRequest) => Promise<void>;
+  /**
+   * Adopt a read-only impersonation session, remembering the admin's own so it can be handed back.
+   *
+   * The admin session is stashed rather than discarded: ending impersonation must return staff to
+   * the console they came from, not to the login screen. Logging them out would make every
+   * support look-up cost a re-authentication, which is how a safety feature stops being used.
+   */
+  beginImpersonation: (session: ImpersonationSession) => void;
+  /** Hand back the admin's own session. No-op if not impersonating. */
+  endImpersonation: () => void;
   /** Increments on every tenant switch so screens can key off it to remount/refetch. */
   tenantEpoch: number;
 }
 
 const STORAGE_KEY = "nexus_session";
+// The admin's own session, parked while they impersonate. Separate key so a crashed tab or a
+// reload cannot strand staff inside a customer account with no way back.
+const ADMIN_STORAGE_KEY = "nexus_admin_session";
 const AuthContext = createContext<AuthApi | null>(null);
 
 export function useAuth(): AuthApi {
@@ -142,6 +160,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [api],
   );
 
+  const beginImpersonation = useCallback(
+    (imp: ImpersonationSession) => {
+      const current = loadSession();
+      if (current && !current.readOnly) {
+        try {
+          localStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(current));
+        } catch {
+          /* storage unavailable — impersonation still works, the return trip is a re-login */
+        }
+      }
+      setSession({
+        token: imp.access_token,
+        role: "rep" as Role,
+        tenantId: imp.tenant_id,
+        readOnly: true,
+        impersonating: imp.impersonating,
+      });
+      setTenantEpoch((e) => e + 1);
+    },
+    [],
+  );
+
+  const endImpersonation = useCallback(() => {
+    let admin: Session | null = null;
+    try {
+      const raw = localStorage.getItem(ADMIN_STORAGE_KEY);
+      admin = raw ? (JSON.parse(raw) as Session) : null;
+      localStorage.removeItem(ADMIN_STORAGE_KEY);
+    } catch {
+      admin = null;
+    }
+    // No stashed admin session (storage cleared, or a reload after the admin token expired) means
+    // the honest outcome is the login screen, not a silent half-state.
+    setSession(admin && admin.token ? admin : null);
+    setTenantEpoch((e) => e + 1);
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
     setSession(null);
@@ -170,7 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       api, session, isAuthed: !!session, login, signup,
       registerStart, registerResend, registerVerify,
       forgotPassword, resetPassword,
-      logout, switchTenant, createWorkspace, tenantEpoch,
+      logout, switchTenant, createWorkspace, beginImpersonation, endImpersonation, tenantEpoch,
     }),
     [api, session, login, signup, registerStart, registerResend, registerVerify,
      forgotPassword, resetPassword,

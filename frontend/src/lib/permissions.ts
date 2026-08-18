@@ -14,6 +14,11 @@ export const INVOICES_COLLECT = "invoices.collect";
 export const JOBS_MANAGE = "jobs.manage";
 export const ADMINS_MANAGE = "admins.manage";
 export const USERS_MANAGE = "users.manage";
+// Deliberately separate from USERS_MANAGE, mirroring the server: resetting someone's MFA and
+// *becoming* them are different powers.
+export const USERS_IMPERSONATE = "users.impersonate";
+export const SOURCES_MANAGE = "sources.manage";
+export const SYSTEM_READ = "system.read";
 
 /** Human labels for the permission chips shown against each admin. */
 export const PERMISSION_LABELS: Record<string, string> = {
@@ -26,6 +31,9 @@ export const PERMISSION_LABELS: Record<string, string> = {
   [JOBS_MANAGE]: "Manage jobs",
   [ADMINS_MANAGE]: "Manage admins",
   [USERS_MANAGE]: "Manage users",
+  [USERS_IMPERSONATE]: "Impersonate users",
+  [SOURCES_MANAGE]: "Manage data sources",
+  [SYSTEM_READ]: "Read system health",
 };
 
 export function permissionLabel(name: string): string {
