@@ -36,6 +36,8 @@ import type {
   FeatureFlag,
   RevenueReport,
   Invoice,
+  SellablePlan,
+  HostedSession,
   PlatformAdmin,
   PlatformIdentity,
   EmailAccount,
@@ -791,6 +793,23 @@ export class ApiClient {
   }
   billingInvoices(signal?: AbortSignal) {
     return this.request<Invoice[]>("/billing/invoices", { signal });
+  }
+  billingPlans(signal?: AbortSignal) {
+    return this.request<SellablePlan[]>("/billing/plans", { signal });
+  }
+  /** Opens hosted Checkout. Returns a provider URL to redirect to; writes no subscription. */
+  billingCheckout(planId: string) {
+    return this.request<HostedSession>("/billing/checkout", {
+      method: "POST",
+      body: JSON.stringify({ plan_id: planId }),
+    });
+  }
+  /** Opens the hosted Customer Portal, where a card is changed or a plan is cancelled. */
+  billingPortal() {
+    return this.request<HostedSession>("/billing/portal", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
   }
 
   // ---- billing (platform-admin control plane) ----

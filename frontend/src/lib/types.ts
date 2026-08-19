@@ -1091,6 +1091,8 @@ export interface BillingUsage {
   capabilities: CapabilityUsage[];
   /** trialing | active | past_due | suspended | canceled. Null when no subscription exists. */
   status: string | null;
+  /** `custom`/`enterprise` mean an admin-managed deal: no self-serve checkout. */
+  plan_class: string | null;
   trial_end: string | null;
   period_end: string | null;
   /** Net of every adjustment already committed to this period's invoice. */
@@ -1186,6 +1188,37 @@ export interface Invoice {
   total_cents: number;
   finalized_at: string | null;
   lines: InvoiceLine[];
+}
+
+/**
+ * A plan this workspace can switch to, from `GET /billing/plans`.
+ *
+ * Only `standard`, `active` plans appear: checkout refuses custom and enterprise with a 409, and
+ * listing something the next click rejects is worse than not listing it.
+ */
+export interface SellablePlan {
+  id: string;
+  name: string;
+  description: string;
+  base_price_cents: number;
+  currency: string;
+  interval: string;
+  included_credits: number;
+  max_seats: number | null;
+  trial_days: number;
+  sort_order: number;
+  current: boolean;
+  /** Module names, resolved against THIS plan — not against what the caller currently has. */
+  includes: string[];
+  excludes: string[];
+}
+
+/** A redirect to the payment provider. Nothing is written until the webhook comes back. */
+export interface HostedSession {
+  id: string;
+  url: string;
+  provider: string;
+  plan_id: string | null;
 }
 
 export interface AdminRateCard {

@@ -726,6 +726,31 @@ is instead a standard plan edited through `PlanEntitlementsDialog`, which reache
 Checkout. There is **no endpoint to create a new sellable plan** — a ninth public tier still needs a
 `plans.py` change and a deploy.
 
+**`core` ($19, sort 18) is the worked example of a restricted tier**: eight modules off, leaving the
+ungateable floor plus Lists and Relevance. `ai.scoring` is deliberately **not** tied to
+`module.relevance` — relevance scores are the most useful column on the Accounts page, which every
+plan includes, so cascading it would sell a page with its point removed. `automation.account_refresh`
+is tied to nothing for the same reason.
+
+**A module gate that only hides a menu item is a discount with no cost saving.** `depends_on` is
+what makes a cheaper plan cheaper to *serve*: `module.signals` carries the signal scans, `signal.stored`
+and `inbox.task`; `module.agents` carries the orchestration run/step and `ai.chat_turn`; `module.plays`
+carries `automation.play_run`. Adding those was safe only because no pre-existing plan disables those
+modules — pinned by `test_the_new_dependencies_change_nothing_for_existing_plans`.
+
+**`GET /billing/plans` is the customer-side price list, and `PlanPicker` is the screen that buys
+one.** `/billing/checkout` and `/billing/portal` existed server-side and **no screen called either**,
+so a workspace could not change its own plan from inside the product — which became load-bearing the
+moment locked navigation started routing people to `/settings/billing` to "view upgrade options".
+The endpoint omits what checkout would refuse (custom, enterprise) plus `unlimited`, `internal` and
+`trial`, because listing a plan whose next click 409s is worse than not listing it; a plan leaves the
+list by having its `status` changed in Admin, with no deploy. Module inclusion is resolved **per
+plan**, not against the caller's subscription — the question a picker answers is "what would I get if
+I switched". `UsageOut.plan_class` exists so the client can tell an admin-managed deal from a listed
+tier without sniffing the plan id for a `custom-` prefix. **No Stripe object is created when a plan is
+seeded**: `create_checkout` calls `ensure_plan_price` on first purchase and caches `price_id` into
+`plan.meta`, verified live — `growth` carries a cached price, `core` stays `{}` until someone buys it.
+
 ## Apify actors (`nexus/integrations/apify.py`)
 
 The seam for lookups with no compliant public API. **Adding an actor is a line in `ACTORS`, not a new

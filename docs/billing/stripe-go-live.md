@@ -105,8 +105,16 @@ This is a design decision, not a gap:
   being told to talk to their account team. They are billed through `collect_invoice`.
 
 So: a bespoke "core only" deal for one customer → custom plan. A repeatable "Core" tier on the
-price list → edit a standard plan's entitlements.
+price list → a standard plan. **`core` ships as exactly that** ($19/month, sort order 18): eight
+modules disabled, self-serve checkout allowed. Customers pick it at Settings → Billing.
+
+Verified live against this account: `POST /billing/checkout` for a standard plan returns a real
+`cs_test_…` session and a `checkout.stripe.com` URL, and caches the minted `price_id` onto the plan
+row. **Session creation works even while `charges_enabled` is false** — the account flags stop the
+payment at the end, not the redirect, so "checkout opens" is not evidence that a card would be
+accepted. Finishing onboarding (section 1) is still what makes a purchase complete.
 
 **There is no endpoint to create a brand-new sellable plan.** `PATCH /admin/billing/plans/{id}`
-edits the eight seeded plans and `POST /admin/billing/tenants/{id}/custom-plan` creates per-tenant
-ones; adding a ninth public tier still needs a `nexus/billing/plans.py` change and a deploy.
+edits the seeded plans and `POST /admin/billing/tenants/{id}/custom-plan` creates per-tenant ones;
+adding a further public tier still needs a `nexus/billing/plans.py` change and a deploy — which is
+how `core` itself was added.

@@ -78,6 +78,25 @@ _MODULES = [
          description="Orchestrator, agent runs and approvals."),
 ]
 
+# A module gate that only hides a menu item is a discount with no cost saving: the pages disappear
+# and the crawler, the classifier and the agent runtime keep spending. `depends_on` is what makes a
+# cheaper plan cheaper to SERVE, and `_apply_dependencies` disables a capability whose module is
+# disabled. So `module.signals` carries `signal.news_scan`, `signal.rss_scan`, `signal.stored` and
+# `inbox.task`; `module.agents` carries the orchestration run/step and `ai.chat_turn`;
+# `module.plays` carries `automation.play_run`. (Declared inline above, next to each capability.)
+#
+# Two are deliberately left gating navigation only:
+#
+# * **`ai.scoring` is NOT tied to `module.relevance`.** Relevance scores are the most useful column
+#   on the Accounts page, and Accounts is on every plan. Cascading it would sell a page with its
+#   point removed. `module.relevance` hides the ICP *editor*, which is a different thing.
+# * **`automation.account_refresh` is tied to nothing.** It refreshes the account record itself, not
+#   the signal feed. A workspace that bought Accounts should get accounts that stay current.
+#
+# Like the gates themselves this is additive: no plan disabled these modules before `core` existed,
+# and `resolve_entitlement` returns early for unlimited plan classes before dependencies are
+# applied at all.
+
 # ---- platform & seats ----------------------------------------------------------------------
 _PLATFORM = [
     _cap("seat.member", "platform", "User seat", unit="seat", meter_kind="gauge",
@@ -110,15 +129,16 @@ _AI = [
     _cap("ai.icp_from_website", "ai", "AI ICP from website", sub_category="relevance",
          default_mode="metered"),
     _cap("ai.chat_turn", "ai", "Orchestrator chat turn", sub_category="orchestration",
-         default_mode="metered"),
+         default_mode="metered", depends_on=["module.agents"]),
     _cap("ai.personalization_fetch", "ai", "Person social insights", sub_category="personalization",
          default_mode="metered"),
     _cap("ai.premium_model", "ai", "Premium model routing", sub_category="routing",
          default_mode="enterprise",
          description="Route to a frontier model; multiplies credit cost."),
     _cap("workflow.orchestration_run", "workflow", "Orchestration run", unit="run",
-         default_mode="metered"),
-    _cap("workflow.orchestration_step", "workflow", "Orchestration step", unit="job"),
+         default_mode="metered", depends_on=["module.agents"]),
+    _cap("workflow.orchestration_step", "workflow", "Orchestration step", unit="job",
+         depends_on=["module.agents"]),
 ]
 
 # ---- search / discovery / enrichment --------------------------------------------------------
@@ -142,9 +162,11 @@ _DISCOVERY = [
     # would average a 3-cent lookup into a fraction-of-a-cent one and hide the margin.
     _cap("enrich.phone", "enrich", "Phone number lookup", unit="check", default_mode="metered"),
     _cap("verify.email", "enrich", "Email verification", unit="check", default_mode="metered"),
-    _cap("signal.news_scan", "signal", "News signal scan", unit="job"),
-    _cap("signal.rss_scan", "signal", "RSS signal scan", unit="job"),
-    _cap("signal.stored", "signal", "Signal stored"),
+    _cap("signal.news_scan", "signal", "News signal scan", unit="job",
+         depends_on=["module.signals"]),
+    _cap("signal.rss_scan", "signal", "RSS signal scan", unit="job",
+         depends_on=["module.signals"]),
+    _cap("signal.stored", "signal", "Signal stored", depends_on=["module.signals"]),
 ]
 
 # ---- outreach & workflow --------------------------------------------------------------------
@@ -166,9 +188,9 @@ _OUTREACH = [
     _cap("calling.minutes", "calling", "Telephony minutes", unit="minute",
          default_mode="enterprise", depends_on=["module.calling"]),
     _cap("automation.play_run", "automation", "Play executed", unit="job",
-         default_mode="metered"),
+         default_mode="metered", depends_on=["module.plays"]),
     _cap("automation.account_refresh", "automation", "Account refresh cycle", unit="job"),
-    _cap("inbox.task", "workflow", "Inbox task created"),
+    _cap("inbox.task", "workflow", "Inbox task created", depends_on=["module.signals"]),
 ]
 
 # ---- network (relationship graph) -----------------------------------------------------------

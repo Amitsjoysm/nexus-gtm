@@ -58,6 +58,11 @@ class UsageOut(BaseModel):
     # Subscription state the customer needs in order to read the rest of this page: a paused
     # plan shows zero quota everywhere, and without the status that looks like a bug.
     status: str | None = None
+    # Whether this workspace is on an admin-managed deal. The client needs it to decide between
+    # showing a price list and saying "talk to your account team", and the alternative was sniffing
+    # the plan id for a `custom-` prefix — a naming convention doing load-bearing work in the UI,
+    # which breaks silently the first time a plan is named anything else.
+    plan_class: str | None = None
     trial_end: str | None = None
     period_end: str | None = None
     # Mid-cycle plan changes already committed to this period's invoice. Surfaced before the
@@ -169,6 +174,7 @@ async def get_usage(
         period=key,
         capabilities=out,
         status=sub.status if sub else None,
+        plan_class=plan.plan_class if plan else None,
         trial_end=sub.trial_end.isoformat() if sub and sub.trial_end else None,
         period_end=(
             sub.current_period_end.isoformat() if sub and sub.current_period_end else None
@@ -339,6 +345,115 @@ async def _billing_email(user_id: str) -> str:
     async with get_sessionmaker()() as session:
         user = await session.get(User, user_id)
         return (user.email or "") if user is not None else ""
+
+
+class SellablePlanOut(BaseModel):
+    """A plan a workspace can actually switch to, with the modules it includes."""
+
+    id: str
+    name: str
+    description: str
+    base_price_cents: int
+    currency: str
+    interval: str
+    included_credits: int
+    max_seats: int | None
+    trial_days: int
+    sort_order: int
+    current: bool
+    # Module names, so the picker can say what the plan is rather than only what it costs.
+    includes: list[str]
+    excludes: list[str]
+
+
+@router.get("/plans", response_model=list[SellablePlanOut])
+async def list_sellable_plans(
+    ts: TenantSession = Depends(get_tenant_session),
+    # Same gate as /checkout and /portal: this is the money surface, and the page it feeds is
+    # admin-only. A rep who hits a 402 sees their usage, not the price list.
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> list[SellablePlanOut]:
+    """The price list, from the customer's side.
+
+    `POST /billing/checkout` has always taken a `plan_id`, and there was no endpoint that said
+    which ids exist — so the only way to buy a plan was to already know its id. A locked nav item
+    routes here offering to "view upgrade options", which is a promise this endpoint is what keeps.
+
+    Deliberately excluded:
+
+    * **admin-managed classes** (`custom`, `enterprise`) — checkout refuses them with a 409, and
+      listing something the next click rejects is worse than not listing it;
+    * **`unlimited` and `internal`** — `legacy-unlimited` is a migration keystone and internal is
+      staff-only; neither is a thing to sell, and offering a grandfathered tenant the chance to
+      "upgrade" off unlimited onto a metered plan is a downgrade wearing the wrong label;
+    * **`trial`** — entered by signing up, not bought.
+
+    Non-active plans are omitted too, which is how a plan is retired: set `status` in Admin and it
+    leaves the price list without any code change.
+    """
+    from nexus.models.billing import BillingCapability
+
+    sub = await _current_subscription(ts)
+    current_plan_id = sub.plan_id if sub is not None else None
+
+    rows = (
+        await ts.session.scalars(
+            select(BillingPlan)
+            .where(BillingPlan.plan_class == "standard", BillingPlan.status == "active")
+            .order_by(BillingPlan.sort_order)
+        )
+    ).all()
+
+    modules = (
+        await ts.session.scalars(
+            select(BillingCapability)
+            .where(BillingCapability.category == "module")
+            .order_by(BillingCapability.id)
+        )
+    ).all()
+
+    # Every module entitlement for every listed plan, in ONE query. Resolving these per
+    # (plan x capability) is 5 x 11 = 55 round-trips to render one page, which is the N+1 this
+    # endpoint would otherwise be.
+    #
+    # Deliberately not `resolve_entitlement`: that answers for the tenant's CURRENT subscription,
+    # and the question a picker answers is "what would I get if I switched". It falls back to the
+    # catalog default for an unlisted capability, and so does this — same rule, so the picker
+    # cannot advertise a module the engine would refuse.
+    module_ids = [c.id for c in modules]
+    configured: dict[tuple[str, str], str] = {
+        (e.plan_id, e.capability_id): e.mode
+        for e in (
+            await ts.session.scalars(
+                select(BillingPlanEntitlement).where(
+                    BillingPlanEntitlement.plan_id.in_([p.id for p in rows]),
+                    BillingPlanEntitlement.capability_id.in_(module_ids),
+                )
+            )
+        ).all()
+        if e.mode
+    }
+
+    out: list[SellablePlanOut] = []
+    for plan in rows:
+        includes: list[str] = []
+        excludes: list[str] = []
+        for cap in modules:
+            mode = configured.get((plan.id, cap.id)) or cap.default_mode
+            label = cap.name or cap.id
+            # `enterprise` is "talk to us", not "you have it" — same reading as /entitlements.
+            (excludes if mode in ("disabled", "enterprise") else includes).append(label)
+        out.append(
+            SellablePlanOut(
+                id=plan.id, name=plan.name, description=plan.description or "",
+                base_price_cents=plan.base_price_cents, currency=plan.currency,
+                interval=plan.interval, included_credits=plan.included_credits,
+                max_seats=plan.max_seats, trial_days=plan.trial_days,
+                sort_order=plan.sort_order, current=plan.id == current_plan_id,
+                includes=includes, excludes=excludes,
+            )
+        )
+    return out
 
 
 @router.post("/checkout", response_model=HostedSessionOut)

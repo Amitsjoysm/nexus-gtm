@@ -35,6 +35,30 @@ _FREE_ENT = [
     ("platform.storage", "metered", 1, None),
     ("seat.member", "metered", 1, None),
 ]
+# Core: account and contact intelligence, and nothing else. The one plan whose shape is defined by
+# what it EXCLUDES, so every module gate is listed explicitly rather than inherited — a reader
+# pricing a deal should not have to diff this against the catalog to see what the customer gets.
+#
+# What is left is not a rump: Dashboard, Accounts, Contacts, Members, Settings and Billing carry no
+# capability by design (see NAV_ITEMS), so they are present on every plan including this one.
+#
+# `module.relevance` and `module.lists` are deliberately NOT in this list. Relevance scoring feeds
+# the score column on the Accounts page, which Core includes — gating it would sell a page with its
+# most useful column blanked. Lists are saved views over accounts Core already has.
+_CORE_ENT = [
+    ("module.signals", "disabled", None, None),
+    ("module.outreach", "disabled", None, None),
+    ("module.calling", "disabled", None, None),
+    ("module.network", "disabled", None, None),
+    ("module.discovery", "disabled", None, None),
+    ("module.integrations", "disabled", None, None),
+    ("module.plays", "disabled", None, None),
+    ("module.agents", "disabled", None, None),
+    ("verify.email", "metered", 500, 1),
+    ("enrich.contact", "metered", 500, 2),
+    ("seat.member", "metered", 3, None),
+    ("platform.storage", "metered", 1, 25),
+]
 _STARTER_ENT = [
     ("module.network", "disabled", None, None),
     ("module.calling", "disabled", None, None),
@@ -87,6 +111,25 @@ PLAN_SEED: list[dict] = [
         "max_seats": 5, "trial_days": 14, "sort_order": 15,
         "description": "14-day full-feature trial.",
         "entitlements": _GROWTH_ENT,
+    },
+    {
+        # `standard`, not `custom` — that is the whole point. Custom and enterprise plans are
+        # refused by /billing/checkout and /billing/portal with a 409 (_reject_if_admin_managed),
+        # so a bespoke per-tenant plan can never be bought self-serve. Core is on the price list.
+        #
+        # No Stripe object is created here and none is needed: create_checkout calls
+        # ensure_plan_price on first purchase when `meta.price_id` is empty and caches the result,
+        # so the price is minted by the first customer who buys it.
+        #
+        # Credits are 21% of the price, matching Starter (750/3900) rather than Growth's 25% — a
+        # cheaper plan carries proportionally less usage. All of it is editable in Admin without a
+        # redeploy: sync_plans only ever CREATES, so these numbers are a starting point and the
+        # database wins from then on.
+        "id": "core", "name": "Core", "plan_class": "standard", "status": "active",
+        "base_price_cents": 1900, "seat_price_cents": 1900, "included_credits": 400,
+        "max_seats": 3, "sort_order": 18,
+        "description": "Accounts and contacts, with enrichment. No signals, outreach or agents.",
+        "entitlements": _CORE_ENT,
     },
     {
         "id": "starter", "name": "Starter", "plan_class": "standard", "status": "active",

@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge, Card, CardHeader, EmptyState, Icons, Skeleton } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { DataTable, type Column } from "@/components/ui/DataTable";
+import { PlanPicker } from "./billing/PlanPicker";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { cn } from "@/lib/cn";
@@ -296,6 +297,10 @@ export function BillingPage() {
         </Card>
 
         {usage.data && <ProrationCard data={usage.data} />}
+
+        {/* Above usage and invoices: someone who came here from a locked nav item is here to
+            change plan, not to read a meter. */}
+        <PlanPicker usage={usage.data ?? null} />
 
         <Card padding="lg">
           <CardHeader
