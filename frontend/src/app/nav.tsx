@@ -53,19 +53,32 @@ export interface NavItem {
 
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
 
+// Dashboard, Accounts and Contacts carry no `capability` ON PURPOSE and must keep it that way:
+// they are the floor of the product, and a plan that hides them sells nothing. Settings, Billing
+// and Members are the same — gating Billing behind a plan locks the customer out of the one page
+// where they could change their plan.
 export const NAV_ITEMS: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", icon: <DashboardIcon /> },
-  { to: "/inbox", label: "Inbox", icon: <InboxIcon /> },
+  { to: "/inbox", label: "Inbox", icon: <InboxIcon />, capability: "module.signals" },
   { to: "/calls", label: "Calls", icon: <PhoneIcon />, capability: "module.calling" },
   { to: "/accounts", label: "Accounts", icon: <BuildingIcon /> },
   { to: "/contacts", label: "Contacts", icon: <UsersIcon /> },
   { to: "/network", label: "Network", icon: <NetworkIcon />, capability: "module.network" },
-  { to: "/lists", label: "Lists", icon: <ListIcon /> },
-  { to: "/signals", label: "Signals", icon: <SignalIcon /> },
-  { to: "/alerts", label: "Alerts", icon: <BellIcon /> },
-  { to: "/orchestrator", label: "Orchestrator", icon: <SparklesIcon />, minRole: "manager" },
-  { to: "/runs", label: "AI Runs", icon: <WorkflowIcon />, minRole: "manager" },
-  { to: "/approvals", label: "Approvals", icon: <ShieldCheckIcon />, minRole: "manager" },
+  { to: "/lists", label: "Lists", icon: <ListIcon />, capability: "module.lists" },
+  { to: "/signals", label: "Signals", icon: <SignalIcon />, capability: "module.signals" },
+  { to: "/alerts", label: "Alerts", icon: <BellIcon />, capability: "module.signals" },
+  {
+    to: "/orchestrator", label: "Orchestrator", icon: <SparklesIcon />, minRole: "manager",
+    capability: "module.agents",
+  },
+  {
+    to: "/runs", label: "AI Runs", icon: <WorkflowIcon />, minRole: "manager",
+    capability: "module.agents",
+  },
+  {
+    to: "/approvals", label: "Approvals", icon: <ShieldCheckIcon />, minRole: "manager",
+    capability: "module.agents",
+  },
   {
     to: "/campaigns", label: "Campaigns", icon: <SendIcon />, minRole: "manager",
     capability: "module.outreach",
@@ -74,8 +87,14 @@ export const NAV_ITEMS: NavItem[] = [
     to: "/cadences", label: "Cadences", icon: <MessageIcon />, minRole: "manager",
     capability: "module.outreach",
   },
-  { to: "/plays", label: "Plays", icon: <BoltIcon />, minRole: "manager" },
-  { to: "/relevance", label: "Relevance", icon: <TargetIcon />, minRole: "manager" },
+  {
+    to: "/plays", label: "Plays", icon: <BoltIcon />, minRole: "manager",
+    capability: "module.plays",
+  },
+  {
+    to: "/relevance", label: "Relevance", icon: <TargetIcon />, minRole: "manager",
+    capability: "module.relevance",
+  },
   { to: "/members", label: "Members", icon: <UsersIcon />, minRole: "manager" },
   {
     to: "/integrations", label: "Integrations", icon: <PlugIcon />, minRole: "admin",

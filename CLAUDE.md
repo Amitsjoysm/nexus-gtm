@@ -693,6 +693,39 @@ deployment this change is a strict no-op.
 - Only coarse `module.*` gates belong in nav. Per-action quotas stay on the action — a menu that
   greyed out at 19 of 20 drafts would be lying about a feature the customer still has.
 
+**Hiding a link is presentation; `RequireCapability` in `App.tsx` is the access control.** Until it
+existed, a gated page was reachable by typing the URL, following a bookmark, or being sent one by a
+colleague on a richer plan — the nav hid Campaigns and the route served it. Every capability that
+gates a nav item now also guards its route, asserted structurally by
+`test_the_routes_guard_the_same_capabilities_the_nav_hides` (there is no frontend test runner, so
+these tests read the source). It fails **open** for the same reasons `isLocked` does, and the server
+remains the real boundary — each of those routes calls endpoints that meter and 402 on their own.
+For a `rep` the redirect target is itself admin-only, so the chain is
+`/signals → /settings/billing → /dashboard`; it terminates because both hops use `replace`.
+
+**Nine of the twenty-two nav destinations carried no capability at all**, so "sell them Accounts and
+Contacts only" was not expressible by any plan: a bespoke deal could disable Outreach, Calling,
+Network and Integrations and the customer still saw Inbox, Signals, Alerts, Lists, Plays, Relevance,
+Orchestrator, Runs and Approvals. `module.signals` (Inbox + Signals + Alerts), `module.lists`,
+`module.plays`, `module.relevance` and `module.agents` (Orchestrator + Runs + Approvals) close it.
+All five default to `enabled` and are on **no** plan, and `resolve_entitlement` falls back to the
+catalog default for a capability a plan does not list — so adding them is a strict no-op until an
+operator disables one, pinned by `test_the_new_module_gates_change_nothing_for_existing_plans`.
+
+**Dashboard, Accounts, Contacts, Members, Settings and Billing are deliberately ungateable**, and
+`test_the_floor_of_the_product_is_never_gated` keeps them that way. Billing is the load-bearing one:
+gating it behind a plan locks the customer out of the only page where they could change the plan
+that locked them out.
+
+**Two ways to sell a restricted product, and they are not interchangeable.** `CustomPlanDialog`
+builds a per-tenant plan (`plan_class="custom"`) — module checkboxes seeded from the base plan, and
+only *changed* rows are sent, so a module added to the base plan next quarter still reaches the
+customer. Custom and enterprise plans are refused by `/billing/checkout` and `/billing/portal` with
+a **409** (`_reject_if_admin_managed`) and are billed by `collect_invoice`. A repeatable public tier
+is instead a standard plan edited through `PlanEntitlementsDialog`, which reaches self-serve
+Checkout. There is **no endpoint to create a new sellable plan** — a ninth public tier still needs a
+`plans.py` change and a deploy.
+
 ## Apify actors (`nexus/integrations/apify.py`)
 
 The seam for lookups with no compliant public API. **Adding an actor is a line in `ACTORS`, not a new

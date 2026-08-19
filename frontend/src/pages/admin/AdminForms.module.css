@@ -43,6 +43,84 @@
   padding-top: var(--space-2);
 }
 
+/* ---- module include/exclude ------------------------------------------------------------------
+   A plain checked list, not a grid of cards: this is a set of yes/no decisions an operator scans
+   top to bottom while reading a signed contract, and cards would add chrome to eleven one-line
+   answers. Two columns once there is room, so a long catalog does not push the buttons off-screen.
+*/
+.moduleList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  /* 44px minimum target: the row is the hit area, not just the 16px box. */
+  min-height: 44px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--text-default);
+  cursor: pointer;
+}
+
+.toggle:hover {
+  background: var(--surface-2);
+}
+
+/* The label is the control, so the ring belongs on the label — a focus ring drawn around a 16px
+   box inside a 44px row reads as though something else has focus. */
+.toggle:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.toggle input {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Focus is expressed on the row above; drawing it here too gives two rings for one control. */
+.toggle input:focus-visible {
+  outline: none;
+}
+
+.moduleName {
+  font-weight: var(--weight-medium);
+}
+
+/* The capability id is what an operator quotes in a support thread, so it is present but quiet. */
+.moduleId {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* Marks a deviation from the base plan. The whole editing model is "clone, then change only what
+   was negotiated", so which rows are actually a change is the thing worth seeing before saving.
+
+   The amber TINT carries the signal; the text does not. `color: var(--warning)` on
+   `--warning-quiet` measured 3.21:1 at 12px in the light theme, which fails AA — the token is a
+   fill colour, and at 12% alpha over the surface it leaves almost no room beneath it. */
+.changed {
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--warning-quiet);
+  color: var(--text-default);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
 /* Live margin feedback: the guardrail refuses a below-floor price at the API, so the form says
    so before the user submits rather than surfacing it as a 422. */
 .marginPreview {

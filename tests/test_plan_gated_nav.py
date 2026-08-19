@@ -216,3 +216,88 @@ async def test_free_is_gated_once_enforcement_is_on(client, monkeypatch):
     assert body["gating_active"] is True
     modules = {m["capability_id"]: m for m in body["modules"]}
     assert modules["module.network"]["included"] is False
+
+
+# ---- the nav and the catalog must agree ---------------------------------------------------------
+#
+# `isLocked` looks a capability up in the entitlements response and returns FALSE when it finds
+# nothing ("unknown means allow", matching the engine). That bias is right, and it makes a typo in
+# nav.tsx completely silent: the item simply never gates, forever, and no test or log says so. The
+# two tests below are structural — they read the source — because there is no runtime moment at
+# which the mismatch is observable.
+
+import re
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent
+_NAV = _ROOT / "frontend" / "src" / "app" / "nav.tsx"
+_APP = _ROOT / "frontend" / "src" / "App.tsx"
+
+
+def _nav_capabilities() -> set[str]:
+    return set(re.findall(r'capability:\s*"([^"]+)"', _NAV.read_text(encoding="utf-8")))
+
+
+def test_every_capability_the_nav_keys_on_exists_in_the_catalog():
+    from nexus.billing.catalog import CAPABILITY_SEED
+
+    known = {c["id"] for c in CAPABILITY_SEED}
+    referenced = _nav_capabilities()
+    assert referenced, "nav.tsx should gate at least some items"
+    missing = referenced - known
+    assert not missing, (
+        f"nav.tsx gates on capabilities that do not exist: {sorted(missing)}. "
+        "isLocked would silently never lock these."
+    )
+
+
+def test_the_routes_guard_the_same_capabilities_the_nav_hides():
+    """Hiding a link is presentation; the route guard is the access control.
+
+    A gated nav item whose route is unguarded is reachable by typing the URL, which is exactly how
+    a customer on a restricted plan finds the page they did not buy.
+    """
+    guarded = set(
+        re.findall(r'RequireCapability capability="([^"]+)"', _APP.read_text(encoding="utf-8"))
+    )
+    missing = _nav_capabilities() - guarded
+    assert not missing, (
+        f"these capabilities gate a nav item but no route: {sorted(missing)} — "
+        "the pages are still reachable by URL."
+    )
+
+
+def test_the_floor_of_the_product_is_never_gated():
+    """Dashboard, Accounts, Contacts, Members, Settings and Billing carry no capability.
+
+    Billing is the load-bearing one: gating it behind a plan locks the customer out of the only
+    page where they could change the plan that locked them out. Dashboard is the landing route, so
+    gating it means a redirect loop into an empty shell.
+    """
+    source = _NAV.read_text(encoding="utf-8")
+    for route in ("/dashboard", "/accounts", "/contacts", "/members", "/settings/billing"):
+        block = re.search(r'\{[^{}]*to:\s*"' + re.escape(route) + r'"[^{}]*\}', source, re.S)
+        assert block, f"{route} is no longer in NAV_ITEMS"
+        assert "capability" not in block.group(0), (
+            f"{route} must never be plan-gated — see the comment above NAV_ITEMS."
+        )
+
+
+async def test_the_new_module_gates_change_nothing_for_existing_plans(client):
+    """Adding module.signals/lists/plays/relevance/agents must be a strict no-op on rollout.
+
+    They default to `enabled` in the catalog, and `resolve_entitlement` falls back to the catalog
+    default when a plan does not list a capability. So every tenant on every existing plan keeps
+    seeing Inbox, Signals, Alerts, Lists, Plays, Relevance, Orchestrator, Runs and Approvals until
+    an operator deliberately turns one off.
+    """
+    new = ["module.signals", "module.lists", "module.plays", "module.relevance", "module.agents"]
+    for slug, plan in (("entnew1", "free"), ("entnew2", "starter"), ("entnew3", "growth")):
+        token = await _tenant_on_plan(client, slug, plan)
+        body = (await client.get("/api/billing/entitlements", headers=auth(token))).json()
+        modules = {m["capability_id"]: m for m in body["modules"]}
+        for cap in new:
+            assert cap in modules, f"{cap} missing from the entitlements response"
+            assert modules[cap]["included"] is True, (
+                f"{cap} is excluded on {plan} — adding it was supposed to change nothing"
+            )

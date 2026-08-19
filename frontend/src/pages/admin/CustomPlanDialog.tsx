@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Button, Field, Input, Modal, Select, useToast } from "@/components/ui";
+import { useCallback, useEffect, useState } from "react";
+import { Button, Field, Input, Modal, Select, SkeletonText, useToast } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import type { AdminPlan, AdminSubscription } from "@/lib/types";
+import type { AdminPlan, AdminSubscription, PlanEntitlement } from "@/lib/types";
 import styles from "./AdminForms.module.css";
 
 interface Props {
@@ -18,12 +18,26 @@ interface QuotaOverride {
   quota: string;
 }
 
+/** One sellable module, and whether this deal includes it. */
+interface ModuleChoice {
+  capabilityId: string;
+  name: string;
+  /** What the base plan resolves to, so "changed from the base" is answerable. */
+  inheritedIncluded: boolean;
+  included: boolean;
+}
+
 /**
  * Build a negotiated, per-customer plan.
  *
  * Cloned from a base plan so a deal never starts from a blank slate, then only the terms that
  * were actually negotiated are overridden. The result is a real plan row, so the entitlement
  * engine and invoicing treat it exactly like a standard plan.
+ *
+ * The module checkboxes are what make a partial product sellable. Before them this dialog could
+ * only override quotas, so "sell them Accounts and Contacts and nothing else" was not expressible
+ * from any screen: the entitlement engine understood `mode: "disabled"` perfectly, and nothing in
+ * the product could ever send it.
  */
 export function CustomPlanDialog({ open, onClose, tenant, plans, onDone }: Props) {
   const api = useApiClient();
@@ -34,9 +48,52 @@ export function CustomPlanDialog({ open, onClose, tenant, plans, onDone }: Props
   const [credits, setCredits] = useState("50000");
   const [seats, setSeats] = useState("");
   const [overrides, setOverrides] = useState<QuotaOverride[]>([]);
+  const [modules, setModules] = useState<ModuleChoice[] | null>(null);
   const [saving, setSaving] = useState(false);
 
   const sellable = plans.filter((p) => p.plan_class !== "custom");
+
+  // Seeded from the BASE plan, not from "everything on". A base plan that already excludes
+  // Calling must not be silently upgraded because the dialog defaulted every box to checked —
+  // that would hand away a module every time someone opened this form to change a price.
+  const loadModules = useCallback(
+    async (planId: string, signal?: AbortSignal) => {
+      const rows = (await api.planEntitlements(planId, signal)) as PlanEntitlement[];
+      return rows
+        .filter((r) => r.category === "module")
+        .map((r) => {
+          // An unconfigured capability falls through to the catalog default — the same rule the
+          // engine applies, so what is shown here is what the customer would actually get.
+          const effective = r.mode ?? r.default_mode;
+          const included = effective !== "disabled" && effective !== "enterprise";
+          return {
+            capabilityId: r.capability_id,
+            name: r.name || r.capability_id,
+            inheritedIncluded: included,
+            included,
+          };
+        });
+    },
+    [api],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    setModules(null);
+    loadModules(basePlan, controller.signal)
+      .then((rows) => setModules(rows))
+      // Leaving `modules` null means no module override is sent at all, so a failed read cannot
+      // quietly disable something. The rest of the form still works.
+      .catch(() => setModules([]));
+    return () => controller.abort();
+  }, [open, basePlan, loadModules]);
+
+  function toggleModule(capabilityId: string, included: boolean) {
+    setModules((rows) =>
+      rows ? rows.map((r) => (r.capabilityId === capabilityId ? { ...r, included } : r)) : rows,
+    );
+  }
 
   function addOverride() {
     setOverrides((rows) => [...rows, { capability: "", quota: "" }]);
@@ -55,11 +112,21 @@ export function CustomPlanDialog({ open, onClose, tenant, plans, onDone }: Props
     if (!tenant) return;
     setSaving(true);
     try {
-      const entitlement_overrides: Record<string, { quota: number }> = {};
+      const entitlement_overrides: Record<string, { quota?: number; mode?: string }> = {};
+      // Only modules the operator actually CHANGED. Writing every module on every save would
+      // freeze today's catalog defaults into the plan row, so a module added to the base plan
+      // next quarter would never reach this customer.
+      for (const m of modules ?? []) {
+        if (m.included === m.inheritedIncluded) continue;
+        entitlement_overrides[m.capabilityId] = { mode: m.included ? "enabled" : "disabled" };
+      }
       for (const row of overrides) {
         const capability = row.capability.trim();
         if (!capability || row.quota.trim() === "") continue;
-        entitlement_overrides[capability] = { quota: Number(row.quota) };
+        entitlement_overrides[capability] = {
+          ...(entitlement_overrides[capability] ?? {}),
+          quota: Number(row.quota),
+        };
       }
       const result = (await api.createCustomPlan(tenant.tenant_id, {
         base_plan_id: basePlan,
@@ -151,6 +218,43 @@ export function CustomPlanDialog({ open, onClose, tenant, plans, onDone }: Props
             />
           </Field>
         </div>
+
+        <fieldset className={styles.fieldset}>
+          <legend className={styles.legend}>Modules included</legend>
+          <p className={styles.hint}>
+            Unchecked modules are hidden from this workspace's navigation and refused by the API.
+            Dashboard, Accounts, Contacts, Members and Billing are always included.
+          </p>
+          {modules === null ? (
+            <SkeletonText lines={4} />
+          ) : modules.length === 0 ? (
+            <p className={styles.hint}>
+              Couldn't read the base plan's modules. Save the plan and set them from the plan
+              editor.
+            </p>
+          ) : (
+            <ul className={styles.moduleList}>
+              {modules.map((m) => (
+                <li key={m.capabilityId}>
+                  <label className={styles.toggle}>
+                    <input
+                      type="checkbox"
+                      checked={m.included}
+                      onChange={(e) => toggleModule(m.capabilityId, e.target.checked)}
+                    />
+                    <span className={styles.moduleName}>{m.name}</span>
+                    <code className={styles.moduleId}>{m.capabilityId}</code>
+                    {m.included !== m.inheritedIncluded && (
+                      <span className={styles.changed}>
+                        changed from {m.inheritedIncluded ? "included" : "excluded"}
+                      </span>
+                    )}
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+        </fieldset>
 
         <fieldset className={styles.fieldset}>
           <legend className={styles.legend}>Quota overrides</legend>

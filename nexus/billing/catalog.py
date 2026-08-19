@@ -50,6 +50,32 @@ _MODULES = [
          description="CRM and sales-engagement connectors."),
     _cap("module.api", "module", "Public API access", default_mode="enterprise",
          description="Programmatic API access."),
+    # The five below closed a gap that made "sell them accounts and contacts only" unbuildable.
+    # Nine of the twenty-two nav destinations carried no capability at all, so no plan — custom or
+    # otherwise — could switch them off; a bespoke deal could disable Outreach, Calling, Network
+    # and Integrations and the customer still saw Inbox, Signals, Alerts, Lists, Plays, Relevance,
+    # Orchestrator, AI Runs and Approvals. The catalog described a product we could not actually
+    # sell a subset of.
+    #
+    # `enabled` is what keeps this additive: `resolve_entitlement` falls back to the catalog
+    # default when a plan does not list a capability, so every existing plan, every tenant with no
+    # subscription, and every `legacy-unlimited` tenant (which bypasses module gates by class)
+    # resolves exactly as it did before this list grew. Nothing is disabled until an operator
+    # deliberately disables it on a plan.
+    #
+    # Deliberately NOT gateable, and they must stay that way: Dashboard, Accounts, Contacts,
+    # Members, Settings and Billing. Gating Billing behind a plan locks a customer out of the page
+    # where they would fix their plan, and gating Dashboard leaves them staring at an empty shell.
+    _cap("module.signals", "module", "Signals module", default_mode="enabled",
+         description="Signal feed, prioritized inbox and alerts."),
+    _cap("module.lists", "module", "Lists module", default_mode="enabled",
+         description="Saved and dynamic account lists."),
+    _cap("module.plays", "module", "Plays module", default_mode="enabled",
+         description="Signal-triggered automated plays."),
+    _cap("module.relevance", "module", "Relevance module", default_mode="enabled",
+         description="ICP definition and deterministic account scoring."),
+    _cap("module.agents", "module", "AI agents module", default_mode="enabled",
+         description="Orchestrator, agent runs and approvals."),
 ]
 
 # ---- platform & seats ----------------------------------------------------------------------
