@@ -46,13 +46,40 @@ class StubCallProvider(CallProvider):
         return CallHandle(mode="manual", dial_url=f"tel:{digits}" if digits else None)
 
 
+# Providers this module can actually construct. Anything else is a name with no implementation
+# behind it, and must not be silently honoured — see below.
+KNOWN_PROVIDERS = ("", "stub", "none")
+
+
+class TelephonyNotImplemented(RuntimeError):
+    """A provider was configured that has no implementation here."""
+
+
 def build_call_provider(name: str) -> CallProvider:
-    """Construct the configured provider. Unknown/blank keys fail safe to the offline stub."""
+    """Construct the configured provider.
+
+    Blank or ``stub`` is the offline default: click-to-dial via a ``tel:`` URL, which is a real,
+    working workflow rather than a placeholder.
+
+    **A name we cannot build raises.** This used to return the stub for every input, so setting
+    ``NEXUS_TELEPHONY_PROVIDER=twilio`` produced click-to-dial with no error anywhere — the
+    operator had configured Twilio, no call was ever placed through it, and nothing said so. That
+    is the same "configured and doing nothing" failure as the personalization provider that
+    returned the stub for every input, and as `demo` signals scoring fabricated events: the
+    codebase's rule is that an integration is inert until keyed and *says so*, never a fake
+    fallback.
+
+    Raising here rather than at call time is deliberate: `get_call_provider` is resolved on first
+    use, so a bad value surfaces immediately instead of on the first rep's first call.
+    """
     key = (name or "").strip().lower()
-    # Tier 2/3 providers (twilio, voice agent) register here later. Until then everything is stub.
-    if key in ("", "stub", "none"):
+    if key in KNOWN_PROVIDERS:
         return StubCallProvider()
-    return StubCallProvider()
+    raise TelephonyNotImplemented(
+        f"NEXUS_TELEPHONY_PROVIDER={name!r} has no implementation. "
+        f"Only {', '.join(p or '(blank)' for p in KNOWN_PROVIDERS)} are available; a real "
+        f"provider (Twilio) is not built yet. Leave it unset for click-to-dial."
+    )
 
 
 _provider: CallProvider | None = None

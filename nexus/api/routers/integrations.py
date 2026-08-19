@@ -26,8 +26,7 @@ from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.ingestion.crm import (
     CRMAccount,
-    HubSpotConnector,
-    SalesforceConnector,
+    CRMConnector,
     get_crm_connector,
 )
 from nexus.ingestion.crm_sync import sync_account_to_crm
@@ -37,7 +36,31 @@ from nexus.models.identity import Tenant
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
-_CRM_CONNECTORS = {"salesforce": SalesforceConnector, "hubspot": HubSpotConnector}
+CRM_SOURCES = ("salesforce", "hubspot")
+
+
+class _PostedRows(CRMConnector):
+    """The rows the caller posted, tagged with the source they named.
+
+    This used to be done by looking the source up in a dict of connector CLASSES and calling it
+    with ``sample=`` — which only worked because the Salesforce connector is still a stub whose
+    constructor happens to take that keyword. `HubSpotConnector.__init__` takes an access token,
+    so choosing "HubSpot" in the Integrations screen raised
+    ``TypeError: got an unexpected keyword argument 'sample'`` and the user saw a 500. Measured
+    against the running stack before the fix: salesforce 200, hubspot 500.
+
+    Carrying the source as data rather than as a class removes the coupling entirely: what the
+    caller posts is imported the same way whichever CRM they say it came from, which is all this
+    path ever did.
+    """
+
+    def __init__(self, source: str, sample: list[CRMAccount]):
+        super().__init__()
+        self.source = source
+        self._sample = sample
+
+    async def fetch_accounts(self) -> list[CRMAccount]:
+        return self._sample
 
 
 @router.post("/crm/sync", response_model=CRMSyncResponse)
@@ -46,6 +69,19 @@ async def crm_sync(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> CRMSyncResponse:
+    """Import accounts into NEXUS under a CRM source.
+
+    Two paths, and which one runs depends on whether the caller posted rows:
+
+    * **Rows posted** — they are imported as-is, tagged with ``source``. This is what the
+      Integrations screen drives today: a hand-entry grid, not a connection.
+    * **No rows** — pull from the CRM that this deployment is actually configured for
+      (``NEXUS_CRM_PROVIDER`` + its credentials). Asking to pull from a provider the deployment
+      is not wired to is a 400 rather than an empty success: "nothing came back" and "we were
+      never connected to that CRM" are different facts and must not look the same.
+    """
+    # `source` is already constrained by the request schema's pattern; `CRM_SOURCES` is the same
+    # set as a value the rest of the code can read, and a test asserts the two stay in step.
     sample = [
         CRMAccount(
             external_id=a.external_id,
@@ -57,7 +93,20 @@ async def crm_sync(
         )
         for a in body.accounts
     ]
-    connector = _CRM_CONNECTORS[body.source](sample=sample)
+
+    if sample:
+        connector: CRMConnector = _PostedRows(body.source, sample)
+    else:
+        connector = get_crm_connector()
+        if connector.source != body.source:
+            configured = get_settings().crm_provider or "stub"
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"This deployment is not connected to {body.source} "
+                f"(NEXUS_CRM_PROVIDER is '{configured}'), so there is nothing to pull. "
+                f"Post accounts to import them manually, or configure the connector.",
+            )
+
     accounts = await connector.sync_accounts(ts)
     return CRMSyncResponse(
         source=body.source,

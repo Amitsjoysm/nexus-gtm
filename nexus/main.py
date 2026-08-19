@@ -57,6 +57,19 @@ async def lifespan(app: FastAPI):
 
     register_crm_sync_subscribers()
 
+    # Resolve the telephony provider once, at boot, so a name with no implementation behind it is
+    # a startup error rather than a permanent silence.
+    #
+    # `build_call_provider` returned the offline stub for EVERY input, so
+    # `NEXUS_TELEPHONY_PROVIDER=twilio` behaved exactly like leaving it blank — and because
+    # `get_call_provider()` has no callers anywhere in the product, the setting did nothing twice
+    # over. An operator who set it, saw click-to-dial working and concluded Twilio was placing the
+    # calls would never be corrected by anything in the system. Failing loudly here costs one clear
+    # message on a config that could never have worked.
+    from nexus.calling.provider import get_call_provider
+
+    get_call_provider()
+
     # Billing catalog/plan seed: idempotent, additive, and non-fatal. A seed failure must never
     # stop the API from serving (docs/billing/15-Migration-Strategy.md).
     if get_settings().billing_seed_on_startup:

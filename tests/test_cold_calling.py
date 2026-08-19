@@ -149,3 +149,47 @@ def test_stub_call_provider_returns_tel_link():
     )
     assert handle.mode == "manual"
     assert handle.dial_url == "tel:+15551234567"
+
+
+# ---- an unimplemented provider must not read as a working one -----------------------------------
+
+
+def test_the_offline_default_is_click_to_dial():
+    from nexus.calling.provider import build_call_provider
+
+    for name in ("", "stub", "none", "STUB"):
+        assert build_call_provider(name).name == "stub"
+
+
+def test_a_provider_with_no_implementation_raises_rather_than_stubbing():
+    """`build_call_provider` returned StubCallProvider for EVERY input, so
+    `NEXUS_TELEPHONY_PROVIDER=twilio` behaved exactly like leaving it blank with nothing logged.
+
+    Click-to-dial works, so an operator who set it saw calls "working" and had no way to learn
+    that Twilio was never involved. That is the same failure as the personalization provider that
+    silently returned the stub for every input.
+    """
+    import pytest
+
+    from nexus.calling.provider import TelephonyNotImplemented, build_call_provider
+
+    with pytest.raises(TelephonyNotImplemented) as exc:
+        build_call_provider("twilio")
+    # The message has to say what IS available, or it just moves the confusion.
+    assert "twilio" in str(exc.value).lower()
+    assert "click-to-dial" in str(exc.value)
+
+
+async def test_the_app_refuses_to_start_on_a_provider_it_cannot_build(monkeypatch):
+    """Resolved once at boot in `lifespan`, so the mistake surfaces on deploy rather than on the
+    first rep's first call."""
+    import pytest
+
+    from nexus.calling import provider as provider_mod
+    from nexus.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "telephony_provider", "twilio")
+    monkeypatch.setattr(provider_mod, "_provider", None)
+    with pytest.raises(provider_mod.TelephonyNotImplemented):
+        provider_mod.get_call_provider()
+    monkeypatch.setattr(provider_mod, "_provider", None)
