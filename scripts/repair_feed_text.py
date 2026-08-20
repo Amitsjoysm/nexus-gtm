@@ -9,8 +9,16 @@ signals carried raw entity codes and 74 carried HTML tags** — `&#8211;` where 
 Safe to run repeatedly. Cleaning is idempotent: text with no entities and no tags comes back
 unchanged, so a second pass is a no-op.
 
-    python scripts/repair_feed_text.py --dry-run     # show what would change, touch nothing
-    python scripts/repair_feed_text.py               # apply
+**Run it where the database is.** In a containerised deployment the app's DSN lives in the
+container's environment; a shell on the host resolves `NEXUS_DATABASE_URL` to its local default
+instead, which is a stale SQLite file. That is not hypothetical — the first run of this script did
+exactly that and died on `no such column: signal_events.subtype`, because the local file predated
+migration 0043. It printed nothing about which database it had opened, so "it errored" and "it
+repaired nothing" looked the same. Hence the banner below: the target is stated before any work.
+
+    docker cp scripts/repair_feed_text.py nexus-gtm-app-1:/tmp/repair.py
+    docker exec nexus-gtm-app-1 python /tmp/repair.py --dry-run   # report only
+    docker exec nexus-gtm-app-1 python /tmp/repair.py             # apply
 
 Only `title` and `body` are touched. `url` is left exactly as published — a URL is not display
 text, and stripping anything that looks like a tag out of a query string would corrupt it.
@@ -25,6 +33,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
+def _redacted_dsn(settings) -> str:
+    """The database this run will modify, with any password removed.
+
+    Shown rather than logged: the operator needs to see "postgresql+asyncpg://...@postgres/nexus"
+    and not "sqlite+aiosqlite:///./nexus.db" BEFORE the work starts, not after it fails.
+    """
+    import re
+
+    dsn = getattr(settings, "db_owner_url", "") or settings.database_url
+    return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", dsn)
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="report only, change nothing")
@@ -33,9 +53,20 @@ async def main() -> int:
 
     from sqlalchemy import select
 
+    from nexus.core.config import get_settings
     from nexus.core.db import get_platform_sessionmaker
     from nexus.ingestion.sources import clean_feed_text
     from nexus.models.signal import SignalEvent
+
+    # State the target before touching anything. A repair script that opens a different database
+    # than the operator expects and says nothing is the worst kind: it reports success on an empty
+    # table, or dies on a schema mismatch, and neither outcome names the cause.
+    print(f"target: {_redacted_dsn(get_settings())}")
+    if not args.dry_run:
+        print("mode:   APPLY (writes)")
+    else:
+        print("mode:   dry run (no writes)")
+    print()
 
     # Platform sessionmaker: this sweeps every tenant, and a tenant-bound session would silently
     # return zero rows for all but one of them.
