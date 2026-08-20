@@ -64,11 +64,30 @@ class RunOut(BaseModel):
     created_at: datetime
     steps: list[RunStepOut] = Field(default_factory=list)
     blackboard: dict = Field(default_factory=dict)
+    # Step progress as plain numbers, so a caller that does not need the full step list can still
+    # show it. The runs LIST builds `RunOut` without steps — loading every step of every run, each
+    # carrying its own `output` blob, to render one "3/5" label would be a lot of payload for a
+    # number. So the list reported `steps=[]` and the UI computed "0/0 steps" for runs that had
+    # completed successfully; a finished 25-account discovery run displayed as having done nothing.
+    step_total: int = 0
+    step_done: int = 0
 
     @classmethod
     def from_model(
-        cls, run: OrchestrationRun, steps: list[RunStep] | None = None
+        cls,
+        run: OrchestrationRun,
+        steps: list[RunStep] | None = None,
+        *,
+        step_total: int | None = None,
+        step_done: int | None = None,
     ) -> "RunOut":
+        """``steps`` populates the detail view; ``step_total``/``step_done`` let the list pass
+        counts it aggregated separately. When steps ARE supplied the counts are derived from them,
+        so the two can never disagree."""
+        out = [RunStepOut.from_model(s) for s in (steps or [])]
+        if steps is not None:
+            step_total = len(out)
+            step_done = sum(1 for s in out if s.status == "completed")
         return cls(
             id=run.id,
             goal=run.goal,
@@ -77,8 +96,10 @@ class RunOut(BaseModel):
             chat_session_id=run.chat_session_id,
             error=run.error,
             created_at=run.created_at,
-            steps=[RunStepOut.from_model(s) for s in (steps or [])],
+            steps=out,
             blackboard=run.blackboard or {},
+            step_total=step_total or 0,
+            step_done=step_done or 0,
         )
 
 

@@ -61,7 +61,16 @@ class AnalyticsService:
             "contacts": int(row.contacts or 0),
             "signals": int(row.signals or 0),
             "open_tasks": int(row.open_tasks or 0),
-            "agent_runs": int(row.agent_runs or 0),
+            # Named "agent_runs" until it was reported as a bug: the dashboard renders each key
+            # with `humanize()`, so this tile read "Agent Runs" directly beside a nav item called
+            # "AI Runs" — and the two count different tables. This is `agent_runs`, one row per
+            # individual agent execution (a research brief, a draft, a scoring pass). "AI Runs" is
+            # `orchestration_runs`, one row per multi-agent orchestrator session.
+            #
+            # Neither number was ever wrong. A workspace that has scored accounts but never opened
+            # the orchestrator genuinely has many agent actions and zero runs, which is exactly
+            # what was seen (6 vs 0). Only the label lied, so only the label changed.
+            "agent_actions": int(row.agent_runs or 0),
             "agent_failures": int(row.agent_failures or 0),
             "plays_executed": int(row.plays_executed or 0),
             "avg_composite_score": round(float(row.avg_composite), 1) if row.avg_composite else 0.0,

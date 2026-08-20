@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 
+from nexus.agents.copy import CALL_RULES, first_pain, format_pains
 from nexus.agents.llm import LLMMessage
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 
@@ -60,7 +61,9 @@ class CallScriptAgent(BaseAgent):
 
         vps = ctx.relevance_context.value_props
         vp = vps[0] if vps else {"name": "our platform", "pains_solved": []}
-        pains = ", ".join(vp.get("pains_solved", [])) or "hit pipeline goals"
+        # Nouns, formatted to sit inside a sentence — see nexus/agents/copy.py for the
+        # garbled email this replaced.
+        pains = format_pains(vp.get("pains_solved", []))
 
         # Person-level personalization: shape the talk track to this individual (role/seniority,
         # a signal tied to them when available, social insights), not just the account.
@@ -73,13 +76,19 @@ class CallScriptAgent(BaseAgent):
             " " + brief.to_prompt(max_posts=get_settings().personalization_max_posts)
             if brief is not None else ""
         )
+        # Facts, then task, then rules, then the output contract — the same order as the email
+        # agent, so "use only facts given above" has something above it to refer to.
         content = (
-            f"Write a cold-call talk track for an SDR calling "
-            f"{contact_name} ({contact.title if contact and contact.title else 'a buyer'}) "
-            f"at {ctx.account.name}. Hook: {hook}. Lead value prop: '{vp.get('name')}'.{person_block} "
+            f"Write a cold-call talk track for an experienced SDR calling {contact_name} "
+            f"({contact.title if contact and contact.title else 'a buyer'}) at {ctx.account.name}.\n"
+            f"The trigger to open on: {hook}\n"
+            f"The value proposition to land: {vp.get('name')}\n"
+            f"The problems it removes: {pains}\n"
+            f"{person_block}\n"
+            f"{CALL_RULES}\n"
             "Return ONLY a JSON object with keys: opener, hook, value_prop, "
             "discovery_questions (array of strings), objections (array of {objection, response}), "
-            "cta, voicemail. Keep it concise and natural to say out loud."
+            "cta, voicemail. No markdown fence, no commentary."
         )
         raw = await ctx.complete(
             [ctx.system_message(), LLMMessage(role="user", content=content)],
@@ -91,6 +100,7 @@ class CallScriptAgent(BaseAgent):
                 "value_prop": vp.get("name", "our platform"),
                 "trigger": trigger,
                 "pain": pains,
+                "one_pain": first_pain(vp.get("pains_solved", [])),
             },
         )
         script = _coerce(raw, account=ctx.account.name, contact=contact_name)

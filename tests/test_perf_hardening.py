@@ -57,11 +57,13 @@ async def test_overview_counts_are_correct_after_single_query_rewrite(client):
     data = r.json()
     assert set(data) == {
         "accounts", "contacts", "signals", "open_tasks",
-        "agent_runs", "agent_failures", "plays_executed", "avg_composite_score",
+        "agent_actions", "agent_failures", "plays_executed", "avg_composite_score",
     }
     assert data["accounts"] == 1
     assert data["signals"] > 0          # pipeline ingested demo signals
-    assert data["agent_runs"] >= 1      # scoring agent ran
+    # Individual agent EXECUTIONS, not orchestrator sessions — the two are different
+    # tables and the tile used to be labelled as though they were the same.
+    assert data["agent_actions"] >= 1   # scoring agent ran
     assert data["agent_failures"] == 0
     assert data["avg_composite_score"] > 0
 

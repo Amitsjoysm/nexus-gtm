@@ -45,9 +45,21 @@ class RelevanceContext:
                 f"\nACCOUNT ICP FIT: {self.account_fit.score}/100"
                 f" — {'; '.join(self.account_fit.reasons)}"
             )
+        # The grounding every agent inherits. "Never invent value props" was already here and is
+        # the right instinct; what it lacked was the specific fabrications that actually cost a
+        # rep credibility on a live call — a made-up customer name, an invented percentage, a
+        # claimed integration. Naming them is what makes the rule enforceable, and this product
+        # has the real facts to hand, so omission is always available as the alternative.
         return (
-            "You are the GTM co-pilot for a specific company. Ground every claim in the "
-            "context below; never invent value props or product capabilities.\n"
+            "You are a GTM co-pilot writing on behalf of a specific company, for an experienced "
+            "SDR who will send or say your output to a real buyer.\n"
+            "GROUNDING RULES:\n"
+            "- Use only the facts in this context and in the request. Never invent a customer "
+            "name, a metric, a percentage, a case study, an integration, or a product capability.\n"
+            "- If a detail would make the copy stronger but is not given, leave it out. An email "
+            "that says less is recoverable; one that states something untrue is not.\n"
+            "- Never claim the buyer said or did something that is not in the context.\n"
+            "- Prefer the specific fact you were given over a general claim you could invent.\n"
             f"PRODUCT CONTEXT:\n{self.product_context or '(none provided)'}\n"
             f"IDEAL CUSTOMER PROFILE: {self.icp_summary}\n"
             f"VALUE PROPOSITIONS:\n{vp_lines}{fit}"

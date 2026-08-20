@@ -82,10 +82,18 @@ class StubLLMProvider(LLMProvider):
             vp = v.get("value_prop", "our platform")
             trigger = v.get("trigger", "your recent initiative")
             contact = v.get("contact", "there")
+            # `pain` is a list of PROBLEMS (nouns), so the connective has to take a noun. It used
+            # to read "use {vp} to {pain}", which needs a verb, and produced:
+            #   "...use Accurate Lead Generation to Stale lists, Duplicate records, ..."
+            # See nexus/agents/copy.py. The default here matches that shape too, so a caller that
+            # passes nothing still gets a sentence.
+            from nexus.agents.copy import DEFAULT_PAINS
+
+            pain = v.get("pain") or DEFAULT_PAINS
             return (
                 f"Subject: {vp} for {account}\n\n"
-                f"Hi {contact}, noticed {trigger}. Teams like {account} use {vp} to "
-                f"{v.get('pain', 'hit their goals faster')}. Worth a 15-min look?\n\nBest,\nYour AE"
+                f"Hi {contact}, noticed {trigger}. Teams like {account} use {vp} to get ahead of "
+                f"{pain}. Worth a 15-min look?\n\nBest,\nYour AE"
             )
         if purpose == "call_script":
             import json as _json
@@ -93,14 +101,20 @@ class StubLLMProvider(LLMProvider):
             contact = v.get("contact", "there")
             vp = v.get("value_prop", "our platform")
             trigger = v.get("trigger", "your current priorities")
-            pain = v.get("pain", "hit pipeline goals")
+            from nexus.agents.copy import DEFAULT_PAINS
+
+            # Same noun-vs-verb fix as outreach_message. `one_pain` is what the caller passes for
+            # the discovery question: naming four problems in a question nobody can answer is how
+            # a script stops sounding like a person.
+            pain = v.get("pain") or DEFAULT_PAINS
+            one_pain = v.get("one_pain") or pain
             return _json.dumps({
                 "opener": f"Hi {contact}, this is <your name> from <your company>. "
                           f"Did I catch you at an okay time for 30 seconds?",
                 "hook": f"I noticed {trigger} at {account} — that's usually when teams look at {vp}.",
-                "value_prop": f"{vp} helps teams {pain}.",
+                "value_prop": f"{vp} helps teams get ahead of {pain}.",
                 "discovery_questions": [
-                    f"How are you handling {pain} today?",
+                    f"How are you handling {one_pain} today?",
                     "What's driving the priority on this right now?",
                     "Who else would be involved in evaluating something like this?",
                 ],

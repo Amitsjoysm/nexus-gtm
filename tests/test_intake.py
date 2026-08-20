@@ -302,3 +302,80 @@ async def test_stub_intake_understanding_is_empty_noop():
         variables={"summary": "", "icp_state": {}, "target": "companies"},
     )
     assert r.text.strip() == "{}"
+
+
+# -- A question is not a launch instruction -------------------------------------------------------
+#
+# `is_first_turn` launched a discovery run on its own once the ICP had no missing slots. A rep who
+# opened the orchestrator from an account page and typed "What is the ICP fit for Marketjoy and
+# why?" got a full run that re-scored every account in the workspace, never got an answer, and paid
+# for it. Reported from the live app.
+
+from nexus.orchestration.intake import _is_question
+
+
+def test_questions_are_recognised_and_instructions_are_not():
+    for asked in (
+        "What is the ICP fit for Marketjoy and why?",
+        "why did this account score 40",
+        "How does relevance scoring work?",
+        "Is Marketjoy a good fit",
+        "which accounts are hot",
+        "Explain the fit score",
+    ):
+        assert _is_question(asked), asked
+
+    # These are instructions. They must keep launching immediately — the whole point of the
+    # first-turn shortcut is that "show me X" does not need a confirmation round trip.
+    for told in (
+        "Find Fintech companies in the US with 200-5000 employees",
+        "show me fintech CFOs in the UK",
+        "get me 50 SaaS companies hiring engineers",
+        "list healthcare accounts in Germany",
+        "fintech, US, 200-5000",
+    ):
+        assert not _is_question(told), told
+
+
+@pytest.mark.asyncio
+async def test_a_first_turn_question_does_not_spend_a_run():
+    """The reported bug, end to end through the controller."""
+    ctrl = IntakeController()
+    complete = {"industries": ["Fintech"], "geo": ["United States"],
+                "company_size": {"min": 200, "max": 5000}}
+    d = await ctrl.advance(
+        icp_state=complete, target="companies", missing_slots=[], context_summary="",
+        user_text="What is the ICP fit for Marketjoy and why?",
+        is_first_turn=True,
+    )
+    assert d.action == "ready", "a question must not launch a discovery run"
+
+
+@pytest.mark.asyncio
+async def test_a_first_turn_instruction_still_launches_immediately():
+    """The behaviour the guard must not cost: an explicit ask still goes straight to a run."""
+    ctrl = IntakeController()
+    d = await ctrl.advance(
+        icp_state={}, target="companies", missing_slots=[], context_summary="",
+        user_text="Find Fintech companies in the US with 200-5000 employees",
+        is_first_turn=True,
+    )
+    assert d.action == "launch"
+
+
+@pytest.mark.asyncio
+async def test_a_question_then_a_yes_launches():
+    """Cautious, not obstructive — one extra word gets the run."""
+    ctrl = IntakeController()
+    complete = {"industries": ["Fintech"], "geo": ["United States"],
+                "company_size": {"min": 200, "max": 5000}}
+    asked = await ctrl.advance(
+        icp_state=complete, target="companies", missing_slots=[], context_summary="",
+        user_text="Which companies match?", is_first_turn=True,
+    )
+    assert asked.action == "ready"
+    go = await ctrl.advance(
+        icp_state=asked.icp_state, target="companies", missing_slots=[], context_summary="",
+        user_text="yes", is_first_turn=False,
+    )
+    assert go.action == "launch"

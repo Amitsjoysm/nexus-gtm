@@ -668,6 +668,38 @@ you built is not a config change afterwards.
 - Still to build (step 7): the enrichment provider itself. **Failure posture when it lands: fall
   through to the paid provider, never stop collection.** It is an optimisation, not a dependency.
 
+## Orchestrator intake (`nexus/orchestration/intake.py`)
+
+**A question is not a launch instruction.** `advance` used to launch on `is_first_turn` alone once
+the ICP had no missing slots, so a workspace with a saved ICP turned *any* opening message into a
+`discover` run. Opening the orchestrator from an account page and typing "What is the ICP fit for
+Marketjoy and why?" re-scored every account in the workspace, never answered the question, and
+billed a full run for it.
+
+`_is_question` is deterministic and narrow — a trailing `?` or an interrogative opener — matching
+the rest of this controller, where the LLM only phrases and summarises. It deliberately excludes
+`find`/`show`/`get`/`list`: "show me fintech CFOs in the UK" **is** an instruction and must keep
+launching immediately, which is the whole point of the first-turn shortcut. Being wrong cautiously
+costs one "yes" (`_is_affirmative` already handles it); being wrong the other way spends a run.
+
+Note the orchestrator has exactly one destination — it is an ICP intake funnel that ends in
+`discover`. There is still no path for a scoped question about an account already in context.
+
+## Two counters, two tables
+
+`analytics.overview` reports **`agent_actions`** (`count(AgentRun)` — one row per individual agent
+execution: a research brief, a draft, a scoring pass). The **AI Runs** page lists
+`OrchestrationRun` — one row per multi-agent orchestrator session. The key used to be named
+`agent_runs`, and the dashboard renders each key through `humanize()`, so the tile read "Agent Runs"
+directly beside a nav item called "AI Runs" while counting a different table. A workspace that has
+scored accounts but never opened the orchestrator genuinely has many agent actions and zero runs
+(observed: 6 vs 0). Neither number was wrong; only the label was.
+
+`RunOut` also carries **`step_total` / `step_done`**. The runs LIST builds it without steps —
+shipping every step's `output` blob to render one "3/5" label is not worth it — so it reported
+`steps: []` and the UI computed "0/0 steps" for runs that had completed. When steps *are* supplied
+the counts derive from them, so list and detail cannot disagree.
+
 ## Plan-gated navigation (`frontend/src/app/EntitlementsContext.tsx`)
 
 The sidebar was blind to entitlements, so a `free` workspace saw Network and Campaigns and found
@@ -805,6 +837,53 @@ Registered actors and their state:
 
 The last two are registered and called by nothing. Before wiring `company_search`, note it has 42
 total runs across 2 users — an abandoned actor is a dependency that disappears without notice.
+
+## Drafted copy (`nexus/agents/copy.py`)
+
+**Everything the agents generate is sent to a real buyer**, including the offline stub's output:
+`llm_provider="auto"` builds `FallbackLLMProvider([Groq, Stub])`, so the stub is what a deployment
+with a dead key sends. It is not a placeholder.
+
+**One variable must not carry two grammatical forms.** `pains_solved` holds problem NOUNS, the
+template read `use {vp} to {pain}` — which needs a verb — and the no-value-props fallback was
+`"hit pipeline goals"`, a verb phrase. So the sentence read correctly for workspaces that had
+configured nothing and broke for every workspace that had filled the field in:
+
+> Teams like Marketjoy use Accurate Lead Generation to Stale lists, Duplicate records, No signal on
+> in-market accounts, Wasted time chasing wrong leads.
+
+`format_pains` guarantees the noun form and the connective takes nouns (`to get ahead of ...`);
+fixing only one half would leave the other free to break again. It caps at two — four problems in
+one sentence reads as a list being recited — and `first_pain` exists because a discovery question
+naming four problems is not answerable. `_downcase_lead` tests the **second** character, so `SOC2`
+and `CRM` keep their capitals; a blanket `.lower()` mangles every acronym a customer typed.
+
+**Prompt rules live in one place and are stated as constraints, not style notes.** Distilled from
+four public GTM prompt libraries (Prospeda, gtm-skills, gtmagents, sidchaudhary) — their text is not
+copied; what transfers is that a hard word cap, a banned-phrase list, observation-before-ask, and
+no-invented-facts each map to a failure this product can have. The highest-value rule is in none of
+them: **`OUTPUT_CONTRACT` asks for the `Subject:` line that `_split_subject` has always parsed.**
+The prompt never requested it, so a model that opened with the body produced a blank subject and
+nothing reported a problem.
+
+The system grounding (`RelevanceContext.to_prompt`) names the specific fabrications — a customer
+name, a metric, a percentage, a case study, an integration — because "never invent value props"
+alone is not enforceable, and this product *has* the real facts, so omission is always available.
+
+## Feed text (`nexus/ingestion/sources.py`)
+
+**RSS is double-encoded far more often than not**: the publisher HTML-escapes the content and the
+XML layer escapes it again, so `&amp;#8211;` survives XML parsing as the literal text `&#8211;`.
+Measured on live data: **73 of 139 stored RSS signals carried raw entity codes and 74 carried HTML
+tags** — `&#8217;s` and WordPress's `[&#8230;]` in front of reps on the Signals list, the account
+Signals tab and the dashboard feed.
+
+`clean_feed_text` runs unescape → strip tags → unescape. The order matters in the opposite
+direction to `webwatch.normalise`: unescaping first turns `&lt;p&gt;` into a real tag so it can be
+stripped, and the second pass catches entities that were hidden inside the markup layer. Two passes,
+not a loop to a fixed point — an unbounded loop on third-party text is how a display bug becomes a
+hang. It preserves case (unlike `normalise`, which lowercases because it feeds a hash) and leaves
+URLs untouched. `scripts/repair_feed_text.py` fixes rows stored before it existed; it is idempotent.
 
 ## Person-level personalization (`nexus/personalization/`)
 

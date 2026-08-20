@@ -182,11 +182,7 @@ export class ApiClient {
     const data = text ? safeJsonParse(text) : null;
 
     if (!res.ok) {
-      const detail =
-        (data && typeof data === "object" && "detail" in data
-          ? String((data as { detail: unknown }).detail)
-          : null) || res.statusText || "Request failed";
-      throw new ApiError(res.status, detail);
+      throw new ApiError(res.status, errorDetail(data, res.statusText));
     }
     return data as T;
   }
@@ -206,11 +202,7 @@ export class ApiClient {
     const text = await res.text();
     const data = text ? safeJsonParse(text) : null;
     if (!res.ok) {
-      const detail =
-        (data && typeof data === "object" && "detail" in data
-          ? String((data as { detail: unknown }).detail)
-          : null) || res.statusText || "Request failed";
-      throw new ApiError(res.status, detail);
+      throw new ApiError(res.status, errorDetail(data, res.statusText));
     }
     return data as T;
   }
@@ -239,11 +231,7 @@ export class ApiClient {
     if (!res.ok) {
       const text = await res.text();
       const data = text ? safeJsonParse(text) : null;
-      const detail =
-        (data && typeof data === "object" && "detail" in data
-          ? String((data as { detail: unknown }).detail)
-          : null) || res.statusText || "Export failed";
-      throw new ApiError(res.status, detail);
+      throw new ApiError(res.status, errorDetail(data, res.statusText || "Export failed"));
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -399,11 +387,7 @@ export class ApiClient {
     const text = await res.text();
     const data = text ? safeJsonParse(text) : null;
     if (!res.ok) {
-      const detail =
-        (data && typeof data === "object" && "detail" in data
-          ? String((data as { detail: unknown }).detail)
-          : null) || res.statusText || "Enrichment failed";
-      throw new ApiError(res.status, detail);
+      throw new ApiError(res.status, errorDetail(data, res.statusText || "Enrichment failed"));
     }
     const filledHeader = res.headers.get("X-Enriched-Fields") || "";
     const filled = filledHeader ? filledHeader.split(",").filter(Boolean) : [];
@@ -798,18 +782,19 @@ export class ApiClient {
     return this.request<SellablePlan[]>("/billing/plans", { signal });
   }
   /** Opens hosted Checkout. Returns a provider URL to redirect to; writes no subscription. */
+  // `body` takes a plain object — `request` serializes it. Passing a pre-stringified string here
+  // double-encodes it, so the wire carries a JSON *string* rather than an object and FastAPI
+  // answers 422. Every other method on this client passes an object; these two did not, which is
+  // why both money actions failed the moment they were first clicked.
   billingCheckout(planId: string) {
     return this.request<HostedSession>("/billing/checkout", {
       method: "POST",
-      body: JSON.stringify({ plan_id: planId }),
+      body: { plan_id: planId },
     });
   }
   /** Opens the hosted Customer Portal, where a card is changed or a plan is cancelled. */
   billingPortal() {
-    return this.request<HostedSession>("/billing/portal", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
+    return this.request<HostedSession>("/billing/portal", { method: "POST", body: {} });
   }
 
   // ---- billing (platform-admin control plane) ----
@@ -1320,4 +1305,38 @@ function safeJsonParse(text: string): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * A human-readable message out of whatever the backend returned.
+ *
+ * FastAPI answers a validation failure (422) with `detail` as an ARRAY of
+ * `{loc, msg, type}` objects, and the old code did `String(detail)` on it — which yields
+ * `"[object Object]"`. Every 422 in the app therefore surfaced as that string, which tells the
+ * user nothing and tells a developer reading a bug report even less: it is indistinguishable from
+ * a rendering fault, so a real backend rejection reads as "the button does nothing".
+ *
+ * Handles the three shapes the API actually produces: a plain string (our own HTTPException
+ * details), the 422 array, and anything else — which falls back to the HTTP status text rather
+ * than stringifying an object.
+ */
+export function errorDetail(data: unknown, statusText = ""): string {
+  const fallback = statusText || "Request failed";
+  if (!data || typeof data !== "object") return fallback;
+  const detail = (data as { detail?: unknown }).detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((e) => {
+        if (!e || typeof e !== "object") return String(e);
+        const { loc, msg } = e as { loc?: unknown; msg?: unknown };
+        // `loc` is ["body", "plan_id"] — the last segment is the field the user cares about.
+        const field = Array.isArray(loc) ? String(loc[loc.length - 1] ?? "") : "";
+        const message = typeof msg === "string" ? msg : "is invalid";
+        return field ? `${field}: ${message}` : message;
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  return fallback;
 }

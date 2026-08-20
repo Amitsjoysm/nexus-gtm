@@ -13,6 +13,7 @@ from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import case, func, select
 
 from nexus.api.deps import Principal, get_principal, get_tenant_session, require
 from nexus.core.rbac import Permission, has_permission
@@ -78,7 +79,31 @@ async def list_runs(
 ) -> list[RunOut]:
     stmt = ts.select(OrchestrationRun).order_by(OrchestrationRun.created_at.desc()).limit(100)
     runs = list((await ts.session.scalars(stmt)).all())
-    return [RunOut.from_model(r) for r in runs]
+
+    # Step counts for the whole page in ONE grouped query. The alternative that reads naturally —
+    # loading each run's steps — is 100 extra queries carrying every step's `output` blob to
+    # render a "3/5" label. Without it the list showed "0/0 steps" on runs that had finished.
+    counts: dict[str, tuple[int, int]] = {}
+    if runs:
+        rows = await ts.session.execute(
+            select(
+                RunStep.run_id,
+                func.count().label("total"),
+                func.sum(case((RunStep.status == "completed", 1), else_=0)).label("done"),
+            )
+            .where(RunStep.run_id.in_([r.id for r in runs]))
+            .group_by(RunStep.run_id)
+        )
+        counts = {rid: (int(total or 0), int(done or 0)) for rid, total, done in rows}
+
+    return [
+        RunOut.from_model(
+            r,
+            step_total=counts.get(r.id, (0, 0))[0],
+            step_done=counts.get(r.id, (0, 0))[1],
+        )
+        for r in runs
+    ]
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)

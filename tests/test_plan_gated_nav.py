@@ -301,3 +301,63 @@ async def test_the_new_module_gates_change_nothing_for_existing_plans(client):
             assert modules[cap]["included"] is True, (
                 f"{cap} is excluded on {plan} — adding it was supposed to change nothing"
             )
+
+
+# ---- the page title is derived, not hand-maintained ----------------------------------------------
+
+
+def test_no_second_hand_maintained_list_of_page_titles():
+    """`AppShell` used to hold a literal map of seven titles for twenty-two destinations, so Calls,
+    Contacts, Network, Lists, AI Runs and eight others rendered as "InfoJoy GTM · InfoJoy GTM".
+
+    A second list of every page will always drift from the first. This asserts the derivation is
+    still in place rather than re-checking each title, because re-listing them here would just be
+    the same duplicate one layer further out.
+    """
+    shell = (_ROOT / "frontend" / "src" / "components" / "layout" / "AppShell.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "NAV_ITEMS.map" in shell, "page titles are no longer derived from the nav"
+    assert "const TITLES: Record<string, string> = {" not in shell, (
+        "a hand-maintained title map is back — it will drift again"
+    )
+
+
+def test_every_nav_destination_can_produce_a_title():
+    """The derivation only works if each nav item has a usable label."""
+    source = _NAV.read_text(encoding="utf-8")
+    labels = re.findall(r'label:\s*"([^"]+)"', source)
+    routes = re.findall(r'to:\s*"([^"]+)"', source)
+    assert len(labels) == len(routes), "every nav item needs both a route and a label"
+    assert all(label.strip() for label in labels)
+    # The bug in one line: these five were the ones reported as showing the app name.
+    for route in ("/calls", "/contacts", "/network", "/lists", "/runs"):
+        assert route in routes, f"{route} left NAV_ITEMS — its title would fall back to the app name"
+
+
+# ---- the API client must not double-encode a request body ----------------------------------------
+
+
+def test_no_api_method_pre_stringifies_its_body():
+    """`request()` serializes `body` itself. Passing an already-stringified string double-encodes
+    it, so the wire carries a JSON *string* instead of an object and FastAPI answers 422.
+
+    That is exactly what happened to `billingCheckout` and `billingPortal`: both money actions
+    failed the first time anyone clicked them. Every other method on the client passes a plain
+    object, so this asserts the convention rather than the two symptoms.
+    """
+    api = (_ROOT / "frontend" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    offenders = re.findall(r"body:\s*JSON\.stringify\(", api)
+    assert not offenders, (
+        f"{len(offenders)} request(s) pre-stringify their body — `request()` already does that, "
+        "and the result is a 422 with no useful detail."
+    )
+
+
+def test_a_validation_error_renders_as_text_not_object_object():
+    """FastAPI returns 422 `detail` as an ARRAY of {loc, msg, type}. `String(detail)` on that
+    yields "[object Object]", which is indistinguishable from a rendering fault — so a real
+    backend rejection reads to the user as "the button does nothing"."""
+    api = (_ROOT / "frontend" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    assert "export function errorDetail(" in api, "the 422 detail formatter is gone"
+    assert "Array.isArray(detail)" in api, "the 422 array shape is no longer handled"

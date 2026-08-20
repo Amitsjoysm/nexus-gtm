@@ -402,3 +402,53 @@ async def test_runaway_guard_fails_run_instead_of_hanging(monkeypatch):
         await engine.execute_run(ts, run, runtime=_runtime())
         assert run.status == RUN_FAILED
         assert run.error and "runaway_guard" in run.error
+
+
+# ---- the runs list has to report progress it can actually see -----------------------------------
+
+
+async def test_the_runs_list_reports_step_counts(client):
+    """A finished discovery run displayed "0/0 steps" on the AI Runs list.
+
+    `RunOut.from_model` defaults `steps` to empty, and the LIST endpoint never passed any — loading
+    every step of every run, each carrying its own `output` blob, to render one "3/5" label is a
+    lot of payload for a number. So the counts are aggregated separately and sent as plain ints.
+    """
+    from tests.conftest import auth, signup
+
+    token = await signup(client, slug="runcnt", email="o@runcnt.com", company="RUNCNT")
+    created = await client.post(
+        "/api/orchestration/runs",
+        headers=auth(token),
+        json={"goal": "discover", "input": {"target": "companies", "max_candidates": 1}},
+    )
+    assert created.status_code in (200, 201), created.text
+
+    listed = await client.get("/api/orchestration/runs", headers=auth(token))
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    assert rows, "the run we just created should be listed"
+    row = rows[0]
+    assert "step_total" in row and "step_done" in row
+    assert row["step_total"] >= 1, "a discovery run has at least one step — 0 was the bug"
+
+
+async def test_the_detail_view_derives_the_same_counts_from_its_steps(client):
+    """When steps ARE loaded the counts come from them, so list and detail cannot disagree."""
+    from tests.conftest import auth, signup
+
+    token = await signup(client, slug="runcnt2", email="o@runcnt2.com", company="RUNCNT2")
+    created = await client.post(
+        "/api/orchestration/runs",
+        headers=auth(token),
+        json={"goal": "discover", "input": {"target": "companies", "max_candidates": 1}},
+    )
+    run_id = created.json()["id"]
+
+    detail = (await client.get(f"/api/orchestration/runs/{run_id}", headers=auth(token))).json()
+    assert detail["step_total"] == len(detail["steps"])
+    assert detail["step_done"] == sum(1 for s in detail["steps"] if s["status"] == "completed")
+
+    listed = (await client.get("/api/orchestration/runs", headers=auth(token))).json()
+    row = next(r for r in listed if r["id"] == run_id)
+    assert row["step_total"] == detail["step_total"]

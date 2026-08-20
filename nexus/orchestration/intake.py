@@ -360,6 +360,37 @@ def _is_affirmative(text: str) -> bool:
     return any(t == p or t.startswith(p + " ") for p in _AFFIRMATIVE_PREFIXES)
 
 
+# Openers that make a sentence a question rather than an instruction. Deliberately excludes
+# "find", "show", "get", "list" — "show me fintech CFOs in the UK" IS a request to go and must
+# keep launching immediately.
+_QUESTION_OPENERS = (
+    "what", "why", "how", "when", "who", "whom", "whose", "which",
+    "is", "are", "was", "were", "does", "do", "did", "can", "could",
+    "should", "would", "will", "explain", "tell me about", "tell me why",
+)
+
+
+def _is_question(text: str) -> bool:
+    """Whether the user asked something rather than instructed something.
+
+    A first turn used to launch a discovery run unconditionally once the ICP had no missing slots,
+    so opening the orchestrator from an account page and typing "What is the ICP fit for Marketjoy
+    and why?" spent a full run re-scoring every account in the workspace. The question was never
+    answered and the rep paid for it.
+
+    Kept deterministic and narrow, matching the rest of this controller: a trailing "?" or an
+    interrogative opener. Being wrong in the cautious direction costs one extra confirmation
+    ("yes"), which `_is_affirmative` already handles; being wrong in the other direction spends a
+    run and burns credits on something nobody asked for.
+    """
+    t = text.strip().lower()
+    if not t:
+        return False
+    if t.endswith("?"):
+        return True
+    return any(t == w or t.startswith(w + " ") for w in _QUESTION_OPENERS)
+
+
 # Vocabulary that signals the user wants individual people vs. accounts. "prospect/lead/buyer"
 # are the words real reps use, and their absence was why "I want prospects not companies" failed.
 _CONTACT_WORDS = (
@@ -521,7 +552,12 @@ class IntakeController:
             )
 
         summary = await self._summarize(context_summary, new_state, target)
-        if is_first_turn or _is_affirmative(user_text):
+        # A question is not a launch instruction. `is_first_turn` used to launch on its own, so a
+        # workspace whose ICP was already complete turned any opening message — including "What is
+        # the ICP fit for Marketjoy and why?" — into a full discovery run over every account.
+        # Falling through to `ready` states what it can do and waits for a yes, which
+        # `_is_affirmative` then honours; the cost of being cautious is one extra word from the rep.
+        if (is_first_turn and not _is_question(user_text)) or _is_affirmative(user_text):
             return IntakeDecision(
                 icp_state=new_state, missing_slots=[], target=target,
                 action="launch", assistant_kind="run_launched",

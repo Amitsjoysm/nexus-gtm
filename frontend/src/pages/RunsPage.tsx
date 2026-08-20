@@ -208,8 +208,12 @@ export function RunsPage() {
 }
 
 function RunRow({ run }: { run: Run }) {
-  const total = run.steps.length;
-  const done = run.steps.filter((s) => s.status === "completed").length;
+  // The list endpoint does not carry each run's full step list — one "3/5" label is not worth
+  // shipping every step's output blob — so it sends the counts instead. Reading `steps.length`
+  // here made every finished run render "0/0 steps". Falls back to the array for the detail view
+  // and for any caller that does populate it.
+  const total = run.step_total ?? run.steps.length;
+  const done = run.step_done ?? run.steps.filter((s) => s.status === "completed").length;
   const composite = run.blackboard?.composite;
 
   return (

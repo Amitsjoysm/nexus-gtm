@@ -19,6 +19,7 @@ funding round it becomes one signal rather than three.
 from __future__ import annotations
 
 import abc
+import html
 import logging
 import re
 from dataclasses import dataclass, field
@@ -293,9 +294,45 @@ class DemoSignalSource(SignalSource):
         return out
 
 
+_FEED_TAGS = re.compile(r"<[^>]+>")
+_FEED_WS = re.compile(r"\s+")
+
+
+def clean_feed_text(value: str | None) -> str:
+    """Readable text out of a feed field.
+
+    Feeds are **double-encoded** far more often than not: the publisher HTML-escapes the content
+    and the XML layer escapes it again, so `&amp;#8211;` survives XML parsing as the literal text
+    `&#8211;`. Measured on live data before this existed: 73 of 139 stored RSS signals showed raw
+    entity codes and 74 carried HTML tags, which is what put `&#8217;s` and WordPress's `[&#8230;]`
+    read-more marker in front of reps on the Signals list, the account Signals tab and the
+    dashboard feed.
+
+    Order matters and is the reverse of `webwatch.normalise`'s reason for existing:
+
+    1. unescape once, so `&lt;p&gt;` becomes a real tag rather than surviving as visible text;
+    2. strip tags;
+    3. unescape again, for entities that were hidden inside the markup layer.
+
+    Two passes, not a loop to a fixed point — bounded is the point. A third layer of encoding is
+    not something a feed does, and an unbounded loop on attacker-supplied text is how you turn a
+    display bug into a hang.
+
+    Deliberately preserves case and punctuation: this is display text, unlike `webwatch.normalise`
+    which lowercases because it is feeding a hash.
+    """
+    text = html.unescape(value or "")
+    text = _FEED_TAGS.sub(" ", text)
+    text = html.unescape(text)
+    return _FEED_WS.sub(" ", text).strip()
+
+
 def _parse_feed(xml_text: str) -> list[dict]:
     """Parse an RSS or Atom feed into ``[{title, link, summary}]``. Namespace-tolerant, never
-    raises. Handles RSS ``<item>`` (link is text) and Atom ``<entry>`` (link is an href attr)."""
+    raises. Handles RSS ``<item>`` (link is text) and Atom ``<entry>`` (link is an href attr).
+
+    Text fields are cleaned here rather than at each call site, so every consumer of a feed gets
+    readable text and no future one has to remember."""
     import xml.etree.ElementTree as ET
 
     def _local(tag: str) -> str:
@@ -313,14 +350,15 @@ def _parse_feed(xml_text: str) -> list[dict]:
         for child in el:
             lt = _local(child.tag)
             if lt == "title" and child.text:
-                d["title"] = child.text.strip()
+                d["title"] = clean_feed_text(child.text)
             elif lt == "link":
                 href = child.get("href")
+                # A URL is not display text — leave it exactly as published.
                 link = (href or child.text or "").strip()
                 if link and "link" not in d:
                     d["link"] = link
             elif lt in ("description", "summary", "content") and child.text and "summary" not in d:
-                d["summary"] = child.text.strip()
+                d["summary"] = clean_feed_text(child.text)
         if d.get("title"):
             items.append(d)
     return items

@@ -629,6 +629,13 @@ export interface Run {
   steps: RunStep[];
   blackboard: RunBlackboard;
   chat_session_id?: string | null;
+  /**
+   * Step progress as counts. The runs LIST sends these with `steps: []` — shipping every step's
+   * output blob to render one "3/5" label is not worth it — so anything showing progress must
+   * read these rather than `steps.length`.
+   */
+  step_total?: number;
+  step_done?: number;
 }
 
 export interface RunCreateRequest {
