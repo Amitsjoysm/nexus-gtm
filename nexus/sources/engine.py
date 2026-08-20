@@ -1,11 +1,11 @@
 # nexus/sources/engine.py
-"""Talking to a registered source database: connect, introspect, map, dry-run.
+"""Talking to a registered source database: connect, introspect, map, dry-run, read.
 
-Steps 3–6 of the build order in
-``docs/superpowers/plans/2026-07-31-master-company-data-layer.md``. Step 7 (using a verified source
-as an enrichment provider) is deliberately not here yet — a source is not consumable until a dry
-run has proved it, and shipping the consumer in the same change would make it possible to skip the
-proof by accident.
+Steps 3–7 of the build order in
+``docs/superpowers/plans/2026-07-31-master-company-data-layer.md``. Steps 3–6 are the ladder that
+proves a source; ``build_lookup`` / ``fetch_by_identity`` at the bottom of this module are the
+read step 7 consumes, and they are only ever reached for a source the ladder has already passed —
+``nexus/sources/provider.py`` owns that check, and is the only caller.
 
 **Everything in this module is read-only, three times over**, because any one of the three is one
 mistake away from a write into a customer's database:
@@ -49,7 +49,13 @@ ENTITIES: dict[str, tuple[str, ...]] = {
     "company": ("domain", "name", "industry", "country", "employee_count"),
     # A person needs an identity we can key on. Name alone is never enough — getting a *person*
     # wrong means a rep phones a stranger with someone else's context.
-    "person": ("linkedin_url", "email", "full_name", "title", "company_domain"),
+    #
+    # `phone` is optional and is where most of the money is. A phone lookup is an Apify actor run
+    # billed per call (`nexus/people/enrich.py`, the priciest capability on the rate card); a
+    # source database that already holds the number replaces that call outright. It is deliberately
+    # NOT an identity — a phone can be a switchboard shared by a whole company, so it may be
+    # *read* from a source but never used to decide *who* a row is about.
+    "person": ("linkedin_url", "email", "full_name", "title", "company_domain", "phone"),
 }
 REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "company": ("domain",),
@@ -292,14 +298,16 @@ def validate_mapping(mapping: dict, discovered: dict) -> dict:
     return {"entity": entity, "schema": schema, "table": table, "columns": columns}
 
 
-def build_select(mapping: dict, *, limit: int) -> str:
-    """Build the SELECT for a validated mapping.
+def _projection(mapping: dict) -> tuple[str, str, str]:
+    """Re-validate a mapping's identifiers and render the SELECT list. ``(schema, table, cols)``.
 
-    The identifiers are re-validated **here**, at the moment of interpolation, even though
-    ``validate_mapping`` already checked them: this function is what puts them in a SQL string,
-    and it may be called with a mapping loaded from our own JSON column long after validation.
-    "It was safe when we stored it" is exactly the assumption that makes stored-value injection
-    work. ``limit`` is bound as a parameter, never formatted.
+    Every identifier is re-validated **here**, at the moment of interpolation, even though
+    ``validate_mapping`` already checked them: this is what puts them in a SQL string, and it may
+    be reached with a mapping loaded from our own JSON column long after validation. "It was safe
+    when we stored it" is exactly the assumption that makes stored-value injection work.
+
+    Shared by ``build_select`` and ``build_lookup`` so there is exactly one place where a mapping
+    becomes SQL — a second copy is how one of them ends up missing a check.
     """
     schema = require_identifier(mapping.get("schema"), what="schema")
     table = require_identifier(mapping.get("table"), what="table")
@@ -310,6 +318,12 @@ def build_select(mapping: dict, *, limit: int) -> str:
         f'"{require_identifier(col, what="column")}" AS "{require_identifier(fld, what="field")}"'
         for fld, col in sorted(columns.items())
     )
+    return schema, table, projection
+
+
+def build_select(mapping: dict, *, limit: int) -> str:
+    """Build the unfiltered SELECT for a validated mapping. ``limit`` is bound, never formatted."""
+    schema, table, projection = _projection(mapping)
     return f'SELECT {projection} FROM "{schema}"."{table}" LIMIT :limit'
 
 
@@ -379,3 +393,83 @@ async def dry_run(sealed_dsn: str, mapping: dict, *, limit: int | None = None) -
         # credentials and no user input — every identifier in it came from introspection.
         "statement": sql,
     }
+
+
+# ---- step 7: reading a verified source -------------------------------------------------------
+# The fields a lookup may be keyed on. Exactly the identity keys the ladder already enforces at
+# mapping time (`validate_mapping`), and no others: keying on a name is how you attach one
+# company's firmographics — or one human's phone number — to another.
+LOOKUP_FIELDS: dict[str, tuple[str, ...]] = {
+    "company": ("domain",),
+    "person": ("linkedin_url", "email"),
+}
+
+# A lookup is a point read on an identity key, so a handful of rows is already more than the
+# answer needs. The cap exists because we do not control the source's indexes: an unindexed
+# column on a big table would otherwise stream a warehouse through a request worker.
+LOOKUP_LIMIT = 5
+
+
+def build_lookup(mapping: dict, *, key_field: str, limit: int = LOOKUP_LIMIT) -> str:
+    """Build the identity-keyed SELECT the enrichment provider reads through.
+
+    ``key_field`` is checked against ``LOOKUP_FIELDS`` rather than merely against the mapping, so
+    a mapping that happens to carry ``full_name`` can never be queried *by* it. The key values
+    themselves are bound parameters — only the column name is interpolated, and only after
+    ``_projection`` has re-validated every identifier in the mapping.
+    """
+    entity = str(mapping.get("entity") or "")
+    allowed = LOOKUP_FIELDS.get(entity)
+    if not allowed:
+        raise SourceRejected(f"unknown entity {entity!r}; expected one of {sorted(LOOKUP_FIELDS)}")
+    if key_field not in allowed:
+        raise SourceRejected(
+            f"{entity} lookups may only be keyed on {list(allowed)}, not {key_field!r}"
+        )
+    key_column = (mapping.get("columns") or {}).get(key_field)
+    if not key_column:
+        raise SourceRejected(f"mapping does not carry {key_field!r}")
+
+    schema, table, projection = _projection(mapping)
+    # Re-validated independently of the projection: this name is going into a WHERE clause, and
+    # the projection's pass over it is not this call's guarantee.
+    column = require_identifier(key_column, what="column")
+    # `IN` over a small candidate set rather than `lower(col) = :key`: a function on the column
+    # would defeat whatever index the source has, and we do not get to add one to a database we
+    # do not own. The candidates are generated by us (see `provider._domain_candidates`), never
+    # by the source.
+    return (
+        f'SELECT {projection} FROM "{schema}"."{table}" '
+        f'WHERE "{column}" IN :keys LIMIT :limit'
+    )
+
+
+async def fetch_by_identity(
+    sealed_dsn: str,
+    mapping: dict,
+    *,
+    key_field: str,
+    key_values: list[str],
+    limit: int = LOOKUP_LIMIT,
+) -> list[dict]:
+    """Read the rows a verified source holds for one identity. Writes nothing.
+
+    This is the seam that talks to a foreign host, and it is the one the tests replace. It raises
+    ``SourceUnavailable`` on anything the source does wrong — the *caller* is what turns that into
+    "fall through to the paid provider", because that decision belongs to the enrichment flow and
+    not to the transport.
+    """
+    from sqlalchemy import bindparam
+
+    keys = [k for k in (v.strip() for v in key_values if isinstance(v, str)) if k]
+    if not keys:
+        return []
+    sql = build_lookup(mapping, key_field=key_field, limit=limit)
+    dsn = unseal_dsn(sealed_dsn)
+
+    async def _read(conn: AsyncConnection) -> list[dict]:
+        stmt = text(sql).bindparams(bindparam("keys", expanding=True))
+        result = await conn.execute(stmt, {"keys": keys, "limit": limit})
+        return [dict(r) for r in result.mappings().all()]
+
+    return await _run(dsn, _read)

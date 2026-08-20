@@ -72,6 +72,57 @@ class EnrichmentProvider(abc.ABC):
     async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult: ...
 
 
+class SourceDatabaseProvider(EnrichmentProvider):
+    """Read a contact's email/phone from a registered source database, ahead of the paid finders.
+
+    First in the waterfall because it is the only provider that costs nothing at the margin: a
+    source database is one vendor licence amortised across every tenant, where the providers after
+    it spend a search call, a verification credit or an actor run per contact.
+
+    **Keyed on the contact's LinkedIn URL, never on their name.** That is the same rule the source
+    mapping itself enforces (`engine.validate_mapping` refuses a person mapping without
+    `linkedin_url` or `email`), and it is not negotiable here either: getting a *person* wrong
+    means a rep phones a stranger with someone else's context. A contact with no LinkedIn URL and
+    no email simply has no identity this provider can key on, so it returns nothing and the paid
+    finders below it run exactly as before.
+
+    Never raises — the waterfall isolates provider failures anyway, but the locked posture for
+    `nexus/sources/` is that it degrades to the paid provider rather than stopping collection, and
+    that must hold whether or not a caller happens to wrap it.
+    """
+
+    name = "source_db"
+
+    async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult:
+        linkedin = (contact.linkedin_url or "").strip()
+        email = (contact.email or "").strip()
+        if not linkedin and not email:
+            return EnrichmentResult()
+        try:
+            from nexus.sources.provider import enrich_person, source_phone
+
+            hit = await enrich_person(
+                linkedin_url=linkedin, email=email,
+                account_country=(account.country or ""),
+            )
+        except Exception:
+            return EnrichmentResult()
+        if hit is None:
+            return EnrichmentResult()
+
+        result = EnrichmentResult(source=self.name)
+        found_email = hit.get("email")
+        if found_email and "@" in found_email:
+            # High confidence, and deliberately so: this is a curated database somebody licensed,
+            # not a pattern guess or a string scraped out of search-result prose. It is still
+            # verified by the waterfall's final pass like any other unverified address.
+            result.email, result.email_confidence, result.found = found_email, 0.9, True
+        phone = source_phone(hit, account_country=(account.country or ""))
+        if phone:
+            result.phone, result.phone_confidence, result.found = phone, 0.9, True
+        return result
+
+
 class PatternEmailProvider(EnrichmentProvider):
     """Zero-dependency baseline: guess a corporate email from name + domain. Low confidence."""
 

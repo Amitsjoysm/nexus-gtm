@@ -4,6 +4,7 @@ from nexus.enrichment.providers import (
     EnrichmentResult,
     PatternEmailProvider,
     SearchEnrichmentProvider,
+    SourceDatabaseProvider,
 )
 from nexus.enrichment.waterfall import WaterfallEnricher, get_enricher
 
@@ -14,6 +15,7 @@ __all__ = [
     "EnrichmentResult",
     "PatternEmailProvider",
     "SearchEnrichmentProvider",
+    "SourceDatabaseProvider",
     "WaterfallEnricher",
     "get_enricher",
 ]

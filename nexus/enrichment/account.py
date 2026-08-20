@@ -1,10 +1,15 @@
-"""Web-backed account (firmographic) enrichment.
+"""Account (firmographic) enrichment: registered source databases first, then the open web.
 
 Fills an Account's blank firmographics — industry, employee_count, country, tech_stack, a short
-description — from the open web, so accounts are useful even when no premium data provider
-(InfoJoy / Apollo / ZoomInfo) is configured. It goes through ``get_search_provider()``, which is
-Exa when a key is set and **falls back to DuckDuckGo automatically** otherwise, then has the LLM
-extract structured fields. Offline-safe (stub LLM extracts nothing → no-op) and never raises.
+description — so accounts are useful even when no premium data provider (InfoJoy / Apollo /
+ZoomInfo) is configured.
+
+Two paths, cheapest first. A **registered source database** (`nexus/sources/`) is consulted ahead
+of everything else: it costs nothing at the margin, because one vendor licence is amortised across
+every tenant. Only if the basics are still blank does the **web** path run — ``get_search_provider()``,
+which is Exa when a key is set and **falls back to DuckDuckGo automatically** otherwise, then an
+LLM extraction. Offline-safe (stub LLM extracts nothing → no-op) and never raises; a source
+database that is down simply falls through to the web, never blocking enrichment.
 
 Deeper page scraping (Firecrawl / Scrapegraph-AI / a Camoufox browser) can slot in behind this
 same shape later if search snippets prove too thin; they'd each need their own key/service.
@@ -137,12 +142,51 @@ class SearchBackedAccountEnricher:
             account.custom_fields = cf
         return filled
 
+    async def from_source_db(self, account: Account) -> list[str]:
+        """Fill blanks from a registered source database. Returns filled keys; never raises.
+
+        Tried ahead of the web+LLM path because it is free at the margin: one vendor licence
+        amortised across every tenant, instead of a search call and an LLM completion per account.
+        A source that is down, slow or does not hold this domain returns nothing and `enrich`
+        continues to the paid path — the locked posture for `nexus/sources/` is that it is an
+        optimisation, never a dependency.
+        """
+        try:
+            from nexus.sources.provider import enrich_company
+
+            hit = await enrich_company(account.domain or "")
+        except Exception as exc:  # provider isolation, same as every other provider here
+            logger.warning("source database account enrich failed: %r", exc)
+            return []
+        if hit is None:
+            return []
+        # Routed through `apply` rather than assigning here, so a source database is held to the
+        # same blank-only rule as the web path and can never overwrite a customer's CRM data.
+        return self.apply(account, {
+            "industry": hit.get("industry"),
+            "country": hit.get("country"),
+            # Parsed by the hit, not by `apply`: a source column may hold "250", 250, or a band
+            # like "51-200" that is not one number, and `apply` only accepts a real int.
+            "employee_count": hit.employee_count(),
+        })
+
     async def enrich(self, account: Account) -> list[str]:
-        """Fetch from the web and apply to the account. Returns the list of fields filled."""
+        """Fill blank firmographics. Source databases first, then the web. Returns fields filled."""
+        filled = await self.from_source_db(account)
+
+        # The paid path runs only if the basics are still missing — the same gate `pipeline.py`
+        # applies before calling here at all. When a registered source answered in full there is
+        # nothing left for a search call and an LLM completion to add, and that skipped pair is
+        # exactly where the COGS saving lands.
+        if account.industry and account.employee_count:
+            return filled
+
         data = await self.fetch(account)
         if not data:
-            return []
-        return self.apply(account, data)
+            return filled
+        # `apply` is blank-only, so fields the source already filled are left alone and only the
+        # genuinely new ones are reported.
+        return filled + self.apply(account, data)
 
 
 _enricher: SearchBackedAccountEnricher | None = None

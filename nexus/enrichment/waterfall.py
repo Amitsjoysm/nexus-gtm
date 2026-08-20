@@ -14,6 +14,7 @@ from nexus.enrichment.providers import (
     EnrichmentResult,
     PatternEmailProvider,
     SearchEnrichmentProvider,
+    SourceDatabaseProvider,
     VerifyingPatternEmailProvider,
 )
 from nexus.models.account import Account, Contact
@@ -125,6 +126,11 @@ def get_enricher() -> WaterfallEnricher:
 
         _enricher = WaterfallEnricher(
             providers=[
+                # Cheapest first. A registered source database costs nothing at the margin, so it
+                # is asked before anything that spends a search call, a verification credit or an
+                # actor run. With no source registered it returns immediately and the order below
+                # is unchanged — which is why this is safe to put first unconditionally.
+                SourceDatabaseProvider(),
                 SearchEnrichmentProvider(get_browser_provider()),
                 VerifyingPatternEmailProvider(),
                 PatternEmailProvider(),

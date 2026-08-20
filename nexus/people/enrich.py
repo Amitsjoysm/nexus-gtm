@@ -14,6 +14,11 @@ to ask second, which is arbitrary, and would make revenue depend on crawl orderi
 **A recorded miss is not re-purchased.** ``phone_status == "not_found"`` means we already paid to
 learn there is nothing there. Re-asking on every crawl is the difference between a bounded monthly
 bill and an unbounded one.
+
+**Order of attempts**: the shared person record, then a registered source database
+(``nexus/sources/``), then the paid actor. Each step is cheaper than the one after it, and each is
+an optimisation rather than a dependency — a source database that is down falls through to the
+actor, exactly as an absent shared record does.
 """
 from __future__ import annotations
 
@@ -268,12 +273,27 @@ async def find_phone(
                 cached=True, status=view.phone_status,
             )
 
-        # 2. Buy it. No database transaction is open across the actor run.
+        # 2. A registered source database, tried BEFORE the paid actor — which is the whole point
+        #    of `nexus/sources/`: one vendor licence amortised across every tenant instead of an
+        #    actor run per person. It is an optimisation and never a dependency, so it returns an
+        #    empty result rather than raising and the actor below runs exactly as it would have.
+        from_source = await _phone_from_source_db(
+            linkedin_url=stored_linkedin, email=email, country=country,
+            account_country=account_country,
+        )
+        if from_source.ok:
+            # Metered exactly as the actor run it replaced. The customer received a phone number
+            # and is charged for the number; what the source database improves is COGS, not price.
+            # `cached=True` is what keeps that margin visible in the usage stream.
+            await _meter_lookup(ts, user_id=user_id, cached=True, provider="source_db")
+            return from_source
+
+        # 3. Buy it. No database transaction is open across the actor run.
         result = await _run_phone_actor(
             linkedin_url=stored_linkedin, country=country, account_country=account_country,
         )
 
-        # 3. Persist the outcome, still on the platform connection, and commit.
+        # 4. Persist the outcome, still on the platform connection, and commit.
         if result.status not in ("unconfigured", "no_identity"):
             async with get_platform_sessionmaker()() as session:
                 await record_phone_lookup(
@@ -281,7 +301,7 @@ async def find_phone(
                 )
                 await session.commit()
 
-        # 4. Only now touch the tenant session. Charged for the lookup, not the result — a
+        # 5. Only now touch the tenant session. Charged for the lookup, not the result — a
         #    `not_found` is an answer we paid an actor to obtain. Not charged when the integration
         #    was never configured, because nothing was bought.
         if result.status in ("found", "not_found"):
@@ -292,7 +312,47 @@ async def find_phone(
         return PhoneResult(status="failed")
 
 
-async def _meter_lookup(ts, *, user_id: str | None, cached: bool = False) -> None:
+async def _phone_from_source_db(
+    *, linkedin_url: str, email: str, country: str, account_country: str,
+) -> PhoneResult:
+    """A phone number from a registered source database. Returns an empty result, never raises.
+
+    Deliberately total. The locked failure posture for `nexus/sources/` is "fall through to the
+    paid provider, never stop collection" — so an unreachable warehouse, a stale mapping or a
+    source that simply does not hold this person are all the same answer here: nothing, and the
+    actor runs next.
+
+    The hit is landed in the shared `people` store by `provider.enrich_person`, so the *next*
+    tenant to ask this question reads it from the shared record and neither pays an actor nor
+    re-reads the source.
+    """
+    try:
+        from nexus.sources.provider import enrich_person, source_phone
+
+        hit = await enrich_person(
+            linkedin_url=linkedin_url, email=email,
+            country=country, account_country=account_country,
+        )
+        if hit is None:
+            return PhoneResult(status="not_found")
+        phone = source_phone(hit, country=country, account_country=account_country)
+        if not phone:
+            # The source knows this person but holds no usable number. Not an answer we can
+            # return, and not a reason to skip the actor — the actor may still find one.
+            return PhoneResult(status="not_found")
+        return PhoneResult(
+            phone=phone, source="source_db",
+            # Same meaning as a shared-store hit: the customer's answer cost us no per-call COGS.
+            cached=True, status="found",
+        )
+    except Exception:
+        logger.warning("source database phone lookup failed", exc_info=True)
+        return PhoneResult(status="failed")
+
+
+async def _meter_lookup(
+    ts, *, user_id: str | None, cached: bool = False, provider: str = "apify",
+) -> None:
     """Charge the tenant for one phone lookup.
 
     Metering never blocks the result: the customer already has the number, and a billing write that
@@ -305,8 +365,9 @@ async def _meter_lookup(ts, *, user_id: str | None, cached: bool = False) -> Non
         async with metered(
             ts, PHONE_CAPABILITY, user_id=user_id, source="enrichment",
             # `cached` is what makes the margin visible: same revenue, no COGS. Without the flag,
-            # the shared store's saving is invisible in the usage stream.
-            attrs={"provider": "apify", "cached": cached},
+            # neither the shared store's saving nor a registered source database's is visible in
+            # the usage stream. `provider` says WHICH of the two answered.
+            attrs={"provider": provider, "cached": cached},
         ):
             pass
     except Exception:

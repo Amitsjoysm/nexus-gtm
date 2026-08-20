@@ -34,8 +34,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from nexus.core.db import Base, IdMixin, TimestampMixin, TZDateTime
 
-# How a person record came to exist, for provenance when two sources disagree.
-PERSON_SOURCES = ("contact_backfill", "enrichment", "network", "import")
+# How a person record came to exist, for provenance when two sources disagree. `source_db` is a
+# registered external source database (`nexus/sources/`), read ahead of the paid providers.
+PERSON_SOURCES = ("contact_backfill", "enrichment", "network", "import", "source_db")
 
 # Whether a paid lookup has been attempted for this person's phone. `not_found` is a real,
 # expensive answer and is recorded so the same miss is not re-purchased every crawl — the

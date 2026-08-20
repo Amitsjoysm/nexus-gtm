@@ -20,9 +20,10 @@ from nexus.sources.safety import (
     validate_dsn,
 )
 
-# `engine` and `service` are deliberately NOT re-exported here. Importing this package must stay
-# cheap and side-effect-free: `engine` pulls in SQLAlchemy's async engine machinery and `service`
-# imports the ORM, and `safety` is imported by things that only want the guards.
+# `engine`, `service` and `provider` are deliberately NOT re-exported here. Importing this package
+# must stay cheap and side-effect-free: `engine` pulls in SQLAlchemy's async engine machinery and
+# `service` imports the ORM, and `safety` is imported by things that only want the guards.
+# `provider` (step 7) is imported lazily by its callers in the enrichment path for the same reason.
 
 __all__ = [
     "DsnUnsealable",

@@ -424,10 +424,39 @@ different write targets.
    dry run has passed. Same staging as the shared company crawl (shadow → diff → fan-out), for the
    same reason: a plausible integration pointed at the wrong column is the failure mode this
    subsystem has shipped six times.
-7. **Enrichment provider — NOT built yet.** Tried before the paid APIs. **Failure posture: fall
-   through to the paid provider, never stop collection.** It is an optimisation, not a dependency.
-   Deliberately left out of the same change as steps 2–6: shipping the consumer alongside the
-   ladder makes it possible to skip the proof by accident.
+7. **Enrichment provider — done** (`nexus/sources/provider.py`, `engine.build_lookup` /
+   `engine.fetch_by_identity`). Shipped *after* steps 2–6 and not alongside them, deliberately:
+   shipping the consumer with the ladder makes it possible to skip the proof by accident.
+
+   Read ahead of the paid APIs at three seams — `people/enrich.find_phone` (the priciest
+   capability on the rate card, and the one where a source replaces an actor run outright),
+   `enrichment/account.SearchBackedAccountEnricher` (which now skips the search call and the LLM
+   completion entirely when a source filled the basics), and `SourceDatabaseProvider`, first in
+   the contact waterfall. Hits land in the shared `companies` / `people` stores through
+   `get_platform_sessionmaker()`, so an answer is bought once for every tenant rather than once
+   per tenant.
+
+   **Failure posture, as built:** every entry point is total. Unreachable, slow, stale mapping,
+   or a source that simply does not hold this identity all return *no answer* rather than
+   raising, and each source is tried independently so one dead warehouse cannot mask a working
+   one behind it. `usable_sources()` — verified AND enabled — is the only gate, so an operator
+   who flips the kill switch mid-incident stops the reads themselves, not merely their results.
+
+   **The guard that is not obvious:** `WHERE domain IN (...)` runs against somebody else's data
+   with normalisation we do not control, so it selects *candidates*. Every returned row is
+   re-verified in Python against the identity we asked for, using the same normalisers the shared
+   stores key on. Without it, this step would write one company's firmographics — or one human's
+   phone number — into a store every tenant reads, which is the failure this subsystem has
+   shipped six times.
+
+   **Metering:** a source hit is metered **identically** to the paid lookup it replaced, carrying
+   `attrs.cached` exactly as the shared-person path does. The customer is charged for the answer,
+   not for our infrastructure — the saving is COGS, not price. Metering only the paid path would
+   make revenue depend on our procurement and on crawl ordering.
+
+   `ENTITIES["person"]` gained an optional `phone`, which is what lets a source replace the Apify
+   actor run. It is mappable but is **never** an identity (`LOOKUP_FIELDS`): a phone can be a
+   switchboard shared by a whole company.
 
 **Open question — answered.** `allow_private` is a **setting** (`NEXUS_SOURCE_DB_ALLOW_PRIVATE`),
 false everywhere by default, and never a request parameter: an admin must not be able to switch off

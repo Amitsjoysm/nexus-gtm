@@ -665,8 +665,25 @@ you built is not a config change afterwards.
 - Gated on **`sources.manage`**, deliberately not folded into `admins.manage`: registering a data
   source and granting platform power are different acts, and only the `superadmin` preset has it.
   Every mutation is audited; the DSN is Fernet-sealed and is in **no** response model.
-- Still to build (step 7): the enrichment provider itself. **Failure posture when it lands: fall
-  through to the paid provider, never stop collection.** It is an optimisation, not a dependency.
+- **Step 7 — the enrichment provider — is built** (`nexus/sources/provider.py`), read *ahead of*
+  the paid APIs at three seams: the phone lookup (`nexus/people/enrich.py`, the priciest
+  capability on the rate card), account firmographics (`nexus/enrichment/account.py`) and the
+  contact waterfall (`SourceDatabaseProvider`, deliberately first). Hits land in the shared
+  `companies` / `people` stores, so an answer is bought once for every tenant.
+  - **Failure posture: fall through to the paid provider, never stop collection.** Every entry
+    point is total — unreachable, slow, or stale-mapping all return *no answer*, never an
+    exception, and sources are tried independently so one dead warehouse cannot hide the answer
+    in the next. It is an optimisation, not a dependency.
+  - **`WHERE domain IN (...)` is a candidate filter, not proof.** We do not control a foreign
+    database's normalisation, so every returned row is re-checked in Python against the identity
+    we asked for, through the same normalisers the shared stores key on. Skipping that check is
+    the wrong-attribution bug, written into a store every tenant reads.
+  - **A hit is metered identically to the paid lookup it replaced**, carrying `attrs.cached` like
+    `nexus/people/enrich.py`. The customer is charged for the answer, not for our infrastructure:
+    the saving is **COGS, not price**. Charging only on a source hit would make revenue depend on
+    our procurement.
+  - `phone` is mappable on a person but is **never an identity** — a switchboard is shared by a
+    whole company. Lookups may only be keyed on the fields in `engine.LOOKUP_FIELDS`.
 
 ## Orchestrator intake (`nexus/orchestration/intake.py`)
 

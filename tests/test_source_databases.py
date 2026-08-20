@@ -33,7 +33,13 @@ def _allow_private(monkeypatch):
     monkeypatch.setattr(get_settings(), "source_db_allow_private", True)
 
 
-DSN = "postgresql://user:pw@db.example.com:5432/warehouse"
+# A distinctive password, because every "the secret did not leak" assertion in this file is a
+# substring search for it. A two-character one (`pw`) made those assertions unreliable in BOTH
+# directions: it turns up inside Fernet's base64 output by pure chance about 4% of the time, which
+# failed the round-trip test at random, and it could equally hide inside an unrelated word in a
+# response body and never be noticed. A hit has to mean a leak, or the assertion is decoration.
+PASSWORD = "s3cr3t-pw-9f2a1c"
+DSN = f"postgresql://user:{PASSWORD}@db.example.com:5432/warehouse"
 
 DISCOVERED = {
     "tables": [
@@ -67,7 +73,7 @@ async def test_the_dsn_is_sealed_at_rest_and_round_trips(fresh_db):
 
     sealed = seal_dsn(DSN)
     assert DSN not in sealed
-    assert "pw" not in sealed
+    assert PASSWORD not in sealed
     assert unseal_dsn(sealed) == DSN
 
 
@@ -86,7 +92,7 @@ async def test_the_stored_redaction_carries_no_password(fresh_db, monkeypatch):
     from nexus.sources import service
 
     row = await service.register(name="wh", dsn=DSN)
-    assert "pw" not in row.dsn_redacted
+    assert PASSWORD not in row.dsn_redacted
     assert "db.example.com" in row.dsn_redacted
 
 
@@ -371,7 +377,7 @@ async def test_the_console_never_returns_the_connection_string(client, monkeypat
     body = r.json()
     assert "dsn" not in body
     assert "dsn_encrypted" not in body
-    assert "pw" not in r.text
+    assert PASSWORD not in r.text
     assert body["usable"] is False
 
 
@@ -431,7 +437,7 @@ async def test_registration_is_audited(client, monkeypatch, fresh_db):
         )).all()
     assert len(rows) == 1
     # The audit row must not become a new home for the secret.
-    assert "pw" not in str(rows[0].after)
+    assert PASSWORD not in str(rows[0].after)
 
 
 # ---- permission separation ------------------------------------------------------------------
