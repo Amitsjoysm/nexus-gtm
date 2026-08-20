@@ -53,3 +53,27 @@ def test_audit_omits_empty_actor_and_quotes_spaces():
     assert "actor=" not in line
     assert 'detail="two words"' in line
     assert "ok=false" in line
+
+
+async def test_crm_connection_is_tenant_scoped_and_stores_ciphertext():
+    from nexus.models.integration import CrmConnection
+
+    tid_a = await make_tenant(slug="ta", name="A")
+    tid_b = await make_tenant(slug="tb", name="B")
+
+    async with tenant_session(tid_a) as ts:
+        ts.add(CrmConnection(tenant_id=tid_a, provider="hubspot",
+                             secret=seal_crm_secret({"access_token": "pat-A"})))
+        await ts.flush()
+
+    async with tenant_session(tid_a) as ts:
+        row = await ts.first(CrmConnection)
+        assert row is not None
+        assert row.provider == "hubspot"
+        assert row.status == "unverified"
+        assert row.api_base == ""
+        assert unseal_crm_secret(row.secret) == {"access_token": "pat-A"}
+        assert "pat-A" not in str(row.secret)
+
+    async with tenant_session(tid_b) as ts:
+        assert await ts.first(CrmConnection) is None
