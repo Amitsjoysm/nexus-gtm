@@ -609,13 +609,17 @@ commit. Gate: **1453 passed** in 19 minutes (parallel; ~55 min serial before `-n
 | M25 | **Complete** — impersonation, suspend/reactivate, merge duplicates, ownership transfer |
 | Shared company fan-out | On, gated per company by `crawl_verdict` |
 | Shared people store | Built (`0037`), email/phone Fernet-sealed, hashed index |
-| Apify seam | Built, key rotation; **only the phone actor is wired** |
+| Apify seam | Built, key rotation; both registered actors (phone, profile) wired — **but all accounts currently 403 unapproved** |
 | Account dedupe | One write-point across all six creation paths |
 
 ## Not built
 
-* **Crunchbase (`PPUtGNTB6xB9dJ2di`) and company-search (`ayZno82KNVAVaWMpg`) actors** — registered
-  in `ACTORS` and callable, but not connected to a firmographics path or the ICP sweep.
+* **Crunchbase (`PPUtGNTB6xB9dJ2di`) and company-search (`ayZno82KNVAVaWMpg`) actors** — **removed
+  from `ACTORS` on 2026-08-20** rather than wired, so this is now a deliberate absence rather than a
+  gap. Crunchbase keys on an organisation URL the shared-company layer has no way to derive (its
+  identity is the normalised domain alone), and company-search had 42 runs across 2 users. Neither
+  could be exercised even once against the live API to learn its output shape — see the operator
+  blocker in `CLAUDE.md`. Re-adding either is one `ACTORS` line plus a consumer.
 * **M17 tech extraction**, **M21 digest worker + channel adapters**, **M26 partitioning**
   (runbook only), **external source database** (designed in the company-data-layer plan).
 
