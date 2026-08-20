@@ -77,3 +77,114 @@ async def test_crm_connection_is_tenant_scoped_and_stores_ciphertext():
 
     async with tenant_session(tid_b) as ts:
         assert await ts.first(CrmConnection) is None
+
+
+# ---- connector health + the globals split ------------------------------------------------
+def _fixed_response(status: int, body: dict):
+    """A stand-in for HubSpotConnector._request that always answers the same way."""
+
+    async def _req(method: str, path: str, request_body: dict | None = None):
+        return status, body
+
+    return _req
+
+
+async def test_stub_connector_test_connection_ok():
+    from nexus.ingestion.crm import StubCRMConnector
+
+    res = await StubCRMConnector().test_connection()
+    assert res.ok is True
+    assert res.label == "stub"
+
+
+async def test_salesforce_test_connection_is_honest_about_not_being_live():
+    from nexus.ingestion.crm import SalesforceConnector
+
+    res = await SalesforceConnector().test_connection()
+    assert res.ok is False
+    assert "not available yet" in res.detail
+
+
+async def test_hubspot_test_connection_maps_statuses():
+    from nexus.ingestion.crm import HubSpotConnector
+
+    conn = HubSpotConnector(access_token="pat-x")
+
+    conn._request = _fixed_response(200, {"portalId": 12345678})  # type: ignore[method-assign]
+    ok = await conn.test_connection()
+    assert ok.ok is True and "12345678" in ok.label
+
+    conn._request = _fixed_response(401, {})  # type: ignore[method-assign]
+    assert "Invalid or expired" in (await conn.test_connection()).detail
+
+    conn._request = _fixed_response(429, {})  # type: ignore[method-assign]
+    assert "rate limit" in (await conn.test_connection()).detail
+
+    conn._request = _fixed_response(500, {})  # type: ignore[method-assign]
+    assert "HTTP 500" in (await conn.test_connection()).detail
+
+
+async def test_hubspot_test_connection_without_a_token():
+    from nexus.ingestion.crm import HubSpotConnector
+
+    res = await HubSpotConnector(access_token="").test_connection()
+    assert res.ok is False and "No access token" in res.detail
+
+
+async def test_hubspot_test_connection_never_raises():
+    """A flaky CRM is a failed result, never an exception across the boundary."""
+    from nexus.ingestion.crm import HubSpotConnector
+
+    conn = HubSpotConnector(access_token="pat-x")
+
+    async def boom(method, path, body=None):
+        raise RuntimeError("socket exploded")
+
+    conn._request = boom  # type: ignore[method-assign]
+    res = await conn.test_connection()
+    assert res.ok is False
+    assert "socket exploded" not in res.detail  # internals never surface
+
+
+async def test_hubspot_falls_back_when_account_info_is_forbidden():
+    """Private apps often lack the `oauth` scope account-info needs; the fallback uses the
+    companies scope we already require for syncing."""
+    from nexus.ingestion.crm import HubSpotConnector
+
+    conn = HubSpotConnector(access_token="pat-x")
+    calls: list[str] = []
+
+    async def _req(method, path, body=None):
+        calls.append(path)
+        return (403, {}) if path.startswith("/account-info") else (200, {"results": []})
+
+    conn._request = _req  # type: ignore[method-assign]
+    res = await conn.test_connection()
+    assert res.ok is True
+    assert any(p.startswith("/crm/v3/objects/companies") for p in calls)
+
+
+def test_override_is_distinguishable_from_the_memoized_env_connector():
+    """The bug this guards: `_connector` used to hold both the test override and the memoized env
+    instance, so 'is an override installed?' was unanswerable — and per-tenant resolution would
+    skip tenant credentials on any env-configured deployment."""
+    from nexus.ingestion.crm import (
+        StubCRMConnector,
+        get_crm_connector,
+        get_crm_connector_override,
+        set_crm_connector,
+    )
+
+    set_crm_connector(None)
+    assert get_crm_connector_override() is None
+    memoized = get_crm_connector()
+    assert memoized is get_crm_connector()
+    assert get_crm_connector_override() is None  # memoized, NOT an override
+
+    installed = StubCRMConnector()
+    set_crm_connector(installed)
+    assert get_crm_connector_override() is installed
+    assert get_crm_connector() is installed
+
+    set_crm_connector(None)
+    assert get_crm_connector_override() is None

@@ -51,6 +51,16 @@ class CRMPushResult:
 
 
 @dataclass(slots=True)
+class CRMTestResult:
+    """The outcome of verifying a credential. ``label`` is a friendly identity for the UI
+    ("HubSpot portal 12345678"); ``detail`` is a human-readable reason, safe to show a user."""
+
+    ok: bool
+    label: str = ""
+    detail: str = ""
+
+
+@dataclass(slots=True)
 class CRMOwner:
     """An account→owner mapping pulled from the CRM, used for lead routing."""
 
@@ -148,6 +158,12 @@ class CRMConnector(abc.ABC):
             ok=True, source=self.source, external_id=account_id, detail=record
         )
 
+    # -- connection health -------------------------------------------------------------
+    async def test_connection(self) -> CRMTestResult:
+        """Verify the credential works. Like every connector method, never raises across the
+        boundary — a failure is a result the caller can render, not an exception."""
+        return CRMTestResult(ok=True, label=self.source, detail="Offline stub connector.")
+
     # -- routing ----------------------------------------------------------------------
     async def fetch_owners(self) -> list[CRMOwner]:
         """Pull account→owner mappings for routing. Real adapters override; stub: none."""
@@ -174,6 +190,15 @@ class SalesforceConnector(CRMConnector):
         # Real impl: SOQL via Salesforce REST. Returns injected sample for now.
         return self._sample
 
+    async def test_connection(self) -> CRMTestResult:
+        # There is no real Salesforce API client yet — fetch_accounts returns an injected sample.
+        # Reporting a green check here would be a lie about a token that does nothing.
+        return CRMTestResult(
+            ok=False,
+            label="Salesforce",
+            detail="Salesforce connections are not available yet.",
+        )
+
 
 def _split_name(full_name: str | None) -> tuple[str, str]:
     parts = (full_name or "").strip().split()
@@ -182,6 +207,13 @@ def _split_name(full_name: str | None) -> tuple[str, str]:
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], " ".join(parts[1:])
+
+
+_HUBSPOT_TEST_ERRORS = {
+    401: "Invalid or expired access token.",
+    403: "Token is missing required scopes (crm.objects.companies.read/write).",
+    429: "HubSpot rate limit reached — try again shortly.",
+}
 
 
 class HubSpotConnector(CRMConnector):
@@ -385,8 +417,52 @@ class HubSpotConnector(CRMConnector):
             logger.warning("[hubspot] fetch_accounts failed: %r", exc)
         return out
 
+    # -- connection health -------------------------------------------------------------
+    async def test_connection(self) -> CRMTestResult:
+        """Verify the private-app token.
 
+        Prefers ``/account-info/v3/details`` for a friendly portal label, but that endpoint needs
+        the ``oauth`` scope, which many private apps do not grant. On 403 we retry against the
+        companies scope we actually require for syncing, so a correctly-scoped token still
+        reports connected.
+        """
+        if not self._token:
+            return CRMTestResult(ok=False, label="HubSpot", detail="No access token configured.")
+        try:
+            st, body = await self._request("GET", "/account-info/v3/details")
+            if st == 200:
+                portal = body.get("portalId")
+                return CRMTestResult(
+                    ok=True,
+                    label=f"HubSpot portal {portal}" if portal else "HubSpot",
+                    detail="Connected.",
+                )
+            if st == 403:
+                st_fallback, _ = await self._request("GET", "/crm/v3/objects/companies?limit=1")
+                if st_fallback == 200:
+                    return CRMTestResult(ok=True, label="HubSpot", detail="Connected.")
+                st = st_fallback
+            return CRMTestResult(
+                ok=False,
+                label="HubSpot",
+                detail=_HUBSPOT_TEST_ERRORS.get(st, f"HubSpot returned HTTP {st}."),
+            )
+        except Exception as exc:
+            # Log the cause for operators; show the user a message that cannot leak internals.
+            logger.warning("[hubspot] test_connection failed: %r", exc)
+            return CRMTestResult(
+                ok=False, label="HubSpot", detail="Could not reach HubSpot. Try again shortly."
+            )
+
+
+# The deployment-wide connector. Two *separate* globals on purpose:
+#   _connector — the memoized env-configured instance (what get_crm_connector() returns)
+#   _override  — an instance installed deliberately via set_crm_connector()
+# They used to be one variable, which made "is an override installed?" unanswerable: after any
+# call to get_crm_connector() on an env-configured deployment the single global was non-None.
+# Per-tenant resolution needs that distinction — see crm_credentials.resolve_crm_connector.
 _connector: CRMConnector | None = None
+_override: CRMConnector | None = None
 
 
 def build_crm_connector_from_settings() -> CRMConnector:
@@ -405,6 +481,12 @@ def build_crm_connector_from_settings() -> CRMConnector:
 
 
 def get_crm_connector() -> CRMConnector:
+    """The deployment-wide connector: an installed override, else the env-configured one.
+
+    This is the *fallback*. Per-tenant resolution lives in
+    :func:`nexus.ingestion.crm_credentials.resolve_crm_connector`; call that from request and
+    worker paths so each tenant syncs to its own CRM.
+    """
     global _connector
     if _connector is None:
         _connector = build_crm_connector_from_settings()
@@ -412,5 +494,18 @@ def get_crm_connector() -> CRMConnector:
 
 
 def set_crm_connector(connector: CRMConnector | None) -> None:
-    global _connector
+    """Install (or clear) an explicit connector — the test seam for a recording stub.
+
+    Sets both globals so ``get_crm_connector()`` returns it *and* per-tenant resolution knows it
+    was installed deliberately. ``None`` clears both, so the next ``get_crm_connector()`` rebuilds
+    from settings.
+    """
+    global _connector, _override
     _connector = connector
+    _override = connector
+
+
+def get_crm_connector_override() -> CRMConnector | None:
+    """The deliberately installed connector, or ``None`` when the module has merely memoized the
+    env-configured instance — the distinction ``get_crm_connector()`` cannot make."""
+    return _override
