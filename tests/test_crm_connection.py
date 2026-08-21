@@ -481,3 +481,93 @@ async def test_sync_status_reports_the_tenants_own_provider(client):
     await _connect(client, h)
     assert (await client.get("/api/integrations/crm/sync-status",
                              headers=h)).json()["provider"] == "hubspot"
+
+
+# ---- the cross-tenant leak ----------------------------------------------------------------
+def _settings_with(**overrides):
+    """A get_settings() replacement that keeps the real settings but overrides a few fields."""
+    from nexus.core.config import get_settings as real_get_settings
+
+    base = real_get_settings()
+
+    def _patched():
+        return base.model_copy(update=overrides)
+
+    return _patched
+
+
+async def test_heartbeat_sweep_uses_each_tenants_own_connector(monkeypatch):
+    """The bug this fixes: handle_sync_crm_due_accounts resolved ONE connector and looped every
+    tenant with it, so tenant A's accounts were pushed into whichever CRM the deployment env
+    pointed at. Fails against pre-change master."""
+    from nexus.core.db import utcnow
+    from nexus.ingestion import crm_credentials
+    from nexus.ingestion.crm import StubCRMConnector
+    from nexus.models.account import Account
+    from nexus.models.identity import Tenant
+    from nexus.workers.tasks import handle_sync_crm_due_accounts
+
+    monkeypatch.setattr("nexus.core.config.get_settings",
+                        _settings_with(crm_sync_enabled=True))
+
+    tid_a = await make_tenant(slug="swa", name="SWA")
+    tid_b = await make_tenant(slug="swb", name="SWB")
+    for tid, name in ((tid_a, "Acct A"), (tid_b, "Acct B")):
+        async with tenant_session(tid) as ts:
+            (await ts.session.get(Tenant, tid)).automation_enabled = True
+            ts.add(Account(tenant_id=tid, name=name, domain=f"{name[-1].lower()}.com"))
+            await ts.flush()
+
+    conn_a, conn_b = StubCRMConnector(), StubCRMConnector()
+    by_tenant = {tid_a: conn_a, tid_b: conn_b}
+
+    async def fake_resolve(ts):
+        return by_tenant[ts.tenant_id]
+
+    monkeypatch.setattr(crm_credentials, "resolve_crm_connector", fake_resolve)
+
+    result = await handle_sync_crm_due_accounts({"now_iso": utcnow().isoformat()})
+    assert result.get("skipped") != "crm_sync_disabled", result
+
+    assert [r["name"] for r in conn_a.pushed_accounts] == ["Acct A"]
+    assert [r["name"] for r in conn_b.pushed_accounts] == ["Acct B"]
+
+
+async def test_play_crm_push_uses_the_tenants_connector(monkeypatch):
+    """The same leak in the plays engine: a `crm_push` action must reach this tenant's CRM."""
+    from nexus.core.db import utcnow
+    from nexus.ingestion import crm_credentials
+    from nexus.ingestion.crm import StubCRMConnector
+    from nexus.models.account import Account, Contact
+    from nexus.models.signal import SignalEvent
+    from nexus.models.workflow import Play
+    from nexus.plays.engine import get_plays_engine
+
+    tenant_connector = StubCRMConnector()
+
+    async def fake_resolve(ts):
+        return tenant_connector
+
+    monkeypatch.setattr(crm_credentials, "resolve_crm_connector", fake_resolve)
+
+    tid = await make_tenant(slug="pl", name="PL")
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.co", crm_id="CRM-1")
+        ts.add(acc)
+        await ts.flush()
+        ts.add(Contact(tenant_id=tid, account_id=acc.id,
+                       full_name="Ada Lovelace", email="ada@acme.co"))
+        sig = SignalEvent(tenant_id=tid, account_id=acc.id, kind="funding", source="t",
+                          title="Raised $20M", strength=0.9, dedupe_key="k",
+                          occurred_at=utcnow())
+        ts.add(sig)
+        ts.add(Play(tenant_id=tid, name="Sync hot", enabled=True,
+                    trigger={"signal_kinds": ["funding"]},
+                    actions=[{"type": "crm_push"}]))
+        await ts.flush()
+
+        runs = await get_plays_engine().evaluate(ts, account=acc, signal=sig, composite=80)
+        assert len(runs) == 1
+
+    assert tenant_connector.pushed_accounts[0]["name"] == "Acme"
+    assert tenant_connector.pushed_activities[0]["kind"] == "signal"
