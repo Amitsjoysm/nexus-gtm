@@ -71,6 +71,9 @@ import type {
   LaunchFromSelectionInput,
   LookalikeResponse,
   ContactLookalikeResponse,
+  CRMConnection,
+  CRMConnectionInput,
+  CRMConnectionTest,
   CRMPushResponse,
   CRMSyncRequest,
   CRMSyncResponse,
@@ -575,6 +578,30 @@ export class ApiClient {
   }
   crmSyncStatus(signal?: AbortSignal) {
     return this.request<CRMSyncStatus>("/integrations/crm/sync-status", { signal });
+  }
+
+  // ---- per-tenant CRM connection (admin only) ----
+  crmConnection(signal?: AbortSignal) {
+    return this.request<CRMConnection>("/integrations/crm/connection", { signal });
+  }
+  setCrmConnection(body: CRMConnectionInput, signal?: AbortSignal) {
+    return this.request<CRMConnection>("/integrations/crm/connection", {
+      method: "PUT",
+      body,
+      signal,
+    });
+  }
+  testCrmConnection(signal?: AbortSignal) {
+    return this.request<CRMConnectionTest>("/integrations/crm/connection/test", {
+      method: "POST",
+      signal,
+    });
+  }
+  clearCrmConnection(signal?: AbortSignal) {
+    return this.request<void>("/integrations/crm/connection", {
+      method: "DELETE",
+      signal,
+    });
   }
 
   // ---- inbox ----

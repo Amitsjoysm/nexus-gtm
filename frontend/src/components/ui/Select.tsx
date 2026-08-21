@@ -7,6 +7,8 @@ import styles from "./control.module.css";
 export interface SelectOption {
   value: string;
   label: string;
+  /** Listed but not choosable — e.g. a provider the product knows about but cannot connect yet. */
+  disabled?: boolean;
 }
 
 export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
@@ -37,7 +39,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
           </option>
         )}
         {options.map((o) => (
-          <option key={o.value} value={o.value}>
+          <option key={o.value} value={o.value} disabled={o.disabled}>
             {o.label}
           </option>
         ))}
