@@ -87,7 +87,7 @@ class LookalikeService:
             try:
                 from nexus.enrichment.account import get_account_enricher
 
-                if await get_account_enricher().enrich(account):
+                if await get_account_enricher().enrich(ts, account):
                     await ts.flush()
             except Exception:  # enrichment must never block lookalikes
                 pass
@@ -154,7 +154,7 @@ class LookalikeService:
             enrich = settings.account_enrich_enabled
         if enrich:
             await self._enrich_candidates(
-                [c for c, _ in candidates[: settings.lookalike_enrich_max]], settings
+                ts, [c for c, _ in candidates[: settings.lookalike_enrich_max]], settings
             )
 
         # 5) Rank by RESEMBLANCE TO THE SEED (the actual lookalike signal), lightly blended with
@@ -183,24 +183,20 @@ class LookalikeService:
         out.sort(key=lambda lk: lk.score, reverse=True)
         return out[:limit]
 
-    async def _enrich_candidates(self, candidates: list[Account], settings) -> None:
-        """Enrich candidate companies in place, concurrently and best-effort. The enricher already
-        isolates failures (returns [] on any error), so one bad candidate never sinks the batch."""
-        import asyncio
+    async def _enrich_candidates(
+        self, ts: TenantSession, candidates: list[Account], settings
+    ) -> None:
+        """Enrich candidate companies in place, concurrently and best-effort.
 
+        Billing lives in ``enrich_batch``: one ``enrich.account`` charge for the batch, taken
+        before the concurrency starts, because metering each candidate inside the gather would put
+        N coroutines on one AsyncSession. Over quota the candidates go unenriched and similarity
+        is scored on snippet text — a weaker ranking, not a failed search."""
         from nexus.enrichment.account import get_account_enricher
 
-        enricher = get_account_enricher()
-        sem = asyncio.Semaphore(max(1, settings.lookalike_enrich_concurrency))
-
-        async def _one(c: Account) -> None:
-            async with sem:
-                try:
-                    await enricher.enrich(c)
-                except Exception:  # belt-and-suspenders; enrich already swallows its own errors
-                    pass
-
-        await asyncio.gather(*(_one(c) for c in candidates))
+        await get_account_enricher().enrich_batch(
+            ts, candidates, concurrency=settings.lookalike_enrich_concurrency
+        )
 
 
 _service: LookalikeService | None = None

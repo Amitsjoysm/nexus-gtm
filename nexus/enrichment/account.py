@@ -16,6 +16,7 @@ same shape later if search snippets prove too thin; they'd each need their own k
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -23,6 +24,10 @@ import re
 from nexus.models.account import Account
 
 logger = logging.getLogger("nexus.enrichment.account")
+
+# What the billing seam charges for one firmographic crawl. Priced in `billing/rates.py` as
+# "crawl + llm" — a search request plus an LLM completion, which is exactly what `fetch` spends.
+ACCOUNT_CAPABILITY = "enrich.account"
 
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -142,8 +147,8 @@ class SearchBackedAccountEnricher:
             account.custom_fields = cf
         return filled
 
-    async def from_source_db(self, account: Account) -> list[str]:
-        """Fill blanks from a registered source database. Returns filled keys; never raises.
+    async def from_source_db(self, account: Account) -> tuple[list[str], object | None]:
+        """Fill blanks from a registered source database. ``(filled, hit)``; never raises.
 
         Tried ahead of the web+LLM path because it is free at the margin: one vendor licence
         amortised across every tenant, instead of a search call and an LLM completion per account.
@@ -157,36 +162,137 @@ class SearchBackedAccountEnricher:
             hit = await enrich_company(account.domain or "")
         except Exception as exc:  # provider isolation, same as every other provider here
             logger.warning("source database account enrich failed: %r", exc)
-            return []
+            return [], None
         if hit is None:
-            return []
+            return [], None
         # Routed through `apply` rather than assigning here, so a source database is held to the
         # same blank-only rule as the web path and can never overwrite a customer's CRM data.
-        return self.apply(account, {
+        filled = self.apply(account, {
             "industry": hit.get("industry"),
             "country": hit.get("country"),
             # Parsed by the hit, not by `apply`: a source column may hold "250", 250, or a band
             # like "51-200" that is not one number, and `apply` only accepts a real int.
             "employee_count": hit.employee_count(),
         })
+        return filled, hit
 
-    async def enrich(self, account: Account) -> list[str]:
-        """Fill blank firmographics. Source databases first, then the web. Returns fields filled."""
-        filled = await self.from_source_db(account)
+    async def enrich(
+        self, ts, account: Account, *, user_id: str | None = None,
+        raise_on_block: bool = False, meter: bool = True,
+    ) -> list[str]:
+        """Fill blank firmographics. Source databases first, then the web. Returns fields filled.
+
+        ``ts`` is the requesting tenant's session, and it is **required** — this call spends a
+        search request and an LLM completion, which is what ``enrich.account`` prices. Making it
+        optional would recreate the state this method was in for most of the project's life: a
+        capability sitting in the catalog with a rate card, metered at no call site.
+
+        ``raise_on_block`` is the difference between a user pressing "Enrich" and a background
+        sweep. A person gets a 402 carrying the upsell; the account-refresh pipeline, the ICP
+        discovery run and the lookalike search get an empty list and carry on, because a quota on
+        *enrichment* must never take down *signal collection*. Defaults to the safe one.
+
+        ``meter=False`` is for **concurrent batch** callers only, and they must charge the batch
+        themselves — see ``enrich_batch``. It exists because metering touches ``ts``, and
+        SQLAlchemy's AsyncSession is not safe for concurrent use: N coroutines metering on one
+        session interleave on a single connection and raise, or read each other's rows. The
+        candidate sweeps in ``discovery/auto.py`` and ``lookalike/service.py`` are exactly that
+        shape. Both callers are pinned by tests that assert the batch is charged once.
+        """
+        filled, hit = await self.from_source_db(account)
 
         # The paid path runs only if the basics are still missing — the same gate `pipeline.py`
         # applies before calling here at all. When a registered source answered in full there is
         # nothing left for a search call and an LLM completion to add, and that skipped pair is
         # exactly where the COGS saving lands.
         if account.industry and account.employee_count:
+            if hit is not None and meter:
+                # Charged like the web crawl it replaced: the customer received firmographics and
+                # is billed for the firmographics, not for our infrastructure. `cached` is what
+                # keeps the margin visible. Never blocks — the answer is already in hand, and
+                # this mirrors the shared-record hit in `nexus/people/enrich.py`.
+                from nexus.sources.provider import meter_hit
+
+                await meter_hit(ts, ACCOUNT_CAPABILITY, user_id=user_id,
+                                source_name=getattr(hit, "source_name", ""))
             return filled
 
-        data = await self.fetch(account)
-        if not data:
+        if not (account.name or account.domain or "").strip():
+            # `fetch` would return {} without issuing a request. Nothing was bought, so nothing is
+            # charged — the same rule that keeps an unconfigured phone lookup off the bill.
             return filled
-        # `apply` is blank-only, so fields the source already filled are left alone and only the
-        # genuinely new ones are reported.
-        return filled + self.apply(account, data)
+
+        if not meter:
+            data = await self.fetch(account)
+            return filled + self.apply(account, data) if data else filled
+
+        from nexus.billing.errors import QuotaExceeded
+        from nexus.billing.meter import metered
+
+        try:
+            # Gated BEFORE the spend, which is the whole point of the context manager: a blocked
+            # tenant must not have the search issued and then be told no.
+            async with metered(
+                ts, ACCOUNT_CAPABILITY, user_id=user_id, source="enrichment",
+                attrs={"provider": "web", "cached": False},
+            ):
+                data = await self.fetch(account)
+                if not data:
+                    return filled
+                # `apply` is blank-only, so fields the source already filled are left alone and
+                # only the genuinely new ones are reported.
+                filled = filled + self.apply(account, data)
+        except QuotaExceeded:
+            if raise_on_block:
+                raise
+            logger.info(
+                "account enrichment skipped for %s: %s quota reached",
+                account.id, ACCOUNT_CAPABILITY,
+            )
+        return filled
+
+    async def enrich_batch(
+        self, ts, accounts: list[Account], *, concurrency: int, user_id: str | None = None,
+    ) -> None:
+        """Enrich candidates concurrently, charging the batch once. Never raises.
+
+        The single gate up front is not a shortcut, it is the only safe shape: ``metered`` reads
+        and writes ``ts``, and running it inside the ``gather`` would put N coroutines on one
+        AsyncSession — the concurrency trap CLAUDE.md documents for session-bound signal sources,
+        which fails as an interleaved-connection error or, worse, as one coroutine reading
+        another's rows. So the tenant is charged for ``len(accounts)`` before any of it starts,
+        exactly as the bulk email verifier in ``routers/contacts.py`` does.
+
+        Blocked means the whole batch is skipped rather than partially run: these are candidates
+        for ranking, and a half-enriched set produces a silently worse ordering rather than a
+        visible failure.
+        """
+        if not accounts:
+            return
+
+        from nexus.billing.errors import QuotaExceeded
+        from nexus.billing.meter import metered
+
+        sem = asyncio.Semaphore(max(1, concurrency))
+
+        async def _one(acc: Account) -> None:
+            async with sem:
+                try:
+                    await self.enrich(ts, acc, user_id=user_id, meter=False)
+                except Exception:  # enrich already swallows its own errors; belt and braces
+                    pass
+
+        try:
+            async with metered(
+                ts, ACCOUNT_CAPABILITY, quantity=len(accounts), user_id=user_id,
+                source="enrichment", attrs={"provider": "web", "cached": False, "batch": True},
+            ):
+                await asyncio.gather(*(_one(a) for a in accounts))
+        except QuotaExceeded:
+            logger.info(
+                "candidate enrichment skipped for %d account(s): %s quota reached",
+                len(accounts), ACCOUNT_CAPABILITY,
+            )
 
 
 _enricher: SearchBackedAccountEnricher | None = None

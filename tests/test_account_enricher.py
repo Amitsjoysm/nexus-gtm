@@ -1,4 +1,10 @@
-"""Web-backed account firmographic enrichment (Exa/DuckDuckGo + LLM). Offline/deterministic."""
+"""Web-backed account firmographic enrichment (Exa/DuckDuckGo + LLM). Offline/deterministic.
+
+These are about EXTRACTION — what the LLM output turns into on the account — so they run with
+`meter=False` and no session. Billing for `enrich.account` is a separate concern with its own
+tests in `tests/test_enrichment_billing.py`; mixing the two here would make a field-mapping
+test fail for a billing reason.
+"""
 from __future__ import annotations
 
 from nexus.agents.llm import LLMResponse, StubLLMProvider
@@ -37,7 +43,7 @@ async def test_enrich_fills_blank_firmographics():
     hits = [_Hit("Northwind Logistics", "3PL provider, 1200 employees, USA", "https://northwind.com")]
     llm = _FakeLLM('{"industry":"Logistics","employee_count":1200,"country":"United States",'
                    '"description":"Third-party logistics provider.","tech_stack":["SAP","Salesforce"]}')
-    out = await SearchBackedAccountEnricher(_FakeSearch(hits), llm).enrich(acc)
+    out = await SearchBackedAccountEnricher(_FakeSearch(hits), llm).enrich(None, acc, meter=False)
     assert set(out) == {"industry", "employee_count", "country", "tech_stack", "description"}
     assert acc.industry == "Logistics" and acc.employee_count == 1200
     assert acc.country == "United States" and acc.tech_stack == ["SAP", "Salesforce"]
@@ -48,7 +54,7 @@ async def test_enrich_never_overwrites_existing_values():
     acc = Account(tenant_id="t", name="Acme", domain="acme.com",
                   industry="Fintech", employee_count=50, country="Canada")
     llm = _FakeLLM('{"industry":"Logistics","employee_count":9999,"country":"United States"}')
-    out = await SearchBackedAccountEnricher(_FakeSearch([_Hit("Acme")]), llm).enrich(acc)
+    out = await SearchBackedAccountEnricher(_FakeSearch([_Hit("Acme")]), llm).enrich(None, acc, meter=False)
     # Pre-set fields are preserved; only genuinely blank ones could be filled.
     assert acc.industry == "Fintech" and acc.employee_count == 50 and acc.country == "Canada"
     assert "industry" not in out and "employee_count" not in out
@@ -56,19 +62,19 @@ async def test_enrich_never_overwrites_existing_values():
 
 async def test_enrich_stub_llm_is_noop():
     acc = Account(tenant_id="t", name="Acme", domain="acme.com")
-    out = await SearchBackedAccountEnricher(_FakeSearch([_Hit("Acme")]), StubLLMProvider()).enrich(acc)
+    out = await SearchBackedAccountEnricher(_FakeSearch([_Hit("Acme")]), StubLLMProvider()).enrich(None, acc, meter=False)
     assert out == [] and acc.industry is None  # offline → nothing extracted
 
 
 async def test_enrich_no_hits_is_noop():
     acc = Account(tenant_id="t", name="Ghost", domain="ghost.example")
-    out = await SearchBackedAccountEnricher(_FakeSearch([]), _FakeLLM("{}")).enrich(acc)
+    out = await SearchBackedAccountEnricher(_FakeSearch([]), _FakeLLM("{}")).enrich(None, acc, meter=False)
     assert out == []
 
 
 async def test_enrich_ignores_bool_employee_count():
     acc = Account(tenant_id="t", name="Acme", domain="acme.com")
     llm = _FakeLLM('{"employee_count": true, "industry": "SaaS"}')
-    out = await SearchBackedAccountEnricher(_FakeSearch([_Hit("Acme")]), llm).enrich(acc)
+    out = await SearchBackedAccountEnricher(_FakeSearch([_Hit("Acme")]), llm).enrich(None, acc, meter=False)
     assert acc.employee_count is None and "employee_count" not in out
     assert acc.industry == "SaaS"

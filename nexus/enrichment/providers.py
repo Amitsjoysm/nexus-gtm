@@ -68,6 +68,13 @@ class EnrichmentResult:
 class EnrichmentProvider(abc.ABC):
     name: str
 
+    # Whether consulting this provider spends money — a search call, a verification credit, an
+    # actor run. It is what the waterfall bills on: a free provider that fully answers means no
+    # paid provider was consulted, and the usage row is stamped `cached` so the margin is visible.
+    # Defaults True because every provider written before `SourceDatabaseProvider` cost something,
+    # and a new one that costs money but forgot to say so must not silently become free.
+    costs_money: bool = True
+
     @abc.abstractmethod
     async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult: ...
 
@@ -92,6 +99,10 @@ class SourceDatabaseProvider(EnrichmentProvider):
     """
 
     name = "source_db"
+    # The only provider here that spends nothing at the margin: the licence is already paid and
+    # amortised across every tenant. This is what lets the waterfall tell a free answer from a
+    # bought one when it stamps the usage row.
+    costs_money = False
 
     async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult:
         linkedin = (contact.linkedin_url or "").strip()

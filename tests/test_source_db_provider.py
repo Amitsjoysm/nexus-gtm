@@ -221,9 +221,12 @@ async def test_the_paid_enricher_still_runs_when_the_source_is_down(fresh_db, mo
         return {"industry": "Payments", "employee_count": 900}
 
     monkeypatch.setattr(enricher, "fetch", _paid)
-    account = Account(tenant_id="t", name="Stripe", domain="stripe.com")
+    await _seed_billing()
+    tid = await make_tenant(slug="sdf1", name="SDF One")
+    account = Account(tenant_id=tid, name="Stripe", domain="stripe.com")
 
-    filled = await enricher.enrich(account)
+    async with tenant_session(tid) as ts:
+        filled = await enricher.enrich(ts, account)
     assert account.industry == "Payments"
     assert "industry" in filled
 
@@ -617,9 +620,12 @@ async def test_the_account_enricher_skips_the_paid_web_path_when_a_source_answer
         return {"industry": "Wrong", "employee_count": 1}
 
     monkeypatch.setattr(enricher, "fetch", _paid)
-    account = Account(tenant_id="t", name="Stripe", domain="stripe.com")
+    await _seed_billing()
+    tid = await make_tenant(slug="sdf2", name="SDF Two")
+    account = Account(tenant_id=tid, name="Stripe", domain="stripe.com")
 
-    filled = await enricher.enrich(account)
+    async with tenant_session(tid) as ts:
+        filled = await enricher.enrich(ts, account)
     assert account.industry == "Payments"
     assert account.employee_count == 900
     assert set(filled) >= {"industry", "employee_count"}
