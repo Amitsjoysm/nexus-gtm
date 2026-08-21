@@ -72,18 +72,18 @@ def test_audit_omits_empty_actor_and_quotes_spaces():
 
 
 async def test_crm_connection_is_tenant_scoped_and_stores_ciphertext():
-    from nexus.models.integration import CrmConnection
+    from nexus.models.integration import IntegrationConnection
 
     tid_a = await make_tenant(slug="ta", name="A")
     tid_b = await make_tenant(slug="tb", name="B")
 
     async with tenant_session(tid_a) as ts:
-        ts.add(CrmConnection(tenant_id=tid_a, provider="hubspot",
+        ts.add(IntegrationConnection(tenant_id=tid_a, kind="crm", provider="hubspot",
                              secret=seal_crm_secret({"access_token": "pat-A"})))
         await ts.flush()
 
     async with tenant_session(tid_a) as ts:
-        row = await ts.first(CrmConnection)
+        row = await ts.first(IntegrationConnection)
         assert row is not None
         assert row.provider == "hubspot"
         assert row.status == "unverified"
@@ -92,7 +92,7 @@ async def test_crm_connection_is_tenant_scoped_and_stores_ciphertext():
         assert "pat-A" not in str(row.secret)
 
     async with tenant_session(tid_b) as ts:
-        assert await ts.first(CrmConnection) is None
+        assert await ts.first(IntegrationConnection) is None
 
 
 # ---- connector health + the globals split ------------------------------------------------
@@ -113,12 +113,82 @@ async def test_stub_connector_test_connection_ok():
     assert res.label == "stub"
 
 
-async def test_salesforce_test_connection_is_honest_about_not_being_live():
+async def test_salesforce_without_credentials_says_which_half_is_missing():
+    """A Salesforce connector needs both a token and the org's instance_url. Reporting a generic
+    failure would send an admin to re-check the token when the URL is what is absent."""
     from nexus.ingestion.crm import SalesforceConnector
 
-    res = await SalesforceConnector().test_connection()
+    none = await SalesforceConnector().test_connection()
+    assert none.ok is False and "No access token" in none.detail
+
+    no_host = await SalesforceConnector(access_token="tok").test_connection()
+    assert no_host.ok is False and "instance URL" in no_host.detail
+
+
+async def test_salesforce_test_connection_maps_statuses():
+    from nexus.ingestion.crm import SalesforceConnector
+
+    conn = SalesforceConnector(access_token="tok", instance_url="https://acme.my.salesforce.com")
+
+    conn._request = _fixed_response(200, {})  # type: ignore[method-assign]
+    ok = await conn.test_connection()
+    assert ok.ok is True and "acme.my.salesforce.com" in ok.label
+
+    conn._request = _fixed_response(401, {})  # type: ignore[method-assign]
+    assert "Session expired" in (await conn.test_connection()).detail
+
+    conn._request = _fixed_response(403, {})  # type: ignore[method-assign]
+    assert "'api' scope" in (await conn.test_connection()).detail
+
+
+async def test_salesforce_fetch_accounts_maps_soql_rows():
+    from nexus.ingestion.crm import SalesforceConnector
+
+    conn = SalesforceConnector(access_token="tok", instance_url="https://acme.my.salesforce.com")
+    conn._request = _fixed_response(200, {"records": [  # type: ignore[method-assign]
+        {"Id": "001x", "Name": "Globex", "Website": "https://www.globex.com/careers",
+         "Industry": "Software", "NumberOfEmployees": 250, "BillingCountry": "US"},
+        {"Id": "001y", "Name": "", "Website": "nope.com"},  # unnamed rows are skipped
+    ]})
+    rows = await conn.fetch_accounts()
+    assert len(rows) == 1
+    assert rows[0].external_id == "001x"
+    # Salesforce stores a full URL; NEXUS keys on a bare domain.
+    assert rows[0].domain == "globex.com"
+    assert rows[0].employee_count == 250
+
+
+async def test_salesforce_never_raises_across_the_boundary():
+    from nexus.ingestion.crm import SalesforceConnector
+    from nexus.models.account import Account
+
+    conn = SalesforceConnector(access_token="tok", instance_url="https://acme.my.salesforce.com")
+
+    async def boom(method, path, body=None):
+        raise RuntimeError("tls exploded")
+
+    conn._request = boom  # type: ignore[method-assign]
+    assert (await conn.test_connection()).ok is False
+    assert await conn.fetch_accounts() == []
+    res = await conn.push_account(Account(tenant_id="t", name="Acme"))
     assert res.ok is False
-    assert "not available yet" in res.detail
+
+
+def test_soql_literals_are_escaped():
+    """An account domain is customer-supplied text that lands inside a quoted SOQL literal."""
+    from nexus.ingestion.crm import _soql_escape
+
+    assert _soql_escape("o'brien.com") == "o\\'brien.com"
+    assert _soql_escape("a\\b") == "a\\\\b"
+
+
+def test_website_to_domain_strips_scheme_path_and_www():
+    from nexus.ingestion.crm import _domain_from_website
+
+    assert _domain_from_website("https://www.acme.com/about") == "acme.com"
+    assert _domain_from_website("acme.co.uk") == "acme.co.uk"
+    assert _domain_from_website("") is None
+    assert _domain_from_website(None) is None
 
 
 async def test_hubspot_test_connection_maps_statuses():
@@ -312,16 +382,16 @@ async def test_undecryptable_secret_falls_back_instead_of_crashing():
     """A key rotation must degrade to 'reconnect', not a 500."""
     from nexus.ingestion.crm import get_crm_connector
     from nexus.ingestion.crm_credentials import has_credentials, resolve_crm_connector
-    from nexus.models.integration import CrmConnection
+    from nexus.models.integration import IntegrationConnection
 
     tid = await make_tenant(slug="rot", name="ROT")
     async with tenant_session(tid) as ts:
-        ts.add(CrmConnection(tenant_id=tid, provider="hubspot",
+        ts.add(IntegrationConnection(tenant_id=tid, kind="crm", provider="hubspot",
                              secret={"enc": "garbage-from-an-old-key"}))
         await ts.flush()
 
     async with tenant_session(tid) as ts:
-        row = await ts.first(CrmConnection)
+        row = await ts.first(IntegrationConnection)
         assert has_credentials(row) is False
         assert await resolve_crm_connector(ts) is get_crm_connector()
 
@@ -352,12 +422,12 @@ async def test_put_then_get_never_returns_the_token(client):
 
 
 async def test_stored_token_is_ciphertext_in_the_database(client):
-    from nexus.models.integration import CrmConnection
+    from nexus.models.integration import IntegrationConnection
 
     token = await signup(client)
     await _connect(client, auth(token))
     async with tenant_session(principal_from_token(token).tenant_id) as ts:
-        row = await ts.first(CrmConnection)
+        row = await ts.first(IntegrationConnection)
         assert _SECRET not in str(row.secret)
 
 
@@ -368,17 +438,28 @@ async def test_get_reports_env_source_when_no_tenant_credential(client):
     assert g["has_credentials"] is False
 
 
-async def test_put_rejects_unknown_and_not_live_providers(client):
+async def test_put_rejects_an_unknown_provider(client):
     h = auth(await signup(client))
     bad = await client.put("/api/integrations/crm/connection", headers=h,
                            json={"provider": "pipedrive", "access_token": "x"})
     assert bad.status_code == 400
     assert "Unknown CRM provider" in bad.json()["detail"]
 
-    sf = await client.put("/api/integrations/crm/connection", headers=h,
-                          json={"provider": "salesforce", "access_token": "x"})
-    assert sf.status_code == 400
-    assert "not available yet" in sf.json()["detail"]
+
+async def test_salesforce_requires_an_instance_url(client):
+    """Salesforce REST is addressed at the org's own host. A token alone has nowhere to go, so
+    the endpoint refuses rather than storing a credential that can never be used."""
+    h = auth(await signup(client))
+    r = await client.put("/api/integrations/crm/connection", headers=h,
+                         json={"provider": "salesforce", "access_token": "tok"})
+    assert r.status_code == 400
+    assert "instance URL" in r.json()["detail"]
+
+    ok = await client.put("/api/integrations/crm/connection", headers=h, json={
+        "provider": "salesforce", "access_token": "tok",
+        "api_base": "https://acme.my.salesforce.com"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["provider"] == "salesforce"
 
 
 async def test_put_requires_a_token_on_first_connect(client):
@@ -571,3 +652,33 @@ async def test_play_crm_push_uses_the_tenants_connector(monkeypatch):
 
     assert tenant_connector.pushed_accounts[0]["name"] == "Acme"
     assert tenant_connector.pushed_activities[0]["kind"] == "signal"
+
+
+# ---- the generalized connection store -----------------------------------------------------
+async def test_one_tenant_can_hold_a_crm_and_a_sep_connection():
+    """The store is keyed (tenant, kind), so CRM and SEP credentials coexist without a second
+    table. The earlier YAGNI call against a generic table was right until SEP arrived."""
+    from nexus.models.integration import IntegrationConnection
+
+    tid = await make_tenant(slug="two", name="TWO")
+    async with tenant_session(tid) as ts:
+        ts.add(IntegrationConnection(tenant_id=tid, kind="crm", provider="hubspot",
+                                     secret=seal_crm_secret({"access_token": "a"})))
+        ts.add(IntegrationConnection(tenant_id=tid, kind="sep", provider="salesloft",
+                                     secret=seal_crm_secret({"api_key": "b"})))
+        await ts.flush()
+        rows = await ts.list(IntegrationConnection)
+        assert {r.kind for r in rows} == {"crm", "sep"}
+
+
+async def test_crm_lookup_ignores_a_sep_row():
+    """get_connection must not hand the CRM resolver a SEP credential."""
+    from nexus.ingestion.crm_credentials import get_connection
+    from nexus.models.integration import IntegrationConnection
+
+    tid = await make_tenant(slug="onlysep", name="OS")
+    async with tenant_session(tid) as ts:
+        ts.add(IntegrationConnection(tenant_id=tid, kind="sep", provider="salesloft",
+                                     secret=seal_crm_secret({"api_key": "b"})))
+        await ts.flush()
+        assert await get_connection(ts) is None

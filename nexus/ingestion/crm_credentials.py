@@ -1,8 +1,9 @@
 # nexus/ingestion/crm_credentials.py
-"""Per-tenant CRM credentials: encrypted storage + connector resolution.
+"""Per-tenant CRM credentials: connector resolution over the shared connection store.
 
-A tenant connects its own CRM by storing an access token here. The token is sealed
-(:mod:`nexus.ingestion.crm_crypto`) and never leaves the server.
+Storage lives in :mod:`nexus.integrations.connections` (shared with SEP); this module owns the
+CRM-specific half — which connector a stored credential builds, and the precedence that decides
+whether a stored credential is used at all.
 
 Resolution is layered so a deployment that only sets ``NEXUS_CRM_PROVIDER`` /
 ``NEXUS_HUBSPOT_ACCESS_TOKEN`` keeps behaving exactly as it did before per-tenant credentials
@@ -25,20 +26,24 @@ from nexus.core.tenancy import TenantSession
 from nexus.ingestion.crm import (
     CRMConnector,
     HubSpotConnector,
+    SalesforceConnector,
     get_crm_connector,
     get_crm_connector_override,
 )
-from nexus.ingestion.crm_crypto import seal_crm_secret, unseal_crm_secret
-from nexus.models.integration import CrmConnection
+from nexus.integrations import connections
+from nexus.models.integration import IntegrationConnection
 
 logger = logging.getLogger("nexus.integrations.crm")
 
-# Provider names the product recognises, and the subset with a working API client. Salesforce is
-# known (so the UI can render it, disabled, and the model can store it later) but not live:
-# SalesforceConnector.fetch_accounts returns an injected sample, so accepting a Salesforce token
-# would mean storing a secret that does nothing.
+KIND = "crm"
+
+# Provider names the product recognises, and the subset with a working API client.
 KNOWN_CRM_PROVIDERS = ("hubspot", "salesforce")
-LIVE_CRM_PROVIDERS = ("hubspot",)
+LIVE_CRM_PROVIDERS = ("hubspot", "salesforce")
+
+# Any one of these makes a stored credential usable. A workspace that connected via OAuth has no
+# access_token the admin typed but does have a refresh_token, and must not read as unconfigured.
+CREDENTIAL_FIELDS = ("access_token", "refresh_token")
 
 _CACHE_MAX = 128
 # tenant_id -> (fingerprint, connector).
@@ -61,28 +66,45 @@ def invalidate_tenant_connector(tenant_id: str | None = None) -> None:
         _TENANT_CONNECTORS.pop(tenant_id, None)
 
 
-def _fingerprint(row: CrmConnection) -> str:
+def _fingerprint(row: IntegrationConnection) -> str:
     stamp = row.updated_at.isoformat() if row.updated_at else ""
     return f"{stamp}|{row.provider}|{row.api_base}"
 
 
-def has_credentials(row: CrmConnection | None) -> bool:
-    """True when the row holds a secret that still decrypts to a usable token."""
-    return bool(row and unseal_crm_secret(row.secret).get("access_token"))
+def has_credentials(row: IntegrationConnection | None) -> bool:
+    """True when the row holds a secret that still decrypts to a usable credential."""
+    return connections.has_credentials(row, fields=CREDENTIAL_FIELDS)
 
 
-def build_tenant_connector(provider: str, token: str, api_base: str = "") -> CRMConnector | None:
-    """Build a connector from decrypted credentials, or ``None`` if we cannot honor them."""
-    if provider == "hubspot" and token:
+async def get_connection(ts: TenantSession) -> IntegrationConnection | None:
+    """The tenant's stored CRM connection row, if any."""
+    return await connections.get_connection(ts, KIND)
+
+
+def build_tenant_connector(
+    provider: str, bundle: dict, api_base: str = "", *, token_provider=None
+) -> CRMConnector | None:
+    """Build a connector from a decrypted bundle, or ``None`` if we cannot honor it.
+
+    ``token_provider`` is the async callback an OAuth-backed connector uses to refresh an expired
+    access token; a pasted private-app token needs none, so it stays optional.
+    """
+    token = str(bundle.get("access_token") or "")
+    if provider == "hubspot" and (token or bundle.get("refresh_token")):
+        kwargs = {"access_token": token, "token_provider": token_provider}
         if api_base:
-            return HubSpotConnector(access_token=token, api_base=api_base)
-        return HubSpotConnector(access_token=token)
+            kwargs["api_base"] = api_base
+        return HubSpotConnector(**kwargs)
+    if provider == "salesforce" and (token or bundle.get("refresh_token")):
+        instance_url = str(bundle.get("instance_url") or api_base or "")
+        if not instance_url:
+            # Salesforce REST is addressed at the org's own host, which the token response
+            # carries. Without it there is nowhere to send the request.
+            return None
+        return SalesforceConnector(
+            access_token=token, instance_url=instance_url, token_provider=token_provider
+        )
     return None
-
-
-async def get_connection(ts: TenantSession) -> CrmConnection | None:
-    """The tenant's stored CRM connection row, if any. One row per tenant."""
-    return await ts.first(CrmConnection)
 
 
 async def resolve_crm_connector(ts: TenantSession) -> CRMConnector:
@@ -99,8 +121,11 @@ async def resolve_crm_connector(ts: TenantSession) -> CRMConnector:
             _TENANT_CONNECTORS.move_to_end(ts.tenant_id)
             return cached[1]
 
-        token = str(unseal_crm_secret(row.secret).get("access_token") or "")
-        connector = build_tenant_connector(row.provider, token, row.api_base or "")
+        bundle = connections.secret_bundle(row)
+        connector = build_tenant_connector(
+            row.provider, bundle, row.api_base or "",
+            token_provider=_make_token_provider(ts, row),
+        )
         if connector is not None:
             _TENANT_CONNECTORS[ts.tenant_id] = (fingerprint, connector)
             _TENANT_CONNECTORS.move_to_end(ts.tenant_id)
@@ -120,6 +145,30 @@ async def resolve_crm_connector(ts: TenantSession) -> CRMConnector:
     return get_crm_connector()
 
 
+def _make_token_provider(ts: TenantSession, row: IntegrationConnection):
+    """An async callback that refreshes this tenant's OAuth access token and persists it.
+
+    Returns ``None`` for a credential with no refresh token — a pasted private-app token cannot be
+    refreshed, and handing the connector a provider that always fails would turn a clear
+    "invalid token" into a confusing refresh error.
+    """
+    if not connections.secret_bundle(row).get("refresh_token"):
+        return None
+
+    async def _refresh() -> str:
+        from nexus.integrations.oauth import refresh_access_token
+
+        bundle = connections.secret_bundle(row)
+        updated = await refresh_access_token(row.provider, bundle)
+        if not updated:
+            return ""
+        await connections.merge_secret(ts, row, updated)
+        invalidate_tenant_connector(ts.tenant_id)
+        return str(updated.get("access_token") or "")
+
+    return _refresh
+
+
 async def store_credentials(
     ts: TenantSession,
     *,
@@ -127,36 +176,25 @@ async def store_credentials(
     access_token: str | None,
     api_base: str = "",
     actor_user_id: str | None = None,
-) -> CrmConnection:
+    bundle: dict | None = None,
+) -> IntegrationConnection:
     """Upsert the tenant's CRM connection.
 
     ``access_token`` is write-only: a blank or omitted value keeps the stored secret, so an admin
-    can change the provider or api_base without re-entering the token. Any save resets the row to
-    ``unverified`` — a credential is not "connected" until a test says so.
+    can change the provider or api_base without re-entering the token. ``bundle`` is the OAuth
+    path, carrying the full token set at once.
     """
-    row = await get_connection(ts)
-    if row is None:
-        row = CrmConnection(tenant_id=ts.tenant_id, provider=provider, secret={})
-        ts.add(row)
-    row.provider = provider
-    row.api_base = api_base
-    if access_token:
-        row.secret = seal_crm_secret({"access_token": access_token})
-    row.status = "unverified"
-    row.verified_at = None
-    row.last_error = None
-    row.updated_by_user_id = actor_user_id
-    await ts.flush()
+    secret = bundle if bundle else ({"access_token": access_token} if access_token else None)
+    row = await connections.store_credentials(
+        ts, kind=KIND, provider=provider, secret=secret,
+        api_base=api_base, actor_user_id=actor_user_id,
+    )
     invalidate_tenant_connector(ts.tenant_id)
     return row
 
 
 async def clear_credentials(ts: TenantSession) -> bool:
-    """Delete the tenant's connection so it falls back to env. True when a row was removed."""
-    row = await get_connection(ts)
-    if row is None:
-        return False
-    await ts.delete(row)
-    await ts.flush()
+    """Delete the tenant's CRM connection so it falls back to env. True when a row was removed."""
+    removed = await connections.clear_credentials(ts, KIND)
     invalidate_tenant_connector(ts.tenant_id)
-    return True
+    return removed

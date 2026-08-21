@@ -32,6 +32,7 @@ from nexus.ingestion.crm import (
     CRMAccount,
     CRMConnector,
 )
+from nexus.integrations import connections
 from nexus.ingestion.crm_credentials import (
     KNOWN_CRM_PROVIDERS,
     LIVE_CRM_PROVIDERS,
@@ -45,7 +46,7 @@ from nexus.ingestion.crm_sync import sync_account_to_crm
 from nexus.integrations.sep import get_sep_connector
 from nexus.models.account import Account, Contact
 from nexus.models.identity import Tenant
-from nexus.models.integration import CrmConnection
+from nexus.models.integration import IntegrationConnection
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
@@ -211,7 +212,7 @@ async def crm_sync_status(
 # sweep pushed every tenant's accounts to whichever portal the env pointed at.
 
 
-def _connection_out(row: CrmConnection | None, *, env_provider: str) -> CRMConnectionOut:
+def _connection_out(row: IntegrationConnection | None, *, env_provider: str) -> CRMConnectionOut:
     """Project a stored row (or the env fallback) into the response model.
 
     The only place connection state becomes JSON — keeping it in one function is what makes
@@ -267,17 +268,33 @@ async def set_crm_connection(
             f"{provider.capitalize()} connections are not available yet.",
         )
 
+    existing = await get_connection(ts)
     token = (body.access_token or "").strip()
-    if not token and not has_credentials(await get_connection(ts)):
+    if not token and not has_credentials(existing):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "An access token is required to connect a CRM."
         )
+
+    api_base = (body.api_base or "").strip()
+    if provider == "salesforce":
+        # Salesforce REST is addressed at the org's own host, which OAuth returns as instance_url.
+        # On the manual path the admin supplies it; without it the credential has nowhere to go,
+        # so refuse rather than store something that can never work.
+        known_host = api_base or str(
+            connections.secret_bundle(existing).get("instance_url") or ""
+        )
+        if not known_host:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Salesforce needs your instance URL (e.g. https://acme.my.salesforce.com). "
+                "Connect with OAuth to have it filled in automatically.",
+            )
 
     row = await store_credentials(
         ts,
         provider=provider,
         access_token=token or None,
-        api_base=(body.api_base or "").strip(),
+        api_base=api_base,
         actor_user_id=principal.user_id,
     )
     await record_audit(
