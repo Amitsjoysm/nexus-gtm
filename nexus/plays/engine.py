@@ -11,7 +11,7 @@ from nexus.alerts.service import get_alert_service
 from nexus.core.tenancy import TenantSession
 from nexus.inbox.service import get_inbox_service
 from nexus.ingestion import crm_credentials
-from nexus.integrations.sep import get_sep_connector
+from nexus.integrations import sep_credentials
 from nexus.models.account import Account, Contact
 from nexus.models.signal import SignalEvent
 from nexus.models.workflow import Play, PlayRun
@@ -104,7 +104,9 @@ class PlaysEngine:
                 )
             elif atype == "sep_push":
                 contact = await ts.first(Contact, Contact.account_id == account.id)
-                res = await get_sep_connector().push_contact(
+                # This tenant's SEP, not the process's.
+                sep = await sep_credentials.resolve_sep_connector(ts)
+                res = await sep.push_contact(
                     sequence=action.get("sequence", "default"),
                     email=contact.email if contact else None,
                     payload={"account": account.name, "signal": signal.title},

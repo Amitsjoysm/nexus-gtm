@@ -20,6 +20,8 @@ from nexus.api.schemas import (
     CRMSyncRequest,
     CRMSyncResponse,
     CRMSyncStatusOut,
+    SEPConnectionIn,
+    SEPConnectionOut,
     SEPPushRequest,
     SEPPushResponse,
 )
@@ -43,7 +45,15 @@ from nexus.ingestion.crm_credentials import (
     store_credentials,
 )
 from nexus.ingestion.crm_sync import sync_account_to_crm
-from nexus.integrations.sep import get_sep_connector
+from nexus.integrations.sep_credentials import (
+    KNOWN_SEP_PROVIDERS,
+    OAUTH_ONLY_SEP_PROVIDERS,
+    clear_credentials as sep_clear_credentials,
+    get_connection as sep_get_connection,
+    has_credentials as sep_has_credentials,
+    resolve_sep_connector,
+    store_credentials as sep_store_credentials,
+)
 from nexus.models.account import Account, Contact
 from nexus.models.identity import Tenant
 from nexus.models.integration import IntegrationConnection
@@ -368,7 +378,118 @@ async def sep_push(
         if contact is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
         email = email or contact.email
-    result = await get_sep_connector().push_contact(
+    connector = await resolve_sep_connector(ts)
+    result = await connector.push_contact(
         sequence=body.sequence, email=email, payload=body.payload
     )
     return SEPPushResponse(ok=result.ok, platform=result.platform, detail=result.detail)
+
+
+# ---- per-tenant SEP connection -------------------------------------------------------
+def _sep_connection_out(row: IntegrationConnection | None) -> SEPConnectionOut:
+    """The only place SEP connection state becomes JSON. The secret is never on it."""
+    if row is not None:
+        stored = sep_has_credentials(row)
+        return SEPConnectionOut(
+            provider=row.provider,
+            source="tenant",
+            has_credentials=stored,
+            status=row.status if stored else "error",
+            verified_at=row.verified_at.isoformat() if (stored and row.verified_at) else None,
+            last_error=(
+                row.last_error
+                if stored
+                else "Stored credential could not be decrypted — reconnect your SEP."
+            ),
+            updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        )
+    # No tenant credential: pushes are recorded by the stub, not delivered. Reporting that
+    # honestly is the whole point of naming the stub.
+    return SEPConnectionOut(provider="stub", source="default", status="none")
+
+
+@router.get("/sep/connection", response_model=SEPConnectionOut)
+async def get_sep_connection(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> SEPConnectionOut:
+    """The tenant's SEP connection state. Never includes the credential."""
+    return _sep_connection_out(await sep_get_connection(ts))
+
+
+@router.put("/sep/connection", response_model=SEPConnectionOut)
+async def set_sep_connection(
+    body: SEPConnectionIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> SEPConnectionOut:
+    """Store (or update) this tenant's SEP credentials."""
+    provider = (body.provider or "").strip().lower()
+    if provider not in KNOWN_SEP_PROVIDERS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown SEP provider '{provider}'")
+    if provider in OAUTH_ONLY_SEP_PROVIDERS:
+        # Outreach has no API-key path; a pasted key would 401 on first use with nothing to
+        # explain why.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{provider.capitalize()} connects with OAuth, not an API key. "
+            f"Use Connect {provider.capitalize()}.",
+        )
+
+    key = (body.api_key or "").strip()
+    if not key and not sep_has_credentials(await sep_get_connection(ts)):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "An API key is required to connect a sequence platform."
+        )
+
+    row = await sep_store_credentials(
+        ts, provider=provider, api_key=key or None, actor_user_id=principal.user_id
+    )
+    await record_audit(
+        ts, "sep.connection.set", actor_user_id=principal.user_id,
+        target_type="sep_connection", target_id=row.id,
+        meta={"provider": provider, "key_set": bool(key)},
+    )
+    return _sep_connection_out(row)
+
+
+@router.post("/sep/connection/test", response_model=CRMConnectionTestOut)
+async def test_sep_connection(
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> CRMConnectionTestOut:
+    """Verify the resolved SEP connector and record the outcome on the row."""
+    connector = await resolve_sep_connector(ts)
+    result = await connector.test_connection()
+
+    row = await sep_get_connection(ts)
+    if row is not None:
+        if result.ok:
+            row.status = "connected"
+            row.verified_at = utcnow()
+            row.last_error = None
+        else:
+            row.status = "error"
+            row.last_error = (result.detail or "Connection test failed.")[:500]
+        await ts.flush()
+
+    await record_audit(
+        ts, "sep.connection.test", actor_user_id=principal.user_id,
+        target_type="sep_connection", target_id=row.id if row is not None else "",
+        meta={"provider": connector.platform, "ok": result.ok, "detail": result.detail},
+    )
+    return CRMConnectionTestOut(ok=result.ok, label=result.label, detail=result.detail)
+
+
+@router.delete("/sep/connection", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_sep_connection(
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> Response:
+    """Disconnect the tenant's SEP. Pushes fall back to the recording stub."""
+    removed = await sep_clear_credentials(ts)
+    await record_audit(
+        ts, "sep.connection.clear", actor_user_id=principal.user_id,
+        target_type="sep_connection", meta={"removed": removed},
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

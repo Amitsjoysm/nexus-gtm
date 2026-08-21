@@ -23,7 +23,7 @@ from nexus.integrations.email_sender import (
     save_to_drafts,
     send_email,
 )
-from nexus.integrations.sep import get_sep_connector
+from nexus.integrations import sep_credentials
 from nexus.models.account import Contact
 from nexus.models.identity import Tenant
 from nexus.models.orchestration import OrchestrationRun
@@ -227,7 +227,9 @@ class SendMessageTool(Tool):
                 raise ToolError(f"refusing to send to an undeliverable address ({email})")
 
         sequence = tc.inputs.get("sequence") or "ai-orchestrated-outbound"
-        res = await get_sep_connector().push_contact(
+        # This tenant's SEP, not the process's.
+        sep = await sep_credentials.resolve_sep_connector(tc.ts)
+        res = await sep.push_contact(
             sequence=sequence,
             email=email,
             payload={

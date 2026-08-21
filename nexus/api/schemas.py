@@ -747,6 +747,26 @@ class CRMConnectionTestOut(BaseModel):
     detail: str = ""
 
 
+# ---- integrations: per-tenant SEP connection ----
+class SEPConnectionIn(BaseModel):
+    """A tenant's own SEP credentials. ``api_key`` is write-only: omit or blank to keep it."""
+
+    provider: str = Field(default="salesloft", max_length=16)
+    api_key: str | None = Field(default=None, max_length=512)
+
+
+class SEPConnectionOut(BaseModel):
+    """Everything the server will say about a SEP connection — the secret is not on this list."""
+
+    provider: str
+    source: str                       # tenant | default
+    has_credentials: bool = False
+    status: str = "none"              # none | unverified | connected | error
+    verified_at: str | None = None
+    last_error: str | None = None
+    updated_at: str | None = None
+
+
 # ---- integrations: SEP ----
 class SEPPushRequest(BaseModel):
     sequence: str = "default"
