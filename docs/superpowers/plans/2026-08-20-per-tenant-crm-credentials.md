@@ -376,12 +376,19 @@ def downgrade() -> None:
 - [ ] **Step 7: Verify single head** — `python -m alembic heads`
       Expected: exactly `0044_crm_connections (head)`.
 
-> **Known pre-existing condition:** `alembic upgrade head` against an empty SQLite file fails at
-> `0001_initial` with `table chat_sessions already exists`, because `migrations/env.py` imports
-> `nexus.models` and something in that import path creates tables before the migration runs. This
-> reproduces identically on unmodified `master` — it is **not** caused by this work. Verify head
-> uniqueness with `alembic heads`, and verify the table shape via the model + `create_all` (which
-> is what the test suite uses).
+> **Do not verify the migration by running `alembic upgrade head` against your dev database.**
+> If that file already has tables (the app creates them on startup), the chain fails at
+> `0001_initial` with `table chat_sessions already exists`. That is local DB state, not a defect
+> in the chain — `tests/test_migrations_replay.py` builds a database from nothing but
+> `alembic upgrade head` and diffs the result against `Base.metadata`, and it passes. Verify with:
+>
+> ```bash
+> python -m pytest tests/test_migrations_replay.py -v
+> ```
+>
+> `test_chain_has_exactly_one_head` catches a duplicate revision number;
+> `test_alembic_chain_rebuilds_the_current_schema` catches a migration that has drifted from the
+> model. Both must pass before this task is done.
 
 - [ ] **Step 8: Commit** — `git commit -m "feat(models): tenant-scoped crm_connections table"`
 
