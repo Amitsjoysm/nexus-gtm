@@ -23,7 +23,7 @@ from nexus.api.schemas import (
     SEPPushRequest,
     SEPPushResponse,
 )
-from nexus.core.audit import audit
+from nexus.core.audit import record_audit
 from nexus.core.config import get_settings
 from nexus.core.db import utcnow
 from nexus.core.rbac import Permission
@@ -280,12 +280,13 @@ async def set_crm_connection(
         api_base=(body.api_base or "").strip(),
         actor_user_id=principal.user_id,
     )
-    audit(
+    await record_audit(
+        ts,
         "crm.connection.set",
-        tenant_id=ts.tenant_id,
-        actor=principal.user_id,
-        provider=provider,
-        token_set=bool(token),
+        actor_user_id=principal.user_id,
+        target_type="crm_connection",
+        target_id=row.id,
+        meta={"provider": provider, "token_set": bool(token), "api_base": row.api_base},
     )
     return _connection_out(row, env_provider=_env_provider())
 
@@ -310,12 +311,13 @@ async def test_crm_connection(
             row.last_error = (result.detail or "Connection test failed.")[:500]
         await ts.flush()
 
-    audit(
+    await record_audit(
+        ts,
         "crm.connection.test",
-        tenant_id=ts.tenant_id,
-        actor=principal.user_id,
-        provider=connector.source,
-        ok=result.ok,
+        actor_user_id=principal.user_id,
+        target_type="crm_connection",
+        target_id=row.id if row is not None else "",
+        meta={"provider": connector.source, "ok": result.ok, "detail": result.detail},
     )
     return CRMConnectionTestOut(ok=result.ok, label=result.label, detail=result.detail)
 
@@ -327,11 +329,12 @@ async def clear_crm_connection(
 ) -> Response:
     """Disconnect the tenant's CRM. Resolution falls back to the deployment env configuration."""
     removed = await clear_credentials(ts)
-    audit(
+    await record_audit(
+        ts,
         "crm.connection.clear",
-        tenant_id=ts.tenant_id,
-        actor=principal.user_id,
-        removed=removed,
+        actor_user_id=principal.user_id,
+        target_type="crm_connection",
+        meta={"removed": removed},
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

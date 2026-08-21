@@ -700,6 +700,20 @@ class CRMSyncStatusOut(BaseModel):
     synced: int        # accounts already up to date
 
 
+# ---- workspace audit trail ----
+class AuditEntryOut(BaseModel):
+    """One audited action. ``meta`` never carries a secret — see nexus/core/audit.py."""
+
+    id: str
+    action: str
+    actor_user_id: str | None = None
+    actor_email: str | None = None
+    target_type: str = ""
+    target_id: str = ""
+    meta: dict = Field(default_factory=dict)
+    created_at: str
+
+
 # ---- integrations: per-tenant CRM connection ----
 class CRMConnectionIn(BaseModel):
     """A tenant's own CRM credentials.
