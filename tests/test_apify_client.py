@@ -124,6 +124,90 @@ async def test_non_dict_dataset_rows_are_dropped(monkeypatch):
     assert items == [{"good": 1}, {"also_good": 2}]
 
 
+# ---- a registered actor must be a wired actor -------------------------------------------------
+#
+# `crunchbase_org` and `company_search` sat in ACTORS for months with no caller. That state is
+# worse than either alternative: the actor verification script printed a row for each of them, so
+# they read as capabilities in the one place an operator looks, while doing nothing. They were
+# removed 2026-08-20. These two tests keep the registry honest structurally, the way
+# `test_nothing_reads_company_signals_yet` does for the shadow crawl — by scanning the tree, so it
+# stays true by test rather than by memory.
+
+
+def _actor_names_passed_to_run_actor() -> set[str]:
+    """Every actor name that product code actually hands to ``run_actor``.
+
+    Resolved through the AST rather than by grepping the name, because both cheap approximations
+    are wrong here and in opposite directions. Searching for ``run_actor("<name>"`` misses
+    `linkedin_profile`, which is passed via the module constant `apify_provider.ACTOR`. Searching
+    for the bare quoted name falsely matches `company_search`, which is also an unrelated module
+    (`integrations/company_search.py`), a registry method, and a cache key literal
+    (``_norm_key("company_search", ...)``) — so that spelling would have reported a dead actor as
+    wired. Reading the argument is the only version that answers the question asked.
+    """
+    import ast
+    from pathlib import Path
+
+    invoked: set[str] = set()
+    for path in Path("nexus").rglob("*.py"):
+        if path.name == "apify.py":
+            continue                       # the registry may name its own actors
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        # Module-level `ACTOR = "linkedin_profile"` indirection has to resolve, or a caller gets
+        # reported as missing for the crime of naming a constant.
+        consts = {
+            t.id: n.value.value
+            for n in tree.body
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+            and isinstance(n.value.value, str)
+            for t in n.targets
+            if isinstance(t, ast.Name)
+        }
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and node.args):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            if name != "run_actor":
+                continue
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                invoked.add(arg.value)
+            elif isinstance(arg, ast.Name) and arg.id in consts:
+                invoked.add(consts[arg.id])
+    return invoked
+
+
+def test_every_registered_actor_has_a_real_caller():
+    """ACTORS is a list of capabilities. An entry nothing calls is a claim the product cannot back.
+
+    Finds the call site rather than trusting a hand-maintained list, because the failure being
+    prevented is exactly a hand-maintained list drifting out of date.
+    """
+    unwired = sorted(set(ACTORS) - _actor_names_passed_to_run_actor())
+    assert unwired == [], (
+        f"registered but called by nothing: {unwired}. Wire it to a consumer or drop it from "
+        f"ACTORS — a registered actor with no caller looks like a capability and is not one."
+    )
+
+
+def test_the_verification_script_declares_a_consumer_for_every_actor():
+    """`verify_apify_actors.py` prints a consumer per actor. An actor missing from that map used to
+    print the literal string 'none', which is a report that the tool is working as intended rather
+    than the alarm it should be."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from verify_apify_actors import CONSUMERS
+
+    assert set(CONSUMERS) == set(ACTORS), (
+        "the verify script's consumer map and ACTORS have drifted: "
+        f"only in ACTORS={set(ACTORS) - set(CONSUMERS)}, "
+        f"only in CONSUMERS={set(CONSUMERS) - set(ACTORS)}"
+    )
+
+
 async def test_the_key_pool_reads_primary_then_rotation_list():
     from nexus.core.config import get_settings
 

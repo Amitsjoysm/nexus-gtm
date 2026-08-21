@@ -18,6 +18,14 @@ So a green "key is valid" tells you almost nothing. This checks all three, per a
     python scripts/verify_apify_actors.py --run              # also RUN the wired actors (costs)
 
 ``--run`` is opt-in because each run is billed and the free tiers exhaust quickly.
+
+**Known blocked as of 2026-08-20 — this is failure 2, not a code bug.** Both remaining actors 403
+`full-permission-actor-not-approved` on *both* configured Apify accounts, and the key that
+previously worked now returns 401 (revoked or expired). So the Apify integration currently
+delivers nothing in production, and no amount of key rotation changes that: approval is per
+ACCOUNT and must be clicked in the console, and a revoked key needs replacing, not retrying. This
+script prints the exact approval URL per blocked actor. Until an operator clears both, `--run`
+cannot pass and no new actor can be validated against real output.
 """
 from __future__ import annotations
 
@@ -36,6 +44,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # visible rather than merely plausible.
 PROBE_PROFILE = "https://www.linkedin.com/in/walterbenvenuto"
 PROBE_EXPECTED_PHONE = "+17148033540"
+
+# Which actor is consumed by which module. Every actor in ACTORS must appear here, and
+# `test_the_verification_script_declares_a_consumer_for_every_actor` pins that — this table is the
+# script's answer to "what can this integration actually do", so an actor silently defaulting to
+# "none" made a dead registration look like a normal row. `crunchbase_org` and `company_search`
+# were registered and uncalled for months and were removed on 2026-08-20 rather than wired; the
+# reasoning is in the note above ACTORS in nexus/integrations/apify.py.
+CONSUMERS = {
+    "phone_finder": "people/enrich.py",
+    "linkedin_profile": "personalization/apify_provider.py",
+}
 
 
 def keys_from_env(env_file: Path) -> list[str]:
@@ -78,13 +97,14 @@ async def main() -> int:
         print(f"no NEXUS_APIFY_API_KEY[S] in {args.env} or the environment — nothing to check")
         return 2
 
-    # Which actors have a consumer. An unwired actor that works is still doing nothing.
-    consumers = {
-        "phone_finder": "people/enrich.py",
-        "linkedin_profile": "personalization/apify_provider.py",
-    }
+    # An unwired actor that works is still doing nothing, so say so loudly rather than printing a
+    # calm "none" in a column nobody reads twice.
+    unwired = sorted(set(ACTORS) - set(CONSUMERS))
+    if unwired:
+        print(f"!! registered with no consumer: {', '.join(unwired)} — wire it or drop it from "
+              f"ACTORS; it is being reported as a capability and is not one.\n")
 
-    exit_code = 0
+    exit_code = 1 if unwired else 0
     async with httpx.AsyncClient(timeout=120) as c:
         for key in keys:
             auth = {"Authorization": f"Bearer {key}"}
@@ -102,7 +122,8 @@ async def main() -> int:
             for name, actor_id in ACTORS.items():
                 meta = await c.get(f"https://api.apify.com/v2/acts/{actor_id}", headers=auth)
                 if meta.status_code != 200:
-                    print(f"  {name:<18}{'unreachable':<22}{'-':<18}{consumers.get(name, 'none')}")
+                    print(f"  {name:<18}{'unreachable':<22}{'-':<18}"
+                          f"{CONSUMERS.get(name, 'NONE - unwired')}")
                     exit_code = 1
                     continue
                 level = (meta.json().get("data") or {}).get("actorPermissionLevel") or "unset"
@@ -123,9 +144,10 @@ async def main() -> int:
                         pass
                     blocked = kind == "full-permission-actor-not-approved"
                     approved = "NO - approve it" if blocked else "yes"
-                    if blocked and name in consumers:
+                    if blocked and name in CONSUMERS:
                         exit_code = 1
-                print(f"  {name:<18}{level:<22}{approved:<18}{consumers.get(name, 'none')}")
+                print(f"  {name:<18}{level:<22}{approved:<18}"
+                      f"{CONSUMERS.get(name, 'NONE - unwired')}")
                 if approved.startswith("NO"):
                     print(f"  {'':<18}https://console.apify.com/actors/{actor_id}"
                           f"?approvePermissions=true")
