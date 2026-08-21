@@ -48,7 +48,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.10", cache: pip }
-      - run: pip install -e ".[dev,migrate]"
+      # `metrics` is required, not optional: /metrics is on by default since M15, and
+      # test_incident_hardening asserts ordinary endpoints still work with instrumentation
+      # ACTIVE. Without the instrumentator installed, `_maybe_enable_metrics` degrades to
+      # "no metrics", /metrics 404s, and the test fails — for the one reason it is not
+      # meant to catch.
+      - run: pip install -e ".[dev,migrate,metrics]"
       - name: pytest (parallel, bounded) + coverage gate
         # Coverage floor starts conservative; ratchet it up as the suite grows.
         run: >
@@ -148,7 +153,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Trivy scan (fail on fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.24.0
+        # Every tag upstream is v-prefixed; the unprefixed `0.24.0` stopped resolving
+        # ("unable to find version"). The job had been SKIPPED for months because earlier gates
+        # failed first, so the rot was invisible: the image was never built and never scanned.
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: nexus-gtm:ci-${{ github.sha }}
           severity: HIGH,CRITICAL

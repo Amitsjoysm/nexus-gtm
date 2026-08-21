@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   Badge,
   Button,
+  Field,
   Icons,
   Input,
   Skeleton,
@@ -16,6 +17,7 @@ import type {
   CallBriefSignal,
   CallScript,
   CallTask,
+  TelephonyStatus,
 } from "@/lib/types";
 import { formatNumber, humanize, timeAgo } from "@/lib/format";
 import { strengthMeta } from "@/lib/display";
@@ -36,6 +38,15 @@ function telHref(phone: string | null): string | null {
   if (!phone) return null;
   const digits = phone.replace(/[^\d+]/g, "");
   return digits ? `tel:${digits}` : null;
+}
+
+/** Where the rep's own callback number is remembered — the phone a live bridge rings first. */
+const CALLBACK_KEY = "nexus.callback_number";
+/** Mirrors the server's E.164 check so a bad number is caught before a request is spent. */
+const E164 = /^\+[1-9]\d{7,14}$/;
+
+function normalizeNumber(value: string): string {
+  return value.replace(/[\s().\-/]/g, "");
 }
 
 export interface CallConsoleProps {
@@ -62,6 +73,19 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
   const [notes, setNotes] = useState("");
   const [nextStep, setNextStep] = useState("");
   const [logging, setLogging] = useState<string | null>(null);
+  // Telephony is manual (click-to-dial) until the server says otherwise, so the default
+  // workflow renders immediately instead of waiting on a status round-trip.
+  const [telephony, setTelephony] = useState<TelephonyStatus | null>(null);
+  const [callbackNumber, setCallbackNumber] = useState(
+    () => localStorage.getItem(CALLBACK_KEY) ?? "",
+  );
+  const [callbackError, setCallbackError] = useState<string | null>(null);
+  const [dialing, setDialing] = useState(false);
+  // Set once a live call is placed: it links the outcome to the provider's own record of the
+  // call, which is what pulls the real duration, recording, and transcript onto the activity.
+  const [liveCallId, setLiveCallId] = useState<string | null>(null);
+
+  const isLive = telephony?.mode === "live";
 
   async function generate() {
     setScriptBusy(true);
@@ -79,9 +103,48 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
     setScript(null);
     setNotes("");
     setNextStep("");
+    setLiveCallId(null);
     if (autoGenerate) void generate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
+
+  // Can this workspace place live calls? A failure here is not worth surfacing: the console
+  // simply stays on click-to-dial, which works without any telephony account.
+  useEffect(() => {
+    let active = true;
+    const ctrl = new AbortController();
+    api
+      .telephonyStatus(ctrl.signal)
+      .then((s) => active && setTelephony(s))
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      ctrl.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function dialLive() {
+    const number = normalizeNumber(callbackNumber);
+    if (!E164.test(number)) {
+      setCallbackError("Enter your number in international format, like +15551234567.");
+      return;
+    }
+    setCallbackError(null);
+    localStorage.setItem(CALLBACK_KEY, number);
+    setDialing(true);
+    try {
+      // A fresh key per attempt: a double-click replays this response rather than placing a
+      // second billable call, while a deliberate retry after hanging up still dials.
+      const result = await api.dialCallTask(task.id, number, crypto.randomUUID());
+      setLiveCallId(result.provider_call_id);
+      toast.success("Calling you now", `Answer your phone to connect to ${task.contact_name ?? "the contact"}.`);
+    } catch (err) {
+      toast.error("Couldn't place the call", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setDialing(false);
+    }
+  }
 
   // Always pull the pre-call research dossier as soon as a call is opened — the SDR should be
   // looking at the person + company + signals (with sources) before they dial.
@@ -110,6 +173,7 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
         disposition,
         notes: notes.trim() || undefined,
         next_step: nextStep.trim() || undefined,
+        provider_call_id: liveCallId,
       });
       toast.success("Logged", `${DISPO_LABEL[disposition] ?? disposition} — ${task.contact_name ?? "contact"}.`);
       onLogged?.(disposition);
@@ -131,14 +195,57 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
             {task.title ? `${task.title} · ` : ""}{task.account_name}
           </p>
         </div>
-        {dial ? (
+        {!dial ? (
+          <Badge tone="warning" dot>No number</Badge>
+        ) : isLive ? (
+          <Button onClick={dialLive} loading={dialing} disabled={dialing}>
+            <Icons.PhoneIcon /> Start call
+          </Button>
+        ) : (
           <a className={styles.dialBtn} href={dial}>
             <Icons.PhoneIcon /> Call {task.phone}
           </a>
-        ) : (
-          <Badge tone="warning" dot>No number</Badge>
         )}
       </header>
+
+      {dial && isLive && (
+        <section className={styles.bridge}>
+          <Field
+            label="Your phone"
+            hint={`We ring this number first, then connect you to ${task.contact_name ?? "the contact"} at ${task.phone}.`}
+            error={callbackError ?? undefined}
+          >
+            <Input
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              value={callbackNumber}
+              onChange={(e) => {
+                setCallbackNumber(e.target.value);
+                if (callbackError) setCallbackError(null);
+              }}
+              placeholder="+15551234567"
+            />
+          </Field>
+          <p className={styles.bridgeMeta} role="status">
+            {liveCallId ? (
+              <>
+                <Badge tone="info" dot>In progress</Badge>
+                {telephony?.record_calls
+                  ? " Recording and transcript attach to the outcome you log below."
+                  : " Log the outcome below when you hang up."}
+              </>
+            ) : (
+              <>
+                Calls show as {telephony?.from_number || "your workspace number"} to the contact.{" "}
+                <a className={styles.link} href={dial}>
+                  Dial from this device instead
+                </a>
+              </>
+            )}
+          </p>
+        </section>
+      )}
 
       {task.reason && <p className={styles.reason}>{task.reason}</p>}
 

@@ -137,7 +137,7 @@ Infojoy GTM is a multi‑tenant, AI‑powered Go‑To‑Market intelligence plat
 - **Backend:** Python 3.11, FastAPI, async SQLAlchemy 2.0, Pydantic v2, Alembic. In‑process EventBus; Valkey/Redis queue; worker process for automation heartbeat + jobs.
 - **Frontend:** React 18 + TypeScript (strict) + Vite; CSS‑token design system; owned component library; SPA served by FastAPI.
 - **Data:** Postgres 16 (prod) / SQLite (offline tests). RLS on all tenant‑scoped tables.
-- **Auth & calling modules:** `nexus/auth/` (OTP registration, password reset, OTP crypto), `nexus/core/ratelimit.py`; `nexus/calling/` (call queue + AI scripts + dispositions) with a pre‑call brief composer; `nexus/discovery/auto.py` (daily ICP discovery); `nexus/personalization/` (person brief + Apify seam).
+- **Auth & calling modules:** `nexus/auth/` (OTP registration, password reset, OTP crypto), `nexus/core/ratelimit.py`; `nexus/calling/` (call queue + AI scripts + dispositions + the telephony provider seam, `provider.py` / `twilio.py`) with a pre‑call brief composer; `nexus/discovery/auto.py` (daily ICP discovery); `nexus/personalization/` (person brief + Apify seam).
 - **Integrations:** LLM (Anthropic/Groq/OpenAI‑compat/stub), Exa search, Reacher email verification, HubSpot CRM, SMTP send (per‑tenant Gmail/Outlook) + a system transactional mailbox (OTP/reset email), telephony (`stub`/Twilio‑class), Apify (social personalization), Caddy TLS.
 - **Cloud targets:** AWS ECS Fargate + Azure Container Apps (Terraform IaC under `deploy/cloud/`); single‑VM Docker Compose under `deploy/`.
 
@@ -152,10 +152,10 @@ Infojoy GTM is a multi‑tenant, AI‑powered Go‑To‑Market intelligence plat
 - [x] Full automated test suite green (offline, deterministic), run in CI behind quality gates (lint + typecheck + coverage + secret/container scan).
 - [x] Single‑command deploy to a VM or the cloud (AWS Fargate / Azure Container Apps); secrets generated, never committed.
 - [x] Self‑serve onboarding secured: two‑step OTP registration, forgot/reset password, and per‑IP auth rate limiting (enumeration‑resistant).
-- [x] SDR calling shipped: prioritized call queue, AI scripts, and a sourced pre‑call research brief; telephony provider‑pluggable (offline‑safe).
+- [x] SDR calling shipped: prioritized call queue, AI scripts, and a sourced pre‑call research brief; click‑to‑dial by default, with live outbound calling via Twilio (rep‑first bridge) when `NEXUS_TELEPHONY_PROVIDER=twilio` and credentials are set.
 
 ---
 
 ## 9. Out of scope / future
 
-- Additional CRM adapters (Salesforce interface exists, adapter to be completed); inbound‑reply handling and meeting booking; live telephony provider (Twilio) past the offline‑safe seam + call recording/transcription; advanced sequence branching; deeper analytics/forecasting; SSO/SCIM; Key‑Vault/SSM‑backed secret refs and managed‑data variants productionized further.
+- Additional CRM adapters (Salesforce interface exists, adapter to be completed); inbound‑reply handling and meeting booking; inbound calls, live call‑progress events, and per‑tenant Twilio subaccounts/caller IDs (outbound calling with recording + transcription is delivered); advanced sequence branching; deeper analytics/forecasting; SSO/SCIM; Key‑Vault/SSM‑backed secret refs and managed‑data variants productionized further.

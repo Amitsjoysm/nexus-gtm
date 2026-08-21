@@ -51,6 +51,8 @@ import type {
   CallTask,
   CallScript,
   CallActivity,
+  TelephonyStatus,
+  DialResult,
   CallBrief,
   Cadence,
   CadenceEnrollment,
@@ -132,6 +134,8 @@ interface RequestOptions {
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined | null>;
   signal?: AbortSignal;
+  /** Extra request headers, e.g. an Idempotency-Key so a double-submit can't run twice. */
+  headers?: Record<string, string>;
 }
 
 export class ApiClient {
@@ -159,7 +163,7 @@ export class ApiClient {
   }
 
   private async request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...(opts.headers ?? {}) };
     if (opts.body !== undefined) headers["Content-Type"] = "application/json";
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
 
@@ -355,13 +359,34 @@ export class ApiClient {
   }
   logCallDisposition(
     taskId: string,
-    body: { disposition: string; notes?: string; duration_s?: number | null; next_step?: string | null },
+    body: {
+      disposition: string;
+      notes?: string;
+      duration_s?: number | null;
+      next_step?: string | null;
+      provider_call_id?: string | null;
+    },
     signal?: AbortSignal,
   ) {
     return this.request<CallActivity>(`/calling/tasks/${taskId}/disposition`, {
       method: "POST",
       body,
       signal,
+    });
+  }
+  telephonyStatus(signal?: AbortSignal) {
+    return this.request<TelephonyStatus>("/calling/telephony", { signal });
+  }
+  /**
+   * Start the call. Under the default stub this only returns a `tel:` URL; with telephony
+   * configured it places a real, billable call — hence the idempotency key, so a double-click
+   * replays the first response instead of ringing the prospect twice.
+   */
+  dialCallTask(taskId: string, agentNumber: string | null, idempotencyKey: string) {
+    return this.request<DialResult>(`/calling/tasks/${taskId}/dial`, {
+      method: "POST",
+      body: { agent_number: agentNumber },
+      headers: { "Idempotency-Key": idempotencyKey },
     });
   }
   skipCallTask(taskId: string, signal?: AbortSignal) {

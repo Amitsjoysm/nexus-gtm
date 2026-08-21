@@ -271,6 +271,27 @@ export interface CallActivity {
   duration_s: number | null;
   next_step: string | null;
   occurred_at: string;
+  /** Live calls only; null for click-to-dial. */
+  provider_call_id: string | null;
+  recording_url: string | null;
+  transcript: string | null;
+}
+
+/** Whether this workspace can place live calls, or dials from the rep's own device. */
+export interface TelephonyStatus {
+  provider: string;
+  mode: "manual" | "live";
+  from_number: string;
+  configured: boolean;
+  record_calls: boolean;
+  /** Why a selected provider is unusable — surfaced to admins, not silently swallowed. */
+  detail: string | null;
+}
+
+export interface DialResult {
+  mode: "manual" | "live";
+  dial_url: string | null;
+  provider_call_id: string | null;
 }
 
 export const CALL_DISPOSITIONS = [
