@@ -153,7 +153,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Trivy scan (fail on fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.24.0
+        # 0.24.0 was withdrawn upstream and stopped resolving ("unable to find version"). The
+        # job had been SKIPPED for months because earlier gates failed first, so the rot was
+        # invisible: the image was never built and never scanned.
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           image-ref: nexus-gtm:ci-${{ github.sha }}
           severity: HIGH,CRITICAL

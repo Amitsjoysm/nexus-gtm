@@ -15,6 +15,16 @@ pytestmark = [pytest.mark.asyncio, requires_pg]
 @pytest_asyncio.fixture
 async def pg_engine():
     engine = create_async_engine(PG_URL, pool_size=5, max_overflow=5)
+    # `test_orm_for_update_compiles_on_postgres` needs a real `tenants` table to lock. In the
+    # Docker stack the app container has already migrated this database, which is what the test
+    # used to assume; CI starts a bare postgres service and nothing provisions it, so the test
+    # died on UndefinedTableError the moment it began running at all. `checkfirst=True` keeps
+    # both environments correct, and creating only the one table this suite touches stops it
+    # becoming a second copy of the migration chain that can drift from the real one.
+    from nexus.models.identity import Tenant
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Tenant.__table__.create, checkfirst=True)
     yield engine
     await engine.dispose()
 
