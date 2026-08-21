@@ -324,3 +324,160 @@ async def test_undecryptable_secret_falls_back_instead_of_crashing():
         row = await ts.first(CrmConnection)
         assert has_credentials(row) is False
         assert await resolve_crm_connector(ts) is get_crm_connector()
+
+
+# ---- endpoints ----------------------------------------------------------------------------
+_SECRET = "pat-super-secret-value"
+
+
+async def _connect(client, headers, token=_SECRET, provider="hubspot"):
+    return await client.put("/api/integrations/crm/connection", headers=headers,
+                            json={"provider": provider, "access_token": token})
+
+
+async def test_put_then_get_never_returns_the_token(client):
+    h = auth(await signup(client))
+    r = await _connect(client, h)
+    assert r.status_code == 200, r.text
+    assert _SECRET not in r.text
+
+    g = await client.get("/api/integrations/crm/connection", headers=h)
+    assert g.status_code == 200
+    assert _SECRET not in g.text          # raw body, not just the fields we thought to check
+    body = g.json()
+    assert body["source"] == "tenant"
+    assert body["provider"] == "hubspot"
+    assert body["has_credentials"] is True
+    assert body["status"] == "unverified"
+
+
+async def test_stored_token_is_ciphertext_in_the_database(client):
+    from nexus.models.integration import CrmConnection
+
+    token = await signup(client)
+    await _connect(client, auth(token))
+    async with tenant_session(principal_from_token(token).tenant_id) as ts:
+        row = await ts.first(CrmConnection)
+        assert _SECRET not in str(row.secret)
+
+
+async def test_get_reports_env_source_when_no_tenant_credential(client):
+    h = auth(await signup(client))
+    g = (await client.get("/api/integrations/crm/connection", headers=h)).json()
+    assert g["source"] in ("env", "none")
+    assert g["has_credentials"] is False
+
+
+async def test_put_rejects_unknown_and_not_live_providers(client):
+    h = auth(await signup(client))
+    bad = await client.put("/api/integrations/crm/connection", headers=h,
+                           json={"provider": "pipedrive", "access_token": "x"})
+    assert bad.status_code == 400
+    assert "Unknown CRM provider" in bad.json()["detail"]
+
+    sf = await client.put("/api/integrations/crm/connection", headers=h,
+                          json={"provider": "salesforce", "access_token": "x"})
+    assert sf.status_code == 400
+    assert "not available yet" in sf.json()["detail"]
+
+
+async def test_put_requires_a_token_on_first_connect(client):
+    h = auth(await signup(client))
+    r = await client.put("/api/integrations/crm/connection", headers=h,
+                         json={"provider": "hubspot"})
+    assert r.status_code == 400
+    assert "access token is required" in r.json()["detail"].lower()
+
+
+async def test_put_with_blank_token_keeps_the_stored_secret_over_http(client):
+    h = auth(await signup(client))
+    await _connect(client, h)
+    r = await client.put("/api/integrations/crm/connection", headers=h,
+                         json={"provider": "hubspot", "api_base": "https://eu1.hubapi.com"})
+    assert r.status_code == 200, r.text
+    assert r.json()["has_credentials"] is True
+    assert r.json()["api_base"] == "https://eu1.hubapi.com"
+
+
+async def test_test_endpoint_records_success(client, monkeypatch):
+    from nexus.ingestion.crm import CRMTestResult, HubSpotConnector
+
+    async def ok(self):
+        return CRMTestResult(ok=True, label="HubSpot portal 42", detail="Connected.")
+
+    monkeypatch.setattr(HubSpotConnector, "test_connection", ok)
+
+    h = auth(await signup(client))
+    await _connect(client, h)
+    r = await client.post("/api/integrations/crm/connection/test", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "label": "HubSpot portal 42", "detail": "Connected."}
+    assert _SECRET not in r.text
+
+    g = (await client.get("/api/integrations/crm/connection", headers=h)).json()
+    assert g["status"] == "connected"
+    assert g["verified_at"] is not None
+    assert g["last_error"] is None
+
+
+async def test_test_endpoint_records_failure_without_raising(client, monkeypatch):
+    from nexus.ingestion.crm import CRMTestResult, HubSpotConnector
+
+    async def bad(self):
+        return CRMTestResult(ok=False, label="HubSpot", detail="Invalid or expired access token.")
+
+    monkeypatch.setattr(HubSpotConnector, "test_connection", bad)
+
+    h = auth(await signup(client))
+    await _connect(client, h)
+    assert (await client.post("/api/integrations/crm/connection/test",
+                              headers=h)).json()["ok"] is False
+
+    g = (await client.get("/api/integrations/crm/connection", headers=h)).json()
+    assert g["status"] == "error"
+    assert g["last_error"] == "Invalid or expired access token."
+
+
+async def test_delete_clears_the_connection(client):
+    h = auth(await signup(client))
+    await _connect(client, h)
+    assert (await client.delete("/api/integrations/crm/connection", headers=h)).status_code == 204
+    g = (await client.get("/api/integrations/crm/connection", headers=h)).json()
+    assert g["has_credentials"] is False
+    assert g["source"] in ("env", "none")
+
+
+async def test_rep_cannot_touch_the_crm_connection(client):
+    """manage_workspace is admin+; a rep must be refused on every verb."""
+    owner_h = auth(await signup(client, slug="rb2", email="owner@rb2.com", company="RB2"))
+    invite = await client.post("/api/workspace/members", headers=owner_h, json={
+        "email": "rep@rb2.com", "full_name": "Rep Two", "role": "rep",
+        "password": "password123"})
+    assert invite.status_code in (200, 201), invite.text
+    login = await client.post("/api/auth/login",
+                              json={"email": "rep@rb2.com", "password": "password123"})
+    rep_h = auth(login.json()["access_token"])
+
+    assert (await client.get("/api/integrations/crm/connection", headers=rep_h)).status_code == 403
+    assert (await _connect(client, rep_h)).status_code == 403
+    assert (await client.post("/api/integrations/crm/connection/test",
+                              headers=rep_h)).status_code == 403
+    assert (await client.delete("/api/integrations/crm/connection",
+                                headers=rep_h)).status_code == 403
+
+
+async def test_one_tenant_cannot_see_anothers_connection(client):
+    h_a = auth(await signup(client, slug="ia", email="a@ia.com", company="IA"))
+    h_b = auth(await signup(client, slug="ib", email="b@ib.com", company="IB"))
+    await _connect(client, h_a)
+    g = (await client.get("/api/integrations/crm/connection", headers=h_b)).json()
+    assert g["has_credentials"] is False
+
+
+async def test_sync_status_reports_the_tenants_own_provider(client):
+    h = auth(await signup(client))
+    assert (await client.get("/api/integrations/crm/sync-status",
+                             headers=h)).json()["provider"] == "stub"
+    await _connect(client, h)
+    assert (await client.get("/api/integrations/crm/sync-status",
+                             headers=h)).json()["provider"] == "hubspot"
