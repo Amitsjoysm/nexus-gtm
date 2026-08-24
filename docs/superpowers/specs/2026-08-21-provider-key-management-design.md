@@ -98,9 +98,35 @@ key_pool(provider) -> [preferred, ...other enabled rows by created_at]   if any 
 
 **The real work is not the table.** `get_llm_provider()`, `build_engine()` and `get_apify_client()`
 are memoized module singletons: they resolve once per process and never look again, so a key added
-in the UI would not reach a running worker until it restarted. Each becomes a per-call pool read
-with the constructed client cached — the same shape the in-flight CRM branch used, and for the same
-reason.
+in the UI would not reach a running worker until it restarted.
+
+### The worker must pick up a new key without a restart
+
+This is a hard requirement, and it is harder than it looks because **the worker is a separate
+container** (`nexus-gtm-worker-1`). The API process writing a key cannot invalidate the worker's
+memory — an in-process cache flush reaches only the process that performed the write. Three
+consequences:
+
+1. **The pool is read per operation, not per client.** The constructed client (`GroqLLMProvider`,
+   `ExaSearchProvider`, `ApifyClient`) is still cached — rebuilding an httpx client per call is
+   waste — but the *key list* it uses is resolved at call time. A worker holding a client through a
+   twenty-minute crawl must not hold a key list that long with it.
+
+2. **A short TTL bounds cross-process staleness.** 30 seconds: one indexed lookup per provider per
+   30s is negligible against the cost of an LLM call or a paid search, and it means a key added or
+   pinned in the UI is live on every process within half a minute without anyone restarting
+   anything. In-process writes invalidate immediately, so the API reflects a change at once; the
+   TTL exists purely for the processes that did not perform the write.
+
+3. **No new infrastructure.** Valkey is already here and pub/sub invalidation would be exact, but it
+   adds a failure mode — a missed message means a worker silently runs on a stale pool, which is the
+   class of bug this whole feature exists to remove. A TTL cannot miss; the worst case is bounded
+   lateness. If 30s ever proves too slow, the TTL is one constant.
+
+**Test that pins it:** two independently-constructed resolvers (standing in for two processes) over
+one database — write through the first, assert the second serves the new pinned key once the TTL
+lapses, and assert it does *not* before. A test that only exercises one resolver would pass while
+the worker stayed stale, which is exactly the bug.
 
 ## Rotation
 
@@ -140,9 +166,15 @@ Each step is independently shippable and the app keeps running on env vars throu
 
 1. Migration + model + crypto + service + tests. Nothing reads it yet.
 2. API endpoints + permission + audit.
-3. Resolution refactor — the singleton change. Behaviour identical while the table is empty.
+3. Resolution refactor — the singleton change, plus the TTL that lets a worker pick up a new key
+   without restarting. Behaviour identical while the table is empty.
 4. Runtime write-back on rotation.
 5. UI tab.
+
+Steps 1 and 2 are safe to ship on their own: the table exists and is manageable, and nothing reads
+it, so the running system is untouched. Step 3 is the one that changes behaviour, and its safety
+property is that an empty table resolves to the env pool exactly as today — so it can ship before
+anyone adds a key, and be exercised by adding one.
 
 ## Open item
 
