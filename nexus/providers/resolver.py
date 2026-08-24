@@ -149,3 +149,44 @@ async def managed_pool(provider: str) -> list[str]:
 def invalidate(provider: str = "") -> None:
     _CACHE.invalidate(provider)
 
+
+
+# ---- the model, resolved the same way as the keys -------------------------------------------------
+#
+# Same TTL, same reason: the worker is a separate container, so an operator changing the model in
+# the Control plane must reach a running worker without a restart. A wrong model is exactly as
+# fatal as a dead key — measured, it sent every draft to the stub — so it gets the same treatment.
+
+_MODEL_CACHE: dict[str, tuple[float, str]] = {}
+
+# Which Settings attribute holds the env default for each provider that has a model.
+_MODEL_ENV_ATTR = {
+    "groq": "groq_model",
+    "anthropic": "anthropic_model",
+    "openai_compat": "llm_model",
+}
+
+
+def invalidate_models() -> None:
+    _MODEL_CACHE.clear()
+
+
+async def model_for(provider: str) -> str:
+    """The model this provider should use: the operator's choice, else the environment default."""
+    from nexus.core.config import get_settings
+
+    env_default = getattr(get_settings(), _MODEL_ENV_ATTR.get(provider, ""), "") or ""
+    cached = _MODEL_CACHE.get(provider)
+    if cached is not None and (time.monotonic() - cached[0]) < POOL_TTL_S:
+        return cached[1] or env_default
+
+    try:
+        from nexus.providers.service import get_model_override
+
+        chosen = await get_model_override(provider)
+    except Exception:
+        # A settings read must never break a completion — fall back to the environment.
+        logger.warning("could not read the model override for %s", provider, exc_info=True)
+        return env_default
+    _MODEL_CACHE[provider] = (time.monotonic(), chosen)
+    return chosen or env_default

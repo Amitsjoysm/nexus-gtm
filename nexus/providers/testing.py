@@ -56,6 +56,25 @@ async def _call(method: str, url: str, *, headers: dict, json_body: dict | None 
         return await client.request(method, url, headers=headers, json=json_body)
 
 
+async def _resolved_model(provider: str) -> str:
+    """The model the product would actually send, falling back to the environment default.
+
+    Kept local so `testing` does not hard-depend on the resolver: if the settings table is
+    unreadable, verifying against the environment value is still a useful test.
+    """
+    from nexus.core.config import get_settings
+
+    s = get_settings()
+    env = {"groq": s.groq_model, "openai_compat": s.llm_model,
+           "anthropic": s.anthropic_model}.get(provider, "")
+    try:
+        from nexus.providers.resolver import model_for
+
+        return await model_for(provider) or env
+    except Exception:
+        return env
+
+
 def _unreachable(exc: Exception) -> TestResult:
     return TestResult(False, "failed", f"could not reach the provider: {exc!r}"[:300], None)
 
@@ -120,7 +139,10 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
     try:
         if provider in ("groq", "openai_compat"):
             base = s.groq_base_url if provider == "groq" else s.llm_base_url
-            model = s.groq_model if provider == "groq" else s.llm_model
+            # The RESOLVED model, not the environment one. Verifying against a model the app is
+            # not going to use would report a green key while real calls fail — precisely the
+            # failure this whole feature exists to surface.
+            model = await _resolved_model(provider)
             resp = await _call(
                 "POST", f"{base}/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
@@ -133,7 +155,7 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
             resp = await _call(
                 "POST", "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
-                json_body={"model": s.anthropic_model, "max_tokens": 5,
+                json_body={"model": await _resolved_model(provider), "max_tokens": 5,
                            "messages": [{"role": "user", "content": "Reply with OK"}]},
                 transport=transport,
             )
@@ -162,3 +184,35 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
     if resp.status_code == 200:
         return TestResult(True, "verified", "a real call succeeded", 200)
     return TestResult(False, "failed", _detail(resp), resp.status_code)
+
+
+async def list_models(provider: str, key: str, *, transport=None) -> tuple[list[str], str]:
+    """The models this provider currently offers for this key.
+
+    Returns ``(models, detail)``. An unreachable provider or one with no model concept gives an
+    empty list and a reason — "we could not ask" and "there are none" are different facts and a
+    bare ``[]`` conflates them, which is the mistake this whole subsystem keeps correcting.
+    """
+    from nexus.core.config import get_settings
+
+    s = get_settings()
+    urls = {
+        "groq": (f"{s.groq_base_url}/models", {"Authorization": f"Bearer {key}"}),
+        "openai_compat": (f"{s.llm_base_url}/models", {"Authorization": f"Bearer {key}"}),
+        "anthropic": ("https://api.anthropic.com/v1/models",
+                      {"x-api-key": key, "anthropic-version": "2023-06-01"}),
+    }
+    if provider not in urls:
+        return [], "this provider has no model to choose"
+    url, headers = urls[provider]
+    try:
+        resp = await _call("GET", url, headers=headers, transport=transport)
+    except Exception as exc:
+        return [], f"could not reach the provider: {exc!r}"[:200]
+    if resp.status_code != 200:
+        return [], _detail(resp)
+    try:
+        data = resp.json().get("data") or []
+        return sorted(str(m.get("id")) for m in data if m.get("id")), ""
+    except Exception:
+        return [], "the provider's model list could not be parsed"

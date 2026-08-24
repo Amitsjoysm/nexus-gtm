@@ -202,3 +202,79 @@ async def _audit(principal: Principal, action: str, target: str, after: dict) ->
         await record_admin_action(s, actor=principal.user_id, action=action,
                                   target=target, after=after)
         await s.commit()
+
+
+# ---- the model, and the live catalogue -------------------------------------------------------------
+
+class ModelIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    model: str = ""
+
+
+@router.get("/{provider}/models", response_model=dict)
+async def list_provider_models(
+    provider: str,
+    _: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> dict:
+    """What this provider will ACTUALLY accept right now, asked of the provider itself.
+
+    This is the endpoint that would have prevented the 2026-08-21 outage. The configured model,
+    `llama-3.3-70b-versatile`, had been withdrawn: every key 404'd, every draft came from the stub,
+    and nothing in the product could say why. A hardcoded list would have been just as wrong — the
+    catalogue belongs to the provider and changes without notice — so this asks.
+
+    Returns the current choice alongside the options, and never raises: an unreachable provider
+    yields an empty list and a reason, which is a different thing from "no models exist".
+    """
+    from nexus.providers.resolver import model_for
+    from nexus.providers.testing import list_models
+
+    if provider not in PROVIDERS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unknown provider {provider!r}")
+
+    keys = await service.list_keys(provider)
+    usable = [k for k in keys if k.enabled]
+    secret = ""
+    if usable:
+        from nexus.providers.crypto import KeyUnsealable, unseal_key
+
+        try:
+            secret = unseal_key(usable[0].key_encrypted)
+        except KeyUnsealable:
+            secret = ""
+    if not secret:
+        # Fall back to the environment pool, so the catalogue is listable before anyone has added
+        # a managed key — otherwise the first thing an operator wants to see needs a key first.
+        from nexus.providers.catalog import env_pool
+
+        env = env_pool(provider)
+        secret = env[0] if env else ""
+
+    current = await model_for(provider)
+    if not secret:
+        return {"provider": provider, "current": current, "models": [],
+                "detail": "no usable key for this provider, so its catalogue cannot be listed"}
+    models, detail = await list_models(provider, secret)
+    return {"provider": provider, "current": current, "models": models, "detail": detail}
+
+
+@router.put("/{provider}/model", response_model=dict)
+async def set_provider_model(
+    provider: str,
+    body: ModelIn,
+    principal: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> dict:
+    """Choose the model. Empty clears the override and the environment value applies again.
+
+    Not validated against a fixed list on purpose: the catalogue is the provider's and it changes.
+    An operator naming something this deployment has not seen is making a deliberate choice, and
+    refusing it would mean a withdrawn-model outage could not be fixed from here — which is the
+    exact situation this endpoint exists for.
+    """
+    try:
+        chosen = await service.set_model(provider, body.model, user_id=principal.user_id)
+    except service.UnknownProvider as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    await _audit(principal, "provider_model.set", provider, {"model": chosen or "(env default)"})
+    return {"provider": provider, "model": chosen}

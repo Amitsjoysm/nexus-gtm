@@ -130,3 +130,100 @@ async def test_the_supported_provider_list_is_offered(client, monkeypatch):
     assert r.status_code == 200, r.text
     ids = {p["id"] for p in r.json()}
     assert "groq" in ids and "exa" in ids and len(ids) == 9
+
+
+# ---- the model, and the live catalogue -----------------------------------------------------------
+
+async def test_the_model_can_be_chosen_and_cleared(client, monkeypatch):
+    """The fix for the outage that started this: `llama-3.3-70b-versatile` was withdrawn and
+    changing it meant editing deploy/.env and redeploying."""
+    from nexus.providers.resolver import invalidate_models, model_for
+
+    token = await _superadmin(client, monkeypatch, slug="pm1", email="boss@pm1.com")
+    r = await client.put("/api/admin/provider-keys/groq/model", headers=auth(token),
+                         json={"model": "openai/gpt-oss-120b"})
+    assert r.status_code == 200, r.text
+    invalidate_models()
+    assert await model_for("groq") == "openai/gpt-oss-120b"
+
+    # Empty clears the override and the environment value applies again.
+    await client.put("/api/admin/provider-keys/groq/model", headers=auth(token), json={"model": ""})
+    invalidate_models()
+    from nexus.core.config import get_settings
+
+    assert await model_for("groq") == get_settings().groq_model
+
+
+async def test_an_unknown_model_is_accepted_because_the_catalogue_is_theirs(client, monkeypatch):
+    """Refusing an unlisted model would mean a withdrawn-model outage could not be fixed from
+    here — which is the exact situation this endpoint exists for."""
+    token = await _superadmin(client, monkeypatch, slug="pm2", email="boss@pm2.com")
+    r = await client.put("/api/admin/provider-keys/groq/model", headers=auth(token),
+                         json={"model": "something-new-they-just-shipped"})
+    assert r.status_code == 200
+
+
+async def test_setting_a_model_for_an_unknown_provider_is_refused(client, monkeypatch):
+    token = await _superadmin(client, monkeypatch, slug="pm3", email="boss@pm3.com")
+    r = await client.put("/api/admin/provider-keys/pipedrive/model", headers=auth(token),
+                         json={"model": "x"})
+    assert r.status_code == 400
+
+
+async def test_listing_models_without_a_key_says_why(client, monkeypatch):
+    """"we could not ask" and "there are none" are different facts, and a bare [] conflates them."""
+    from nexus.core.config import get_settings
+
+    token = await _superadmin(client, monkeypatch, slug="pm4", email="boss@pm4.com")
+    monkeypatch.setattr(get_settings(), "anthropic_api_key", "")
+    r = await client.get("/api/admin/provider-keys/anthropic/models", headers=auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["models"] == []
+    assert "no usable key" in body["detail"]
+
+
+# ---- the platform overview -----------------------------------------------------------------------
+
+async def test_the_overview_reports_users_and_requests(client, monkeypatch):
+    """Neither number existed anywhere: the Subscriptions tab shows plan and status,
+    /billing/usage is tenant-scoped, and the user-activity endpoint answers for one person."""
+    token = await _superadmin(client, monkeypatch, slug="ov1", email="boss@ov1.com")
+    r = await client.get("/api/admin/billing/overview", headers=auth(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["users"] >= 1
+    assert body["tenants"] >= 1
+    assert body["requests_total"] >= 0
+    # Attribution is partial by construction — only usage events carry a user_id, and background
+    # work has nobody to attribute it to. The number is reported so the UI can say so.
+    assert body["requests_with_a_user"] <= body["requests_total"]
+
+
+async def test_a_tenant_owner_cannot_read_the_overview(client):
+    token = await signup(client, slug="ov2", email="o@ov2.com", company="OV2")
+    assert (await client.get("/api/admin/billing/overview",
+                             headers=auth(token))).status_code == 403
+
+
+async def test_the_overview_counts_usage_across_every_tenant(client, monkeypatch):
+    """It first reported 0 against a database holding 18 events.
+
+    `billing_usage_events` is tenant-scoped, so a cross-tenant aggregate on the RLS-bound app role
+    returns ZERO ROWS rather than raising — the documented trap, and it reads as "nobody has used
+    anything". This asserts the count survives events belonging to a tenant the caller is not.
+    """
+    from nexus.core.db import get_platform_sessionmaker, utcnow
+    from nexus.models.billing import BillingUsageEvent
+
+    token = await _superadmin(client, monkeypatch, slug="ov3", email="boss@ov3.com")
+    async with get_platform_sessionmaker()() as s:
+        s.add(BillingUsageEvent(
+            tenant_id="some-other-tenant", capability_id="ai.email_draft",
+            quantity=1, unit="action", idempotency_key="overview-probe-1",
+            occurred_at=utcnow(),
+        ))
+        await s.commit()
+
+    body = (await client.get("/api/admin/billing/overview", headers=auth(token))).json()
+    assert body["requests_total"] >= 1, "a cross-tenant aggregate must see other tenants' rows"

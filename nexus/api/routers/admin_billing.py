@@ -381,3 +381,92 @@ async def list_platform_admins(
         )
         for r in rows
     ]
+
+
+# ---- platform overview: how many users, and how much are they actually using? --------------------
+#
+# Neither number existed anywhere. The Subscriptions tab listed plan and status, `/billing/usage` is
+# tenant-scoped, and `/admin/users/{email}/activity` answers for one person at a time — so "how many
+# users do we have and what are they consuming" could only be answered with SQL.
+
+
+class PlatformOverviewOut(BaseModel):
+    users: int
+    active_users: int
+    tenants: int
+    # Metered actions this period and all-time. The period number is what a capacity conversation
+    # needs; the all-time number is what a pricing one needs.
+    requests_this_period: int
+    requests_total: int
+    # Attribution is PARTIAL by construction and the UI must say so: only `billing_usage_events`
+    # carries a `user_id`, and only when the call arrived through a request with a principal.
+    # Background work — crawls, sweeps, plays — is real usage with nobody to attribute it to.
+    requests_with_a_user: int
+    credits_granted: float
+    credits_spent: float
+
+
+@router.get("/overview", response_model=PlatformOverviewOut)
+async def platform_overview(
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
+) -> PlatformOverviewOut:
+    """Platform-wide counts, in one round trip of scalar subqueries."""
+    from sqlalchemy import func, select as _sel
+
+    from nexus.billing.rollups import period_start
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingCreditLedger, BillingUsageEvent
+    from nexus.models.identity import Tenant, User
+
+    # `billing_usage_events` has no period column — the period is a time window over
+    # `occurred_at`, the same way /billing/usage computes it.
+    since = period_start(utcnow())
+
+    def _count(model, *where):
+        return _sel(func.count()).select_from(model).where(*where).scalar_subquery() \
+            if where else _sel(func.count()).select_from(model).scalar_subquery()
+
+    # The PLATFORM sessionmaker, not the app one. `billing_usage_events` and
+    # `billing_credit_ledger` are tenant-scoped, so under the RLS-bound app role a cross-tenant
+    # aggregate returns ZERO ROWS rather than an error — it reported `requests_total: 0` against a
+    # database holding 18 events, which reads as "nobody has used anything".
+    from nexus.core.db import get_platform_sessionmaker
+
+    async with get_platform_sessionmaker()() as session:
+        row = (
+            await session.execute(
+                _sel(
+                    _count(User).label("users"),
+                    _count(Tenant).label("tenants"),
+                    _count(BillingUsageEvent).label("requests_total"),
+                    _count(BillingUsageEvent,
+                           BillingUsageEvent.occurred_at >= since).label("requests_period"),
+                    _count(BillingUsageEvent,
+                           BillingUsageEvent.user_id.isnot(None)).label("requests_user"),
+                    _sel(func.coalesce(func.sum(BillingCreditLedger.delta), 0.0))
+                    .where(BillingCreditLedger.delta > 0).scalar_subquery().label("granted"),
+                    _sel(func.coalesce(func.sum(BillingCreditLedger.delta), 0.0))
+                    .where(BillingCreditLedger.delta < 0).scalar_subquery().label("spent"),
+                )
+            )
+        ).one()
+        # `is_active` may not exist on every deployment's User model; count all users as active
+        # when it does not rather than reporting zero.
+        active = row.users
+        if hasattr(User, "is_active"):
+            active = int(
+                (await session.execute(
+                    _sel(func.count()).select_from(User).where(User.is_active.is_(True))
+                )).scalar() or 0
+            )
+
+    return PlatformOverviewOut(
+        users=int(row.users or 0),
+        active_users=int(active or 0),
+        tenants=int(row.tenants or 0),
+        requests_this_period=int(row.requests_period or 0),
+        requests_total=int(row.requests_total or 0),
+        requests_with_a_user=int(row.requests_user or 0),
+        credits_granted=float(row.granted or 0.0),
+        credits_spent=abs(float(row.spent or 0.0)),
+    )

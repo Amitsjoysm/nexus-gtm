@@ -258,14 +258,21 @@ class GroqLLMProvider(OpenAICompatProvider):
         is meant to be the failure path, not the resting state.
         """
         try:
-            from nexus.providers.resolver import managed_pool
+            from nexus.providers.resolver import managed_pool, model_for
 
             pool = await managed_pool("groq")
+            # The MODEL is resolved here too, and for the same reason a key is: a withdrawn model
+            # is exactly as fatal as a revoked key. Measured 2026-08-21 —
+            # `llama-3.3-70b-versatile` was retired, every key 404'd, and every draft came from
+            # the stub. Changing it must not require a redeploy either.
+            chosen = await model_for("groq")
         except Exception:  # never let key management break the call it is meant to serve
             return
         if pool and pool != self._keys:
             self._keys = pool
             self._idx = 0
+        if chosen and chosen != self.model:
+            self.model = chosen
 
     async def complete(
         self,
@@ -276,13 +283,15 @@ class GroqLLMProvider(OpenAICompatProvider):
         purpose: str | None = None,
         variables: dict | None = None,
     ) -> LLMResponse:
+        # BEFORE the payload is built: the refresh can change `self.model`, and a payload
+        # assembled first would send the stale one and only pick the new model up next call.
+        await self._refresh_keys()
         payload = {
             "model": self.model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        await self._refresh_keys()
         last_resp: httpx.Response | None = None
         for _ in range(len(self._keys)):
             key = self._keys[self._idx]

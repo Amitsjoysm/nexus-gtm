@@ -182,3 +182,54 @@ def _invalidate(provider: str) -> None:
     from nexus.providers.resolver import invalidate
 
     invalidate(provider)
+
+
+# ---- per-provider settings (today: the LLM model) ------------------------------------------------
+
+async def get_model_override(provider: str) -> str:
+    """The operator-chosen model, or ``""`` when the environment value still applies."""
+    from nexus.models.provider_setting import ProviderSetting
+
+    async with get_platform_sessionmaker()() as s:
+        row = (
+            await s.scalars(
+                select(ProviderSetting).where(ProviderSetting.provider == provider)
+            )
+        ).first()
+        return (row.model if row else "") or ""
+
+
+async def set_model(provider: str, model: str, *, user_id: str = "") -> str:
+    """Choose the model for a provider. Empty string clears the override.
+
+    Not validated against a hardcoded list: the catalogue is the provider's to change, and it does
+    — `llama-3.3-70b-versatile` was withdrawn under us. The UI offers what the provider currently
+    reports, and an unknown value here is the operator's deliberate choice.
+    """
+    if provider not in PROVIDERS:
+        raise UnknownProvider(f"unknown provider {provider!r}")
+    from nexus.models.provider_setting import ProviderSetting
+
+    model = (model or "").strip()
+    async with get_platform_sessionmaker()() as s:
+        row = (
+            await s.scalars(
+                select(ProviderSetting).where(ProviderSetting.provider == provider)
+            )
+        ).first()
+        if row is None:
+            row = ProviderSetting(provider=provider, model=model,
+                                  updated_by_user_id=user_id or None)
+            s.add(row)
+        else:
+            row.model = model
+            row.updated_by_user_id = user_id or None
+        await s.commit()
+    _invalidate_models()
+    return model
+
+
+def _invalidate_models() -> None:
+    from nexus.providers.resolver import invalidate_models
+
+    invalidate_models()
