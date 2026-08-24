@@ -13,6 +13,8 @@ export const CREDITS_GRANT_CAPPED = "credits.grant.capped";
 export const INVOICES_COLLECT = "invoices.collect";
 export const JOBS_MANAGE = "jobs.manage";
 export const ADMINS_MANAGE = "admins.manage";
+/** Platform provider API keys. Superadmin only — a holder can spend through someone else's key. */
+export const PROVIDERS_MANAGE = "providers.manage";
 export const USERS_MANAGE = "users.manage";
 // Deliberately separate from USERS_MANAGE, mirroring the server: resetting someone's MFA and
 // *becoming* them are different powers.
@@ -30,6 +32,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   [INVOICES_COLLECT]: "Collect invoices",
   [JOBS_MANAGE]: "Manage jobs",
   [ADMINS_MANAGE]: "Manage admins",
+  [PROVIDERS_MANAGE]: "Manage provider keys",
   [USERS_MANAGE]: "Manage users",
   [USERS_IMPERSONATE]: "Impersonate users",
   [SOURCES_MANAGE]: "Manage data sources",

@@ -1228,6 +1228,43 @@ export interface HostedSession {
   plan_id: string | null;
 }
 
+/**
+ * A platform provider API key. The key itself is NEVER sent to the client — `key_hint` is its last
+ * four characters, which is all the UI needs to tell two rows apart.
+ */
+export interface ProviderKey {
+  id: string;
+  provider: string;
+  label: string;
+  key_hint: string;
+  /**
+   * untested | probe_ok | verified | failed.
+   *
+   * `probe_ok` and `verified` are NOT the same and must not render alike: a key can authenticate
+   * while every real call fails. Measured on Groq 2026-08-21 — five keys passed `GET /models` and
+   * 404'd on every completion, so the stub wrote every outbound email.
+   */
+  status: string;
+  last_depth: string;
+  last_error: string;
+  last_error_status: number | null;
+  enabled: boolean;
+  /** The pinned key: tried first, so rotation is the failure path rather than the resting state. */
+  preferred: boolean;
+}
+
+export interface ProviderKeyTestResult {
+  ok: boolean;
+  status: string;
+  detail: string;
+  http_status: number | null;
+}
+
+export interface SupportedProvider {
+  id: string;
+  label: string;
+}
+
 export interface AdminRateCard {
   capability_id: string;
   name: string;

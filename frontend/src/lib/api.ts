@@ -36,6 +36,9 @@ import type {
   FeatureFlag,
   RevenueReport,
   Invoice,
+  ProviderKey,
+  ProviderKeyTestResult,
+  SupportedProvider,
   SellablePlan,
   HostedSession,
   PlatformAdmin,
@@ -795,6 +798,36 @@ export class ApiClient {
   /** Opens the hosted Customer Portal, where a card is changed or a plan is cancelled. */
   billingPortal() {
     return this.request<HostedSession>("/billing/portal", { method: "POST", body: {} });
+  }
+
+  // ---- platform provider keys (superadmin) ----
+  // NOTE: `body` takes a plain object — `request` serializes it. Pre-stringifying double-encodes
+  // and yields a 422 with no useful detail; see the comment on billingCheckout.
+  providerKeys(provider = "", signal?: AbortSignal) {
+    return this.request<ProviderKey[]>("/admin/provider-keys", { query: { provider }, signal });
+  }
+  supportedProviders(signal?: AbortSignal) {
+    return this.request<SupportedProvider[]>("/admin/provider-keys/providers", { signal });
+  }
+  addProviderKey(body: { provider: string; label: string; key: string }) {
+    return this.request<ProviderKey>("/admin/provider-keys", { method: "POST", body });
+  }
+  deleteProviderKey(id: string) {
+    return this.request<void>(`/admin/provider-keys/${id}`, { method: "DELETE" });
+  }
+  preferProviderKey(id: string) {
+    return this.request<ProviderKey>(`/admin/provider-keys/${id}/prefer`, { method: "POST" });
+  }
+  setProviderKeyEnabled(id: string, enabled: boolean) {
+    return this.request<ProviderKey>(
+      `/admin/provider-keys/${id}/enabled/${enabled}`, { method: "POST" },
+    );
+  }
+  /** `verify` makes a real, billable call. Never call it on a sweep. */
+  testProviderKey(id: string, depth: "probe" | "verify") {
+    return this.request<ProviderKeyTestResult>(
+      `/admin/provider-keys/${id}/test`, { method: "POST", query: { depth } },
+    );
   }
 
   // ---- billing (platform-admin control plane) ----
