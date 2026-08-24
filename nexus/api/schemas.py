@@ -819,3 +819,9 @@ class ActivityItemOut(BaseModel):
     account_name: str | None = None
     at: str              # ISO-8601 timestamp, newest-first in the response
     tone: str = "neutral"  # neutral | info | success | warning | critical
+
+
+class OAuthStartOut(BaseModel):
+    """Where to send the admin's browser to authorize this deployment's app."""
+
+    authorize_url: str

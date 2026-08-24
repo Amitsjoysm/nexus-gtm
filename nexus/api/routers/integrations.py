@@ -8,7 +8,17 @@ authenticated API call without changing either surface.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+import urllib.parse
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
+from fastapi.responses import RedirectResponse
 from sqlalchemy import case, func, or_, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -20,6 +30,7 @@ from nexus.api.schemas import (
     CRMSyncRequest,
     CRMSyncResponse,
     CRMSyncStatusOut,
+    OAuthStartOut,
     SEPConnectionIn,
     SEPConnectionOut,
     SEPPushRequest,
@@ -34,7 +45,7 @@ from nexus.ingestion.crm import (
     CRMAccount,
     CRMConnector,
 )
-from nexus.integrations import connections
+from nexus.integrations import connections, oauth
 from nexus.ingestion.crm_credentials import (
     KNOWN_CRM_PROVIDERS,
     LIVE_CRM_PROVIDERS,
@@ -57,6 +68,7 @@ from nexus.integrations.sep_credentials import (
 from nexus.models.account import Account, Contact
 from nexus.models.identity import Tenant
 from nexus.models.integration import IntegrationConnection
+from nexus.workers.tasks import tenant_session
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
@@ -479,6 +491,93 @@ async def test_sep_connection(
         meta={"provider": connector.platform, "ok": result.ok, "detail": result.detail},
     )
     return CRMConnectionTestOut(ok=result.ok, label=result.label, detail=result.detail)
+
+
+# ---- OAuth (CRM + SEP) ---------------------------------------------------------------
+# One pair of endpoints serves both kinds. The signed state carries the tenant, the user, and the
+# kind, so a callback cannot be replayed against a different workspace or a different integration.
+_OAUTH_KINDS = {"crm": KNOWN_CRM_PROVIDERS, "sep": KNOWN_SEP_PROVIDERS}
+
+
+@router.get("/{kind}/oauth/{provider}/start", response_model=OAuthStartOut)
+async def oauth_start(
+    kind: str,
+    provider: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> OAuthStartOut:
+    """The vendor URL to send the admin to, with a signed short-TTL state."""
+    provider = provider.strip().lower()
+    if kind not in _OAUTH_KINDS or provider not in _OAUTH_KINDS[kind]:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"No {kind} OAuth provider named '{provider}'"
+        )
+    if not oauth.provider_configured(provider):
+        # Inert rather than half-built: an authorize URL without a client id is rejected by the
+        # vendor with an opaque error, which is a worse experience than being told plainly.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"This deployment has no {provider} app configured "
+            f"(set NEXUS_{provider.upper()}_CLIENT_ID / _CLIENT_SECRET and "
+            f"NEXUS_OAUTH_REDIRECT_BASE).",
+        )
+    verifier, challenge = oauth.make_pkce()
+    state = oauth.sign_state(
+        tenant_id=ts.tenant_id, user_id=principal.user_id,
+        kind=kind, provider=provider, verifier=verifier,
+    )
+    return OAuthStartOut(
+        authorize_url=oauth.authorize_url(
+            kind=kind, provider=provider, state=state, challenge=challenge
+        )
+    )
+
+
+@router.get("/{kind}/oauth/{provider}/callback")
+async def oauth_callback(kind: str, provider: str, request: Request) -> RedirectResponse:
+    """Exchange the code and store the sealed bundle for the tenant named in the state.
+
+    Deliberately **not** ``Depends(get_tenant_session)``: the vendor redirects the browser here
+    with no Authorization header, so the tenant comes from the signed state and nowhere else. That
+    is exactly why the state must verify before anything is written.
+    """
+    params = request.query_params
+    claims = oauth.verify_state(params.get("state") or "")
+    if not claims or claims.get("kind") != kind or claims.get("prov") != provider:
+        # A tampered, expired, or foreign state. Never write on the strength of it.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired OAuth state")
+    if params.get("error"):
+        return RedirectResponse(
+            f"/integrations?error={urllib.parse.quote(params.get('error_description') or params['error'])}"
+        )
+    code = params.get("code") or ""
+    if not code:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No authorization code returned")
+
+    bundle = await oauth.exchange_code(
+        kind=kind, provider=provider, code=code, verifier=claims.get("pkce") or ""
+    )
+    if not bundle:
+        return RedirectResponse("/integrations?error=Token+exchange+failed")
+
+    tenant_id, actor = claims["tid"], claims.get("uid")
+    async with tenant_session(tenant_id) as ts:
+        if kind == "crm":
+            await store_credentials(
+                ts, provider=provider, access_token=None,
+                api_base=str(bundle.get("instance_url") or ""),
+                actor_user_id=actor, bundle=bundle,
+            )
+        else:
+            await sep_store_credentials(
+                ts, provider=provider, actor_user_id=actor, bundle=bundle
+            )
+        await record_audit(
+            ts, f"{kind}.connection.oauth", actor_user_id=actor,
+            target_type=f"{kind}_connection",
+            meta={"provider": provider, "token_set": True},
+        )
+    return RedirectResponse(f"/integrations?connected={provider}")
 
 
 @router.delete("/sep/connection", status_code=status.HTTP_204_NO_CONTENT)
