@@ -153,15 +153,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Trivy scan (fail on fixable HIGH/CRITICAL)
-        # Every tag upstream is v-prefixed; the unprefixed `0.24.0` stopped resolving
-        # ("unable to find version"). The job had been SKIPPED for months because earlier gates
-        # failed first, so the rot was invisible: the image was never built and never scanned.
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: nexus-gtm:ci-${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+        # Run the scanner's own image rather than `aquasecurity/trivy-action`.
+        #
+        # Two failures came from the action, not from the scan. The unprefixed `0.24.0` it was
+        # pinned to stopped resolving ("unable to find version") because upstream publishes only
+        # v-prefixed tags; on a valid tag, the action's `setup-trivy` step then shallow-clones the
+        # trivy repo and runs contrib/install.sh, which exits 1 immediately after resolving the
+        # version. Neither failure had anything to do with this repo's image.
+        #
+        # The official image needs no installer and pins exactly what runs. The build above uses
+        # `load: true`, so the image is in the local daemon and the mounted socket is what lets
+        # the scanner see it.
+        #
+        # None of this was visible before: the job needs `test` to pass, and `test` was red for
+        # months, so this step was SKIPPED and the image was never scanned at all.
+        run: >
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v ${{ runner.temp }}/trivy-cache:/root/.cache/trivy
+          aquasec/trivy:0.65.0 image
+          --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          --no-progress
+          nexus-gtm:ci-${{ github.sha }}
 
   # ---------- Single required status check for branch protection ----------
   quality-gate:
