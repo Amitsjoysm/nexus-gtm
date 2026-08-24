@@ -50,20 +50,40 @@ class PoolCache:
         else:
             self._pools.clear()
 
+    async def managed_pool(self, provider: str) -> list[str]:
+        """Only the operator-registered keys, ``[]`` when there are none. TTL-cached like
+        :meth:`key_pool`, so a refresh on a hot path stays a dict lookup."""
+        return await self._cached(provider, fall_back_to_env=False)
+
     async def key_pool(self, provider: str) -> list[str]:
+        """The managed keys, or the environment pool when there are none."""
+        return await self._cached(provider, fall_back_to_env=True)
+
+    async def _cached(self, provider: str, *, fall_back_to_env: bool) -> list[str]:
+        # One cache entry per provider holds the MANAGED keys; the env fallback is applied on the
+        # way out. Caching the post-fallback value would mean two entries per provider that can
+        # disagree about the same table.
         cached = self._pools.get(provider)
-        if cached is not None and (time.monotonic() - cached[0]) < POOL_TTL_S:
-            return list(cached[1])
-        pool = await self._read(provider)
-        self._pools[provider] = (time.monotonic(), pool)
-        return list(pool)
+        if cached is None or (time.monotonic() - cached[0]) >= POOL_TTL_S:
+            managed = await self._read(provider)
+            self._pools[provider] = (time.monotonic(), managed)
+        else:
+            managed = cached[1]
+        if managed:
+            return list(managed)
+        if not fall_back_to_env:
+            return []
+        from nexus.providers.catalog import env_pool
+
+        return env_pool(provider)
 
     async def _read(self, provider: str) -> list[str]:
+        """The operator-registered keys for this provider. Never the env fallback — the caller
+        decides whether an empty result should fall back."""
         from sqlalchemy import select
 
         from nexus.core.db import get_platform_sessionmaker
         from nexus.models.provider_key import ProviderKey
-        from nexus.providers.catalog import env_pool
         from nexus.providers.crypto import KeyUnsealable, unseal_key
 
         try:
@@ -82,10 +102,10 @@ class PoolCache:
                 )
         except Exception:
             logger.warning(
-                "could not read provider keys for %s; falling back to the environment pool",
-                provider, exc_info=True,
+                "could not read provider keys for %s; the caller will fall back to the "
+                "environment pool", provider, exc_info=True,
             )
-            return env_pool(provider)
+            return []
 
         out: list[str] = []
         for row in rows:
@@ -97,17 +117,35 @@ class PoolCache:
                     "encryption key changed or the row was altered; re-enter that key.",
                     row.id, provider, row.key_hint,
                 )
-        # An empty result means every managed row was unreadable, which is a worse state than
-        # having none — so fall through to the env pool rather than returning nothing.
-        return out or env_pool(provider)
+        # An empty result here means either no rows or every row unreadable. Both are "nothing
+        # managed", and `_cached` decides whether that falls back to the environment.
+        return out
 
 
 _CACHE = PoolCache()
 
 
 async def key_pool(provider: str) -> list[str]:
+    """The keys to use: the managed pool when it has any, the environment pool otherwise."""
     return await _CACHE.key_pool(provider)
+
+
+async def managed_pool(provider: str) -> list[str]:
+    """Only the keys an operator registered — ``[]`` when the table holds none.
+
+    The distinction from :func:`key_pool` is load-bearing, and it was found by a failing test
+    rather than by reasoning. `key_pool` falls back to the environment, so refreshing a provider
+    against it would overwrite keys a caller passed **explicitly** —
+    ``ExaSearchProvider(api_keys=[...])`` — with whatever the environment happened to hold. That
+    broke a rotation test immediately, and it would have broken any deliberate construction in
+    production the same way.
+
+    "The database layers over the environment" has to mean the database wins *when it has something
+    to say*, not that every refresh reasserts the environment over its caller.
+    """
+    return await _CACHE.managed_pool(provider)
 
 
 def invalidate(provider: str = "") -> None:
     _CACHE.invalidate(provider)
+

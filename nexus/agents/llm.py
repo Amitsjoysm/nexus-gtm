@@ -244,6 +244,29 @@ class GroqLLMProvider(OpenAICompatProvider):
         self._keys = keys
         self._idx = 0  # sticky: start each call from the last key that worked
 
+    async def _refresh_keys(self) -> None:
+        """Re-read the managed pool so a key added in the Control plane reaches a RUNNING process.
+
+        The worker is a separate container, so nothing the API does can invalidate its memory.
+        Uses the MANAGED pool, not `key_pool`: the latter falls back to the environment,
+        so refreshing against it would overwrite keys a caller passed explicitly. The
+        lookup is TTL-cached, so this is a dict read on all but one call in thirty
+        seconds — cheap enough to sit on the hot path, and the only thing that makes "add a key and
+        it just works" true without a restart.
+
+        Resets the index to 0 so the operator's PINNED key is tried first after a change; rotation
+        is meant to be the failure path, not the resting state.
+        """
+        try:
+            from nexus.providers.resolver import managed_pool
+
+            pool = await managed_pool("groq")
+        except Exception:  # never let key management break the call it is meant to serve
+            return
+        if pool and pool != self._keys:
+            self._keys = pool
+            self._idx = 0
+
     async def complete(
         self,
         messages: list[LLMMessage],
@@ -259,6 +282,7 @@ class GroqLLMProvider(OpenAICompatProvider):
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        await self._refresh_keys()
         last_resp: httpx.Response | None = None
         for _ in range(len(self._keys)):
             key = self._keys[self._idx]

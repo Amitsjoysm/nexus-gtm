@@ -300,3 +300,80 @@ async def test_a_second_process_sees_a_new_key_once_the_ttl_lapses(monkeypatch):
     await fresh.key_pool("firecrawl")
     now[0] += resolver.POOL_TTL_S + 1
     assert set(await fresh.key_pool("firecrawl")) == {"fc-first-0001", "fc-second-0002"}
+
+
+# ---- the seam actually reaches the providers -----------------------------------------------------
+
+async def test_a_key_added_in_the_panel_reaches_the_exa_provider():
+    """The behaviour the whole feature exists for: no env edit, no redeploy, no restart."""
+    from nexus.integrations.search.engines import ExaSearchProvider
+    from nexus.providers import resolver
+    from nexus.providers.service import add_key
+
+    provider = ExaSearchProvider(api_keys=["env-key-only"])
+    assert provider.api_keys == ["env-key-only"]
+
+    await add_key("exa", "from-the-panel", "sk-panel-0001")
+    resolver.invalidate()
+    await provider._refresh_keys()
+    assert provider.api_keys == ["sk-panel-0001"]
+    assert provider._key_idx == 0, "a refresh must start from the pinned key"
+
+
+async def test_refreshing_survives_a_resolver_failure(monkeypatch):
+    """Key management must never break the call it exists to serve. If the resolver raises, the
+    provider keeps the keys it already had rather than losing them."""
+    from nexus.integrations.search.engines import ExaSearchProvider
+    from nexus.providers import resolver
+
+    async def boom(_provider):
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(resolver, "managed_pool", boom)
+    provider = ExaSearchProvider(api_keys=["still-here"])
+    await provider._refresh_keys()
+    assert provider.api_keys == ["still-here"]
+
+
+async def test_the_apify_client_can_gain_its_first_key_from_the_panel():
+    """A client constructed with an empty pool must still pick up the first managed key, which is
+    why the refresh runs BEFORE the not-configured check."""
+    from nexus.integrations.apify import ApifyClient
+    from nexus.providers import resolver
+    from nexus.providers.service import add_key
+
+    client = ApifyClient([])
+    assert client.configured is False
+
+    await add_key("apify", "first-ever", "apify-first-0002")
+    resolver.invalidate()
+    await client._refresh_keys()
+    assert client.configured is True
+
+
+async def test_a_refresh_never_overwrites_explicitly_passed_keys():
+    """Found by a failing rotation test, not by reasoning.
+
+    `key_pool` falls back to the environment, so refreshing against it would replace keys a caller
+    passed deliberately with whatever the environment held. "The database layers over the
+    environment" must mean the database wins WHEN IT HAS SOMETHING TO SAY — not that every refresh
+    reasserts the environment over its caller.
+    """
+    from nexus.integrations.search.engines import ExaSearchProvider
+    from nexus.providers import resolver
+
+    resolver.invalidate()
+    provider = ExaSearchProvider(api_keys=["explicitly-passed"])
+    await provider._refresh_keys()          # no managed rows for a provider nobody configured
+    assert provider.api_keys == ["explicitly-passed"]
+
+
+async def test_managed_pool_is_empty_when_nothing_is_registered():
+    from nexus.providers import resolver
+
+    resolver.invalidate()
+    assert await resolver.managed_pool("anthropic") == []
+    # ...while key_pool still offers the environment floor for ordinary callers.
+    from nexus.providers.catalog import env_pool
+
+    assert await resolver.key_pool("anthropic") == env_pool("anthropic")

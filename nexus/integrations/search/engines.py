@@ -190,7 +190,28 @@ class ExaSearchProvider(SearchProvider):
         }
         return await self._post(self.ENDPOINT_SIMILAR, payload, n)
 
+    async def _refresh_keys(self) -> None:
+        """Re-read the managed pool so a key added in the Control plane reaches a RUNNING process.
+
+        The worker is a separate container, so nothing the API does can invalidate its memory.
+        Uses the MANAGED pool, not `key_pool`: the latter falls back to the environment,
+        so refreshing against it would overwrite keys a caller passed explicitly. The
+        lookup is TTL-cached, so this is a dict read on all but one call in
+        thirty seconds. Resets the index so the operator's PINNED key is tried first after a
+        change — rotation is the failure path, not the resting state.
+        """
+        try:
+            from nexus.providers.resolver import managed_pool
+
+            pool = await managed_pool("exa")
+        except Exception:  # key management must never break the call it exists to serve
+            return
+        if pool and pool != self.api_keys:
+            self.api_keys = pool
+            self._key_idx = 0
+
     async def _post(self, endpoint: str, payload: dict, limit: int) -> list[SearchHit]:
+        await self._refresh_keys()
         keys = self.api_keys
         if not keys:
             return []
@@ -407,6 +428,26 @@ class FirecrawlSearchProvider(SearchProvider):
         # them as site:/-site: terms inside the query.
         return await self._request(query, limit=limit, tbs=_tbs_for_days(days))
 
+    async def _refresh_keys(self) -> None:
+        """Re-read the managed pool so a key added in the Control plane reaches a RUNNING process.
+
+        The worker is a separate container, so nothing the API does can invalidate its memory.
+        Uses the MANAGED pool, not `key_pool`: the latter falls back to the environment,
+        so refreshing against it would overwrite keys a caller passed explicitly. The
+        lookup is TTL-cached, so this is a dict read on all but one call in
+        thirty seconds. Resets the index so the operator's PINNED key is tried first after a
+        change — rotation is the failure path, not the resting state.
+        """
+        try:
+            from nexus.providers.resolver import managed_pool
+
+            pool = await managed_pool("firecrawl")
+        except Exception:  # key management must never break the call it exists to serve
+            return
+        if pool and pool != self.api_keys:
+            self.api_keys = pool
+            self._key_idx = 0
+
     async def _request(self, query: str, *, limit: int, tbs: str) -> list[SearchHit]:
         """One search, rotating across the key pool on rate-limit.
 
@@ -415,6 +456,7 @@ class FirecrawlSearchProvider(SearchProvider):
         single free-tier key is exhausted quickly — and silently returning nothing would look
         exactly like a company with no news.
         """
+        await self._refresh_keys()
         keys = self.api_keys
         if not keys or not query:
             return []
