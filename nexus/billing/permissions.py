@@ -41,11 +41,16 @@ SOURCES_MANAGE = "sources.manage"        # register/introspect/map/dry-run exter
 # probes, it never mutates — so it is the one platform permission `support` can hold safely, and
 # the people who most need it during an incident are exactly the ones without billing power.
 SYSTEM_READ = "system.read"              # live endpoint + dependency health
+# Platform provider credentials (LLM/search/actor API keys). Deliberately separate from
+# `admins.manage` for the same reason as `sources.manage`: registering a credential and granting
+# platform power are different acts. A holder can spend money through someone else's API key, so
+# only the superadmin preset carries it.
+PROVIDERS_MANAGE = "providers.manage"    # add/test/pin platform provider API keys
 
 ALL_PERMISSIONS = (
     BILLING_READ, PRICING_WRITE, SUBSCRIPTIONS_WRITE, CREDITS_GRANT,
     CREDITS_GRANT_CAPPED, INVOICES_COLLECT, JOBS_MANAGE, ADMINS_MANAGE, USERS_MANAGE,
-    USERS_IMPERSONATE, SOURCES_MANAGE, SYSTEM_READ,
+    USERS_IMPERSONATE, SOURCES_MANAGE, SYSTEM_READ, PROVIDERS_MANAGE,
 )
 
 # Role presets. `superadmin` is everything; the other two are deliberately narrower.
