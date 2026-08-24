@@ -143,3 +143,160 @@ def test_probe_ok_and_verified_are_distinct_statuses():
 
     assert "probe_ok" in KEY_STATUSES and "verified" in KEY_STATUSES
     assert KEY_STATUSES.index("probe_ok") < KEY_STATUSES.index("verified")
+
+
+# ---- the service ---------------------------------------------------------------------------------
+
+async def test_adding_the_same_key_twice_is_refused():
+    """Silently accepting a duplicate would double that key's share of the rotation."""
+    from nexus.providers.service import DuplicateKey, add_key
+
+    await add_key("exa", "one", "sk-dupe-1111")
+    with pytest.raises(DuplicateKey):
+        await add_key("exa", "two", "sk-dupe-1111")
+
+
+async def test_preferring_a_key_unpins_the_previous_one_and_enables_it():
+    """At most one pin per provider. Preferring implies enabling, because pinned-but-disabled is a
+    state the UI could express and the resolver would have to silently ignore."""
+    from nexus.providers.service import add_key, list_keys, prefer_key, set_enabled
+
+    a = await add_key("brave", "a", "sk-a-0001")
+    b = await add_key("brave", "b", "sk-b-0002")
+    await prefer_key(a.id)
+    await set_enabled(b.id, False)
+    await prefer_key(b.id)
+
+    rows = {r.id: r for r in await list_keys("brave")}
+    assert rows[b.id].preferred is True and rows[b.id].enabled is True
+    assert rows[a.id].preferred is False
+
+
+async def test_disabling_the_pinned_key_clears_the_pin():
+    from nexus.providers.service import add_key, list_keys, prefer_key, set_enabled
+
+    k = await add_key("serper", "only", "sk-s-0003")
+    await prefer_key(k.id)
+    await set_enabled(k.id, False)
+    row = (await list_keys("serper"))[0]
+    assert row.enabled is False and row.preferred is False
+
+
+def test_a_caller_cannot_set_status_directly():
+    """Only mark_tested/mark_failed write status. An admin who could set `verified` by hand could
+    mark a dead key working — the rule nexus/sources/service.py enforces for its ladder."""
+    import inspect
+
+    from nexus.providers import service
+
+    for name in ("add_key", "update_label", "set_enabled", "prefer_key"):
+        sig = inspect.signature(getattr(service, name))
+        assert "status" not in sig.parameters, f"{name} exposes status"
+
+
+async def test_an_unknown_provider_is_refused():
+    from nexus.providers.service import UnknownProvider, add_key
+
+    with pytest.raises(UnknownProvider):
+        await add_key("not-a-provider", "x", "sk-x-0000")
+
+
+async def test_an_empty_key_is_refused():
+    """Storing "" would produce a row that resolves to nothing while looking configured."""
+    from nexus.providers.service import add_key
+
+    with pytest.raises(ValueError):
+        await add_key("exa", "blank", "   ")
+
+
+# ---- resolution, and the TTL that keeps a separate worker current --------------------------------
+
+async def test_an_empty_table_resolves_to_the_env_pool():
+    """The safety property that lets every earlier task ship: until someone adds a key, behaviour
+    is byte-identical to before this feature existed."""
+    from nexus.providers import resolver
+    from nexus.providers.catalog import env_pool
+
+    resolver.invalidate()
+    assert await resolver.key_pool("anthropic") == env_pool("anthropic")
+
+
+async def test_db_keys_replace_the_env_pool_once_any_exist():
+    from nexus.providers import resolver
+    from nexus.providers.service import add_key
+
+    await add_key("serper", "db", "sk-db-9999")
+    resolver.invalidate()
+    assert await resolver.key_pool("serper") == ["sk-db-9999"]
+
+
+async def test_the_pinned_key_comes_first():
+    """The operator's selection is the starting point; rotation is the failure path, not the
+    normal one."""
+    from nexus.providers import resolver
+    from nexus.providers.service import add_key, prefer_key
+
+    await add_key("github", "first-added", "ghp-aaaa")
+    second = await add_key("github", "second-added", "ghp-bbbb")
+    await prefer_key(second.id)
+    resolver.invalidate()
+    assert (await resolver.key_pool("github"))[0] == "ghp-bbbb"
+
+
+async def test_a_disabled_key_is_not_in_the_pool():
+    from nexus.providers import resolver
+    from nexus.providers.service import add_key, set_enabled
+
+    k = await add_key("exa", "off", "sk-off-1234")
+    await add_key("exa", "on", "sk-on-5678")
+    await set_enabled(k.id, False)
+    resolver.invalidate()
+    pool = await resolver.key_pool("exa")
+    assert "sk-off-1234" not in pool and "sk-on-5678" in pool
+
+
+async def test_an_undecryptable_row_is_skipped_not_fatal():
+    """One bad row must not disable the rest of the pool."""
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.provider_key import ProviderKey
+    from nexus.providers import resolver
+    from nexus.providers.crypto import key_digest, seal_key
+
+    async with get_platform_sessionmaker()() as s:
+        s.add(ProviderKey(provider="brave", label="corrupt",
+                          key_encrypted="not-a-fernet-token",
+                          key_hint="xxxx", key_digest=key_digest("corrupt-unique")))
+        s.add(ProviderKey(provider="brave", label="fine",
+                          key_encrypted=seal_key("sk-brave-good"),
+                          key_hint="good", key_digest=key_digest("sk-brave-good")))
+        await s.commit()
+    resolver.invalidate()
+    assert await resolver.key_pool("brave") == ["sk-brave-good"]
+
+
+async def test_a_second_process_sees_a_new_key_once_the_ttl_lapses(monkeypatch):
+    """THE worker requirement.
+
+    The worker runs in its own container, so the API invalidating its cache reaches nothing. Two
+    independently-constructed caches stand in for two processes: a test with one cache would pass
+    while the worker stayed stale, which is precisely the bug.
+    """
+    from nexus.providers import resolver
+    from nexus.providers.service import add_key
+
+    await add_key("firecrawl", "one", "fc-first-0001")
+
+    worker = resolver.PoolCache()                      # "the worker process"
+    assert await worker.key_pool("firecrawl") == ["fc-first-0001"]
+
+    # The API process adds a key. The worker's cache knows nothing about it.
+    await add_key("firecrawl", "two", "fc-second-0002")
+    assert await worker.key_pool("firecrawl") == ["fc-first-0001"], "should still be cached"
+
+    # ...until the TTL lapses. No restart, no message passing.
+    now = [1000.0]
+    monkeypatch.setattr(resolver.time, "monotonic", lambda: now[0])
+    fresh = resolver.PoolCache()
+    await fresh.key_pool("firecrawl")
+    now[0] += resolver.POOL_TTL_S + 1
+    assert set(await fresh.key_pool("firecrawl")) == {"fc-first-0001", "fc-second-0002"}
