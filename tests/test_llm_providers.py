@@ -157,3 +157,61 @@ async def test_anthropic_splits_system_from_turns(monkeypatch):
     assert captured["json"]["system"] == "You are X"
     assert captured["json"]["messages"] == [{"role": "user", "content": "hello"}]
     assert captured["headers"]["x-api-key"] == "secret"
+
+
+# ---- a revoked key must not send every draft to the stub ----------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403])
+async def test_groq_rotates_past_a_rejected_key(status):
+    """Rotation used to fire on 429 alone, so a 401 raised straight out of the provider, the
+    FallbackLLMProvider caught it, and EVERY draft came from the stub while the remaining keys sat
+    unused. The stub's output is emailed to real prospects — that is not graceful degradation."""
+    import httpx
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("authorization", "")
+        seen.append(auth)
+        if auth == "Bearer dead":
+            return httpx.Response(status, json={"error": {"message": "invalid api key"}})
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "hi"}}], "usage": {"total_tokens": 5}},
+        )
+
+    g = GroqLLMProvider(["dead", "live"], "m", transport=httpx.MockTransport(handler))
+    out = await g.complete([LLMMessage("user", "yo")])
+    assert out.text == "hi", f"a {status} on key 0 still degrades the whole pool"
+    assert seen == ["Bearer dead", "Bearer live"]
+
+
+@pytest.mark.asyncio
+async def test_groq_says_so_when_the_model_is_wrong_rather_than_rotating():
+    """A 404 is the MODEL, not the key, and rotating cannot help.
+
+    Measured 2026-08-21 on the live deployment: all five configured keys returned 404 for
+    `llama-3.3-70b-versatile`, which Groq had withdrawn. Every call fell through to the stub and
+    nothing said why — which is how stub-written copy reached a real prospect.
+    """
+    import httpx
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers.get("authorization", ""))
+        return httpx.Response(404, json={
+            "error": {"message": "The model `x` does not exist or you do not have access to it."}
+        })
+
+    g = GroqLLMProvider(["k1", "k2", "k3"], "x", transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError) as exc:
+        await g.complete([LLMMessage("user", "yo")])
+
+    message = str(exc.value)
+    assert "NEXUS_GROQ_MODEL" in message, "the error must name the setting that fixes it"
+    assert "Rotating keys cannot fix this" in message
+    # One attempt, not one per key: burning the pool on a model error teaches the wrong lesson.
+    assert len(calls) == 1

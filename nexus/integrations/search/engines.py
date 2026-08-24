@@ -33,6 +33,21 @@ import httpx
 _RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
 _RETRY_BACKOFFS = (0.5, 1.5)  # two retries; ~2s worst-case added latency before degrading
 
+# Statuses that condemn the KEY rather than the request. Rotation used to fire on 429 alone, so a
+# revoked or exhausted key was retried with backoff and then given up on — and because it sits at a
+# fixed index, the pool never advanced past it. One dead key at index 0 therefore disabled the whole
+# pool while the other keys stayed untouched, and the caller saw `[]`, which reads as "no results".
+#
+# `nexus/integrations/apify.py` already got this right; these two did not. The rule there is the
+# rule here: rotate past a condemned key and never retry it.
+#
+#   401 unauthorized  — revoked, rotated, or mistyped. Measured this session: an Apify key that
+#                       worked two weeks ago now 401s, so this is not hypothetical.
+#   403 forbidden     — key valid, this operation not permitted for it.
+#   402 payment req.  — Exa returns this when the account's credits are gone. Key-specific and
+#                       permanent for that key, so it is a rotation case, not a backoff case.
+_KEY_REJECTED_STATUS = frozenset({401, 402, 403})
+
 from nexus.integrations.search.provider import (
     DuckDuckGoSearchProvider,
     SearchHit,
@@ -182,11 +197,29 @@ class ExaSearchProvider(SearchProvider):
         # Budget: one shot per key (rotate to ride out a single key's 429) + transient backoffs.
         # Rotation is sticky — once a key works we stay on it until it too rate-limits.
         backoff_used = 0
+        rejected: dict[int, int] = {}          # key index -> status that condemned it
         for attempt in range(len(keys) + len(_RETRY_BACKOFFS)):
             headers = {"x-api-key": keys[self._key_idx], "Content-Type": "application/json"}
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     resp = await client.post(endpoint, json=payload, headers=headers)
+                if resp.status_code in _KEY_REJECTED_STATUS:
+                    # Condemns the key, not the request: rotate past it and never retry it. See
+                    # _KEY_REJECTED_STATUS. Recorded so the final log can say which keys are dead
+                    # rather than blaming the rate limit for someone else's revoked credential.
+                    rejected[self._key_idx] = resp.status_code
+                    logger.warning("Exa key #%d rejected (%d) — rotating past it",
+                                   self._key_idx, resp.status_code)
+                    if len(rejected) >= len(keys):
+                        logger.error(
+                            "Exa: every key in the %d-key pool was rejected (%s). This is a "
+                            "credentials problem, not a rate limit — results will be empty until "
+                            "it is fixed.",
+                            len(keys), ", ".join(f"#{i}:{s}" for i, s in sorted(rejected.items())),
+                        )
+                        return []
+                    self._key_idx = (self._key_idx + 1) % len(keys)
+                    continue
                 if resp.status_code == 429:
                     if len(keys) > 1:
                         self._key_idx = (self._key_idx + 1) % len(keys)  # next key in the pool
@@ -390,6 +423,7 @@ class FirecrawlSearchProvider(SearchProvider):
             payload["tbs"] = tbs
 
         backoff_used = 0
+        rejected: dict[int, int] = {}          # key index -> status that condemned it
         for attempt in range(len(keys) + len(_RETRY_BACKOFFS)):
             headers = {
                 "Authorization": f"Bearer {keys[self._key_idx]}",
@@ -398,6 +432,21 @@ class FirecrawlSearchProvider(SearchProvider):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     resp = await client.post(self.ENDPOINT, json=payload, headers=headers)
+                if resp.status_code in _KEY_REJECTED_STATUS:
+                    # Same rule as Exa above: a condemned key is rotated past, never retried.
+                    rejected[self._key_idx] = resp.status_code
+                    logger.warning("Firecrawl key #%d rejected (%d) — rotating past it",
+                                   self._key_idx, resp.status_code)
+                    if len(rejected) >= len(keys):
+                        logger.error(
+                            "Firecrawl: every key in the %d-key pool was rejected (%s). This is a "
+                            "credentials problem, not a rate limit — results will be empty until "
+                            "it is fixed.",
+                            len(keys), ", ".join(f"#{i}:{s}" for i, s in sorted(rejected.items())),
+                        )
+                        return []
+                    self._key_idx = (self._key_idx + 1) % len(keys)
+                    continue
                 if resp.status_code == 429:
                     if len(keys) > 1:
                         self._key_idx = (self._key_idx + 1) % len(keys)   # next key in the pool
