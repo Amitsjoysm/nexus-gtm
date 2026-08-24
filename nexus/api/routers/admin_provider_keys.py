@@ -70,7 +70,12 @@ async def list_supported_providers(
 ) -> list[dict]:
     """The provider ids the UI may offer. Declared before `/{key_id}` routes so the literal path
     is not swallowed by the parameterised one."""
-    return [{"id": p.id, "label": p.label} for p in PROVIDERS.values()]
+    from nexus.providers.catalog import MODEL_PROVIDERS
+
+    # `has_model` travels with the id so the UI does not keep its own copy of which providers have
+    # one. The same reasoning that put the id list on the server.
+    return [{"id": p.id, "label": p.label, "has_model": p.id in MODEL_PROVIDERS}
+            for p in PROVIDERS.values()]
 
 
 @router.get("", response_model=list[ProviderKeyOut])
@@ -252,11 +257,17 @@ async def list_provider_models(
         secret = env[0] if env else ""
 
     current = await model_for(provider)
+    # Whether the value in force was CHOSEN here or inherited from the environment. Without it the
+    # UI cannot say what "Clear" would do — and on a deployment where the env value and the
+    # override happen to agree, clearing would look like a no-op right up until someone redeploys
+    # with a different NEXUS_GROQ_MODEL and the choice silently changes underneath them.
+    overridden = bool(await service.get_model_override(provider))
     if not secret:
-        return {"provider": provider, "current": current, "models": [],
+        return {"provider": provider, "current": current, "overridden": overridden, "models": [],
                 "detail": "no usable key for this provider, so its catalogue cannot be listed"}
     models, detail = await list_models(provider, secret)
-    return {"provider": provider, "current": current, "models": models, "detail": detail}
+    return {"provider": provider, "current": current, "overridden": overridden,
+            "models": models, "detail": detail}
 
 
 @router.put("/{provider}/model", response_model=dict)

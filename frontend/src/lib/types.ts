@@ -1260,9 +1260,50 @@ export interface ProviderKeyTestResult {
   http_status: number | null;
 }
 
+/**
+ * Platform-wide counts, read across every tenant.
+ *
+ * `requests_with_a_user` is separate on purpose: attribution is partial by construction. Only
+ * usage events carry a user id, and background work — crawls, sweeps, plays — has nobody to
+ * attribute it to. Showing only the total would imply the difference came from nowhere.
+ */
+export interface PlatformOverview {
+  users: number;
+  active_users: number;
+  tenants: number;
+  requests_this_period: number;
+  requests_total: number;
+  requests_with_a_user: number;
+  credits_granted: number;
+  credits_spent: number;
+}
+
 export interface SupportedProvider {
   id: string;
   label: string;
+  /**
+   * Whether this provider has a model to choose. Comes from the server for the same reason the id
+   * list does — a second copy here would drift, and the drift would show as a model picker whose
+   * dropdown is permanently empty.
+   */
+  has_model: boolean;
+}
+
+/**
+ * What a provider currently offers, asked of the provider itself rather than read from a list we
+ * maintain: `llama-3.3-70b-versatile` was withdrawn under us and every key started 404ing.
+ *
+ * `detail` carries the reason the list is empty. "We could not ask" and "there are none" need
+ * opposite responses from the operator, and a bare `[]` conflates them.
+ */
+export interface ProviderModels {
+  provider: string;
+  /** The model in force right now — an override if one is set, else the environment value. */
+  current: string;
+  /** True when an operator chose it here, so the UI can offer to clear it. */
+  overridden: boolean;
+  models: string[];
+  detail: string;
 }
 
 export interface AdminRateCard {

@@ -38,6 +38,8 @@ import type {
   Invoice,
   ProviderKey,
   ProviderKeyTestResult,
+  PlatformOverview,
+  ProviderModels,
   SupportedProvider,
   SellablePlan,
   HostedSession,
@@ -829,6 +831,18 @@ export class ApiClient {
       `/admin/provider-keys/${id}/test`, { method: "POST", query: { depth } },
     );
   }
+  /** Asks the PROVIDER what it currently offers — their catalogue changes without notice. */
+  providerModels(provider: string, signal?: AbortSignal) {
+    return this.request<ProviderModels>(
+      `/admin/provider-keys/${provider}/models`, { signal },
+    );
+  }
+  /** An empty string clears the override and the environment value applies again. */
+  setProviderModel(provider: string, model: string) {
+    return this.request<{ provider: string; model: string }>(
+      `/admin/provider-keys/${provider}/model`, { method: "PUT", body: { model } },
+    );
+  }
 
   // ---- billing (platform-admin control plane) ----
   adminBillingPlans(signal?: AbortSignal) {
@@ -935,6 +949,14 @@ export class ApiClient {
       query: { since },
       signal,
     });
+  }
+  /**
+   * How many people are on the platform and what they consume. Neither number existed anywhere:
+   * the Subscriptions tab shows plan and status, /billing/usage is tenant-scoped, and the
+   * user-activity endpoint answers for one person.
+   */
+  adminPlatformOverview(signal?: AbortSignal) {
+    return this.request<PlatformOverview>("/admin/billing/overview", { signal });
   }
   adminBillingFlags(signal?: AbortSignal) {
     return this.request<FeatureFlag[]>("/admin/billing/flags", { signal });

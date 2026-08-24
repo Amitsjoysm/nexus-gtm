@@ -118,3 +118,14 @@
 .planRow:last-child {
   border-bottom: none;
 }
+
+/* Names what the figures above do NOT count. A dashboard that shows 18 requests and 11 attributed
+   ones, without saying why they differ, invites the reader to assume one of them is broken. */
+.overviewNote {
+  margin: var(--space-3) 0 0;
+  max-width: 74ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-wrap: pretty;
+}

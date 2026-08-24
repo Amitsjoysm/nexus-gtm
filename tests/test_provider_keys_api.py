@@ -154,6 +154,31 @@ async def test_the_model_can_be_chosen_and_cleared(client, monkeypatch):
     assert await model_for("groq") == get_settings().groq_model
 
 
+async def test_the_response_says_whether_the_model_was_chosen_here(client, monkeypatch):
+    """Without it the UI cannot say what "Reset to env default" would do.
+
+    And on a deployment where the environment value and the override happen to agree, clearing
+    would look like a no-op right up until someone redeploys with a different NEXUS_GROQ_MODEL and
+    the choice silently changes underneath them.
+    """
+    from nexus.core.config import get_settings
+
+    token = await _superadmin(client, monkeypatch, slug="pm5", email="boss@pm5.com")
+    monkeypatch.setattr(get_settings(), "groq_model", "env-chosen-model")
+
+    before = (await client.get("/api/admin/provider-keys/groq/models",
+                               headers=auth(token))).json()
+    assert before["overridden"] is False
+    assert before["current"] == "env-chosen-model"
+
+    await client.put("/api/admin/provider-keys/groq/model", headers=auth(token),
+                     json={"model": "operator-chosen-model"})
+    after = (await client.get("/api/admin/provider-keys/groq/models",
+                              headers=auth(token))).json()
+    assert after["overridden"] is True
+    assert after["current"] == "operator-chosen-model"
+
+
 async def test_an_unknown_model_is_accepted_because_the_catalogue_is_theirs(client, monkeypatch):
     """Refusing an unlisted model would mean a withdrawn-model outage could not be fixed from
     here — which is the exact situation this endpoint exists for."""
@@ -227,3 +252,29 @@ async def test_the_overview_counts_usage_across_every_tenant(client, monkeypatch
 
     body = (await client.get("/api/admin/billing/overview", headers=auth(token))).json()
     assert body["requests_total"] >= 1, "a cross-tenant aggregate must see other tenants' rows"
+
+
+async def test_the_model_providers_and_the_catalogue_urls_agree():
+    """Two lists naming the same three providers, in two files.
+
+    Disagreement is silent in both directions: a provider in `MODEL_PROVIDERS` that `list_models`
+    cannot reach shows a picker with an empty dropdown, and one with a URL but no flag has a
+    catalogue nothing offers. The `/providers` endpoint publishes the flag to the UI, so the
+    frontend keeps no third copy.
+    """
+    import inspect
+
+    from nexus.providers.catalog import MODEL_PROVIDERS
+    from nexus.providers import testing
+
+    src = inspect.getsource(testing.list_models)
+    for provider in MODEL_PROVIDERS:
+        assert f'"{provider}":' in src, f"{provider} claims a model but list_models cannot reach it"
+
+
+async def test_the_provider_list_publishes_which_have_a_model(client, monkeypatch):
+    token = await _superadmin(client, monkeypatch, slug="pm6", email="boss@pm6.com")
+    rows = (await client.get("/api/admin/provider-keys/providers", headers=auth(token))).json()
+    by_id = {r["id"]: r["has_model"] for r in rows}
+    assert by_id["groq"] is True
+    assert by_id["exa"] is False

@@ -33,7 +33,10 @@ def _allow_private(monkeypatch):
     monkeypatch.setattr(get_settings(), "source_db_allow_private", True)
 
 
-DSN = "postgresql://user:pw@db.example.com:5432/warehouse"
+# The password is long and distinctive on purpose. It was `pw`, and the leak assertion below
+# looks for it inside base64 ciphertext — a two-character needle turns up there by chance,
+# measured at 4.3% of seals, so the test failed randomly about one run in twenty-three.
+DSN = "postgresql://user:s3cret-warehouse-passphrase@db.example.com:5432/warehouse"
 
 DISCOVERED = {
     "tables": [
@@ -67,7 +70,7 @@ async def test_the_dsn_is_sealed_at_rest_and_round_trips(fresh_db):
 
     sealed = seal_dsn(DSN)
     assert DSN not in sealed
-    assert "pw" not in sealed
+    assert "s3cret-warehouse-passphrase" not in sealed
     assert unseal_dsn(sealed) == DSN
 
 

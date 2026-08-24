@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, CardHeader, Field, Input, Select, Skeleton, useToast } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import type { ProviderKey, SupportedProvider } from "@/lib/types";
+import type { ProviderKey, ProviderModels, SupportedProvider } from "@/lib/types";
 import styles from "./ProviderKeysTab.module.css";
 
 /**
@@ -33,6 +33,103 @@ const STATUS_LABEL: Record<string, string> = {
   failed: "Failed",
   untested: "Untested",
 };
+
+/**
+ * Choose the model a provider runs. The other half of the 2026-08-21 outage: every key was fine
+ * and the *model* had been withdrawn, and changing it meant editing deploy/.env and redeploying.
+ *
+ * The list comes from the provider, not from us — their catalogue is theirs to change, and it did.
+ * A free-text field sits beside it because a model can appear before their list endpoint reports
+ * it, and because refusing an unlisted name would mean this screen could not fix the exact outage
+ * it exists for.
+ */
+function ModelPicker({ provider }: { provider: string }) {
+  const api = useApiClient();
+  const toast = useToast();
+  const [state, setState] = useState<ProviderModels | null>(null);
+  const [choice, setChoice] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    const data = await api.providerModels(provider);
+    setState(data);
+    setChoice(data.current);
+  }, [api, provider]);
+
+  useEffect(() => {
+    load().catch(() =>
+      setState({ provider, current: "", overridden: false, models: [], detail: "" }),
+    );
+  }, [load, provider]);
+
+  async function save(model: string) {
+    setSaving(true);
+    try {
+      await api.setProviderModel(provider, model);
+      await load();
+      toast.success(
+        model ? "Model changed" : "Override cleared",
+        "Live on every process, including the worker, within 30 seconds.",
+      );
+    } catch (err) {
+      toast.error(
+        "Couldn't change the model",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (state === null) return <Skeleton width="100%" height={72} />;
+
+  // The provider's list, plus whatever is in force — a model they have stopped listing is still
+  // the one running, and dropping it from the dropdown would silently change it on the next save.
+  const options = Array.from(new Set([...state.models, state.current].filter(Boolean)));
+
+  return (
+    <div className={styles.model}>
+      <div className={styles.modelRow}>
+        <Field label="Model" hint="Applies to every request this provider serves.">
+          {options.length > 0 ? (
+            <Select
+              value={choice}
+              onChange={(e) => setChoice(e.target.value)}
+              options={options.map((m) => ({ value: m, label: m }))}
+            />
+          ) : (
+            <Input
+              value={choice}
+              onChange={(e) => setChoice(e.target.value)}
+              placeholder="model id"
+            />
+          )}
+        </Field>
+        <Button
+          size="sm"
+          onClick={() => save(choice)}
+          loading={saving}
+          disabled={saving || !choice || choice === state.current}
+        >
+          Use this model
+        </Button>
+        {state.overridden && (
+          <Button variant="ghost" size="sm" onClick={() => save("")} disabled={saving}>
+            Reset to env default
+          </Button>
+        )}
+      </div>
+      <p className={styles.note}>
+        Running <code className={styles.hint}>{state.current || "(none configured)"}</code>
+        {state.overridden ? " — chosen here." : " — from the environment."}
+        {/* The provider's own words, which arrive lowercase because they are written as clause
+            fragments elsewhere. Sentence-cased here rather than at the source: `detail` is also
+            read by machines and by the audit log. */}
+        {state.detail && ` ${state.detail[0].toUpperCase()}${state.detail.slice(1)}.`}
+      </p>
+    </div>
+  );
+}
 
 export function ProviderKeysTab() {
   const api = useApiClient();
@@ -121,6 +218,13 @@ export function ProviderKeysTab() {
     return acc;
   }, {});
 
+  // Every provider that has keys, PLUS every provider with a model to choose even if it has none.
+  // Grouping by key alone would hide the model picker on a deployment running entirely on
+  // environment keys — which is every deployment until someone adds the first managed one, and is
+  // exactly when a withdrawn model needs changing.
+  const modelProviders = providers.filter((p) => p.has_model).map((p) => p.id);
+  const cards = Array.from(new Set([...Object.keys(grouped), ...modelProviders]));
+
   return (
     <div className={styles.stack}>
       <Card padding="lg">
@@ -169,12 +273,19 @@ export function ProviderKeysTab() {
         </Card>
       )}
 
-      {Object.entries(grouped).map(([provider, rows]) => (
+      {cards.map((provider) => {
+        const rows = grouped[provider] ?? [];
+        return (
         <Card padding="lg" key={provider}>
           <CardHeader
             title={providers.find((p) => p.id === provider)?.label ?? provider}
-            subtitle={`${rows.length} key${rows.length === 1 ? "" : "s"} · the pinned key is tried first`}
+            subtitle={
+              rows.length === 0
+                ? "No managed keys — running on its environment variable"
+                : `${rows.length} key${rows.length === 1 ? "" : "s"} · the pinned key is tried first`
+            }
           />
+          {modelProviders.includes(provider) && <ModelPicker provider={provider} />}
           <ul className={styles.keys}>
             {rows.map((row) => (
               <li key={row.id} className={row.enabled ? styles.key : styles.keyOff}>
@@ -248,7 +359,8 @@ export function ProviderKeysTab() {
             ))}
           </ul>
         </Card>
-      ))}
+        );
+      })}
     </div>
   );
 }

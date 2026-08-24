@@ -817,6 +817,72 @@ could set it, watch click-to-dial work, and never learn Twilio was not involved.
 rather than on the first rep's first call. Calling itself works today as click-to-dial —
 `CallConsole.tsx` builds its own `tel:` link — plus manual dispositions.
 
+## Provider keys and models (`nexus/providers/`) — superadmin, no redeploy
+
+Every pooled credential — Groq, Anthropic, OpenAI-compatible, Exa, Firecrawl, Brave, Serper, Apify,
+GitHub — plus the LLM **model**, managed from the panel instead of by editing `deploy/.env` and
+redeploying. Gated on **`providers.manage`**, superadmin preset only: a holder can spend money
+through somebody else's API key, so it is not folded into `admins.manage`. Same argument that keeps
+`sources.manage` separate.
+
+**The motivating outage was not a bad key.** On 2026-08-21 all five Groq keys authenticated and
+404'd on every completion, because `llama-3.3-70b-versatile` had been withdrawn. `llm_provider="auto"`
+falls back to the stub, so the stub wrote every outbound email — to real prospects — and nothing
+reported a problem. Hence two things this subsystem does that a plain key CRUD would not:
+
+- **Two test depths, and `probe_ok` is never rendered as a tick.** `probe` is the cheapest call that
+  proves the credential authenticates; `verify` makes a real request of the kind the product issues
+  and costs credits, so it is opt-in per key and never swept. A panel with one depth would have shown
+  five healthy keys. For search providers the probe *is* a real query, so `verify` upgrades the
+  result to `verified` — leaving them permanently amber would turn the badge from "real calls
+  untested" into "this provider cannot be verified", a different fact wearing the same badge.
+- **The model is chosen here too**, stored in `provider_settings` (migration `0045`) and resolved by
+  `model_for()` on the same 30s TTL as the keys. A wrong model is exactly as fatal as a dead key.
+  `GET /{provider}/models` asks the **provider** what it currently accepts — a list we maintained
+  would go stale the same way the model did. An unlisted model is **accepted on write**: refusing one
+  would mean a withdrawn-model outage could not be fixed from here, which is the situation the
+  endpoint exists for.
+
+Rules that are load-bearing:
+
+- **The key is in no response model, ever** — not even for the superadmin who typed it. `key_hint`
+  (last four) is all the UI gets. A panel that can display a credential leaks it through a screenshot
+  or a support session.
+- **`status` is written in exactly two places**, `mark_tested` and `mark_failed_by_digest`. No
+  mutation function accepts it and the request bodies are `extra="forbid"`, so an admin cannot mark a
+  dead key working by hand. Same ladder discipline as `nexus/sources/service.py`.
+- **`key_digest` (sha256) exists because Fernet is randomised.** One key seals differently every time,
+  so the ciphertext cannot carry the uniqueness constraint, and a runtime rejection — which arrives
+  holding plaintext, not a row id — could not find its row.
+- **Cryptographic roots are deliberately absent from the catalog**: `secret_key`,
+  `network_token_enc_key`, `mfa_secret_enc_key`, `source_db_dsn_enc_key`, plus `stripe_secret_key`
+  and `hubspot_access_token`. Rotating the key that seals the table from a form served by that table
+  is a lockout, not a feature. Pinned by test.
+- **`managed_pool()` and `key_pool()` are separate on purpose.** An explicitly-passed key must win:
+  folding them together made `_refresh_keys` overwrite a caller's key, caught by
+  `test_firecrawl_rotates_to_the_next_key_on_rate_limit`.
+- **A pinned key is tried first, so rotation is the failure path rather than the resting state.**
+  Disabling clears the pin, so the resolver never reasons about a pinned key it may not use.
+  Disabling is never refused — during an incident "stop using this" must not be blocked.
+- **The 30s TTL is what reaches the worker.** It is a separate process; without a TTL a new key would
+  need a restart, which is the redeploy this subsystem removes. Verified live: a running worker
+  picked up a key added through the API without restarting.
+- **`resolver` falls back to the environment pool when no managed key exists**, so adding this
+  changed nothing for a deployment that has not used it. The model endpoint falls back the same way,
+  or the first thing an operator wants to look at would require adding a key first.
+
+`GET /admin/billing/overview` is the platform-wide counter beside it: users, workspaces, requests
+this period and all-time, credits granted vs spent. **`requests_with_a_user` is reported separately
+because attribution is partial by construction** — only usage events carry a user id, and background
+work has nobody to attribute it to (live: 18 total, 11 attributable). Its first version returned
+`requests_total: 0` against a database holding 18 events: `billing_usage_events` is tenant-scoped, so
+a cross-tenant aggregate on the RLS-bound app role returns **zero rows rather than raising**. The
+documented trap, walked into anyway — it now runs on `get_platform_sessionmaker()`, pinned by a test
+that writes an event for a tenant the caller is not.
+
+**Not built: runtime write-back.** `mark_failed_by_digest` exists and nothing calls it, so a key a
+crawl finds revoked at 3am is still green in the panel until someone tests it.
+
 ## Apify actors (`nexus/integrations/apify.py`)
 
 The seam for lookups with no compliant public API. **Adding an actor is a line in `ACTORS`, not a new

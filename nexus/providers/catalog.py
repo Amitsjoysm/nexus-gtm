@@ -42,6 +42,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "github": ProviderSpec("github", "GitHub (public API signals)", "github_token"),
 }
 
+# The providers that HAVE a model to choose. One definition, read by `testing.list_models`, by the
+# `/providers` endpoint and through it by the UI — a second hardcoded list in the frontend would
+# drift, which is the reason `/providers` exists at all rather than the UI knowing the ids.
+MODEL_PROVIDERS: frozenset[str] = frozenset({"groq", "anthropic", "openai_compat"})
+
 
 def env_pool(provider: str) -> list[str]:
     """The env-configured keys for a provider — the floor the database layers over.

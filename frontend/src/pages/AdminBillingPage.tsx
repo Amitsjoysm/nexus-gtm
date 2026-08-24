@@ -28,6 +28,7 @@ import type {
   AdminRateCard,
   AdminSubscription,
   FeatureFlag,
+  PlatformOverview,
   RevenueReport,
 } from "@/lib/types";
 import { ApiError } from "@/lib/api";
@@ -434,6 +435,76 @@ function Subscriptions() {
  * trial sits beside paying workspaces because a trial is a live logo and zero revenue, and merging
  * the two is how a pipeline number gets reported as an MRR number.
  */
+/**
+ * How many people are on the platform and what they consume.
+ *
+ * Sits above revenue because it answers a question revenue cannot: money says what was billed,
+ * this says what was used. A tenant that has consumed nothing all period is a churn risk with a
+ * healthy MRR line.
+ *
+ * Its first version reported `requests_total: 0` against a database holding 18 events —
+ * `billing_usage_events` is tenant-scoped, so a cross-tenant aggregate on the RLS-bound app role
+ * returns zero rows rather than raising. Fixed on the server; noted here because the number is
+ * plausible when it is wrong.
+ */
+function PlatformOverviewPanel() {
+  const api = useApiClient();
+  const state = useApi<PlatformOverview>((signal) => api.adminPlatformOverview(signal), []);
+
+  return (
+    <DataState
+      state={state}
+      errorTitle="Couldn't load the platform overview"
+      skeleton={<Skeleton width="100%" height={120} />}
+    >
+      {(o) => (
+        <section>
+          <h3 className={styles.sectionTitle}>Platform</h3>
+          <dl className={styles.figures}>
+            <div>
+              <dt>Users</dt>
+              <dd className={styles.mono}>{formatNumber(o.users)}</dd>
+            </div>
+            <div>
+              <dt>Active users</dt>
+              <dd className={cn(styles.mono, o.active_users < o.users && styles.marginBad)}>
+                {formatNumber(o.active_users)}
+              </dd>
+            </div>
+            <div>
+              <dt>Workspaces</dt>
+              <dd className={styles.mono}>{formatNumber(o.tenants)}</dd>
+            </div>
+            <div>
+              <dt>Requests this period</dt>
+              <dd className={styles.mono}>{formatNumber(o.requests_this_period)}</dd>
+            </div>
+            <div>
+              <dt>Requests all time</dt>
+              <dd className={styles.mono}>{formatNumber(o.requests_total)}</dd>
+            </div>
+            <div>
+              <dt>Credits granted</dt>
+              <dd className={styles.mono}>{formatNumber(o.credits_granted)}</dd>
+            </div>
+            <div>
+              <dt>Credits spent</dt>
+              <dd className={styles.mono}>{formatNumber(o.credits_spent)}</dd>
+            </div>
+          </dl>
+          {/* Said plainly rather than left to be inferred from a gap between two numbers. */}
+          <p className={styles.overviewNote}>
+            {formatNumber(o.requests_with_a_user)} of {formatNumber(o.requests_total)} requests are
+            attributable to a person. The rest is background work — crawls, sweeps and plays — which
+            has no user to charge it to. Per-workspace consumption is on each tenant's own billing
+            page.
+          </p>
+        </section>
+      )}
+    </DataState>
+  );
+}
+
 function Revenue() {
   const api = useApiClient();
   const report = useApi<RevenueReport>((signal) => api.adminBillingRevenue(undefined, signal), []);
@@ -452,6 +523,7 @@ function Revenue() {
           .sort((a, b) => b[1].mrr_cents - a[1].mrr_cents);
         return (
           <div className={styles.revenue}>
+            <PlatformOverviewPanel />
             <section>
               <h3 className={styles.sectionTitle}>Recurring revenue</h3>
               <dl className={styles.figures}>

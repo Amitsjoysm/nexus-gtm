@@ -22,6 +22,30 @@
   text-wrap: pretty;
 }
 
+/* The model in force, above the keys that serve it. Above, because a withdrawn model makes every
+   key below it fail — an operator reading a column of red rows needs to see this first. */
+.model {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.modelRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+}
+
+/* The select carries model ids, which are long. Let it take the room it needs and wrap the
+   buttons underneath on a narrow viewport rather than truncating the name being chosen. */
+.modelRow > *:first-child {
+  flex: 1 1 22rem;
+}
+
 /* A plain list, not cards. Each row is a set of yes/no facts an operator scans down a column;
    cards would add chrome to one-line answers and nest inside the Card already wrapping them. */
 .keys {

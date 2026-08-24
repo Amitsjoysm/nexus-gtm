@@ -202,6 +202,10 @@ async def list_models(provider: str, key: str, *, transport=None) -> tuple[list[
         "anthropic": ("https://api.anthropic.com/v1/models",
                       {"x-api-key": key, "anthropic-version": "2023-06-01"}),
     }
+    # `urls` and `catalog.MODEL_PROVIDERS` must name the same three providers, or the UI offers a
+    # picker whose dropdown is permanently empty. Pinned by
+    # `test_the_model_providers_and_the_catalogue_urls_agree` rather than asserted here — a
+    # mismatch is a coding error, and crashing a live request over it helps nobody.
     if provider not in urls:
         return [], "this provider has no model to choose"
     url, headers = urls[provider]
