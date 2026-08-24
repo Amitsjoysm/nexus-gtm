@@ -103,3 +103,43 @@ def test_the_env_pool_reads_both_list_and_single_key_settings():
     assert isinstance(env_pool("exa"), list)       # list-shaped
     assert isinstance(env_pool("brave"), list)     # single-string-shaped, wrapped
     assert env_pool("nope") == []                  # unknown provider is empty, never an error
+
+
+# ---- the table -----------------------------------------------------------------------------------
+
+async def test_a_provider_key_row_stores_no_plaintext():
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.provider_key import ProviderKey
+    from nexus.providers.crypto import key_digest, key_hint, seal_key
+
+    secret = "sk-test-abcdefgh1234"
+    async with get_platform_sessionmaker()() as s:
+        row = ProviderKey(
+            provider="exa", label="primary",
+            key_encrypted=seal_key(secret),
+            key_hint=key_hint(secret), key_digest=key_digest(secret),
+        )
+        s.add(row)
+        await s.commit()
+        assert secret not in row.key_encrypted
+        assert row.status == "untested"
+        assert row.enabled is True
+        assert row.preferred is False
+
+
+def test_the_table_carries_no_tenant_id():
+    """Platform-global, like companies/people/source_databases. A tenant_id would make
+    scripts/apply_rls.py enrol it, and every worker read would then return zero rows — silently,
+    because RLS misses are not errors."""
+    from nexus.models.provider_key import ProviderKey
+
+    assert "tenant_id" not in ProviderKey.__table__.columns
+
+
+def test_probe_ok_and_verified_are_distinct_statuses():
+    """The Groq shape: a key can authenticate while every real call fails. One green state would
+    have shown five healthy keys while every draft came from the stub."""
+    from nexus.models.provider_key import KEY_STATUSES
+
+    assert "probe_ok" in KEY_STATUSES and "verified" in KEY_STATUSES
+    assert KEY_STATUSES.index("probe_ok") < KEY_STATUSES.index("verified")
