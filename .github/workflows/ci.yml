@@ -167,12 +167,17 @@ jobs:
         #
         # None of this was visible before: the job needs `test` to pass, and `test` was red for
         # months, so this step was SKIPPED and the image was never scanned at all.
+        # `.trivyignore.yaml` holds dated, justified exceptions — currently only the starlette
+        # CVEs that the fastapi<0.116 pin blocks. Each entry expires, so the gate re-reddens
+        # instead of quietly accepting them forever.
         run: >
           docker run --rm
           -v /var/run/docker.sock:/var/run/docker.sock
           -v ${{ runner.temp }}/trivy-cache:/root/.cache/trivy
+          -v ${{ github.workspace }}/.trivyignore.yaml:/work/.trivyignore.yaml:ro
           aquasec/trivy:0.65.0 image
           --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          --ignorefile /work/.trivyignore.yaml
           --no-progress
           nexus-gtm:ci-${{ github.sha }}
 

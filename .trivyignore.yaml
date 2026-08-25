@@ -1,0 +1,35 @@
+# Trivy findings that are accepted, with a date on which the acceptance lapses.
+#
+# This file is NOT a way to make the scan quiet. Everything else the first real scan found was
+# fixed rather than listed here: the Debian util-linux/shadow CVEs by an upgrade layer in
+# deploy/Dockerfile, cryptography by a constraint bump, wheel/jaraco.context by refreshing the
+# base image's build tooling. Only entries that cannot be fixed without breaking something
+# belong below, and each one carries the reason and an expiry.
+
+vulnerabilities:
+  # starlette 0.46.2 -> the fixes land in 0.49.x, 1.1.x and 1.3.x.
+  #
+  # We cannot take them yet. FastAPI 0.115.14 requires starlette <0.47, so reaching 0.49 means
+  # FastAPI 0.116+, which in turn requires prometheus-fastapi-instrumentator 8.x — the exact
+  # three-way combination behind the incident recorded at the top of constraints.txt, where an
+  # unpinned upgrade left every endpoint returning 500. constraints.txt calls the starlette pin
+  # "the single most important line — do not loosen it without confirming FastAPI/starlette
+  # compatibility", and confirming that is a coordinated upgrade with its own verification, not
+  # a line change smuggled into an unrelated PR.
+  #
+  # Exposure in the meantime: NEXUS terminates TLS at Caddy and every route is authenticated and
+  # tenant-scoped, so the request-parsing surface these reach is not directly internet-exposed.
+  # That is mitigation, not a fix.
+  #
+  # Expiring 2026-11-30 rather than never: when this lapses the scan goes red again and the
+  # upgrade gets scheduled, which is the whole point of writing it down instead of relaxing the
+  # gate.
+  - id: CVE-2025-62727
+    statement: "Blocked by fastapi<0.116 pin; see constraints.txt. Coordinated FastAPI/starlette/instrumentator upgrade required."
+    expired_at: 2026-11-30
+  - id: CVE-2026-48818
+    statement: "Blocked by fastapi<0.116 pin; see constraints.txt. Coordinated FastAPI/starlette/instrumentator upgrade required."
+    expired_at: 2026-11-30
+  - id: CVE-2026-54283
+    statement: "Blocked by fastapi<0.116 pin; see constraints.txt. Coordinated FastAPI/starlette/instrumentator upgrade required."
+    expired_at: 2026-11-30

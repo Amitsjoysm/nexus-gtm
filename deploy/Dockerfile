@@ -21,6 +21,21 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 
+# Apply the base image's outstanding security updates, and refresh the build tooling it ships.
+#
+# The tag floats but the layer does not: python:3.11-slim is rebuilt on its own cadence, so an
+# image built today still carries whatever Debian security fixes landed after that rebuild. The
+# first Trivy scan this repo ever actually ran found exactly that — util-linux and shadow at
+# 2.41-5 with four fixable CVEs (CVE-2026-53612/53613/53614/53615), waiting in deb13u updates.
+#
+# pip/setuptools/wheel are the base image's own preinstalled build tooling, and they are what
+# dragged in the `wheel` and `jaraco.context` findings. They are not used once the app is
+# installed, but they stay in the image, so they are part of its attack surface either way.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip setuptools wheel
+
 # Install the app + production extras (Postgres driver, Redis/Valkey queue, Alembic, metrics).
 # constraints.txt pins exact versions (C-3) so a fresh build can't silently pull a breaking
 # transitive (e.g. an incompatible starlette). Constraints only cap versions — they never change
