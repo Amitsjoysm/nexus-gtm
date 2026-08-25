@@ -1026,11 +1026,37 @@ Registered actors and their state:
 |---|---|---|
 | `phone_finder` | `code_crafter/mobile-finder` | `people/enrich.py` — live, verified end-to-end |
 | `linkedin_profile` | `dev_fusion/Linkedin-Profile-Scraper` | `personalization/apify_provider.py` |
-| `crunchbase_org` | `pratikdani/crunchbase-companies-scraper` | **none** |
-| `company_search` | `bhansalisoft/crunchbase-scraper-without-login` | **none** |
 
-The last two are registered and called by nothing. Before wiring `company_search`, note it has 42
-total runs across 2 users — an abandoned actor is a dependency that disappears without notice.
+**Every registered actor has a consumer, and that is now a test**
+(`test_every_registered_actor_has_a_real_caller`) rather than a habit. It resolves the argument
+handed to `run_actor` through the AST, because both grep spellings are wrong in opposite
+directions: `run_actor("<name>"` misses `linkedin_profile` (passed via the module constant
+`apify_provider.ACTOR`), and the bare quoted name falsely matches `company_search`, which is also
+an unrelated module, a registry method, and a cache-key literal.
+
+`crunchbase_org` and `company_search` were registered and called by nothing for months, and were
+**removed on 2026-08-20 rather than wired**. Registered-but-unused is the worst available state: it
+does nothing while still printing as a capability in `scripts/verify_apify_actors.py`. Why removal
+won over wiring, since "add Crunchbase enrichment" recurs as an idea:
+
+- `crunchbase_org` keys on a **Crunchbase organisation URL**, but shared-company identity is the
+  normalised domain and nothing else, so there is no domain → Crunchbase-URL step to feed it — and
+  `crunchbase.com` is in `_NON_COMPANY_HOSTS` because discovery deliberately filters directory
+  aggregators out. Its output would land in `companies`, which carries no `tenant_id`: a wrong
+  firmographic there is wrong for *every* tenant.
+- `company_search` had 42 total runs across 2 users. An abandoned actor is a dependency that
+  disappears without notice, and this one would have fed net-new Account creation.
+- Neither could be run even once (see the operator blocker below), so wiring meant writing a parser
+  against an output shape nobody has observed — exactly how `phone_finder` shipped reading key
+  spellings the actor never emitted.
+
+Re-adding either is one line plus a consumer. Doing it on a guess is the part that costs.
+
+**Operator blocker, 2026-08-20:** both remaining actors 403 `full-permission-actor-not-approved` on
+*both* configured Apify accounts, and the key that previously worked now 401s. The integration
+therefore delivers nothing in production right now. Key rotation cannot fix either half — approval
+is per account and needs a click in the console; a revoked key needs replacing. Until both are
+cleared, `--run` cannot pass and no new actor can be validated against real output.
 
 ## Drafted copy (`nexus/agents/copy.py`)
 

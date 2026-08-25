@@ -2,9 +2,13 @@
 """Apify actors as a provider seam.
 
 Apify is a marketplace of scrapers, each addressed by an actor id. We use it for the things that
-have no compliant public API — a phone number behind a LinkedIn profile, a Crunchbase organisation
-page — and expect to add more (outreach personalisation, call research). So the point of this module
-is that **adding an actor is a line in `ACTORS`, not a new integration**.
+have no compliant public API — a phone number behind a LinkedIn profile, the headline and recent
+posts that make outreach personal — and expect to add more. So the point of this module is that
+**adding an actor is a line in `ACTORS`, not a new integration**.
+
+The corollary, learned by leaving two actors registered and uncalled for months: *removing* one is
+also a line, so an actor with no consumer gets deleted rather than kept warm. See the note above
+``ACTORS``.
 
 Three properties carried over from the search-provider seam, each of which was learned the hard way
 elsewhere in this codebase:
@@ -39,13 +43,32 @@ _RETRY_BACKOFFS = (1.0, 3.0)
 _RETRY_STATUS = (500, 502, 503, 504)
 
 # Logical name -> actor id. Adding an actor is one entry here plus a caller; nothing else changes.
+#
+# **Every entry must have a caller** — pinned by `test_every_registered_actor_has_a_real_caller`.
+# A registered actor with no consumer is the worst of the three states: it does nothing, and it
+# still prints as a capability in `scripts/verify_apify_actors.py`, which is the one place an
+# operator looks to answer "what can this integration do". Two such entries were removed on
+# 2026-08-20 (`crunchbase_org` = PPUtGNTB6xB9dJ2di, `company_search` = ayZno82KNVAVaWMpg), and the
+# reasons are worth keeping, because "add Crunchbase enrichment" is a recurring idea:
+#
+# * `crunchbase_org` keys on a **Crunchbase organisation URL**. Shared-company identity is the
+#   normalised domain and nothing else (`companies/resolution.py`), so there is no domain ->
+#   Crunchbase-URL step to feed it, and `crunchbase.com` is in `_NON_COMPANY_HOSTS` because the
+#   discovery path deliberately filters directory aggregators out. Its output would land in
+#   `companies`, which carries no tenant_id — a wrong firmographic there is wrong for *every*
+#   tenant, in a subsystem that has already shipped six wrong-attribution bugs.
+# * `company_search` had 42 total runs across 2 users when it was registered. An abandoned actor is
+#   a dependency that disappears without notice, and this one would have fed net-new Account
+#   creation.
+#
+# Neither could be exercised even once: every configured account 403s
+# `full-permission-actor-not-approved` and the key that used to work now 401s. Wiring a parser
+# against an output shape nobody has observed is how `phone_finder` shipped reading key spellings
+# the actor never emitted — a working actor that extracted nothing, silently. Re-adding either is
+# one line plus a consumer; doing it on a guess is the part that costs.
 ACTORS: dict[str, str] = {
     # LinkedIn profile URL(s) -> contact phone numbers.
     "phone_finder": "5lnEEZaNNBD8VeFAN",
-    # Crunchbase organisation URL -> firmographics + funding history.
-    "crunchbase_org": "PPUtGNTB6xB9dJ2di",
-    # Country / employee size / industry / name -> company list, for net-new ICP discovery.
-    "company_search": "ayZno82KNVAVaWMpg",
     # LinkedIn profile URL(s) -> headline, summary, recent posts, interests. Feeds person-level
     # personalization for email and call scripts (nexus/personalization/apify_provider.py).
     # NOTE: like phone_finder, this actor requires its permissions to be approved once per Apify
