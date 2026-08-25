@@ -7,8 +7,8 @@ rows, every tenant falls back to the env configuration exactly as before.
 ``secret`` holds a Fernet envelope, never plaintext. The table is tenant-scoped, so
 ``scripts/apply_rls.py`` applies an RLS policy to it on the next deploy with no manual work.
 
-Revision ID: 0044_crm_connections
-Revises: 0043_signal_subtype
+Revision ID: 0047_crm_connections
+Revises: 0046_payment_credentials
 Create Date: 2026-08-20
 """
 from __future__ import annotations
@@ -16,8 +16,15 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0044_crm_connections"
-down_revision = "0043_signal_subtype"
+# Renumbered 0044_crm_connections -> 0047_crm_connections on 2026-08-25. This chain and master's
+# (0044_provider_keys -> 0046_payment_credentials) both branched from
+# 0043_signal_subtype, so merging them produced TWO alembic heads and
+# `alembic upgrade head` refuses to run against those. Rebased onto master's head
+# rather than adding a merge revision: neither of these had been applied anywhere,
+# so there is no stamped database that remembers the old id.
+
+revision = "0047_crm_connections"
+down_revision = "0046_payment_credentials"
 branch_labels = None
 depends_on = None
 

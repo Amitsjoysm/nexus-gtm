@@ -6,8 +6,8 @@ changes, which move a customer's data to a different destination and so must be 
 Tenant-scoped, unlike ``billing_audit_log``: the reader here is the workspace admin, not the
 platform operator, so ``scripts/apply_rls.py`` enrolling it is the desired behaviour.
 
-Revision ID: 0045_audit_log
-Revises: 0044_crm_connections
+Revision ID: 0048_audit_log
+Revises: 0047_crm_connections
 Create Date: 2026-08-21
 """
 from __future__ import annotations
@@ -15,8 +15,15 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0045_audit_log"
-down_revision = "0044_crm_connections"
+# Renumbered 0045_audit_log -> 0048_audit_log on 2026-08-25. This chain and master's
+# (0044_provider_keys -> 0046_payment_credentials) both branched from
+# 0043_signal_subtype, so merging them produced TWO alembic heads and
+# `alembic upgrade head` refuses to run against those. Rebased onto master's head
+# rather than adding a merge revision: neither of these had been applied anywhere,
+# so there is no stamped database that remembers the old id.
+
+revision = "0048_audit_log"
+down_revision = "0047_crm_connections"
 branch_labels = None
 depends_on = None
 

@@ -216,6 +216,21 @@ def _soql_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _soql_like(value: str) -> str:
+    """Escape a value that will sit inside a SOQL LIKE pattern.
+
+    :func:`_soql_escape` handles the quote, which is the injection. This handles the two characters
+    that are *wildcards* inside LIKE: ``%`` matches any run and ``_`` matches any single character.
+    Neither is dangerous, but both are wrong — a domain containing an underscore silently matches
+    accounts it should not, and the caller is resolving which of the customer's accounts to write
+    to. Matching the wrong one pushes a contact onto somebody else's record.
+
+    Carried over from the deployment-global Salesforce connector that was not merged; the hardening
+    was the one thing that branch had and this one did not.
+    """
+    return _soql_escape(value).replace("%", "\\%").replace("_", "\\_")
+
+
 class SalesforceConnector(CRMConnector):
     """Real Salesforce CRM connector (OAuth2 + REST).
 
@@ -332,7 +347,7 @@ class SalesforceConnector(CRMConnector):
     async def _find_account_by_domain(self, domain: str) -> str | None:
         st, body = await self._query(
             "SELECT Id FROM Account WHERE Website LIKE "
-            f"'%{_soql_escape(domain)}%' LIMIT 1"
+            f"'%{_soql_like(domain)}%' LIMIT 1"
         )
         if st == 200 and body.get("records"):
             return body["records"][0].get("Id")

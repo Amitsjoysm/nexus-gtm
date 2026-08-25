@@ -85,7 +85,7 @@ nexus/api/schemas.py               (edit) CRMConnectionIn / Out / TestOut
 nexus/api/routers/integrations.py  (edit) 4 endpoints + 3 call sites + sync-status fix
 nexus/plays/engine.py              (edit) per-tenant resolution
 nexus/workers/tasks.py             (edit) per-tenant resolution — the leak fix
-migrations/versions/0044_crm_connections.py (new)
+migrations/versions/0047_crm_connections.py (new)
 ```
 
 ### 2.1 Sealing — `nexus/ingestion/crm_crypto.py`
@@ -122,7 +122,7 @@ multi-field bundle (an OAuth token set later) without a migration.
 RLS needs no manual work: `scripts/apply_rls.py::_tenant_tables()` walks
 `Base.metadata.sorted_tables` and covers every table carrying `tenant_id`.
 
-Migration `0044_crm_connections`, `down_revision = "0043_signal_subtype"`.
+Migration `0047_crm_connections`, `down_revision = "0043_signal_subtype"`.
 
 ### 2.3 Resolution — the core refactor
 

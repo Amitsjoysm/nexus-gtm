@@ -988,3 +988,122 @@ async def cancel_tenant_subscription(
         await session.commit()
         return {"tenant_id": tenant_id, "plan_id": sub.plan_id, "status": sub.status,
                 "cancel_at_period_end": bool(sub.cancel_at_period_end)}
+
+
+# ---- authoring a sellable plan -------------------------------------------------------------------
+# Until this existed, a ninth public tier needed a `plans.py` edit and a deploy. `CustomPlanDialog`
+# could build a bespoke per-tenant deal, but a custom plan is excluded from `GET /billing/plans` and
+# refused by checkout with a 409 — so there was no path from "we want to sell a new tier" to a
+# customer buying it, short of shipping code.
+
+
+class SellablePlanIn(BaseModel):
+    # `extra="forbid"`, so a body cannot smuggle `plan_class` and mint an `unlimited` or `internal`
+    # plan by typing a string. The class is decided by the service, not by the request.
+    model_config = {"extra": "forbid"}
+
+    plan_id: str
+    name: str
+    base_plan_id: str
+    base_price_cents: int
+    included_credits: int
+    description: str = ""
+    seat_price_cents: int | None = None
+    currency: str = "USD"
+    interval: str = "month"
+    max_seats: int | None = None
+    trial_days: int = 0
+    sort_order: int | None = None
+    # Draft by default: a plan is invisible to the price list until someone publishes it, so the
+    # ladder cannot gain a half-configured tier the moment the form is submitted.
+    status: str = "draft"
+    # capability_id -> field overrides, layered on top of the cloned base. This is what makes a
+    # cheaper tier cheaper: turn `module.*` off here rather than leaving it to catalog defaults,
+    # which are permissive and would silently grant nearly everything.
+    entitlement_overrides: dict[str, dict] = {}
+
+
+class PlanStatusIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    status: str
+
+
+@router.post("/plans", status_code=status.HTTP_201_CREATED)
+async def create_sellable_plan_endpoint(
+    body: SellablePlanIn,
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> dict:
+    """Create a plan the public price list can sell.
+
+    Gated on `pricing.write`, the same permission that edits a rate card: this sets a price
+    customers pay. Entitlements are cloned from `base_plan_id` rather than started empty, because
+    `resolve_entitlement` falls back to permissive catalog defaults for anything a plan does not
+    list — an empty new plan would grant nearly everything, which is the opposite of what a cheaper
+    tier is for.
+
+    Returns a `warning` when the included credits look expensive against the price. It warns rather
+    than refuses: a rate card below cost is an error, but a *plan* below the cost of its own credits
+    is a normal commercial decision, and a hard floor would refuse the `free` tier that already
+    exists.
+    """
+    from nexus.billing.plan_authoring import PlanAuthoringError, create_sellable_plan
+
+    async with get_sessionmaker()() as session:
+        try:
+            result = await create_sellable_plan(
+                session,
+                plan_id=body.plan_id,
+                name=body.name,
+                base_plan_id=body.base_plan_id,
+                base_price_cents=body.base_price_cents,
+                included_credits=body.included_credits,
+                description=body.description,
+                seat_price_cents=body.seat_price_cents,
+                currency=body.currency,
+                interval=body.interval,
+                max_seats=body.max_seats,
+                trial_days=body.trial_days,
+                sort_order=body.sort_order,
+                status=body.status,
+                entitlement_overrides=body.entitlement_overrides or None,
+            )
+        except PlanAuthoringError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        await record_admin_action(
+            session, actor=principal.user_id, action="plan.create",
+            target=result["plan_id"], after=result,
+        )
+        await session.commit()
+    return result
+
+
+@router.put("/plans/{plan_id}/status")
+async def set_sellable_plan_status(
+    plan_id: str,
+    body: PlanStatusIn,
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> dict:
+    """Publish a plan to the price list, or hold it.
+
+    `draft` is the hold: the plan leaves the price list and existing subscribers are untouched,
+    because entitlements resolve from the plan row rather than from what is currently on sale. That
+    is the difference between holding and retiring, and it is the one an operator wants when a price
+    is wrong while customers are mid-purchase.
+    """
+    from nexus.billing.plan_authoring import PlanAuthoringError, set_plan_status
+
+    async with get_sessionmaker()() as session:
+        before = await session.get(BillingPlan, plan_id)
+        was = before.status if before is not None else None
+        try:
+            plan = await set_plan_status(session, plan_id, body.status)
+        except PlanAuthoringError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        await record_admin_action(
+            session, actor=principal.user_id, action="plan.status",
+            target=plan_id, before={"status": was}, after={"status": plan.status},
+        )
+        await session.commit()
+        return {"plan_id": plan_id, "status": plan.status,
+                "sellable": plan.status == "active"}

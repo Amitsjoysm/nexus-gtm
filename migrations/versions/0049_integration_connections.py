@@ -10,8 +10,8 @@ Existing rows are CRM by definition, so ``kind`` backfills to 'crm' via the serv
 rename preserves every row. The uniqueness rule moves from "one connection per tenant" to "one
 connection per tenant per kind", which is what lets a tenant hold a CRM and a SEP credential.
 
-Revision ID: 0046_integration_connections
-Revises: 0045_audit_log
+Revision ID: 0049_integration_connections
+Revises: 0048_audit_log
 Create Date: 2026-08-21
 """
 from __future__ import annotations
@@ -19,8 +19,15 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0046_integration_connections"
-down_revision = "0045_audit_log"
+# Renumbered 0046_integration_connections -> 0049_integration_connections on 2026-08-25. This chain and master's
+# (0044_provider_keys -> 0046_payment_credentials) both branched from
+# 0043_signal_subtype, so merging them produced TWO alembic heads and
+# `alembic upgrade head` refuses to run against those. Rebased onto master's head
+# rather than adding a merge revision: neither of these had been applied anywhere,
+# so there is no stamped database that remembers the old id.
+
+revision = "0049_integration_connections"
+down_revision = "0048_audit_log"
 branch_labels = None
 depends_on = None
 

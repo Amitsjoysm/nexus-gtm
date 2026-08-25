@@ -84,53 +84,15 @@ async def create_custom_plan(
     await session.flush()
 
     # Clone the base plan's entitlements, then layer the negotiated overrides on top.
-    base_ents = (
-        await session.scalars(
-            select(BillingPlanEntitlement).where(
-                BillingPlanEntitlement.plan_id == base_plan_id
-            )
-        )
-    ).all()
-    existing = {
-        e.capability_id: e
-        for e in (
-            await session.scalars(
-                select(BillingPlanEntitlement).where(
-                    BillingPlanEntitlement.plan_id == plan_id
-                )
-            )
-        ).all()
-    }
-    overrides = entitlement_overrides or {}
-    cloned = 0
-    for src in base_ents:
-        row = existing.get(src.capability_id)
-        if row is None:
-            row = BillingPlanEntitlement(
-                plan_id=plan_id, capability_id=src.capability_id
-            )
-            session.add(row)
-            existing[src.capability_id] = row
-        for field in (
-            "mode", "quota", "soft_limit_pct", "hard_limit", "reset_policy",
-            "burst_limit", "rate_limit", "cooldown_s", "overage_price_credits",
-            "feature_flag", "trial_quota",
-        ):
-            setattr(row, field, getattr(src, field))
-        cloned += 1
+    # Shared with `plan_authoring.create_sellable_plan`: a second copy would drift, and the first
+    # thing to drift would be WHICH FIELDS get carried, which is invisible until a customer turns
+    # out to be on the wrong quota.
+    from nexus.billing.plan_authoring import clone_entitlements
 
-    applied = 0
-    for capability_id, fields in overrides.items():
-        row = existing.get(capability_id)
-        if row is None:
-            row = BillingPlanEntitlement(plan_id=plan_id, capability_id=capability_id)
-            session.add(row)
-            existing[capability_id] = row
-        for field, value in fields.items():
-            if hasattr(row, field):
-                setattr(row, field, value)
-        applied += 1
-    await session.flush()
+    cloned, applied = await clone_entitlements(
+        session, from_plan_id=base_plan_id, to_plan_id=plan_id,
+        overrides=entitlement_overrides,
+    )
 
     provider_refs: dict = {}
     if publish_to_provider:

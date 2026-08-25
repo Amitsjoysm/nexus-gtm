@@ -40,7 +40,7 @@ tokens, and source-DB DSNs. Use its `seal_text` / `unseal_text` / `fernet_for`.
 | `nexus/core/audit.py` *(create)* | `audit()` — one structured line |
 | `nexus/models/integration.py` *(create)* | `CrmConnection` |
 | `nexus/models/__init__.py` *(modify)* | Register + export |
-| `migrations/versions/0044_crm_connections.py` *(create)* | The table |
+| `migrations/versions/0047_crm_connections.py` *(create)* | The table |
 | `nexus/ingestion/crm.py` *(modify)* | `CRMTestResult` + `test_connection()`; split globals |
 | `nexus/ingestion/crm_credentials.py` *(create)* | Store/load/clear + resolve + cache |
 | `nexus/api/schemas.py` *(modify)* | `CRMConnectionIn/Out/TestOut` |
@@ -245,7 +245,7 @@ def audit(action: str, *, tenant_id: str, actor: str | None = None, **fields) ->
 
 ## Task 3: `CrmConnection` model + migration 0044
 
-**Files:** Create `nexus/models/integration.py`, `migrations/versions/0044_crm_connections.py`;
+**Files:** Create `nexus/models/integration.py`, `migrations/versions/0047_crm_connections.py`;
 Modify `nexus/models/__init__.py`
 
 - [ ] **Step 1: Write the failing test** — append:
@@ -320,7 +320,7 @@ class CrmConnection(IdMixin, TimestampMixin, TenantScoped, Base):
 
 - [ ] **Step 5: Run to verify pass**
 
-- [ ] **Step 6: Create `migrations/versions/0044_crm_connections.py`**
+- [ ] **Step 6: Create `migrations/versions/0047_crm_connections.py`**
 
 ```python
 """Per-tenant CRM credentials: crm_connections.
@@ -332,7 +332,7 @@ rows, every tenant falls back to the env configuration exactly as before.
 ``secret`` holds a Fernet envelope, never plaintext. The table is tenant-scoped, so
 ``scripts/apply_rls.py`` applies an RLS policy to it on the next deploy with no manual work.
 
-Revision ID: 0044_crm_connections
+Revision ID: 0047_crm_connections
 Revises: 0043_signal_subtype
 Create Date: 2026-08-20
 """
@@ -341,7 +341,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0044_crm_connections"
+revision = "0047_crm_connections"
 down_revision = "0043_signal_subtype"
 branch_labels = None
 depends_on = None
@@ -374,7 +374,7 @@ def downgrade() -> None:
 ```
 
 - [ ] **Step 7: Verify single head** — `python -m alembic heads`
-      Expected: exactly `0044_crm_connections (head)`.
+      Expected: exactly `0047_crm_connections (head)`.
 
 > **Do not verify the migration by running `alembic upgrade head` against your dev database.**
 > If that file already has tables (the app creates them on startup), the chain fails at
@@ -1547,7 +1547,7 @@ export interface CRMConnectionTest {
 
 ## Task 10: Docs and full-suite verification
 
-- [ ] **Step 1:** Update the Migrations paragraph in `CLAUDE.md` to name `0044_crm_connections` on
+- [ ] **Step 1:** Update the Migrations paragraph in `CLAUDE.md` to name `0047_crm_connections` on
       top of `0043_signal_subtype`, and add a line to the repository-layout section pointing at
       `nexus/ingestion/crm_credentials.py` as the per-tenant CRM seam.
 - [ ] **Step 2: Full suite** — `python -m pytest tests/ -q` (~35 min). Read the summary line. Do

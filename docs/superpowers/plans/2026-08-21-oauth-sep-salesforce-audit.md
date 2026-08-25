@@ -115,7 +115,7 @@ def get_integration_settings() -> IntegrationSettings:
 
 The `nexus.audit` logger stays (operators grep it); the table is what a workspace admin can read.
 
-**Files:** Create `nexus/models/audit.py`, `migrations/versions/0045_audit_log.py`; modify
+**Files:** Create `nexus/models/audit.py`, `migrations/versions/0048_audit_log.py`; modify
 `nexus/core/audit.py`, `nexus/models/__init__.py`, `nexus/api/routers/workspace.py`,
 `nexus/api/schemas.py`
 
@@ -235,7 +235,7 @@ async def record_audit(
 Implementation notes: `json.dumps(meta, default=str)` round-trip to guarantee the JSON column
 accepts it; wrap the whole body in `try/except Exception` logging at ERROR.
 
-- [ ] **Step 5: Migration `0045_audit_log.py`**, `down_revision = "0044_crm_connections"`.
+- [ ] **Step 5: Migration `0048_audit_log.py`**, `down_revision = "0047_crm_connections"`.
 
 - [ ] **Step 6: `GET /workspace/audit`** — `manage_workspace`, newest-first, `limit` (default 100,
   max 500), optional `action` filter. Schema `AuditEntryOut`.
@@ -259,7 +259,7 @@ against a generic table was correct *then* and is wrong *now*. `crm_connections`
 shipped outside this branch.
 
 **Files:** modify `nexus/models/integration.py`, `nexus/ingestion/crm_credentials.py`;
-create `migrations/versions/0046_integration_connections.py`
+create `migrations/versions/0049_integration_connections.py`
 
 - [ ] **Step 1: Test that both kinds coexist for one tenant**
 
