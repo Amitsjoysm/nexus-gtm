@@ -3,17 +3,17 @@ from __future__ import annotations
 
 import pytest
 
-from nexus.integrations.sep import OutreachConnector, set_sep_connector
+from nexus.integrations.sep import StubSEPConnector, set_sep_connector
 from tests.conftest import auth, signup
 
 
 @pytest.fixture(autouse=True)
 def recording_sep():
     """Use a fresh recording SEP connector so pushes are observable and isolated."""
-    connector = OutreachConnector()
+    connector = StubSEPConnector()
     set_sep_connector(connector)
     yield connector
-    set_sep_connector(OutreachConnector())
+    set_sep_connector(StubSEPConnector())
 
 
 async def test_crm_sync_upserts_accounts(client):
@@ -49,7 +49,9 @@ async def test_sep_push_records_contact(client, recording_sep):
     r = await client.post("/api/integrations/sep/push", headers=h, json={
         "sequence": "enterprise", "contact_id": contact["id"]})
     assert r.status_code == 200, r.text
-    assert r.json()["ok"] is True and r.json()["platform"] == "outreach"
+    # "stub", not "outreach": an unconfigured deployment now names the stub rather than a
+    # platform it never reached.
+    assert r.json()["ok"] is True and r.json()["platform"] == "stub"
     assert recording_sep.pushed[0]["email"] == "jane@globex.com"
     assert recording_sep.pushed[0]["sequence"] == "enterprise"
 

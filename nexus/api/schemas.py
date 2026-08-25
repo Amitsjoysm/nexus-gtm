@@ -731,6 +731,73 @@ class CRMSyncStatusOut(BaseModel):
     synced: int        # accounts already up to date
 
 
+# ---- workspace audit trail ----
+class AuditEntryOut(BaseModel):
+    """One audited action. ``meta`` never carries a secret — see nexus/core/audit.py."""
+
+    id: str
+    action: str
+    actor_user_id: str | None = None
+    actor_email: str | None = None
+    target_type: str = ""
+    target_id: str = ""
+    meta: dict = Field(default_factory=dict)
+    created_at: str
+
+
+# ---- integrations: per-tenant CRM connection ----
+class CRMConnectionIn(BaseModel):
+    """A tenant's own CRM credentials.
+
+    ``access_token`` is write-only: omit it or send a blank string to keep the stored secret, so
+    an admin can change ``api_base`` without re-entering the token.
+    """
+
+    provider: str = Field(default="hubspot", max_length=16)
+    access_token: str | None = Field(default=None, max_length=512)
+    api_base: str = Field(default="", max_length=255)
+
+
+class CRMConnectionOut(BaseModel):
+    """Everything the server will say about a CRM connection. The secret is not on this list,
+    and must never be added to it."""
+
+    provider: str                     # effective provider
+    source: str                       # tenant | env | none
+    has_credentials: bool = False     # a secret is stored — never the secret itself
+    status: str = "none"              # none | unverified | connected | error
+    api_base: str = ""
+    verified_at: str | None = None
+    last_error: str | None = None
+    updated_at: str | None = None
+
+
+class CRMConnectionTestOut(BaseModel):
+    ok: bool
+    label: str = ""
+    detail: str = ""
+
+
+# ---- integrations: per-tenant SEP connection ----
+class SEPConnectionIn(BaseModel):
+    """A tenant's own SEP credentials. ``api_key`` is write-only: omit or blank to keep it."""
+
+    provider: str = Field(default="salesloft", max_length=16)
+    api_key: str | None = Field(default=None, max_length=512)
+
+
+class SEPConnectionOut(BaseModel):
+    """Everything the server will say about a SEP connection — the secret is not on this list."""
+
+    provider: str
+    source: str                       # tenant | default
+    has_credentials: bool = False
+    status: str = "none"              # none | unverified | connected | error
+    verified_at: str | None = None
+    last_error: str | None = None
+    updated_at: str | None = None
+
+
 # ---- integrations: SEP ----
 class SEPPushRequest(BaseModel):
     sequence: str = "default"
@@ -783,3 +850,9 @@ class ActivityItemOut(BaseModel):
     account_name: str | None = None
     at: str              # ISO-8601 timestamp, newest-first in the response
     tone: str = "neutral"  # neutral | info | success | warning | critical
+
+
+class OAuthStartOut(BaseModel):
+    """Where to send the admin's browser to authorize this deployment's app."""
+
+    authorize_url: str

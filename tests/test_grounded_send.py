@@ -14,7 +14,7 @@ import pytest
 from nexus.agents.llm import get_llm_provider
 from nexus.agents.runtime import AgentRuntime
 from nexus.integrations import sep
-from nexus.integrations.sep import OutreachConnector, set_sep_connector
+from nexus.integrations.sep import StubSEPConnector, set_sep_connector
 from nexus.models.account import Account, Contact
 from nexus.models.orchestration import (
     APPROVAL_PENDING,
@@ -53,9 +53,9 @@ async def _seed(ts, tenant_id, *, email: str = "jane@acme.co") -> Account:
 
 @pytest.fixture(autouse=True)
 def _fresh_sep():
-    set_sep_connector(OutreachConnector())
+    set_sep_connector(StubSEPConnector())
     yield
-    set_sep_connector(OutreachConnector())
+    set_sep_connector(StubSEPConnector())
 
 
 # -- the research stub makes drafts grounded offline ---------------------------------

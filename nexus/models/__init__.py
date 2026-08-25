@@ -22,6 +22,8 @@ from nexus.models.billing import (
 )
 from nexus.models.chat import ChatMessage, ChatSession, CustomFieldDef
 from nexus.models.identity import Membership, Tenant, User, Workspace
+from nexus.models.audit import AuditLog
+from nexus.models.integration import IntegrationConnection
 from nexus.models.jobs import DeadLetterJob
 from nexus.models.mfa import MFARecoveryCode, UserMFA
 from nexus.models.intelligence import AccountScore, AgentRun
@@ -59,6 +61,8 @@ __all__ = [
     "Workspace",
     "User",
     "Membership",
+    "IntegrationConnection",
+    "AuditLog",
     "Account",
     "Contact",
     "NotificationPreference",

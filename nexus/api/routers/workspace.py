@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
+    AuditEntryOut,
     AutomationSettingsIn,
     AutomationSettingsOut,
     EmailAccountIn,
@@ -29,9 +30,52 @@ from nexus.api.schemas import (
 from nexus.core.rbac import Permission
 from nexus.core.security import hash_password
 from nexus.core.tenancy import TenantSession
+from nexus.models.audit import AuditLog
 from nexus.models.identity import Membership, Tenant, User, Workspace
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
+
+
+# ---- audit trail ----
+@router.get("/audit", response_model=list[AuditEntryOut])
+async def list_audit(
+    action: str | None = None,
+    limit: int = 100,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> list[AuditEntryOut]:
+    """This workspace's audit trail, newest first.
+
+    Capped rather than paginated: the trail is low-volume (credential changes, not page views), and
+    an uncapped read of a JSON column is a memory footgun for a workspace that has been running
+    for years. ``limit`` is clamped server-side — a client cannot ask for the whole table.
+    """
+    limit = max(1, min(limit, 500))
+    stmt = ts.select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
+    if action:
+        stmt = stmt.where(AuditLog.action == action)
+    rows = list((await ts.session.scalars(stmt)).all())
+
+    # Resolve actor emails in one query — the trail is unreadable when every row says "u_a1b2c3".
+    actor_ids = {r.actor_user_id for r in rows if r.actor_user_id}
+    emails: dict[str, str] = {}
+    if actor_ids:
+        users = (await ts.session.scalars(select(User).where(User.id.in_(actor_ids)))).all()
+        emails = {u.id: u.email for u in users}
+
+    return [
+        AuditEntryOut(
+            id=r.id,
+            action=r.action,
+            actor_user_id=r.actor_user_id,
+            actor_email=emails.get(r.actor_user_id or ""),
+            target_type=r.target_type,
+            target_id=r.target_id,
+            meta=r.meta or {},
+            created_at=r.created_at.isoformat() if r.created_at else "",
+        )
+        for r in rows
+    ]
 
 
 # ---- workspaces ----

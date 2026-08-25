@@ -5,18 +5,23 @@ import {
   Badge,
   Button,
   Card,
+  ErrorState,
   Field,
   Icons,
   IconButton,
   Input,
+  Modal,
   Select,
+  Skeleton,
   useToast,
 } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
+import { useApi } from "@/hooks/useApi";
 import { ApiError } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import type {
   CRMAccountInput,
+  CRMConnection,
   CRMSyncResponse,
   SEPPushResponse,
 } from "@/lib/types";
@@ -53,14 +58,230 @@ export function IntegrationsPage() {
         description="Connect your CRM and sales engagement tools. Import accounts and push contacts into sequences."
       />
       <div className={styles.grid}>
-        <CrmCard />
+        <CrmConnectionCard />
         <SepCard />
       </div>
     </div>
   );
 }
 
-function CrmCard() {
+/** Providers a workspace can pick. Salesforce is listed but not connectable: the adapter is a
+ *  stub, so accepting a token would store a secret that does nothing. */
+const CRM_PROVIDERS: { value: string; label: string; disabled?: boolean }[] = [
+  { value: "hubspot", label: "HubSpot" },
+  { value: "salesforce", label: "Salesforce — coming soon", disabled: true },
+];
+
+/** Badge tone + copy per connection state, so the header reads honestly at a glance. */
+function statusChip(c: CRMConnection): { tone: "success" | "warning" | "danger" | "neutral"; text: string } {
+  if (c.source === "env") return { tone: "neutral", text: "Using deployment default" };
+  if (c.source === "none") return { tone: "neutral", text: "Not connected" };
+  if (c.status === "connected") return { tone: "success", text: "Connected" };
+  if (c.status === "error") return { tone: "danger", text: "Connection error" };
+  return { tone: "warning", text: "Not verified" };
+}
+
+function CrmConnectionCard() {
+  const api = useApiClient();
+  const toast = useToast();
+  const state = useApi<CRMConnection>((signal) => api.crmConnection(signal), []);
+  const [provider, setProvider] = useState("hubspot");
+  const [token, setToken] = useState("");
+  const [apiBase, setApiBase] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  const conn = state.data;
+
+  async function onSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.setCrmConnection({
+        provider,
+        access_token: token.trim() || null,
+        api_base: apiBase.trim(),
+      });
+      setToken("");
+      state.refetch();
+      toast.success("CRM saved", "Run a connection test to verify the credentials.");
+    } catch (err) {
+      toast.error("Couldn't save", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onTest() {
+    setTesting(true);
+    try {
+      const res = await api.testCrmConnection();
+      state.refetch();
+      if (res.ok) toast.success("Connection verified", res.label || res.detail);
+      else toast.error("Connection failed", res.detail);
+    } catch (err) {
+      toast.error("Test failed", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function onClear() {
+    try {
+      await api.clearCrmConnection();
+      setConfirmClear(false);
+      setToken("");
+      state.refetch();
+      toast.success("CRM disconnected", "Syncs now use the deployment default.");
+    } catch (err) {
+      toast.error("Couldn't disconnect", err instanceof ApiError ? err.detail : "Please try again.");
+    }
+  }
+
+  const chip = conn ? statusChip(conn) : null;
+
+  return (
+    <Card padding="lg" className={styles.card}>
+      <div className={styles.cardHead}>
+        <span className={styles.cardIcon} aria-hidden="true">
+          <Icons.PlugIcon />
+        </span>
+        <div className={styles.cardHeadText}>
+          <h2 className={styles.cardTitle}>CRM connection</h2>
+          <p className={styles.cardDesc}>
+            Connect your own CRM. Credentials are encrypted and never shown again after saving.
+          </p>
+        </div>
+        {chip && (
+          <Badge tone={chip.tone} dot>
+            {chip.text}
+          </Badge>
+        )}
+      </div>
+
+      {state.loading && (
+        <div className={styles.form} aria-busy="true">
+          <Skeleton height={60} />
+          <Skeleton height={60} />
+          <Skeleton height={36} width="60%" />
+        </div>
+      )}
+
+      {state.error && (
+        <ErrorState
+          title="Couldn't load the CRM connection"
+          message={state.error.detail}
+          onRetry={state.refetch}
+          compact
+        />
+      )}
+
+      {conn && !state.loading && (
+        <>
+          <form className={styles.form} onSubmit={onSave} noValidate>
+            <Field label="Provider">
+              <Select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                options={CRM_PROVIDERS}
+              />
+            </Field>
+
+            <Field
+              label="Private app access token"
+              required={!conn.has_credentials}
+              hint={
+                conn.has_credentials
+                  ? "A token is saved. Leave this blank to keep it."
+                  : "In HubSpot: Settings → Integrations → Private Apps."
+              }
+            >
+              <Input
+                type="password"
+                autoComplete="off"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder={conn.has_credentials ? "••••••••  (saved)" : "pat-na1-…"}
+              />
+            </Field>
+
+            <details className={styles.advanced}>
+              <summary className={styles.summary}>Advanced</summary>
+              <Field label="API base URL" hint="Only for a regional host or a proxy.">
+                <Input
+                  value={apiBase}
+                  onChange={(e) => setApiBase(e.target.value)}
+                  placeholder={conn.api_base || "https://api.hubapi.com"}
+                />
+              </Field>
+            </details>
+
+            {conn.last_error && (
+              <p className={styles.errorNote} role="status">
+                {conn.last_error}
+              </p>
+            )}
+            {conn.status === "connected" && conn.verified_at && (
+              <p className={styles.okNote} role="status">
+                Last verified {new Date(conn.verified_at).toLocaleString()}.
+              </p>
+            )}
+
+            <div className={styles.actions}>
+              <div className={styles.actionGroup}>
+                <Button type="submit" loading={saving}>
+                  Save credentials
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  iconLeft={<Icons.ShieldCheckIcon />}
+                  loading={testing}
+                  onClick={onTest}
+                >
+                  Test connection
+                </Button>
+              </div>
+              {conn.source === "tenant" && (
+                <Button type="button" variant="ghost" onClick={() => setConfirmClear(true)}>
+                  Disconnect
+                </Button>
+              )}
+            </div>
+          </form>
+
+          <details className={styles.advanced}>
+            <summary className={styles.summary}>Import accounts manually</summary>
+            <ManualImportForm />
+          </details>
+        </>
+      )}
+
+      <Modal
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        title="Disconnect CRM?"
+        description="Stored credentials are deleted. Syncs fall back to the deployment default, which may point at a different CRM."
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmClear(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={onClear}>
+              Disconnect CRM
+            </Button>
+          </>
+        }
+      >
+        <p>You will need the access token again to reconnect.</p>
+      </Modal>
+    </Card>
+  );
+}
+
+function ManualImportForm() {
   const api = useApiClient();
   const toast = useToast();
   const [source, setSource] = useState<"salesforce" | "hubspot">("salesforce");
@@ -110,20 +331,7 @@ function CrmCard() {
   }
 
   return (
-    <Card padding="lg" className={styles.card}>
-      <div className={styles.cardHead}>
-        <span className={styles.cardIcon} aria-hidden="true">
-          <Icons.BuildingIcon />
-        </span>
-        <div>
-          <h2 className={styles.cardTitle}>CRM import</h2>
-          <p className={styles.cardDesc}>
-            Push accounts from your CRM into InfoJoy. Existing accounts are matched and updated.
-          </p>
-        </div>
-      </div>
-
-      <form className={styles.form} onSubmit={onSync} noValidate>
+    <form className={styles.form} onSubmit={onSync} noValidate>
         <Field label="Source">
           <Select
             value={source}
@@ -223,8 +431,7 @@ function CrmCard() {
             </span>
           </div>
         )}
-      </form>
-    </Card>
+    </form>
   );
 }
 

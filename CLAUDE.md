@@ -155,6 +155,38 @@ touches Account/Contact/Inbox/Cadence.
 - New provider credentials go in `NEXUS_NETWORK_*` env vars — inert (clear 400) until set,
   never a fake fallback.
 
+## CRM connections (`nexus/ingestion/crm_credentials.py`)
+
+CRM credentials used to be **deployment-global env only** (`NEXUS_CRM_PROVIDER` +
+`NEXUS_HUBSPOT_ACCESS_TOKEN`), memoized in one process-wide singleton by `get_crm_connector()`.
+So every tenant shared one HubSpot token, a customer could not connect their own CRM, and — the
+actual bug — `handle_sync_crm_due_accounts` resolved **one** connector and looped every tenant
+with it, pushing tenant A's accounts into whichever portal the deployment env named.
+
+- **`resolve_crm_connector(ts)` is the only thing request and worker paths should call.**
+  Precedence: an explicitly installed connector (`set_crm_connector` — the test seam) → the
+  tenant's stored credential → `get_crm_connector()`. That third step is why a deployment with
+  only env vars set behaves exactly as it did before this existed; tenant credentials are an
+  *override*, never a replacement.
+- **`crm.py` keeps two globals, not one.** `_connector` memoizes the env-built instance,
+  `_override` records a deliberate `set_crm_connector()`. They were one variable, which made
+  "is an override installed?" unanswerable — after any `get_crm_connector()` call on an
+  env-configured deployment it was non-`None`, so a naive check would skip tenant credentials
+  and silently re-create the shared-token bug.
+- Tokens are sealed by `crm_crypto.py` (over `core/crypto.py`, mirroring `sources/crypto.py`) and
+  appear in **no** response model — `_connection_out` in the router is the single place connection
+  state becomes JSON, which is what makes "the secret never leaves the server" checkable.
+  An unsealable secret is **tolerated** (like `network/crypto.py`, unlike `sources/crypto.py`):
+  it degrades to "reconnect your CRM", a state the admin can fix, and resolution falls back to env
+  rather than failing the sync.
+- **Salesforce is known but not live.** `SalesforceConnector.fetch_accounts` returns an injected
+  sample, so `PUT /crm/connection` 400s for it and `test_connection()` says so plainly. Storing a
+  credential we cannot use would be a silent no-op for the customer.
+- The resolution cache keys on `updated_at|provider|api_base` and **still reads the row every
+  call** — that lookup is how a worker notices a credential the API just changed. It buys instance
+  stability (the `MAX_RECORDED_PUSHES` buffers) and a skipped decrypt, not a skipped query. N+1
+  pressure is handled by hoisting resolution out of inner loops.
+
 ## Migrations
 
 Alembic under `migrations/versions/`. Head: `0042_account_next_refresh`. The chain is
@@ -163,7 +195,8 @@ Alembic under `migrations/versions/`. Head: `0042_account_next_refresh`. The cha
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
 `0031`–`0040` (page snapshots, notification preferences, feature flags, contact soft-delete,
 `companies`, proration, shared `people`, `crawl_verdict`, user suspension, digest delivery) →
-`0041` (`source_databases`) → `0042` (`accounts.next_refresh_at`). Every tenant-scoped table gets RLS via
+`0041` (`source_databases`) → `0042` (`accounts.next_refresh_at`) → `0043` (`signal_events.subtype`) →
+`0044` (`crm_connections`, per-tenant CRM credentials). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —

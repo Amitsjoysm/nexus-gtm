@@ -219,7 +219,7 @@ async def handle_sync_crm_due_accounts(payload: dict) -> dict:
     from sqlalchemy import or_, select
 
     from nexus.core.config import get_settings
-    from nexus.ingestion.crm import get_crm_connector
+    from nexus.ingestion import crm_credentials
     from nexus.ingestion.crm_sync import sync_account_to_crm
     from nexus.models.account import Account
     from nexus.models.identity import Tenant
@@ -257,10 +257,15 @@ async def handle_sync_crm_due_accounts(payload: dict) -> dict:
     for tenant_id, account_id in rows:
         by_tenant.setdefault(tenant_id, []).append(account_id)
 
-    connector = get_crm_connector()
     synced = 0
     for tid, account_ids in by_tenant.items():
         async with tenant_session(tid) as ts:
+            # Resolve ONCE per tenant, inside that tenant's session: each tenant syncs to its own
+            # CRM. Resolving once for the whole sweep — as this did before per-tenant credentials
+            # — pushed every tenant's accounts into whichever portal the deployment env named.
+            # Hoisted out of the account loop so a tenant with N due accounts still costs one
+            # credential lookup, not N.
+            connector = await crm_credentials.resolve_crm_connector(ts)
             for aid in account_ids:
                 account = await ts.get(Account, aid)
                 if account is None:
@@ -277,7 +282,7 @@ async def handle_sync_crm_account(payload: dict) -> dict:
     from datetime import datetime, timezone
 
     from nexus.core.config import get_settings
-    from nexus.ingestion.crm import get_crm_connector
+    from nexus.ingestion import crm_credentials
     from nexus.ingestion.crm_sync import sync_account_to_crm
     from nexus.models.account import Account
     from nexus.models.identity import Tenant
@@ -295,7 +300,9 @@ async def handle_sync_crm_account(payload: dict) -> dict:
         if account is None:
             return {"skipped": "account_missing"}
         res = await sync_account_to_crm(
-            ts, account, connector=get_crm_connector(), now=datetime.now(timezone.utc)
+            ts, account,
+            connector=await crm_credentials.resolve_crm_connector(ts),
+            now=datetime.now(timezone.utc),
         )
     return {"account_id": aid, "ok": res.ok}
 

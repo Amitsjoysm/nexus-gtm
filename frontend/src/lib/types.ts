@@ -1075,6 +1075,32 @@ export interface CRMSyncStatus {
   synced: number;
 }
 
+/** A tenant's own CRM connection. The access token is never returned by the API. */
+export interface CRMConnection {
+  provider: string;
+  /** Where the effective config comes from: the tenant's own row, deployment env, or nothing. */
+  source: "tenant" | "env" | "none";
+  has_credentials: boolean;
+  status: "none" | "unverified" | "connected" | "error";
+  api_base: string;
+  verified_at: string | null;
+  last_error: string | null;
+  updated_at: string | null;
+}
+
+/** `access_token` is write-only: omit it to keep the stored secret. */
+export interface CRMConnectionInput {
+  provider: string;
+  access_token?: string | null;
+  api_base?: string;
+}
+
+export interface CRMConnectionTest {
+  ok: boolean;
+  label: string;
+  detail: string;
+}
+
 // ---- live dashboard activity feed ----
 export type ActivityKind = "signal" | "alert" | "account_scored" | "agent_run";
 export type ActivityTone = "neutral" | "info" | "success" | "warning" | "critical";

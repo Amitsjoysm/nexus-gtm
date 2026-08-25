@@ -10,8 +10,8 @@ from __future__ import annotations
 from nexus.alerts.service import get_alert_service
 from nexus.core.tenancy import TenantSession
 from nexus.inbox.service import get_inbox_service
-from nexus.ingestion.crm import get_crm_connector
-from nexus.integrations.sep import get_sep_connector
+from nexus.ingestion import crm_credentials
+from nexus.integrations import sep_credentials
 from nexus.models.account import Account, Contact
 from nexus.models.signal import SignalEvent
 from nexus.models.workflow import Play, PlayRun
@@ -104,7 +104,9 @@ class PlaysEngine:
                 )
             elif atype == "sep_push":
                 contact = await ts.first(Contact, Contact.account_id == account.id)
-                res = await get_sep_connector().push_contact(
+                # This tenant's SEP, not the process's.
+                sep = await sep_credentials.resolve_sep_connector(ts)
+                res = await sep.push_contact(
                     sequence=action.get("sequence", "default"),
                     email=contact.email if contact else None,
                     payload={"account": account.name, "signal": signal.title},
@@ -112,12 +114,14 @@ class PlaysEngine:
                 outcomes.append({"type": "sep_push", "ok": res.ok, "platform": res.platform})
             elif atype == "crm_push":
                 contacts = await ts.list(Contact, Contact.account_id == account.id)
-                res = await get_crm_connector().push_account(account, contacts=contacts)
+                # Resolve once and reuse for both calls — this tenant's CRM, not the process's.
+                connector = await crm_credentials.resolve_crm_connector(ts)
+                res = await connector.push_account(account, contacts=contacts)
                 outcomes.append(
                     {"type": "crm_push", "ok": res.ok, "source": res.source}
                 )
                 if action.get("log_activity", True):
-                    await get_crm_connector().push_activity(
+                    await connector.push_activity(
                         account_id=account.crm_id or account.id,
                         kind="signal",
                         detail={"signal": signal.title, "play": play.name},

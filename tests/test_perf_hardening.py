@@ -30,9 +30,9 @@ async def test_crm_connector_recording_buffers_are_bounded():
 
 @pytest.mark.asyncio
 async def test_sep_connector_recording_buffer_is_bounded():
-    from nexus.integrations.sep import OutreachConnector
+    from nexus.integrations.sep import StubSEPConnector
 
-    conn = OutreachConnector()
+    conn = StubSEPConnector()
     conn.MAX_RECORDED_PUSHES = 25
     for i in range(60):
         await conn.push_contact(sequence="default", email=f"u{i}@x.y", payload={})

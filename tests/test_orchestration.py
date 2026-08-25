@@ -11,7 +11,7 @@ import pytest
 from nexus.agents.runtime import AgentRuntime
 from nexus.agents.llm import get_llm_provider
 from nexus.integrations import sep
-from nexus.integrations.sep import OutreachConnector, set_sep_connector
+from nexus.integrations.sep import StubSEPConnector, set_sep_connector
 from nexus.models.account import Account, Contact
 from nexus.models.identity import Tenant
 from nexus.models.orchestration import (
@@ -57,9 +57,9 @@ async def _seed(ts, tenant_id) -> Account:
 @pytest.fixture(autouse=True)
 def _fresh_sep():
     """Each test gets a clean recording connector so we can assert on .pushed."""
-    set_sep_connector(OutreachConnector())
+    set_sep_connector(StubSEPConnector())
     yield
-    set_sep_connector(OutreachConnector())
+    set_sep_connector(StubSEPConnector())
 
 
 # -- planner --------------------------------------------------------------------------
