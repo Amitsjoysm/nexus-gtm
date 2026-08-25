@@ -220,6 +220,11 @@ class InvoiceOut(BaseModel):
     total_cents: int
     finalized_at: str | None
     lines: list[InvoiceLineOut]
+    # The provider's hosted invoice and its PDF. Empty until the invoice has been collected, and
+    # empty forever on a deployment with no real payment provider — the UI shows the link only when
+    # there is one, because a button that opens nothing is worse than no button.
+    hosted_url: str = ""
+    pdf_url: str = ""
 
 
 @router.get("/credits", response_model=CreditsOut)
@@ -267,6 +272,8 @@ async def list_invoices(
             id=inv.id, number=inv.number, period_key=inv.period_key, status=inv.status,
             currency=inv.currency, total_cents=inv.total_cents,
             finalized_at=inv.finalized_at.isoformat() if inv.finalized_at else None,
+            hosted_url=(inv.meta or {}).get("hosted_invoice_url", ""),
+            pdf_url=(inv.meta or {}).get("invoice_pdf_url", ""),
             lines=[
                 InvoiceLineOut(
                     kind=ln.kind, capability_id=ln.capability_id, description=ln.description,
@@ -471,7 +478,7 @@ async def create_checkout(
     from nexus.billing.payments import (
         PaymentError,
         PaymentNotConfigured,
-        get_payment_provider,
+        resolve_payment_provider,
     )
 
     plan = await ts.session.get(BillingPlan, body.plan_id)
@@ -490,7 +497,7 @@ async def create_checkout(
     sub = await _current_subscription(ts)
     await _reject_if_admin_managed(ts, sub)
 
-    provider = get_payment_provider()
+    provider = await resolve_payment_provider()
     try:
         # The price object has to exist at the PSP before a Checkout line item can reference it.
         # ensure_plan_price is keyed on plan id + amount, so this is a lookup after the first
@@ -547,7 +554,7 @@ async def create_portal(
     from nexus.billing.payments import (
         PaymentError,
         PaymentNotConfigured,
-        get_payment_provider,
+        resolve_payment_provider,
     )
 
     sub = await _current_subscription(ts)
@@ -562,7 +569,7 @@ async def create_portal(
             "This workspace has no payment account yet. Start a subscription first.",
         )
 
-    provider = get_payment_provider()
+    provider = await resolve_payment_provider()
     try:
         session_out = await provider.create_billing_portal_session(
             customer_id=customer_id,

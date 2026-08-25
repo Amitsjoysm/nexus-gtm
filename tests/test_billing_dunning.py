@@ -65,6 +65,16 @@ class DecliningProvider:
         self.attempts += 1
         return PaymentResult(ok=False, provider=self.name, detail={"error": "card_declined"})
 
+    async def create_invoice(self, *, lines, **k):
+        """A dead card against a real invoice: the document is raised and finalized, and payment
+        fails, so it stays `open`. That is what Stripe does, and it is a better model of the
+        failure than a declined charge — the customer can still pay it from the hosted page,
+        which is exactly why dunning keeps retrying rather than voiding the debt."""
+        self.attempts += 1
+        return {"id": f"in_declined_{self.attempts}", "status": "open",
+                "hosted_url": "https://pay.test/in_declined", "pdf_url": "",
+                "amount_cents": sum(int(ln["amount_cents"]) for ln in lines)}
+
 
 async def test_a_due_invoice_is_retried(monkeypatch):
     from nexus.billing.dunning import run_dunning

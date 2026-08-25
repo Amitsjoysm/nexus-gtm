@@ -134,10 +134,10 @@ async def create_custom_plan(
 
     provider_refs: dict = {}
     if publish_to_provider:
-        from nexus.billing.payments import get_payment_provider
+        from nexus.billing.payments import resolve_payment_provider
 
         try:
-            provider_refs = await get_payment_provider().ensure_plan_price(
+            provider_refs = await (await resolve_payment_provider()).ensure_plan_price(
                 plan_id=plan_id, name=plan.name, amount_cents=plan.base_price_cents,
                 currency=plan.currency, interval=plan.interval,
             )

@@ -470,3 +470,235 @@ async def platform_overview(
         credits_granted=float(row.granted or 0.0),
         credits_spent=abs(float(row.spent or 0.0)),
     )
+
+
+# ---- the customer directory ----------------------------------------------------------------------
+# One place to find a workspace — by the email of anyone in it, or by its own name — and see what
+# it is on, what it has used, and what it owes. Before this the answer lived in four screens: the
+# Subscriptions tab knew the plan, /billing/usage was tenant-scoped and answered only for the
+# caller's own workspace, credits were visible nowhere outside a dialog, and "which workspace is
+# this person in?" had no surface at all.
+
+
+class CustomerRowOut(BaseModel):
+    tenant_id: str
+    workspace: str
+    plan_id: str
+    plan_name: str
+    status: str
+    users: int
+    # Whoever the search matched, so an operator who typed an email can see they found the right
+    # person rather than a workspace that merely contains someone with a similar address.
+    matched_email: str = ""
+    requests_this_period: int
+    credits_balance: float
+
+
+@router.get("/customers", response_model=list[CustomerRowOut])
+async def list_customers(
+    q: str = "",
+    limit: int = 50,
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
+) -> list[CustomerRowOut]:
+    """Search workspaces by name, slug, or the email of any member.
+
+    Runs on the PLATFORM sessionmaker: every table read here except `tenants` and `users` is
+    tenant-scoped, so under the RLS-bound app role this returns zero rows rather than an error.
+    That is the documented trap, and this subsystem has already walked into it twice.
+    """
+    from sqlalchemy import func, or_, select as _sel
+
+    from nexus.billing.rollups import period_start
+    from nexus.core.db import get_platform_sessionmaker, utcnow
+    from nexus.models.billing import (
+        BillingCreditLedger,
+        BillingPlan,
+        BillingSubscription,
+        BillingUsageEvent,
+    )
+    from nexus.models.identity import Membership, Tenant, User
+
+    q = (q or "").strip()
+    limit = max(1, min(int(limit or 50), 200))
+    since = period_start(utcnow())
+
+    async with get_platform_sessionmaker()() as session:
+        stmt = _sel(Tenant)
+        matched: dict[str, str] = {}
+        if q:
+            like = f"%{q}%"
+            # An email match resolves through membership, so searching for a person finds the
+            # workspace they are in — which is the question an operator granting credits actually
+            # has. Credits belong to a workspace, not to a person; the row says which one.
+            member_rows = (
+                await session.execute(
+                    _sel(Membership.tenant_id, User.email)
+                    .join(User, User.id == Membership.user_id)
+                    .where(User.email.ilike(like))
+                )
+            ).all()
+            matched = {row[0]: row[1] for row in member_rows}
+            clauses = [Tenant.name.ilike(like), Tenant.slug.ilike(like)]
+            if matched:
+                clauses.append(Tenant.id.in_(list(matched)))
+            stmt = stmt.where(or_(*clauses))
+        tenants = list((await session.scalars(stmt.limit(limit))).all())
+        if not tenants:
+            return []
+        ids = [t.id for t in tenants]
+
+        def _grouped(expr, model, *where):
+            return (
+                _sel(model.tenant_id, expr)
+                .where(model.tenant_id.in_(ids), *where)
+                .group_by(model.tenant_id)
+            )
+
+        subs = {
+            s.tenant_id: s
+            for s in (await session.scalars(
+                _sel(BillingSubscription).where(BillingSubscription.tenant_id.in_(ids))
+            )).all()
+        }
+        seats = dict((await session.execute(_grouped(func.count(), Membership))).all())
+        reqs = dict((await session.execute(
+            _grouped(func.count(), BillingUsageEvent, BillingUsageEvent.occurred_at >= since)
+        )).all())
+        credits = dict((await session.execute(
+            _grouped(func.coalesce(func.sum(BillingCreditLedger.delta), 0.0), BillingCreditLedger)
+        )).all())
+        # Plans live in a TABLE, not a module constant: a custom deal is seeded per tenant and
+        # would render as a blank name if this read the built-in catalog.
+        plans = {
+            p.id: p
+            for p in (await session.scalars(
+                _sel(BillingPlan).where(
+                    BillingPlan.id.in_([s.plan_id for s in subs.values() if s.plan_id] or [""])
+                )
+            )).all()
+        }
+
+    out: list[CustomerRowOut] = []
+    for t in tenants:
+        sub = subs.get(t.id)
+        plan_id = sub.plan_id if sub else ""
+        plan = plans.get(plan_id)
+        out.append(CustomerRowOut(
+            tenant_id=t.id,
+            workspace=t.name or t.slug or t.id,
+            plan_id=plan_id,
+            # Falls back to the id, so a plan the catalog does not know still names itself rather
+            # than rendering blank for exactly the deals an operator most wants to find.
+            plan_name=(plan.name if plan is not None else plan_id) or "-",
+            status=sub.status if sub else "none",
+            users=int(seats.get(t.id, 0)),
+            matched_email=matched.get(t.id, ""),
+            requests_this_period=int(reqs.get(t.id, 0)),
+            credits_balance=float(credits.get(t.id, 0.0) or 0.0),
+        ))
+    out.sort(key=lambda r: (-r.requests_this_period, r.workspace.lower()))
+    return out
+
+
+class TenantUsageOut(BaseModel):
+    tenant_id: str
+    workspace: str
+    period: str
+    plan_id: str
+    plan_name: str
+    status: str
+    capabilities: list[dict]
+    credits_balance: float
+    requests_this_period: int
+    requests_total: int
+
+
+@router.get("/customers/{tenant_id}/usage", response_model=TenantUsageOut)
+async def customer_usage(
+    tenant_id: str,
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
+) -> TenantUsageOut:
+    """What one workspace has consumed this period, read from the platform role.
+
+    The customer's own `/billing/usage` answers the same question for the caller's workspace only.
+    An operator investigating a bill, or deciding whether a goodwill grant is warranted, cannot
+    reach it — so "how much has this customer used?" had no answer short of impersonating them.
+    """
+    from sqlalchemy import func, select as _sel
+
+    from nexus.billing.rollups import period_key, period_start
+    from nexus.core.db import get_platform_sessionmaker, utcnow
+    from nexus.models.billing import (
+        BillingCapability,
+        BillingCreditLedger,
+        BillingPlan,
+        BillingSubscription,
+        BillingUsageEvent,
+    )
+    from nexus.models.identity import Tenant
+
+    now = utcnow()
+    since = period_start(now)
+
+    async with get_platform_sessionmaker()() as session:
+        tenant = await session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such workspace")
+        sub = (await session.scalars(
+            _sel(BillingSubscription).where(BillingSubscription.tenant_id == tenant_id)
+        )).first()
+
+        used = dict((await session.execute(
+            _sel(BillingUsageEvent.capability_id,
+                 func.coalesce(func.sum(BillingUsageEvent.quantity), 0.0))
+            .where(BillingUsageEvent.tenant_id == tenant_id,
+                   BillingUsageEvent.occurred_at >= since)
+            .group_by(BillingUsageEvent.capability_id)
+        )).all())
+        totals = (await session.execute(
+            _sel(func.count()).select_from(BillingUsageEvent)
+            .where(BillingUsageEvent.tenant_id == tenant_id)
+        )).scalar() or 0
+        period_reqs = (await session.execute(
+            _sel(func.count()).select_from(BillingUsageEvent)
+            .where(BillingUsageEvent.tenant_id == tenant_id,
+                   BillingUsageEvent.occurred_at >= since)
+        )).scalar() or 0
+        balance = (await session.execute(
+            _sel(func.coalesce(func.sum(BillingCreditLedger.delta), 0.0))
+            .where(BillingCreditLedger.tenant_id == tenant_id)
+        )).scalar() or 0.0
+        plan = await session.get(BillingPlan, sub.plan_id) if sub and sub.plan_id else None
+        catalog = {
+            c.id: c
+            for c in (await session.scalars(
+                _sel(BillingCapability).where(BillingCapability.id.in_(list(used) or [""]))
+            )).all()
+        }
+
+    caps = [
+        {
+            "capability_id": cid,
+            # Falls back to the id rather than an empty label: a capability metered before it was
+            # seeded is a real state, and a blank name would read as a rendering bug.
+            "name": getattr(catalog.get(cid), "name", "") or cid,
+            "category": getattr(catalog.get(cid), "category", "") or "",
+            "used": float(qty or 0.0),
+        }
+        # Only what has actually been used. Listing the whole catalog at zero would bury the
+        # handful of capabilities this customer touches under sixty rows of nothing.
+        for cid, qty in sorted(used.items(), key=lambda kv: -float(kv[1] or 0))
+    ]
+
+    return TenantUsageOut(
+        tenant_id=tenant_id,
+        workspace=tenant.name or tenant.slug or tenant_id,
+        period=period_key(now, "period"),
+        plan_id=sub.plan_id if sub else "",
+        plan_name=(plan.name if plan is not None else (sub.plan_id if sub else "")) or "-",
+        status=sub.status if sub else "none",
+        capabilities=caps,
+        credits_balance=float(balance),
+        requests_this_period=int(period_reqs),
+        requests_total=int(totals),
+    )

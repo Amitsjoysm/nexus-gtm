@@ -105,6 +105,26 @@ class PaymentProvider(abc.ABC):
         """
 
     @abc.abstractmethod
+    async def create_invoice(
+        self, *, customer_id: str, lines: list[dict], currency: str = "USD",
+        idempotency_key: str = "", description: str = "", auto_charge: bool = True,
+    ) -> dict:
+        """Publish a rated invoice at the provider and finalize it.
+
+        **Our rating stays the source of truth for what is owed.** This does not ask the provider
+        to compute anything — it sends the lines we already rated, so the customer receives a
+        hosted invoice with a PDF and a payment link for a total our own tables can still explain.
+        Letting the provider price it would put the arithmetic somewhere `reconcile.py` cannot
+        check, and this codebase already refuses to let a provider be the only witness to a number.
+
+        ``lines`` are ``{"description", "amount_cents", "quantity"}``. Returns at least
+        ``{"id", "status", "hosted_url", "pdf_url", "amount_cents"}``.
+
+        Must be idempotent on ``idempotency_key``: a retry after a timeout must not bill twice,
+        which is the same rule ``charge`` follows and for the same reason.
+        """
+
+    @abc.abstractmethod
     async def get_subscription(self, *, subscription_id: str) -> dict:
         """Fetch the provider's current view of a subscription.
 
@@ -139,6 +159,8 @@ class NoopPaymentProvider(PaymentProvider):
         self.prices: dict[str, dict[str, Any]] = {}
         self.charges: list[dict[str, Any]] = []
         self.refunds: list[dict[str, Any]] = []
+        self.invoices: list[dict[str, Any]] = []
+        self._invoices: dict[str, dict[str, Any]] = {}
         self.checkout_sessions: list[dict[str, Any]] = []
         self.portal_sessions: list[dict[str, Any]] = []
         # Stage remote state here to exercise reconciliation offline.
@@ -179,6 +201,27 @@ class NoopPaymentProvider(PaymentProvider):
     ) -> dict:
         out = {"product_id": f"noop_prod_{plan_id}", "price_id": f"noop_price_{plan_id}"}
         self.prices[plan_id] = {**out, "amount_cents": amount_cents, "name": name}
+        return out
+
+    async def create_invoice(
+        self, *, customer_id: str, lines: list[dict], currency: str = "USD",
+        idempotency_key: str = "", description: str = "", auto_charge: bool = True,
+    ) -> dict:
+        if idempotency_key and idempotency_key in self._invoices:
+            return self._invoices[idempotency_key]
+        total = sum(int(ln.get("amount_cents", 0)) for ln in lines)
+        out = {
+            "id": f"noop_in_{len(self.invoices) + 1}",
+            "status": "paid" if auto_charge else "open",
+            # Deliberately empty rather than a fake URL. A plausible-looking link that 404s is
+            # worse than a visibly absent one — the UI hides the button when there is nothing to
+            # open, and a fake would put a dead link in front of a customer.
+            "hosted_url": "", "pdf_url": "",
+            "amount_cents": total, "currency": currency, "lines": list(lines),
+        }
+        self.invoices.append(out)
+        if idempotency_key:
+            self._invoices[idempotency_key] = out
         return out
 
     async def refund(
@@ -416,6 +459,72 @@ class StripePaymentProvider(PaymentProvider):
             "plan_id": plan_id,
         }
 
+    async def create_invoice(
+        self, *, customer_id: str, lines: list[dict], currency: str = "USD",
+        idempotency_key: str = "", description: str = "", auto_charge: bool = True,
+    ) -> dict:
+        """Draft → line items → finalize → (optionally) pay.
+
+        Stripe builds an invoice from *pending* items on the customer, so the order matters and is
+        the opposite of what it looks like: create the invoice with ``pending_invoice_items_behavior
+        = exclude``, then attach each item to that invoice id explicitly. Adding items first and
+        creating the invoice after sweeps in anything else pending on that customer — including
+        items a subscription put there — and bills it on our usage invoice.
+        """
+        self._require()
+        cur = (currency or "USD").lower()
+
+        invoice = await self._post(
+            "/invoices",
+            {
+                "customer": customer_id,
+                "currency": cur,
+                "collection_method": "charge_automatically" if auto_charge else "send_invoice",
+                # Our own invoice id, so a retry finds the same object and `reconcile.py` can tie
+                # the two sides together without guessing.
+                "metadata[nexus_invoice_id]": idempotency_key,
+                "description": description,
+                "auto_advance": "false",
+                "pending_invoice_items_behavior": "exclude",
+                **({} if auto_charge else {"days_until_due": "14"}),
+            },
+            idempotency_key=f"inv:{idempotency_key}" if idempotency_key else "",
+        )
+        invoice_id = str(invoice.get("id", ""))
+
+        for i, ln in enumerate(lines):
+            amount = int(ln.get("amount_cents", 0))
+            if amount == 0:
+                continue        # Stripe rejects a zero-amount item; a $0 line carries no meaning
+            await self._post(
+                "/invoiceitems",
+                {
+                    "customer": customer_id, "invoice": invoice_id, "currency": cur,
+                    "amount": str(amount),
+                    "description": str(ln.get("description") or "Usage")[:250],
+                },
+                idempotency_key=f"invitem:{idempotency_key}:{i}" if idempotency_key else "",
+            )
+
+        final = await self._post(f"/invoices/{invoice_id}/finalize", {"auto_advance": "false"})
+        if auto_charge and final.get("status") == "open":
+            try:
+                final = await self._post(f"/invoices/{invoice_id}/pay", {})
+            except PaymentError as exc:
+                # The invoice EXISTS and is finalized — the customer can still pay it from the
+                # hosted page. Reporting this as a failed creation would hide a real, payable
+                # invoice and invite a second one to be raised for the same period.
+                logger.warning("stripe invoice %s finalized but payment failed: %s",
+                               invoice_id, exc)
+        return {
+            "id": invoice_id,
+            "status": str(final.get("status", "")),
+            "hosted_url": str(final.get("hosted_invoice_url") or ""),
+            "pdf_url": str(final.get("invoice_pdf") or ""),
+            "amount_cents": int(final.get("total") or 0),
+            "currency": str(final.get("currency") or cur).upper(),
+        }
+
     async def get_subscription(self, *, subscription_id: str) -> dict:
         self._require()
         try:
@@ -472,5 +581,52 @@ def get_payment_provider() -> PaymentProvider:
 
 def set_payment_provider(provider: PaymentProvider | None) -> None:
     """Test/runtime override. Passing None restores selection from settings."""
-    global _provider
+    global _provider, _resolved_at
     _provider = provider
+    _resolved_at = 0.0
+
+
+# How long a resolved provider is reused before the managed credential is re-read. Mirrors
+# `providers/resolver.POOL_TTL_S`, and for the same reason: the worker is a separate process, so
+# without a TTL a credential changed in the panel would need a restart — which is the redeploy this
+# whole surface exists to remove.
+_CREDENTIAL_TTL_S = 30.0
+_resolved_at = 0.0
+
+
+async def resolve_payment_provider() -> PaymentProvider:
+    """The provider to bill with, preferring an operator-managed credential over the environment.
+
+    Async because reading the managed credential is a database call. `get_payment_provider()` stays
+    for the synchronous callers and for tests that inject a double — an explicit override always
+    wins here, so `set_payment_provider` still does what it says.
+    """
+    global _provider, _resolved_at
+    import time
+
+    if _provider is not None and (time.monotonic() - _resolved_at) < _CREDENTIAL_TTL_S:
+        return _provider
+
+    from nexus.core.config import get_settings
+
+    s = get_settings()
+    if s.payment_provider != "stripe":
+        # Nothing to resolve: the noop provider has no credential. Build it the old way so a
+        # deployment with no payment provider never touches the credentials table.
+        if _provider is None:
+            _provider = build_payment_provider_from_settings()
+        return _provider
+
+    try:
+        from nexus.billing.credentials import resolve_stripe_secrets
+
+        secret, _hook, _pub = await resolve_stripe_secrets()
+    except Exception:
+        # Falling back rather than raising: losing the ability to bill because a lookup hiccuped
+        # is worse than billing with the configuration we already had.
+        logger.warning("could not resolve the managed payment credential", exc_info=True)
+        secret = s.stripe_secret_key
+
+    _provider = StripePaymentProvider(secret)
+    _resolved_at = time.monotonic()
+    return _provider

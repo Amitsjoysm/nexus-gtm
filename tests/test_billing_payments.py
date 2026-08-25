@@ -153,7 +153,14 @@ async def test_collecting_a_finalized_invoice_marks_it_paid():
             inv = await ts.get(BillingInvoice, inv_id)
             assert inv.status == "paid"
             assert inv.meta["psp_reference"]
-        assert len(provider.charges) == 1
+            # The provider now receives a real invoice carrying the lines we rated, so the customer
+            # gets a document rather than an unexplained card charge.
+            assert inv.meta["psp_invoice_id"]
+        assert len(provider.invoices) == 1
+        assert provider.charges == []
+        raised = provider.invoices[0]
+        assert raised["amount_cents"] == 7900
+        assert raised["lines"], "the rated lines travel to the provider, not just a total"
     finally:
         set_payment_provider(None)
 
@@ -173,7 +180,10 @@ async def test_collection_is_idempotent_on_the_invoice():
             second = await collect_invoice(ts, inv_id, email="ap@acme.test")
         assert first["reference"]
         assert second.get("already") is True
-        assert len(provider.charges) == 1        # charged exactly once
+        # One invoice raised, not two. Collection now publishes a real invoice at the provider
+        # rather than a bare charge, so this is where the "exactly once" property lives.
+        assert len(provider.invoices) == 1
+        assert provider.charges == []
     finally:
         set_payment_provider(None)
 

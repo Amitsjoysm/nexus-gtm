@@ -35,13 +35,13 @@ async def compare_subscription(ts: TenantSession, sub: BillingSubscription) -> d
     skipped, not reported: enterprise deals are administered locally and never had a provider
     object, so flagging them would bury real findings in noise.
     """
-    from nexus.billing.payments import get_payment_provider
+    from nexus.billing.payments import resolve_payment_provider
     from nexus.billing.webhooks import STRIPE_SUBSCRIPTION_STATUS
 
     if not sub.psp_subscription_id:
         return {"tenant_id": sub.tenant_id, "skipped": "not_provider_managed"}
 
-    remote = await get_payment_provider().get_subscription(
+    remote = await (await resolve_payment_provider()).get_subscription(
         subscription_id=sub.psp_subscription_id
     )
     if not remote:

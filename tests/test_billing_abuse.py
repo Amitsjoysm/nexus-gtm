@@ -227,7 +227,10 @@ async def test_an_invoice_cannot_be_collected_twice(enforcing):
             await collect_invoice(ts, inv.id, email="ap@x.test")
             await collect_invoice(ts, inv.id, email="ap@x.test")
             await collect_invoice(ts, inv.id, email="ap@x.test")
-        assert len(provider.charges) == 1
+        # One invoice raised at the provider, not three. Collection publishes an invoice rather
+        # than a bare charge now, so "billed exactly once" is asserted here.
+        assert len(provider.invoices) == 1
+        assert provider.charges == []
     finally:
         set_payment_provider(None)
 

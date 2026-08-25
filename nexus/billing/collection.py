@@ -19,7 +19,7 @@ import logging
 
 from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
-from nexus.models.billing import BillingInvoice
+from nexus.models.billing import BillingInvoice, BillingInvoiceLine
 
 logger = logging.getLogger("nexus.billing.collection")
 
@@ -38,7 +38,7 @@ async def collect_invoice(
     Returns a summary dict. A zero-total invoice is marked paid without touching the provider —
     there is nothing to collect, and a $0 charge is an error at every PSP.
     """
-    from nexus.billing.payments import get_payment_provider
+    from nexus.billing.payments import resolve_payment_provider
     from nexus.models.billing import BillingSubscription
 
     inv = await ts.get(BillingInvoice, invoice_id)
@@ -59,7 +59,7 @@ async def collect_invoice(
         await ts.flush()
         return {"invoice_id": inv.id, "status": "paid", "amount_cents": 0, "reference": ""}
 
-    provider = get_payment_provider()
+    provider = await resolve_payment_provider()
     sub = await ts.first(BillingSubscription)
 
     customer_id = sub.psp_customer_id if sub is not None else None
@@ -75,35 +75,72 @@ async def collect_invoice(
             sub.psp_customer_id = customer_id
             await ts.flush()
 
-    result = await provider.charge(
-        customer_id=customer_id,
-        amount_cents=inv.total_cents,
-        currency=inv.currency,
-        # The invoice id IS the key: a retry can never collect twice.
-        idempotency_key=f"invoice:{inv.id}",
-        description=f"{inv.number or inv.period_key} - {inv.period_key}",
-    )
+    # Raise a real invoice at the provider, carrying the lines we rated, rather than a bare charge.
+    #
+    # A charge collects money and leaves the customer nothing to look at: no hosted page, no PDF,
+    # no line items, and nothing their finance team can file. That was fine while subscriptions
+    # were the only thing Stripe saw, but usage and overage are billed here — so the charges people
+    # most want an explanation for were exactly the ones with no document behind them.
+    #
+    # Our rating stays the source of truth. We send the lines; the provider does not price
+    # anything. Letting it compute the total would put the arithmetic somewhere `reconcile.py`
+    # cannot check.
+    lines = [
+        {"description": ln.description or (ln.capability_id or ln.kind),
+         "amount_cents": int(ln.amount_cents)}
+        for ln in await ts.list(BillingInvoiceLine, BillingInvoiceLine.invoice_id == inv.id)
+    ]
+    if not lines:
+        # A rated invoice with a total and no lines should not exist, but if it does, bill the
+        # total rather than raising an empty invoice — the customer owes what the invoice says.
+        lines = [{"description": f"Usage for {inv.period_key}",
+                  "amount_cents": int(inv.total_cents)}]
 
-    if result.ok:
-        inv.status = "paid"
-        inv.meta = {
-            **(inv.meta or {}),
-            "psp": result.provider,
-            "psp_reference": result.reference,
-            "collected_at": utcnow().isoformat(),
+    try:
+        raised = await provider.create_invoice(
+            customer_id=customer_id,
+            lines=lines,
+            currency=inv.currency,
+            # Our invoice id IS the key: a retry can never bill twice, and it ties the two sides
+            # together for reconciliation without guessing.
+            idempotency_key=inv.id,
+            description=f"{inv.number or inv.period_key} — usage for {inv.period_key}",
+        )
+    except Exception as exc:
+        logger.warning("collection failed for invoice %s: %s", inv.id, exc)
+        return {
+            "invoice_id": inv.id, "status": inv.status, "amount_cents": inv.total_cents,
+            "currency": inv.currency, "reference": "", "provider": provider.name, "ok": False,
         }
-        await ts.flush()
+
+    paid = str(raised.get("status", "")) == "paid"
+    inv.meta = {
+        **(inv.meta or {}),
+        "psp": provider.name,
+        "psp_invoice_id": raised.get("id", ""),
+        # Stored so the customer's own Billing page can link to the document. Empty for the noop
+        # provider, and the UI hides the link rather than offering a URL that goes nowhere.
+        "hosted_invoice_url": raised.get("hosted_url", ""),
+        "invoice_pdf_url": raised.get("pdf_url", ""),
+    }
+    if paid:
+        inv.status = "paid"
+        inv.meta = {**inv.meta, "psp_reference": raised.get("id", ""),
+                    "collected_at": utcnow().isoformat()}
     else:
-        # Left finalized, not marked failed: the money state is "not collected yet", and dunning
-        # (out of scope here) decides what happens next.
-        logger.warning("collection failed for invoice %s: %s", inv.id, result.detail)
+        # Left finalized, not marked failed: the money state is "not collected yet". The invoice
+        # exists and is payable from its hosted page, and dunning decides what happens next.
+        logger.info("invoice %s raised at %s but not paid (status %s)",
+                    inv.id, provider.name, raised.get("status"))
+    await ts.flush()
 
     return {
         "invoice_id": inv.id,
         "status": inv.status,
         "amount_cents": inv.total_cents,
         "currency": inv.currency,
-        "reference": result.reference,
-        "provider": result.provider,
-        "ok": result.ok,
+        "reference": str(raised.get("id", "")),
+        "hosted_url": str(raised.get("hosted_url", "")),
+        "provider": provider.name,
+        "ok": paid,
     }

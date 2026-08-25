@@ -17,12 +17,14 @@ Two invariants are enforced at this layer, not merely documented:
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from nexus.api.deps import Principal, get_principal, require_platform_permission
 from nexus.billing.audit import record_admin_action, snapshot
-from nexus.billing.permissions import ALL_PERMISSIONS, permissions_for_role, ADMINS_MANAGE, INVOICES_COLLECT, PRICING_WRITE, SUBSCRIPTIONS_WRITE
+from nexus.billing.permissions import ALL_PERMISSIONS, permissions_for_role, ADMINS_MANAGE, BILLING_READ, INVOICES_COLLECT, PRICING_WRITE, SUBSCRIPTIONS_WRITE
 from nexus.core.db import get_sessionmaker
 from nexus.core.tenancy import TenantSession, apply_rls
 from nexus.models.billing import (
@@ -805,3 +807,184 @@ async def revoke_platform_admin(
         )
         await session.commit()
         return {"email": email, "active": False}
+
+
+# ---- subscription CRUD ---------------------------------------------------------------------------
+# Create and change already existed (`POST .../subscription`), as did pause and resume. Cancel had a
+# service function and no endpoint at all, so the one lifecycle step a support admin most often has
+# to perform was the one they could not — and the workaround, moving the customer to `free`, keeps
+# billing them nothing while leaving the subscription "active", which reads as a live customer in
+# every report.
+
+
+class SubscriptionPatchIn(BaseModel):
+    """Fine-grained edits. Every field is optional; only what is sent is changed.
+
+    `plan_id` is deliberately NOT here — changing a plan runs proration, which is arithmetic with
+    consequences, and it has its own endpoint. A PATCH that silently repriced a customer because a
+    form posted every field it had loaded is the accident this separation prevents.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    status: str | None = None
+    trial_end: datetime | None = None
+    current_period_end: datetime | None = None
+    cancel_at_period_end: bool | None = None
+    seats_included: int | None = None
+    grandfathered: bool | None = None
+    reason: str = ""
+
+
+class CancelIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Default True: the customer paid through the period, so ending access immediately takes back
+    # something they bought. Immediate cancellation is available, but it has to be asked for.
+    at_period_end: bool = True
+    reason: str = ""
+
+
+@router.get("/tenants/{tenant_id}/subscription")
+async def get_tenant_subscription(
+    tenant_id: str,
+    _: Principal = Depends(require_platform_permission(BILLING_READ)),
+) -> dict:
+    """One workspace's subscription in full, including the fields the list view omits.
+
+    Read on the PLATFORM sessionmaker: `billing_subscriptions` is tenant-scoped, so the app role
+    would return no row and the endpoint would report "no subscription" for a paying customer.
+    """
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingSubscription
+
+    async with get_platform_sessionmaker()() as session:
+        sub = (await session.scalars(
+            select(BillingSubscription).where(BillingSubscription.tenant_id == tenant_id)
+        )).first()
+        if sub is None:
+            # Not a 404: the workspace may exist and simply have no subscription, which is a real
+            # and actionable state — it is exactly who an operator is about to put on a plan.
+            return {"tenant_id": tenant_id, "subscription": None}
+        plan = await session.get(BillingPlan, sub.plan_id) if sub.plan_id else None
+        return {
+            "tenant_id": tenant_id,
+            "subscription": {
+                "id": sub.id,
+                "plan_id": sub.plan_id,
+                "plan_name": (plan.name if plan is not None else sub.plan_id) or "-",
+                "plan_class": getattr(plan, "plan_class", "") if plan is not None else "",
+                "status": sub.status,
+                "interval": sub.interval,
+                "currency": sub.currency,
+                "current_period_start": sub.current_period_start.isoformat()
+                if sub.current_period_start else None,
+                "current_period_end": sub.current_period_end.isoformat()
+                if sub.current_period_end else None,
+                "trial_end": sub.trial_end.isoformat() if sub.trial_end else None,
+                "cancel_at_period_end": bool(sub.cancel_at_period_end),
+                "grandfathered": bool(sub.grandfathered),
+                "seats_included": sub.seats_included,
+                # Whether this deal has a provider object at all. An enterprise contract never had
+                # one, and reconciliation skips it for that reason — the UI has to be able to say
+                # "this is not a Stripe subscription" rather than "Stripe is missing it".
+                "psp_customer_id": sub.psp_customer_id or "",
+                "psp_subscription_id": sub.psp_subscription_id or "",
+            },
+        }
+
+
+@router.patch("/tenants/{tenant_id}/subscription")
+async def patch_tenant_subscription(
+    tenant_id: str,
+    body: SubscriptionPatchIn,
+    principal: Principal = Depends(require_platform_permission(SUBSCRIPTIONS_WRITE)),
+) -> dict:
+    """Edit the terms without changing the plan.
+
+    Extending a trial, correcting a period end after a support conversation, adjusting included
+    seats for a bespoke deal: all real operator tasks that previously needed a database session.
+
+    `status` is validated against `SUBSCRIPTION_STATUSES` because rating and entitlements switch on
+    it — a value outside that vocabulary is not a stricter setting, it is a subscription neither
+    system can reason about.
+    """
+    from nexus.models.billing import SUBSCRIPTION_STATUSES, BillingSubscription
+
+    fields = body.model_dump(exclude_unset=True, exclude={"reason"})
+    if not fields:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "no fields to change")
+    if "status" in fields and fields["status"] not in SUBSCRIPTION_STATUSES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"status must be one of {SUBSCRIPTION_STATUSES}",
+        )
+    if "seats_included" in fields and fields["seats_included"] is not None \
+            and int(fields["seats_included"]) < 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "seats_included cannot be negative")
+
+    async with get_sessionmaker()() as session:
+        await apply_rls(session, tenant_id)
+        ts = TenantSession(session, tenant_id)
+        sub = await ts.first(BillingSubscription)
+        if sub is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                "this workspace has no subscription to edit")
+        before = {k: getattr(sub, k) for k in fields}
+        for key, value in fields.items():
+            setattr(sub, key, value)
+        await ts.flush()
+        await record_admin_action(
+            session, actor=principal.user_id, action="subscription.patch",
+            target=sub.plan_id, subject_tenant_id=tenant_id,
+            # Datetimes do not survive the audit's JSON column; str() keeps the before/after
+            # readable rather than dropping the very fields most likely to be disputed later.
+            before={k: str(v) for k, v in before.items()},
+            after={k: str(v) for k, v in fields.items()},
+            note=body.reason,
+        )
+        await session.commit()
+        return {"tenant_id": tenant_id, "plan_id": sub.plan_id, "status": sub.status,
+                "changed": sorted(fields)}
+
+
+@router.post("/tenants/{tenant_id}/subscription/cancel")
+async def cancel_tenant_subscription(
+    tenant_id: str,
+    body: CancelIn | None = None,
+    principal: Principal = Depends(require_platform_permission(SUBSCRIPTIONS_WRITE)),
+) -> dict:
+    """Cancel. At period end by default — the customer paid through it.
+
+    `cancel_subscription` has existed since M6 with no endpoint, so the workaround was to move the
+    customer to `free`. That leaves the subscription `active` on a $0 plan, which reads as a live
+    customer in revenue, in the directory, and in every count that filters on status.
+    """
+    from nexus.billing.subscriptions import cancel_subscription
+    from nexus.models.billing import BillingSubscription
+
+    at_period_end = body.at_period_end if body else True
+    reason = (body.reason if body else "") or ""
+    async with get_sessionmaker()() as session:
+        await apply_rls(session, tenant_id)
+        ts = TenantSession(session, tenant_id)
+        existing = await ts.first(BillingSubscription)
+        before = {"status": existing.status,
+                  "cancel_at_period_end": bool(existing.cancel_at_period_end)} if existing else {}
+        sub = await cancel_subscription(ts, at_period_end=at_period_end)
+        if sub is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                "this workspace has no active subscription")
+        await record_admin_action(
+            session, actor=principal.user_id, action="subscription.cancel",
+            target=sub.plan_id, subject_tenant_id=tenant_id,
+            before=before,
+            after={"status": sub.status,
+                   "cancel_at_period_end": bool(sub.cancel_at_period_end)},
+            note=reason or ("at period end" if at_period_end else "immediate"),
+        )
+        await session.commit()
+        return {"tenant_id": tenant_id, "plan_id": sub.plan_id, "status": sub.status,
+                "cancel_at_period_end": bool(sub.cancel_at_period_end)}
