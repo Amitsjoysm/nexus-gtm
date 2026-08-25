@@ -314,6 +314,11 @@ class GroqLLMProvider(OpenAICompatProvider):
                 # is not a graceful degradation.
                 logger.warning("Groq key #%d rejected (%d); rotating past it",
                                self._idx, resp.status_code)
+                # Record it against the managed row so the Control plane shows this without anyone
+                # having to press Test. No-op when the key came from the environment pool.
+                from nexus.providers.service import record_rejection_from_response
+
+                await record_rejection_from_response("groq", self._keys[self._idx], resp)
                 self._idx = (self._idx + 1) % len(self._keys)
                 last_resp = resp
                 continue

@@ -63,7 +63,7 @@ handoff.
 - Create: `nexus/providers/__init__.py`, `nexus/providers/crypto.py`
 - Test: `tests/test_provider_keys.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_provider_keys.py
@@ -108,12 +108,12 @@ def test_digest_is_stable_and_hint_shows_only_the_tail():
     assert len(key_hint("sk-live-verysecret9876")) == 4
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q`
 Expected: FAIL, `ModuleNotFoundError: No module named 'nexus.providers'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 # nexus/providers/__init__.py
@@ -168,12 +168,12 @@ def key_hint(plaintext: str) -> str:
     return (plaintext or "")[-4:]
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q`
 Expected: PASS, 4 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add nexus/providers/__init__.py nexus/providers/crypto.py tests/test_provider_keys.py
@@ -188,7 +188,7 @@ git commit -m "feat(providers): seal provider keys at rest, raising rather than 
 - Create: `nexus/providers/catalog.py`
 - Test: `tests/test_provider_keys.py` (append)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # append to tests/test_provider_keys.py
@@ -227,12 +227,12 @@ def test_crypto_roots_are_not_in_the_catalog():
         assert forbidden not in attrs
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q -k catalog`
 Expected: FAIL, `ModuleNotFoundError: No module named 'nexus.providers.catalog'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 # nexus/providers/catalog.py
@@ -287,7 +287,7 @@ def env_pool(provider: str) -> list[str]:
     return [value] if value else []
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q`
 Expected: PASS, 7 passed
@@ -296,7 +296,7 @@ If `firecrawl_api_key_list` or `exa_api_key_list` does not exist on `Settings`, 
 property name with `grep -n "api_key_list" nexus/core/config.py` and use that. Do not add a
 property to `config.py` — it is on the do-not-commit list.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add nexus/providers/catalog.py tests/test_provider_keys.py
@@ -312,7 +312,7 @@ git commit -m "feat(providers): catalog the nine pooled providers and their env 
 - Modify: `nexus/models/__init__.py`
 - Test: `tests/test_provider_keys.py` (append)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # append to tests/test_provider_keys.py
@@ -346,12 +346,12 @@ def test_the_table_carries_no_tenant_id():
     assert "tenant_id" not in ProviderKey.__table__.columns
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q -k "plaintext or tenant_id"`
 Expected: FAIL, `ModuleNotFoundError: No module named 'nexus.models.provider_key'`
 
-- [ ] **Step 3: Write the model**
+- [x] **Step 3: Write the model**
 
 ```python
 # nexus/models/provider_key.py
@@ -414,7 +414,7 @@ class ProviderKey(IdMixin, TimestampMixin, Base):
     created_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 ```
 
-- [ ] **Step 4: Register the model and write the migration**
+- [x] **Step 4: Register the model and write the migration**
 
 Add to `nexus/models/__init__.py`, beside the other imports:
 
@@ -479,13 +479,13 @@ def downgrade() -> None:
     op.drop_table("provider_keys")
 ```
 
-- [ ] **Step 5: Run the tests, including migration replay**
+- [x] **Step 5: Run the tests, including migration replay**
 
 Run: `python -m pytest tests/test_provider_keys.py tests/test_migrations_replay.py -n0 -q`
 Expected: PASS. If replay fails with "multiple heads", your `down_revision` is wrong — re-read
 "Before you start".
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add nexus/models/provider_key.py nexus/models/__init__.py migrations/versions/00NN_provider_keys.py tests/test_provider_keys.py
@@ -500,7 +500,7 @@ git commit -m "feat(providers): platform-global provider_keys table"
 - Create: `nexus/providers/service.py`
 - Test: `tests/test_provider_keys.py` (append)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # append to tests/test_provider_keys.py
@@ -552,12 +552,12 @@ async def test_a_caller_cannot_set_status_directly():
         assert "status" not in sig.parameters, f"{name} exposes status"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q -k "dupe or prefer or disabling or status_directly"`
 Expected: FAIL, `ModuleNotFoundError: No module named 'nexus.providers.service'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 # nexus/providers/service.py
@@ -733,7 +733,7 @@ def _invalidate(provider: str) -> None:
     invalidate(provider)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q`
 Expected: PASS. `_invalidate` imports `resolver`, which does not exist yet — create a stub now so
@@ -745,7 +745,7 @@ def invalidate(provider: str = "") -> None:
     return None
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add nexus/providers/service.py nexus/providers/resolver.py tests/test_provider_keys.py
@@ -760,7 +760,7 @@ git commit -m "feat(providers): key CRUD, with prefer implying enable and status
 - Create: `nexus/providers/testing.py`
 - Test: `tests/test_provider_key_testing.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_provider_key_testing.py
@@ -835,12 +835,12 @@ async def test_an_unknown_provider_is_refused_not_silently_ok():
     assert result.ok is False and "unknown provider" in result.detail.lower()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_provider_key_testing.py -n0 -q`
 Expected: FAIL, `ModuleNotFoundError: No module named 'nexus.providers.testing'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 # nexus/providers/testing.py
@@ -984,12 +984,12 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
     return TestResult(False, "failed", _detail(resp), resp.status_code)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_provider_key_testing.py -n0 -q`
 Expected: PASS, 5 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add nexus/providers/testing.py tests/test_provider_key_testing.py
@@ -1004,7 +1004,7 @@ git commit -m "feat(providers): probe and verify, because auth passing is not th
 - Modify: `nexus/providers/resolver.py` (replace the Task 4 stub)
 - Test: `tests/test_provider_keys.py` (append)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # append to tests/test_provider_keys.py
@@ -1078,12 +1078,12 @@ async def test_a_second_process_sees_a_new_key_once_the_ttl_lapses(monkeypatch):
     assert set(await fresh.key_pool("firecrawl")) == {"fc-first-0001", "fc-second-0002"}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q -k "resolver or env_pool or pinned or ttl or second_process"`
 Expected: FAIL, `AttributeError: module 'nexus.providers.resolver' has no attribute 'key_pool'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 # nexus/providers/resolver.py
@@ -1183,12 +1183,12 @@ def invalidate(provider: str = "") -> None:
     _CACHE.invalidate(provider)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add nexus/providers/resolver.py tests/test_provider_keys.py
@@ -1203,7 +1203,7 @@ git commit -m "feat(providers): resolve pools with a 30s TTL so a separate worke
 - Modify: `nexus/agents/llm.py`, `nexus/integrations/search/engines.py`, `nexus/integrations/apify.py`
 - Test: `tests/test_provider_keys.py` (append)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # append to tests/test_provider_keys.py
@@ -1220,13 +1220,13 @@ async def test_the_llm_provider_uses_a_db_key_when_one_exists():
     assert "gsk-from-the-ui-0001" in await resolver.key_pool("groq")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q -k llm_provider_uses`
 Expected: PASS already (it only exercises the resolver). This step is the seam wiring; the
 behavioural assertion lives in the manual check in Step 4.
 
-- [ ] **Step 3: Add a refresh hook to each provider**
+- [x] **Step 3: Add a refresh hook to each provider**
 
 In `nexus/agents/llm.py`, on `GroqLLMProvider`, add:
 
@@ -1254,7 +1254,7 @@ In `nexus/integrations/search/engines.py`, add the same to `ExaSearchProvider` a
 In `nexus/integrations/apify.py`, add the same to `ApifyClient` using `key_pool("apify")`, called
 at the top of `run_actor`.
 
-- [ ] **Step 4: Verify by hand against the running stack**
+- [x] **Step 4: Verify by hand against the running stack**
 
 ```bash
 docker exec nexus-gtm-app-1 python -c "
@@ -1266,12 +1266,12 @@ print(asyncio.run(key_pool('exa')))"
 Expected: the env keys (the table is empty). Add one through the API in Task 9 and re-run — the
 new key must appear within 30s in **both** `nexus-gtm-app-1` and `nexus-gtm-worker-1`.
 
-- [ ] **Step 5: Run the affected suites**
+- [x] **Step 5: Run the affected suites**
 
 Run: `python -m pytest tests/test_search_engines.py tests/test_llm_providers.py tests/test_apify_client.py tests/test_provider_keys.py -q`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add nexus/agents/llm.py nexus/integrations/search/engines.py nexus/integrations/apify.py tests/test_provider_keys.py
@@ -1282,11 +1282,22 @@ git commit -m "feat(providers): provider factories re-read the pool per call"
 
 ### Task 8: Runtime rejections mark the row failed
 
+> **Shipped 2026-08-25, with one change to the plan.** Step 1's test only exercised
+> `mark_failed_by_digest`, which already existed — it would have passed against the very gap this
+> task exists to close (the function shipped and *nothing called it*). The shipped test drives a
+> real two-key Exa rotation instead and asserts the dead row went red, the healthy row did not, and
+> the caller still got results. Three more pin the decisions: marking does not disable, an
+> environment-pool key writes no row, and the recorded text is the provider's own words.
+>
+> The four call sites share one helper (`providers.service.record_rejection_from_response`) rather
+> than repeating the try/except; Apify keeps `_describe_error` so the row records
+> `full-permission-actor-not-approved` rather than mislabelling a console approval as a bad key.
+
 **Files:**
 - Modify: `nexus/integrations/search/engines.py`, `nexus/agents/llm.py`, `nexus/integrations/apify.py`
 - Test: `tests/test_provider_keys.py` (append)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # append to tests/test_provider_keys.py
@@ -1308,13 +1319,13 @@ async def test_a_runtime_rejection_marks_the_row_failed():
     assert "invalid api key" in row.last_error
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_provider_keys.py -n0 -q -k runtime_rejection`
 Expected: PASS if Task 4 is complete (`mark_failed_by_digest` already exists). The remaining work
 is calling it from the rotation paths.
 
-- [ ] **Step 3: Call it where a key is condemned**
+- [x] **Step 3: Call it where a key is condemned**
 
 In `ExaSearchProvider._post`, inside the `_KEY_REJECTED_STATUS` branch added on 2026-08-21, after
 the `logger.warning`:
@@ -1353,12 +1364,12 @@ def _detail_text(resp) -> str:
         return (getattr(resp, "text", "") or "")[:300]
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `python -m pytest tests/test_search_engines.py tests/test_llm_providers.py tests/test_provider_keys.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add nexus/integrations/search/engines.py nexus/agents/llm.py nexus/integrations/apify.py tests/test_provider_keys.py
@@ -1374,7 +1385,7 @@ git commit -m "feat(providers): a runtime rejection marks the key failed in the 
 - Modify: `nexus/billing/permissions.py`, `nexus/api/__init__.py` (router registration)
 - Test: `tests/test_provider_keys_api.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_provider_keys_api.py
@@ -1445,12 +1456,12 @@ async def test_preferring_a_key_is_audited(client, monkeypatch):
     assert any(row.action == "provider_key.prefer" for row in rows)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_provider_keys_api.py -n0 -q`
 Expected: FAIL, 404 on the endpoint
 
-- [ ] **Step 3: Add the permission**
+- [x] **Step 3: Add the permission**
 
 In `nexus/billing/permissions.py`, beside `SOURCES_MANAGE`:
 
@@ -1461,7 +1472,7 @@ PROVIDERS_MANAGE = "providers.manage"    # add/test/pin platform provider API ke
 Add it to `ALL_PERMISSIONS`. Do **not** add it to the `support` or `billing_admin` presets —
 `superadmin` gets it via `ALL_PERMISSIONS`.
 
-- [ ] **Step 4: Write the router**
+- [x] **Step 4: Write the router**
 
 ```python
 # nexus/api/routers/admin_provider_keys.py
@@ -1621,7 +1632,7 @@ async def list_supported_providers(
 Register it where the other admin routers are registered (`grep -n "admin_sources" nexus/api/__init__.py`
 to find the pattern) and mirror it exactly.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `python -m pytest tests/test_provider_keys_api.py -n0 -q`
 Expected: PASS, 4 passed
@@ -1629,7 +1640,7 @@ Expected: PASS, 4 passed
 If `record_admin_action` requires `subject_tenant_id`, pass `None` — these are platform actions
 with no tenant.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add nexus/api/routers/admin_provider_keys.py nexus/billing/permissions.py nexus/api/__init__.py tests/test_provider_keys_api.py
@@ -1644,7 +1655,7 @@ git commit -m "feat(providers): Control-plane API for provider keys, gated on pr
 - Create: `frontend/src/pages/admin/ProviderKeysTab.tsx`, `frontend/src/pages/admin/ProviderKeysTab.module.css`
 - Modify: `frontend/src/pages/admin/AdminBillingPage.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts`
 
-- [ ] **Step 1: Add the types**
+- [x] **Step 1: Add the types**
 
 ```typescript
 // frontend/src/lib/types.ts
@@ -1672,7 +1683,7 @@ export interface ProviderKeyTestResult {
 }
 ```
 
-- [ ] **Step 2: Add the API client methods**
+- [x] **Step 2: Add the API client methods**
 
 ```typescript
 // frontend/src/lib/api.ts — beside the other admin methods.
@@ -1704,7 +1715,7 @@ export interface ProviderKeyTestResult {
   }
 ```
 
-- [ ] **Step 3: Build the tab**
+- [x] **Step 3: Build the tab**
 
 Group rows by provider. Each row shows label, `••••{key_hint}`, a status badge, and the last error
 when there is one. Row actions: **Pin** (disabled when already preferred), **Test** (probe),
@@ -1726,17 +1737,17 @@ Follow `frontend/src/pages/admin/AdminForms.module.css` for form styling, use de
 (`var(--space-4)`, `var(--text-muted)`), and check contrast is ≥4.5:1 for body text — compositing
 alpha properly, since `--text-muted` on `--surface-2` measures 4.49:1 and fails.
 
-- [ ] **Step 4: Register the tab**
+- [x] **Step 4: Register the tab**
 
 In `AdminBillingPage.tsx`, add `"Provider keys"` to the tab list beside Rate cards / Plans /
 Subscriptions and render `<ProviderKeysTab />` for it.
 
-- [ ] **Step 5: Typecheck and build**
+- [x] **Step 5: Typecheck and build**
 
 Run: `cd frontend && npx tsc --noEmit && npm run build`
 Expected: no errors
 
-- [ ] **Step 6: Verify in the browser**
+- [x] **Step 6: Verify in the browser**
 
 ```bash
 cd deploy && docker compose -f docker-compose.prod.yml build app && \
@@ -1755,7 +1766,7 @@ print(asyncio.run(key_pool('exa')))"
 
 Expected: the new key present within 30 seconds, with no restart of that container.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/src/pages/admin/ProviderKeysTab.tsx frontend/src/pages/admin/ProviderKeysTab.module.css frontend/src/pages/admin/AdminBillingPage.tsx frontend/src/lib/api.ts frontend/src/lib/types.ts
@@ -1766,12 +1777,12 @@ git commit -m "feat(providers): Provider keys tab in the Control plane"
 
 ### Task 11: Full suite and documentation
 
-- [ ] **Step 1: Run the full suite**
+- [x] **Step 1: Run the full suite**
 
 Run: `python -m pytest tests/ -q`
 Expected: PASS. Baseline before this work was 1909 + the rotation-fix tests.
 
-- [ ] **Step 2: Record it in CLAUDE.md**
+- [x] **Step 2: Record it in CLAUDE.md**
 
 Add a section after "CRM and telephony: what is actually connected" covering: the table is
 platform-global with no tenant_id; DB layers over env and an empty table is byte-identical to
@@ -1780,7 +1791,7 @@ today; `probe_ok` and `verified` are separate because all five Groq keys passed 
 400/404/422 because those fail identically on every key; and the 30s TTL is what lets a separate
 worker container pick up a new key without restarting.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add CLAUDE.md

@@ -880,8 +880,16 @@ a cross-tenant aggregate on the RLS-bound app role returns **zero rows rather th
 documented trap, walked into anyway — it now runs on `get_platform_sessionmaker()`, pinned by a test
 that writes an event for a tenant the caller is not.
 
-**Not built: runtime write-back.** `mark_failed_by_digest` exists and nothing calls it, so a key a
-crawl finds revoked at 3am is still green in the panel until someone tests it.
+**Runtime write-back marks, it does not disable.** A key rejected mid-crawl records itself against
+its row (Exa, Firecrawl, Groq and Apify all call `record_rejection_from_response`), so a credential
+revoked at 3am is red by morning without anyone pressing Test — which is the point of the panel.
+But the resolver filters on `enabled`, not on `status`, so a red row is still in the pool:
+auto-disabling on a runtime error would let one bad minute — a provider 403ing during an incident, a
+billing hiccup arriving as 402 — take the last working key out of rotation with nobody watching.
+Rotation already routes around a dead key inside the same request; what was missing was the
+evidence, not the reaction. Apify deliberately records `_describe_error` rather than the generic
+extractor, so `full-permission-actor-not-approved` reads as the console approval it is instead of
+sending an operator to rotate credentials that were never wrong.
 
 ## Apify actors (`nexus/integrations/apify.py`)
 

@@ -377,3 +377,114 @@ async def test_managed_pool_is_empty_when_nothing_is_registered():
     from nexus.providers.catalog import env_pool
 
     assert await resolver.key_pool("anthropic") == env_pool("anthropic")
+
+
+# ---- runtime write-back ---------------------------------------------------------------------------
+
+async def test_a_runtime_rejection_marks_the_row_failed(fresh_db):
+    """The bookkeeping primitive. What makes the panel show production reality rather than only
+    what the last manual test said."""
+    from nexus.providers.crypto import key_digest
+    from nexus.providers.service import add_key, list_keys, mark_failed_by_digest
+
+    k = await add_key("exa", "will-die", "sk-dies-4321")
+    await mark_failed_by_digest(
+        "exa", key_digest("sk-dies-4321"), error="invalid api key", error_status=401,
+    )
+    row = next(r for r in await list_keys("exa") if r.id == k.id)
+    assert row.status == "failed"
+    assert row.last_error_status == 401
+    assert "invalid api key" in row.last_error
+
+
+async def test_a_live_rejection_during_rotation_writes_the_row_back(fresh_db, monkeypatch):
+    """The wiring, not the primitive.
+
+    `mark_failed_by_digest` shipped with the rest of the subsystem and NOTHING CALLED IT, so a key
+    a crawl found revoked at 3am stayed green until somebody thought to press Test — and the point
+    of the panel is that nobody had to think of it. Testing the primitive alone would have passed
+    against that gap, which is why this drives a real rotation instead.
+    """
+    import httpx
+
+    from nexus.integrations.search.engines import ExaSearchProvider
+    from nexus.providers.service import add_key, list_keys
+
+    dead = await add_key("exa", "revoked", "sk-revoked-0001")
+    good = await add_key("exa", "healthy", "sk-healthy-0002")
+
+    class Resp:
+        def __init__(self, status):
+            self.status_code = status
+
+        def json(self):
+            if self.status_code == 401:
+                return {"error": {"message": "Invalid API key"}}
+            return {"results": [{"title": "t", "url": "u", "text": "d"}]}
+
+        def raise_for_status(self):
+            return None
+
+    used: list[str] = []
+
+    class Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            used.append(headers["x-api-key"])
+            return Resp(401 if len(used) == 1 else 200)
+
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    p = ExaSearchProvider(api_keys=["sk-revoked-0001", "sk-healthy-0002"])
+    hits = await p.search("q")
+
+    assert used == ["sk-revoked-0001", "sk-healthy-0002"]
+    assert len(hits) == 1, "the request still succeeds — a dead key must not cost the caller"
+
+    rows = {r.id: r for r in await list_keys("exa")}
+    assert rows[dead.id].status == "failed"
+    assert rows[dead.id].last_error_status == 401
+    # The provider's own words, not our paraphrase: "Invalid API key" and "insufficient credits"
+    # both arrive as a rejection and need opposite fixes.
+    assert "Invalid API key" in rows[dead.id].last_error
+    # The key that worked is untouched. Condemning the whole pool because one member died is how a
+    # panel starts lying in the other direction.
+    assert rows[good.id].status == "untested"
+
+
+async def test_marking_a_key_failed_does_not_remove_it_from_rotation(fresh_db):
+    """It marks, it does not disable.
+
+    The resolver filters on `enabled`, not on `status`. Auto-disabling on a runtime error would let
+    one bad minute — a provider 403ing during an incident, a billing hiccup reading as 402 — take
+    the last working key out of the pool with nobody watching. Rotation already routes around a dead
+    key within the same request; what was missing was the evidence, not the reaction.
+    """
+    from nexus.providers.crypto import key_digest
+    from nexus.providers.resolver import invalidate, managed_pool
+    from nexus.providers.service import add_key, mark_failed_by_digest
+
+    await add_key("brave", "only-key", "sk-brave-solo-9")
+    await mark_failed_by_digest(
+        "brave", key_digest("sk-brave-solo-9"), error="temporary 403", error_status=403,
+    )
+    invalidate("brave")
+    assert await managed_pool("brave") == ["sk-brave-solo-9"]
+
+
+async def test_an_environment_key_rejection_is_a_no_op(fresh_db):
+    """A key from NEXUS_EXA_API_KEYS has no row. Recording against it must not invent one, or the
+    panel fills with credentials the operator never registered and cannot delete."""
+    from nexus.providers.service import list_keys, record_runtime_rejection
+
+    await record_runtime_rejection(
+        "exa", "sk-came-from-the-env", error="nope", error_status=401,
+    )
+    assert await list_keys("exa") == []

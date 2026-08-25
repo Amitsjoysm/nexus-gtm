@@ -162,6 +162,16 @@ class ApifyClient:
                     last_auth_error = _describe_error(resp)
                     logger.warning("Apify key %d rejected (%s) for actor %s: %s",
                                    self._key_idx, resp.status_code, actor_id, last_auth_error)
+                    # Uses `_describe_error`, not the generic extractor, so the row records Apify's
+                    # own `error.type` — `full-permission-actor-not-approved` is a console approval
+                    # nobody clicked, and a panel that called it a bad key would send the operator
+                    # to rotate credentials that were never wrong.
+                    from nexus.providers.service import record_runtime_rejection
+
+                    await record_runtime_rejection(
+                        "apify", keys[self._key_idx],
+                        error=last_auth_error, error_status=resp.status_code,
+                    )
                     if len(keys) > 1:
                         self._key_idx = (self._key_idx + 1) % len(keys)
                         continue

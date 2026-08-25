@@ -70,6 +70,13 @@ _TAG = re.compile(r"<[^>]+>")
 _EXA_MAX_RESULTS = 100
 
 
+async def _record_rejection(provider: str, key: str, resp) -> None:
+    """Mark the managed row holding this key as failed. No-op for an environment-pool key."""
+    from nexus.providers.service import record_rejection_from_response
+
+    await record_rejection_from_response(provider, key, resp)
+
+
 def _exa_num_results(limit: int) -> int:
     return max(1, min(int(limit), _EXA_MAX_RESULTS))
 
@@ -231,6 +238,7 @@ class ExaSearchProvider(SearchProvider):
                     rejected[self._key_idx] = resp.status_code
                     logger.warning("Exa key #%d rejected (%d) — rotating past it",
                                    self._key_idx, resp.status_code)
+                    await _record_rejection("exa", keys[self._key_idx], resp)
                     if len(rejected) >= len(keys):
                         logger.error(
                             "Exa: every key in the %d-key pool was rejected (%s). This is a "
@@ -479,6 +487,7 @@ class FirecrawlSearchProvider(SearchProvider):
                     rejected[self._key_idx] = resp.status_code
                     logger.warning("Firecrawl key #%d rejected (%d) — rotating past it",
                                    self._key_idx, resp.status_code)
+                    await _record_rejection("firecrawl", keys[self._key_idx], resp)
                     if len(rejected) >= len(keys):
                         logger.error(
                             "Firecrawl: every key in the %d-key pool was rejected (%s). This is a "

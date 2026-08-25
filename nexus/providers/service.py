@@ -177,6 +177,60 @@ async def mark_failed_by_digest(provider: str, digest: str, *, error: str,
     _invalidate(provider)
 
 
+def provider_error_text(resp) -> str:
+    """The provider's own error message, verbatim, for the Control plane to display.
+
+    "Invalid API Key" and "insufficient credits" both arrive as a rejection and need opposite
+    fixes; the status code alone does not tell an operator which one they are looking at.
+
+    Lives here rather than in either caller so the search engines and the LLM providers share one
+    definition — an LLM module reaching into a search module for a private helper is the kind of
+    coupling that survives until someone moves a file.
+    """
+    try:
+        body = resp.json()
+        err = body.get("error") if isinstance(body, dict) else None
+        if isinstance(err, dict):
+            return str(err.get("message") or err)[:300]
+        return str(err or body)[:300]
+    except Exception:
+        return (getattr(resp, "text", "") or "")[:300]
+
+
+async def record_rejection_from_response(provider: str, key: str, resp) -> None:
+    """Convenience wrapper: read the reason off the response and record it. Never raises."""
+    await record_runtime_rejection(
+        provider, key, error=provider_error_text(resp),
+        error_status=getattr(resp, "status_code", None),
+    )
+
+
+async def record_runtime_rejection(provider: str, key: str, *, error: str,
+                                   error_status: int | None) -> None:
+    """A live call condemned this key. Record it, and never let the bookkeeping break the call.
+
+    This is what makes the Control plane show production reality rather than only what the last
+    manual test said. Without it a key revoked at 3am stays green until somebody thinks to press
+    Test — and the panel's whole purpose is that nobody had to think of it.
+
+    **It marks, it does not disable.** The resolver filters on ``enabled``, not on ``status``, so a
+    red row is still in the pool. Auto-disabling on a runtime error would let one bad minute — a
+    provider returning 403 during an incident, a billing hiccup reading as 402 — take the last
+    working key out of rotation with nobody watching. Rotation already routes around a dead key
+    within the same request; what was missing was the evidence, not the reaction.
+
+    Swallows everything: a search must not fail because an audit write did. It is called from
+    inside except-handlers on paths that are already degrading, which is the worst possible moment
+    to raise something new.
+    """
+    try:
+        await mark_failed_by_digest(
+            provider, key_digest(key), error=error, error_status=error_status,
+        )
+    except Exception:
+        logger.debug("could not record the %s key rejection", provider, exc_info=True)
+
+
 def _invalidate(provider: str) -> None:
     """Drop this process's cached pool. Other processes pick the change up on the TTL."""
     from nexus.providers.resolver import invalidate
