@@ -61,3 +61,27 @@ accessible roles/labels, and explicit disabled/loading variants.
   `aria-invalid`. Live regions for toasts (`role="status"`) and async results.
 - Touch targets ≥ 44×44px. Color never the sole signal (icon/text accompany status colors).
 - Respect `prefers-reduced-motion` and `prefers-color-scheme`.
+
+## Muted text meets AA (measured, 2026-08-25)
+
+`--text-subtle` shipped at **3.09:1 on white** in the light theme and 3.90:1 on `--surface-2` in the
+dark one, against the 4.5:1 floor this document calls non-negotiable. It is the colour of every
+`Field` hint, and a hint carries the one sentence explaining what a control expects — the last text
+in the product that should render as decoration. `--text-muted` was also 4.49:1 on light
+`--surface-2`: one hundredth under, which is still under.
+
+Both are now solved against the **lightest surface each actually lands on**, not against the body
+background:
+
+| Token | Was | Now | Worst-case ratio |
+|---|---|---|---|
+| `--text-subtle` (light) | `#8494ab` | `#64748b` | 4.50:1 on `--surface-2` |
+| `--text-subtle` (dark) | `#7278a8` | `#858bbb` | 4.54:1 on `--surface-3` |
+| `--text-muted` (light) | `#64748d` | `#62728b` | 4.62:1 on `--surface-2` |
+
+Verified in the running app across 110 text nodes per theme: zero failures in either.
+
+**When auditing contrast in a browser, do not toggle the theme with JavaScript while the pane
+emulates the other scheme.** Doing that produced 20 phantom failures — light-theme values computed
+against a dark background, including a 1.14:1 reading — none of them real. Set the emulated scheme,
+reload, then measure.

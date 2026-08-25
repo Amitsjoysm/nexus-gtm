@@ -1,0 +1,242 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  margin-top: var(--space-4);
+}
+
+/* Constrained rather than full-bleed: a search field the width of a six-column table reads as a
+   filter bar for the table, not as the first thing to do. */
+.search {
+  max-width: 34rem;
+}
+
+.empty {
+  margin: 0;
+  max-width: 60ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+/* ---- table cells ------------------------------------------------------------------------- */
+
+.nameCell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.name {
+  font-weight: var(--weight-medium);
+  color: var(--text-default);
+}
+
+/* The member address that matched the search. Present only when an email matched, so its absence
+   is information too. */
+.matched {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ---- the inline detail panel --------------------------------------------------------------- */
+
+/* Opened in place rather than in a modal: there is too much here for a dialog, and a modal would
+   also cover the table the operator is comparing against. */
+.detail {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  padding: var(--space-5);
+}
+
+.detailHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.detailTitle {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+/* Focused programmatically when the panel opens, so a keyboard user lands here rather than staying
+   on the table row. It is a focus target, not a control, so it gets no ring of its own. */
+.detailTitle:focus {
+  outline: none;
+}
+.detailTitle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* Three panels: terms, usage, credits. Two up on wide screens, stacked below — rules between them
+   rather than nested cards, which would be a card inside a card inside a card. */
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: var(--space-6);
+}
+
+.panels > section + section {
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+@media (min-width: 60rem) {
+  /* Side by side, so the separator has to move from above to beside. */
+  .panels > section + section {
+    padding-top: 0;
+    border-top: none;
+  }
+}
+
+.panelTitle {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+.note {
+  margin: var(--space-2) 0 0;
+  max-width: 60ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+/* A pending cancellation is the one fact on this panel that changes what an operator should do
+   next, so it is stated rather than left to be inferred from a date field. */
+.warn {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--warning-quiet);
+  color: var(--text-default);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.figures dt {
+  margin-bottom: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.figures dd {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm) !important;
+  font-weight: var(--weight-normal) !important;
+  overflow-wrap: anywhere;
+}
+
+/* ---- forms ---------------------------------------------------------------------------------- */
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.row > *:not(button) {
+  flex: 1 1 12rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* The terms editor. Inset and ruled so it reads as a mode you entered, not as more of the panel —
+   these fields write directly to a live subscription. */
+.editor {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.editor .row:first-child {
+  margin-top: 0;
+}
+
+/* ---- usage ---------------------------------------------------------------------------------- */
+
+.usage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.usage li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5rem auto;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.usageName {
+  color: var(--text-default);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Relative to the busiest capability, not to a quota — most of these are unlimited, and a bar
+   against an absent ceiling would be drawing a fraction of nothing. It ranks; it does not measure.
+   `aria-hidden` because the number beside it already says the value. */
+.usageBar {
+  block-size: 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.usageBar > span {
+  display: block;
+  block-size: 100%;
+  min-inline-size: 2px;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.usageValue {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-default);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

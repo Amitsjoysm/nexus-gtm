@@ -1260,6 +1260,95 @@ export interface ProviderKeyTestResult {
   http_status: number | null;
 }
 
+/** A workspace in the Control-plane directory. */
+export interface CustomerRow {
+  tenant_id: string;
+  workspace: string;
+  plan_id: string;
+  plan_name: string;
+  status: string;
+  users: number;
+  /**
+   * The member address the search matched, when it matched one. Credits belong to a WORKSPACE,
+   * not a person, so an operator who typed an email needs to see they found the right human
+   * rather than a workspace that merely contains a similar address.
+   */
+  matched_email: string;
+  requests_this_period: number;
+  credits_balance: number;
+}
+
+export interface CustomerCapabilityUse {
+  capability_id: string;
+  name: string;
+  category: string;
+  used: number;
+}
+
+export interface CustomerUsage {
+  tenant_id: string;
+  workspace: string;
+  period: string;
+  plan_id: string;
+  plan_name: string;
+  status: string;
+  capabilities: CustomerCapabilityUse[];
+  credits_balance: number;
+  requests_this_period: number;
+  requests_total: number;
+}
+
+/** Full subscription terms. The list view omits everything below `status`. */
+export interface AdminSubscriptionDetail {
+  id: string;
+  plan_id: string;
+  plan_name: string;
+  plan_class: string;
+  status: string;
+  interval: string;
+  currency: string;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  trial_end: string | null;
+  cancel_at_period_end: boolean;
+  grandfathered: boolean;
+  seats_included: number | null;
+  /** Empty for an enterprise deal that never had a provider object. */
+  psp_customer_id: string;
+  psp_subscription_id: string;
+}
+
+/** Only what is sent is changed. `plan_id` is deliberately absent — see the endpoint. */
+export interface SubscriptionPatch {
+  status?: string;
+  trial_end?: string | null;
+  current_period_end?: string | null;
+  cancel_at_period_end?: boolean;
+  seats_included?: number | null;
+  grandfathered?: boolean;
+  reason?: string;
+}
+
+/**
+ * A payment-provider account. The secret key is NEVER sent to the client — `key_hint` is its last
+ * four characters, and `account_name` is read back from the provider during verification because
+ * authenticating against the WRONG business looks exactly like success.
+ */
+export interface PaymentCredential {
+  id: string;
+  provider: string;
+  label: string;
+  key_hint: string;
+  publishable_key: string;
+  account_id: string;
+  account_name: string;
+  livemode: boolean;
+  /** registered | verified | failed. Only `verified` can be activated. */
+  status: string;
+  last_error: string;
+  active: boolean;
+}
+
 /**
  * Platform-wide counts, read across every tenant.
  *

@@ -258,6 +258,92 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   table having `tenant_id` — does not hide them from the operators who must read them.
   `dead_letter_jobs` (below) follows the same rule for the same reason.
 
+## Payment credentials (`nexus/billing/credentials.py`) — its own table, on purpose
+
+Stripe is **deliberately not** in `providers/catalog.py`, and the reason it gave is the design brief
+for this module: **money fails silently.** A dead search key returns no results and somebody notices
+within a day; a wrong Stripe key stops checkout and stops invoices being raised, which is
+indistinguishable from a quiet month until a customer asks why they were never charged.
+
+So `payment_credentials` (migration `0046`, no `tenant_id`) carries rules the generic key pool does
+not:
+
+- **Verification is mandatory before activation.** `activate_credential` refuses anything not
+  `verified`; there is no add-and-see path for money. The endpoint returns **409**, not 400 — the
+  request is well-formed and the row exists, it is the *state* that forbids it.
+- **Verification reads `/v1/account` and stores the account name and `livemode`.** A key that merely
+  authenticates is not enough: authenticating against the **wrong business** is the expensive
+  mistake and it looks exactly like success. Test and live keys are the same shape.
+- **Exactly one active credential.** No rotation pool — you cannot ride out a bad Stripe key by
+  trying the next one, and two accounts both collecting money with no rule about which is worse than
+  an outage, because it is an outage you cannot see.
+- **A failed re-verification also deactivates.** Leaving a now-broken credential live because it
+  passed last month is how a silent billing outage lasts a month.
+- The active credential **refuses deletion**; deactivation is **never** refused, because during an
+  incident "stop taking money through this account" must not be blocked by a state machine.
+
+`resolve_payment_provider()` is async with a **30s TTL**, mirroring `providers/resolver.py` — the
+worker is a separate process, so without a TTL a credential change would need a restart. It falls
+back to the environment on any failure, which is also what makes the table additive: a deployment
+that never opens the screen behaves exactly as before. `get_payment_provider()` stays for the
+synchronous callers and for `set_payment_provider` test injection, which always wins.
+
+`stripe_publishable_key` is read with `getattr` — Settings has no such field, because the publishable
+key has never been needed server-side.
+
+## Usage invoices are real invoices (`nexus/billing/collection.py`)
+
+Subscriptions ran through Stripe end to end and got hosted invoices, PDFs and line items.
+Usage and overage were rated here and collected with a bare `charge`, so the charges customers most
+want explained were the ones with **no document behind them**.
+
+`collect_invoice` now calls `provider.create_invoice` with the lines we already rated.
+**Our rating stays the source of truth** — the provider prices nothing; letting it compute the total
+would put the arithmetic somewhere `reconcile.py` cannot check.
+
+Two things about the Stripe call that are the opposite of what they look like:
+
+- Create the invoice with `pending_invoice_items_behavior=exclude` **first**, then attach items to
+  that invoice id. Adding items first sweeps in anything else pending on that customer — including
+  items a subscription put there — and bills it on our usage invoice.
+- A finalize that succeeds followed by a payment that fails **still returns the invoice**. It exists
+  and is payable from its hosted page; reporting that as a failed creation would hide a real invoice
+  and invite a second one for the same period.
+
+`hosted_invoice_url` / `invoice_pdf_url` land in `invoice.meta` and are surfaced on the customer's
+own `/billing/invoices`. Empty for the noop provider, and the UI hides the link rather than offering
+a URL that goes nowhere — a plausible-looking link that 404s is worse than a visibly absent one.
+
+## The customer directory (`/admin/billing/customers`)
+
+"Which workspace is this person in?" had **no surface at all**: the Subscriptions tab knew the plan,
+`/billing/usage` is tenant-scoped and answers only for the caller, and credits were visible nowhere
+outside a dialog.
+
+- Search matches workspace name, slug, **or the email of any member**. Credits belong to a
+  **workspace, not a person** — the ledger, quotas and the metering engine are all tenant-scoped —
+  so an email resolves through membership and the row reports **which address matched**, letting an
+  operator confirm they found the right human rather than a workspace containing a similar address.
+- `/customers/{tenant_id}/usage` gives per-capability consumption for **any** workspace. Only what
+  was actually used: the whole catalog at zero would bury the handful that matter under sixty rows
+  of nothing.
+- Both run on `get_platform_sessionmaker()`. The documented trap, and the third time it has bitten
+  here: a cross-tenant aggregate under the RLS-bound app role returns **zero rows, not an error**, so
+  the directory would have shown every customer at 0 requests and 0 credits — indistinguishable from
+  a platform nobody uses. Pinned by a test that writes rows for a tenant the caller is not.
+
+**Subscription CRUD is now complete.** `cancel_subscription` had existed since M6 with **no
+endpoint**, so the lifecycle step support performs most often was the one they could not, and the
+workaround — moving the customer to `free` — leaves the subscription `active` on a $0 plan, which
+reads as a live customer in revenue and in every count that filters on status.
+
+`PATCH .../subscription` edits terms (status, trial end, period end, seats, `cancel_at_period_end`).
+**`plan_id` is deliberately absent from that schema**: a plan change runs proration, and a PATCH that
+repriced a customer because a form posted every field it had loaded is the accident the separation
+prevents. `status` is validated against `SUBSCRIPTION_STATUSES` — a value outside that vocabulary is
+not a stricter setting, it is a subscription neither rating nor entitlements can reason about.
+Cancel defaults to **at period end**, because the customer paid through it.
+
 ## MFA (`nexus/auth/`) — M13
 
 Opt-in per user; **login is unchanged for anyone who has not confirmed a factor**. That is the

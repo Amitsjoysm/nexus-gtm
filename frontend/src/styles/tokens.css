@@ -108,7 +108,11 @@
 
   --text: #eaecfb;
   --text-muted: #a0a6d2;
-  --text-subtle: #7278a8;
+  /* Measured 2026-08-25 at 3.90:1 on --surface-2 as `#7278a8`, below the 4.5 floor DESIGN.md
+     calls non-negotiable. It is the colour of every Field hint, and a hint carries the one
+     sentence explaining what a control expects — the last text to render as decoration.
+     Now 4.54:1 on --surface-3, the lightest surface it lands on. */
+  --text-subtle: #858bbb;
   --text-inverse: #0c0d28;
 
   --accent: #7a68ff;
@@ -163,8 +167,10 @@
   --border-strong: #a8c3de;
 
   --text: #0d253d;
-  --text-muted: #64748d;
-  --text-subtle: #8494ab;
+  /* 4.49:1 on --surface-2 — one hundredth under AA, which is still under. */
+  --text-muted: #62728b;
+  /* Was 3.09:1 on white. See the dark-theme note above; 4.50:1 on --surface-2 now. */
+  --text-subtle: #64748b;
   --text-inverse: #ffffff;
 
   --accent: #533afd;

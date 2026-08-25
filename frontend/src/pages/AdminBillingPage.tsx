@@ -32,6 +32,8 @@ import type {
   RevenueReport,
 } from "@/lib/types";
 import { ApiError } from "@/lib/api";
+import { CustomersTab } from "./admin/CustomersTab";
+import { PaymentsTab } from "./admin/PaymentsTab";
 import { ProviderKeysTab } from "./admin/ProviderKeysTab";
 import styles from "./AdminBillingPage.module.css";
 
@@ -782,10 +784,16 @@ export function AdminBillingPage() {
     { value: "rates", label: "Rate cards" },
     { value: "plans", label: "Plans" },
     { value: "subs", label: "Subscriptions" },
+    // Where an operator goes to answer a question about ONE customer: what are they on, what have
+    // they used, and act on it. The Subscriptions tab is the roll-up; this is the drill-in.
+    { value: "customers", label: "Customers" },
     { value: "revenue", label: "Revenue" },
     // Flags change what customers can do, so this follows pricing-write rather than being visible
     // to every reader.
     ...(can(PRICING_WRITE) ? [{ value: "flags", label: "Feature flags" }] : []),
+    // The payment account decides WHICH BUSINESS the money lands in, which is a commercial
+    // decision — so it follows pricing-write rather than being visible to every reader.
+    ...(can(PRICING_WRITE) ? [{ value: "payments", label: "Payments" }] : []),
     ...(can(ADMINS_MANAGE) ? [{ value: "access", label: "Access" }] : []),
     // Provider credentials. Its own permission, not admins.manage: a holder can spend money
     // through someone else's API key, so registering one and granting platform power stay
@@ -814,8 +822,10 @@ export function AdminBillingPage() {
           {tab === "rates" && <RateCards />}
           {tab === "plans" && <Plans />}
           {tab === "subs" && <Subscriptions />}
+          {tab === "customers" && <CustomersTab />}
           {tab === "revenue" && <Revenue />}
           {tab === "flags" && can(PRICING_WRITE) && <FeatureFlags />}
+          {tab === "payments" && can(PRICING_WRITE) && <PaymentsTab />}
           {tab === "access" && can(ADMINS_MANAGE) && <PlatformAdmins />}
           {tab === "keys" && can(PROVIDERS_MANAGE) && <ProviderKeysTab />}
           {tab === "users" && (can(USERS_MANAGE) || can(USERS_IMPERSONATE)) && (

@@ -41,16 +41,20 @@ async def stripe_webhook(
         mark_processed,
         verify_stripe_signature,
     )
-    from nexus.core.config import get_settings
+    from nexus.billing.credentials import resolve_stripe_secrets
 
     # The RAW bytes. Parsing and re-serializing changes them and breaks the HMAC — the most
     # common way webhook verification is silently defeated.
     raw = await request.body()
 
+    # The MANAGED secret when a credential is active, else the environment. Reading
+    # `get_settings()` directly here would mean a webhook secret typed into the Control plane was
+    # stored and never used — the exact "configured and doing nothing" state this codebase keeps
+    # having to diagnose, and here it would present as every event failing signature check.
+    _secret_key, webhook_secret, _pub = await resolve_stripe_secrets()
+
     try:
-        event = verify_stripe_signature(
-            raw, stripe_signature, get_settings().stripe_webhook_secret
-        )
+        event = verify_stripe_signature(raw, stripe_signature, webhook_secret)
     except (SignatureError, StaleWebhookError, WebhookError) as exc:
         # Log the reason, return a generic message: a precise error tells someone probing the
         # endpoint exactly which check they still need to defeat.

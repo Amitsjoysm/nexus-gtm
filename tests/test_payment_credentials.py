@@ -250,3 +250,45 @@ async def test_an_empty_secret_key_is_refused(fresh_db):
 
     with pytest.raises(CredentialError):
         await add_credential(label="blank", secret_key="   ")
+
+
+async def test_the_managed_webhook_secret_is_what_verifies_events(fresh_db, monkeypatch):
+    """Stored and never used is the failure mode this codebase keeps finding.
+
+    The webhook route read `get_settings().stripe_webhook_secret` directly, so a secret typed into
+    the Control plane would have been sealed, displayed as configured, and ignored — presenting as
+    every Stripe event failing its signature check, which reads as "subscriptions stopped updating".
+    """
+    from nexus.billing.credentials import (
+        activate_credential,
+        add_credential,
+        resolve_stripe_secrets,
+        verify_credential,
+    )
+    from nexus.billing.payments import StripePaymentProvider
+    from nexus.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "stripe_webhook_secret", "whsec_from_env")
+
+    async def fake_get(self, path):
+        return {"id": "acct_OK", "charges_enabled": True}
+
+    monkeypatch.setattr(StripePaymentProvider, "_get", fake_get)
+    row = await add_credential(label="panel", secret_key="sk_panel_1234",
+                               webhook_secret="whsec_typed_in_the_panel")
+    await verify_credential(row.id)
+    await activate_credential(row.id)
+
+    _sk, hook, _pub = await resolve_stripe_secrets()
+    assert hook == "whsec_typed_in_the_panel"
+
+    # And the route reads it through that resolver rather than from settings. Asserted
+    # structurally because exercising it needs a signed body: there is no frontend test runner
+    # here either, and the same reading-the-source approach is used for the nav/route guards.
+    import inspect
+
+    from nexus.api.routers import billing_webhooks
+
+    src = inspect.getsource(billing_webhooks)
+    assert "resolve_stripe_secrets" in src
+    assert "get_settings().stripe_webhook_secret" not in src

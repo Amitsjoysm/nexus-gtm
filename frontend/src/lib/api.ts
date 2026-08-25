@@ -38,7 +38,12 @@ import type {
   Invoice,
   ProviderKey,
   ProviderKeyTestResult,
+  AdminSubscriptionDetail,
+  CustomerRow,
+  CustomerUsage,
+  PaymentCredential,
   PlatformOverview,
+  SubscriptionPatch,
   ProviderModels,
   SupportedProvider,
   SellablePlan,
@@ -957,6 +962,61 @@ export class ApiClient {
    */
   adminPlatformOverview(signal?: AbortSignal) {
     return this.request<PlatformOverview>("/admin/billing/overview", { signal });
+  }
+  // ---- the customer directory (superadmin) ----
+  adminCustomers(q = "", signal?: AbortSignal) {
+    return this.request<CustomerRow[]>("/admin/billing/customers", { query: { q }, signal });
+  }
+  adminCustomerUsage(tenantId: string, signal?: AbortSignal) {
+    return this.request<CustomerUsage>(
+      `/admin/billing/customers/${tenantId}/usage`, { signal },
+    );
+  }
+  adminTenantSubscription(tenantId: string, signal?: AbortSignal) {
+    return this.request<{ tenant_id: string; subscription: AdminSubscriptionDetail | null }>(
+      `/admin/billing/tenants/${tenantId}/subscription`, { signal },
+    );
+  }
+  /** Only the fields you send are changed. Changing the PLAN has its own endpoint. */
+  patchTenantSubscription(tenantId: string, body: SubscriptionPatch) {
+    return this.request<{ plan_id: string; status: string; changed: string[] }>(
+      `/admin/billing/tenants/${tenantId}/subscription`, { method: "PATCH", body },
+    );
+  }
+  cancelTenantSubscription(tenantId: string, body: { at_period_end: boolean; reason: string }) {
+    return this.request<{ status: string; cancel_at_period_end: boolean }>(
+      `/admin/billing/tenants/${tenantId}/subscription/cancel`, { method: "POST", body },
+    );
+  }
+
+  // ---- payment credentials (superadmin) ----
+  paymentCredentials(signal?: AbortSignal) {
+    return this.request<PaymentCredential[]>("/admin/payment-credentials", { signal });
+  }
+  addPaymentCredential(body: {
+    label: string; secret_key: string; publishable_key: string; webhook_secret: string;
+  }) {
+    return this.request<PaymentCredential>("/admin/payment-credentials", { method: "POST", body });
+  }
+  /** Makes a real call and reports which account answered. */
+  verifyPaymentCredential(id: string) {
+    return this.request<{ ok: boolean; status: string; detail?: string; account_name?: string;
+                          account_id?: string; livemode?: boolean }>(
+      `/admin/payment-credentials/${id}/verify`, { method: "POST" },
+    );
+  }
+  activatePaymentCredential(id: string) {
+    return this.request<PaymentCredential>(
+      `/admin/payment-credentials/${id}/activate`, { method: "POST" },
+    );
+  }
+  deactivatePaymentCredential(id: string) {
+    return this.request<PaymentCredential>(
+      `/admin/payment-credentials/${id}/deactivate`, { method: "POST" },
+    );
+  }
+  deletePaymentCredential(id: string) {
+    return this.request<void>(`/admin/payment-credentials/${id}`, { method: "DELETE" });
   }
   adminBillingFlags(signal?: AbortSignal) {
     return this.request<FeatureFlag[]>("/admin/billing/flags", { signal });
