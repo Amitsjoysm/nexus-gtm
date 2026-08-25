@@ -1021,6 +1021,10 @@ class SellablePlanIn(BaseModel):
     # cheaper tier cheaper: turn `module.*` off here rather than leaving it to catalog defaults,
     # which are permissive and would silently grant nearly everything.
     entitlement_overrides: dict[str, dict] = {}
+    # Pay-as-you-go: every metered capability starts at quota 0, so all consumption is rated as
+    # overage onto an invoice. Without it a zero-allowance plan inherits unlimited entitlements
+    # and bills nothing — rating skips any capability whose quota is None.
+    metered_from_zero: bool = False
 
 
 class PlanStatusIn(BaseModel):
@@ -1067,6 +1071,7 @@ async def create_sellable_plan_endpoint(
                 sort_order=body.sort_order,
                 status=body.status,
                 entitlement_overrides=body.entitlement_overrides or None,
+                metered_from_zero=body.metered_from_zero,
             )
         except PlanAuthoringError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc

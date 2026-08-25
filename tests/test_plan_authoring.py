@@ -278,14 +278,43 @@ async def test_no_stripe_object_is_created_for_a_plan_nobody_has_bought(client, 
         set_payment_provider(None)
 
 
-async def test_the_sort_order_places_it_by_price(client, monkeypatch):
-    """So a new tier lands in the right place on the ladder without the operator having to know
-    what sort_order means."""
+async def test_a_new_tier_lands_between_the_plans_it_out_and_under_prices(client, monkeypatch):
+    """Read the ladder, do not compute a position from price alone.
+
+    The first version scored `10 + cents // 250`, which put $149 Scale at 69 — *after* $199
+    Business at 50. The seeded ladder uses hand-picked orders on no particular scale, so a formula
+    cannot know its spacing. This asserts against the real neighbours instead.
+    """
     token = await _superadmin(client, monkeypatch, slug="pa21", email="boss@pa21.com")
+    admin = (await client.get("/api/admin/billing/plans", headers=auth(token))).json()
+    order = {p["id"]: p["sort_order"] for p in admin}
+
+    # $149 sits between Professional ($129) and Business ($199).
+    mid = (await client.post("/api/admin/billing/plans", headers=auth(token),
+                             json=_plan(plan_id="between", base_price_cents=14900))).json()
+    assert order["professional"] < mid["sort_order"] < order["business"], (
+        f"{mid['sort_order']} is not between professional {order['professional']} "
+        f"and business {order['business']}"
+    )
+
+    # Dearer than everything sorts last among the standard tiers.
+    top = (await client.post("/api/admin/billing/plans", headers=auth(token),
+                             json=_plan(plan_id="priciest", base_price_cents=90000))).json()
+    assert top["sort_order"] >= order["business"]
+
+
+async def test_an_annual_plan_is_positioned_against_other_annual_plans(client, monkeypatch):
+    """An annual price is roughly twelve monthly ones. Comparing across intervals would sort every
+    annual plan below every monthly one, which is not a ladder."""
+    token = await _superadmin(client, monkeypatch, slug="pa24", email="boss@pa24.com")
     cheap = (await client.post("/api/admin/billing/plans", headers=auth(token),
-                               json=_plan(plan_id="cheap", base_price_cents=1000))).json()
+                               json=_plan(plan_id="yr-lite", interval="year",
+                                          base_price_cents=49000,
+                                          included_credits=12000))).json()
     dear = (await client.post("/api/admin/billing/plans", headers=auth(token),
-                              json=_plan(plan_id="dear", base_price_cents=90000))).json()
+                              json=_plan(plan_id="yr-max", interval="year",
+                                         base_price_cents=490000,
+                                         included_credits=200000))).json()
     assert cheap["sort_order"] < dear["sort_order"]
 
 
@@ -303,3 +332,131 @@ async def test_an_empty_id_is_refused(client, monkeypatch, bad):
     r = await client.post("/api/admin/billing/plans", headers=auth(token),
                           json=_plan(plan_id=bad))
     assert r.status_code == 400
+
+
+# ---- pay as you go -------------------------------------------------------------------------------
+
+async def test_pay_as_you_go_sets_every_quota_to_zero(client, monkeypatch):
+    """The whole reason `metered_from_zero` exists.
+
+    Rating charges overage only where a quota is SET. A capability with `quota=None` reads as
+    unlimited and is skipped entirely. So a PAYG plan built the obvious way — clone a plan, set
+    `included_credits=0` — inherits unlimited entitlements and bills the customer **nothing**,
+    while metering happily. It would look correct right up to the first invoice.
+    """
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingPlanEntitlement
+
+    token = await _superadmin(client, monkeypatch, slug="pg1", email="boss@pg1.com")
+    r = await client.post("/api/admin/billing/plans", headers=auth(token),
+                          json=_plan(plan_id="payg", name="Pay as you go",
+                                     base_price_cents=0, included_credits=0,
+                                     metered_from_zero=True, status="active"))
+    assert r.status_code == 201, r.text
+
+    async with get_platform_sessionmaker()() as s:
+        ents = (await s.scalars(
+            select(BillingPlanEntitlement).where(BillingPlanEntitlement.plan_id == "payg")
+        )).all()
+    from nexus.billing.rates import UNPRICED_BY_DESIGN
+
+    zeroed = [e for e in ents
+              if not e.capability_id.startswith("module.")
+              and e.capability_id not in UNPRICED_BY_DESIGN]
+    assert all(e.quota == 0 for e in zeroed), (
+        [f"{e.capability_id}={e.quota}" for e in zeroed if e.quota != 0]
+    )
+    # Enumerated from the CATALOG, not from the base plan. `growth` carries five entitlement rows;
+    # a PAYG plan built from those five would bill for five things and give away the other sixty.
+    assert len(zeroed) > 20, f"only {len(zeroed)} capabilities are billable — cloned, not enumerated"
+
+
+async def test_pay_as_you_go_never_zeroes_the_seat_quota(client, monkeypatch):
+    """`seat.member` is billed as a SEAT PRICE, not in credits. `quota=0` on it means no members
+    allowed, so the customer cannot use the product at all. The first build of this did exactly
+    that."""
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingPlanEntitlement
+
+    token = await _superadmin(client, monkeypatch, slug="pg5", email="boss@pg5.com")
+    await client.post("/api/admin/billing/plans", headers=auth(token),
+                      json=_plan(plan_id="payg5", base_price_cents=0, included_credits=0,
+                                 metered_from_zero=True))
+    async with get_platform_sessionmaker()() as s:
+        row = (await s.scalars(select(BillingPlanEntitlement).where(
+            BillingPlanEntitlement.plan_id == "payg5",
+            BillingPlanEntitlement.capability_id == "seat.member",
+        ))).first()
+    assert row is None or row.quota != 0, "a PAYG customer must still be allowed members"
+
+
+async def test_pay_as_you_go_leaves_module_gates_alone(client, monkeypatch):
+    """A module gate is on/off, not a quantity. Forcing quota 0 onto one would read as "you may
+    use this module zero times", which is not what disabling a module means."""
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingPlanEntitlement
+
+    token = await _superadmin(client, monkeypatch, slug="pg2", email="boss@pg2.com")
+    await client.post("/api/admin/billing/plans", headers=auth(token),
+                      json=_plan(plan_id="payg2", base_price_cents=0, included_credits=0,
+                                 metered_from_zero=True))
+
+    async with get_platform_sessionmaker()() as s:
+        gates = (await s.scalars(
+            select(BillingPlanEntitlement).where(
+                BillingPlanEntitlement.plan_id == "payg2",
+                BillingPlanEntitlement.capability_id.like("module.%"),
+            )
+        )).all()
+    assert all(g.quota != 0 for g in gates), "module gates must not be zero-quota'd"
+
+
+async def test_an_explicit_override_still_wins_on_a_payg_plan(client, monkeypatch):
+    """A PAYG plan may still want a module off, or a genuine free allowance on one capability
+    as an acquisition hook."""
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingPlanEntitlement
+
+    token = await _superadmin(client, monkeypatch, slug="pg3", email="boss@pg3.com")
+    await client.post(
+        "/api/admin/billing/plans", headers=auth(token),
+        json=_plan(plan_id="payg3", base_price_cents=0, included_credits=0,
+                   metered_from_zero=True,
+                   entitlement_overrides={"ai.email_draft": {"quota": 25, "mode": "metered"}}),
+    )
+    async with get_platform_sessionmaker()() as s:
+        row = (await s.scalars(
+            select(BillingPlanEntitlement).where(
+                BillingPlanEntitlement.plan_id == "payg3",
+                BillingPlanEntitlement.capability_id == "ai.email_draft",
+            )
+        )).first()
+    assert row is not None and row.quota == 25
+
+
+async def test_a_normal_plan_is_unaffected_by_the_flag_being_off(client, monkeypatch):
+    """Additive: leaving `metered_from_zero` alone changes nothing about how plans clone."""
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingPlanEntitlement
+
+    token = await _superadmin(client, monkeypatch, slug="pg4", email="boss@pg4.com")
+    await client.post("/api/admin/billing/plans", headers=auth(token), json=_plan(plan_id="normal"))
+
+    async with get_platform_sessionmaker()() as s:
+        new = {e.capability_id: e.quota for e in (await s.scalars(
+            select(BillingPlanEntitlement).where(BillingPlanEntitlement.plan_id == "normal")
+        )).all()}
+        base = {e.capability_id: e.quota for e in (await s.scalars(
+            select(BillingPlanEntitlement).where(BillingPlanEntitlement.plan_id == "growth")
+        )).all()}
+    assert new == base

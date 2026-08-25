@@ -188,8 +188,19 @@ async def create_sellable_plan(
     sort_order: int | None = None,
     status: str = "draft",
     entitlement_overrides: dict[str, dict] | None = None,
+    metered_from_zero: bool = False,
 ) -> dict:
-    """Create a plan the public price list can sell. Returns a summary plus any margin warning."""
+    """Create a plan the public price list can sell. Returns a summary plus any margin warning.
+
+    ``metered_from_zero`` builds a **pay-as-you-go** plan: every metered entitlement gets
+    ``quota=0`` so that all consumption is overage and therefore rated onto an invoice.
+
+    That flag is not a convenience. Rating charges overage only where a quota is set — a
+    capability with ``quota=None`` reads as unlimited and is skipped, contributing nothing. So a
+    PAYG plan built the obvious way, by cloning a plan and setting ``included_credits=0``, would
+    inherit unlimited entitlements and **bill the customer nothing at all** while metering happily.
+    It would look like it was working right up to the first invoice.
+    """
     plan_id = normalise_plan_id(plan_id)
     if status not in AUTHORABLE_STATUSES:
         raise PlanAuthoringError(f"status must be one of {AUTHORABLE_STATUSES}")
@@ -223,17 +234,22 @@ async def create_sellable_plan(
         included_credits=int(included_credits),
         max_seats=max_seats if max_seats is not None else base.max_seats,
         trial_days=int(trial_days),
-        # Sorts next to its price by default, so a new tier lands in the right place on the ladder
-        # without the operator having to know what sort_order means.
-        sort_order=int(sort_order) if sort_order is not None else _sort_for(base_price_cents),
+        # Placeholder; replaced below once we can see the ladder it is joining.
+        sort_order=int(sort_order) if sort_order is not None else 0,
         meta={},
     )
+    if sort_order is None:
+        plan.sort_order = await _position_on_ladder(session, base_price_cents, interval)
     session.add(plan)
     await session.flush()
 
+    overrides = dict(entitlement_overrides or {})
+    if metered_from_zero:
+        overrides = await _zero_quota_overrides(session, overrides)
+
     cloned, applied = await clone_entitlements(
         session, from_plan_id=base_plan_id, to_plan_id=plan_id,
-        overrides=entitlement_overrides,
+        overrides=overrides,
     )
     warning = await margin_warning(
         session, base_price_cents=base_price_cents, included_credits=included_credits,
@@ -259,9 +275,74 @@ async def create_sellable_plan(
     }
 
 
-def _sort_for(base_price_cents: int) -> int:
-    """Position on the ladder, derived from price. The seeded tiers use 10-60 in price order."""
-    return max(10, min(890, 10 + base_price_cents // 250))
+async def _zero_quota_overrides(session: AsyncSession,
+                                explicit: dict[str, dict]) -> dict[str, dict]:
+    """Every priced capability starts at zero, so every unit is billable overage.
+
+    Enumerated from the **capability catalog**, not from the base plan's entitlements. The base
+    plans carry only a handful of rows each — `growth` has five — and everything else resolves
+    from catalog defaults. Cloning those five and zeroing them would produce a pay-as-you-go plan
+    that bills for five things and gives away the other sixty-five.
+
+    Two exclusions, both of which would be actively wrong:
+
+    * **Module gates** are on/off, not quantities. `quota=0` on one reads as "you may use this
+      module zero times", which is not what disabling a module means.
+    * **`UNPRICED_BY_DESIGN`** — chiefly `seat.member`, which is billed as a seat price rather than
+      in credits. Zeroing it means *no members allowed*, so the customer cannot use the product at
+      all. Caught by exactly that happening on the first build of this function.
+
+    An explicit override still wins: a PAYG plan may want a module off, or a genuine free
+    allowance on one capability as an acquisition hook.
+    """
+    from nexus.billing.rates import UNPRICED_BY_DESIGN
+    from nexus.models.billing import BillingCapability, BillingRateCard
+
+    caps = (await session.scalars(select(BillingCapability.id))).all()
+    priced = set((await session.scalars(select(BillingRateCard.capability_id))).all())
+
+    out: dict[str, dict] = {}
+    for cap_id in caps:
+        if cap_id.startswith("module.") or cap_id in UNPRICED_BY_DESIGN:
+            continue
+        # No rate card means nothing to rate it at, so a zero quota would only block the customer
+        # rather than bill them.
+        if cap_id not in priced:
+            continue
+        out[cap_id] = {"quota": 0, "mode": "metered"}
+    out.update(explicit)
+    return out
+
+
+async def _position_on_ladder(session: AsyncSession, base_price_cents: int,
+                              interval: str) -> int:
+    """Slot the new plan between the existing tiers it out-prices and under-prices.
+
+    The first version computed this from price alone (``10 + cents // 250``). That was wrong the
+    first time it ran: the seeded ladder uses hand-picked orders (10, 15, 18, 20, 30, 40, 50, 60)
+    on no particular scale, so a $149 plan scored 69 and sorted *after* $199 Business. A formula
+    cannot know the spacing of a ladder it did not build — so read it instead.
+
+    Compared **within the same interval**, because an annual price is roughly twelve monthly ones
+    and comparing across the two would sort every annual plan below every monthly one.
+    """
+    rows = (
+        await session.scalars(
+            select(BillingPlan).where(
+                BillingPlan.plan_class == SELLABLE_CLASS,
+                BillingPlan.interval == interval,
+            )
+        )
+    ).all()
+    cheaper = [p for p in rows if p.base_price_cents <= base_price_cents]
+    dearer = [p for p in rows if p.base_price_cents > base_price_cents]
+    below = max((p.sort_order for p in cheaper), default=0)
+    above = min((p.sort_order for p in dearer), default=below + 20)
+    if above - below >= 2:
+        return (below + above) // 2
+    # No gap to sit in — take the dearer plan's slot and let it drift up. Ties sort by insertion,
+    # which is stable, and an operator can set the number by hand if the order matters that much.
+    return above
 
 
 async def set_plan_status(session: AsyncSession, plan_id: str, status: str) -> BillingPlan:
