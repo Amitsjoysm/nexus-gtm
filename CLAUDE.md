@@ -189,15 +189,23 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0042_account_next_refresh`. The chain is
+Alembic under `migrations/versions/`. Head: `0049_integration_connections`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
 `0031`–`0040` (page snapshots, notification preferences, feature flags, contact soft-delete,
 `companies`, proration, shared `people`, `crawl_verdict`, user suspension, digest delivery) →
 `0041` (`source_databases`) → `0042` (`accounts.next_refresh_at`) → `0043` (`signal_events.subtype`) →
-`0044` (`crm_connections`, per-tenant CRM credentials). Every tenant-scoped table gets RLS via
+`0044`–`0046` (`provider_keys`, `provider_settings`, `payment_credentials`) → `0047`–`0049`
+(`crm_connections`, `audit_log`, `integration_connections`). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
+
+**Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
+`upgrade head` refuses to run against. Both had branched from `0043_signal_subtype`. Resolved by
+renumbering one chain to `0047`–`0049` and rebasing it onto the other's head, rather than adding a
+merge revision — neither had been applied anywhere, so no stamped database remembered the old ids.
+If you branch for more than a day, check `ScriptDirectory.get_heads()` returns exactly one before
+merging; the collision is invisible until a deploy.
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —
 `tests/test_migrations_replay.py` builds one from nothing but `alembic upgrade head` and diffs
@@ -290,6 +298,37 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   deliberately name their tenant column `subject_tenant_id` so `apply_rls.py` — which enrolls any
   table having `tenant_id` — does not hide them from the operators who must read them.
   `dead_letter_jobs` (below) follows the same rule for the same reason.
+
+## Authoring a sellable plan (`nexus/billing/plan_authoring.py`)
+
+A ninth public tier used to need a `plans.py` edit and a deploy. `CustomPlanDialog` could build a
+bespoke per-tenant deal, but `plan_class="custom"` is excluded from `GET /billing/plans` and refused
+by checkout with a 409 — so there was no path from "we want to sell a new tier" to a customer buying
+it. `POST /admin/billing/plans` closes that; `PUT .../status` publishes or holds.
+
+- **`plan_class` is decided by the service, never by the body** (`extra="forbid"`). An endpoint that
+  accepted one would mint an `unlimited` or `internal` plan by typing a string — the migration
+  keystone and the staff tier. Publishing a non-standard plan is refused for the same reason, as
+  are the reserved ids (`free`, `enterprise`, `legacy-unlimited`, anything `custom-`).
+- **Draft by default, and `draft` is also the hold.** A held plan leaves the price list and existing
+  subscribers are untouched, because entitlements resolve from the plan row rather than from what is
+  on sale. That is the difference between holding and retiring, and `retired` is deliberately not
+  reachable from the status switch.
+- **Entitlements are cloned from a base plan, never empty.** `resolve_entitlement` falls back to
+  permissive catalog defaults for anything a plan does not list, so a blank new tier would silently
+  grant nearly everything. `clone_entitlements` is shared with `custom_plans` — a second copy would
+  drift, and the first thing to drift would be *which fields* get carried, invisible until a customer
+  is on the wrong quota.
+- **The margin check warns, it does not block**, unlike `rates.validate_rate`. A rate card below cost
+  loses money on every call; a plan priced under the cost of its own credits is a normal commercial
+  decision, and a hard floor would refuse the `free` tier that already exists.
+- **No Stripe object is created.** `create_checkout` calls `ensure_plan_price` on first purchase, so
+  a draft nobody bought does not litter the Stripe account with products.
+
+`sort_order` defaults to a function of price, so a new tier lands in the right place without the
+operator knowing what the number means. An **annual** plan is a separate row with `interval="year"`,
+and its auto-position is derived from the yearly price — set `sort_order` explicitly to sit it beside
+its monthly sibling.
 
 ## Payment credentials (`nexus/billing/credentials.py`) — its own table, on purpose
 
@@ -954,37 +993,34 @@ seeded**: `create_checkout` calls `ensure_plan_price` on first purchase and cach
 
 ## CRM and telephony: what is actually connected
 
-Both were reported as "users can't add credentials". Neither had a credential surface at all, and
-each hid a different failure behind that.
+Both were once reported as "users can't add credentials", and neither had a credential surface at
+all. Both now do, and the shape differs because the problems differ.
 
-**CRM credentials are deployment-global env vars**, not per-tenant: `NEXUS_CRM_PROVIDER` plus
-`NEXUS_HUBSPOT_ACCESS_TOKEN`, resolved once into a module singleton. The Integrations screen looks
-like a connection form and is not one — `CrmCard` is a manual account-entry grid whose
-salesforce/hubspot dropdown is only a provenance label. There are no credential fields anywhere in
-the product.
+**CRM credentials are per-tenant** (`nexus/ingestion/crm_credentials.py`, migration `0047`), not
+deployment-global env vars. Each workspace connects its own HubSpot or Salesforce, by pasted token
+or by OAuth (`nexus/integrations/oauth.py`); the token is Fernet-sealed and never returned. The env
+vars remain as the **fallback** — `get_crm_connector()` is the deployment default and
+`resolve_crm_connector()` is the per-tenant path, so a deployment that never connects anything keeps
+working exactly as before.
 
-**HubSpot works; Salesforce is a stub.** A real pull returned 99 companies on the live token.
-`SalesforceConnector.fetch_accounts` returns an injected sample, so `NEXUS_CRM_PROVIDER=salesforce`
-yields zero accounts forever — silently, which is the not-configured-vs-no-results failure this
-codebase fixes everywhere else.
+**Both providers are live.** HubSpot returned 99 companies on a real token; Salesforce is a real
+OAuth2 + REST adapter with SOQL fetch and push, listed in `LIVE_CRM_PROVIDERS`. It spent a release
+working while the UI still offered it as "coming soon" and disabled — the inverse of
+configured-and-doing-nothing, and `test_the_dropdown_offers_exactly_the_providers_the_server_accepts`
+now pins the two lists together.
 
-**`/crm/sync` used to pick a connector CLASS by the wire value and call it with `sample=`.** That
-only worked because the Salesforce stub's constructor happens to take that keyword;
-`HubSpotConnector.__init__` takes an access token, so choosing HubSpot in the UI raised `TypeError`
-and the user got a 500. Measured before the fix: salesforce 200, hubspot 500 — the dropdown's
-second option was dead. `_PostedRows` carries the source as *data* instead, so the wire value can
-never select a constructor again. With no rows posted the endpoint pulls from the configured CRM,
-and asking for a provider this deployment is not wired to is a 400, because answering 0 accounts
-would read as "your CRM is empty".
+`_soql_escape` handles the quote, which is the injection. `_soql_like` additionally escapes `%` and
+`_`, which are LIKE **wildcards** — not dangerous, but a domain containing an underscore silently
+matches accounts it should not, and that query decides which of the customer's accounts a contact
+gets written onto.
 
-**There is no Twilio integration.** `nexus/calling/provider.py` ships one implementation —
-`StubCallProvider`, returning a click-to-dial `tel:` URL — and `build_call_provider` returned it for
-*every* input, so `NEXUS_TELEPHONY_PROVIDER=twilio` behaved exactly like leaving it blank. Worse,
-`get_call_provider()` had **no callers anywhere**, so the setting was inert twice over: an operator
-could set it, watch click-to-dial work, and never learn Twilio was not involved. It now raises
-`TelephonyNotImplemented`, resolved once in `main.py`'s `lifespan` so the mistake surfaces on deploy
-rather than on the first rep's first call. Calling itself works today as click-to-dial —
-`CallConsole.tsx` builds its own `tel:` link — plus manual dispositions.
+**Twilio is real** (`nexus/calling/twilio.py`). `build_call_provider` used to return the stub for
+*every* input, so `NEXUS_TELEPHONY_PROVIDER=twilio` behaved exactly like leaving it blank, and
+`get_call_provider()` had no callers at all — the setting was inert twice over. It now raises
+`TelephonyNotConfigured` naming the exact env vars (`NEXUS_TWILIO_ACCOUNT_SID`,
+`NEXUS_TWILIO_AUTH_TOKEN`), resolved in `main.py`'s `lifespan` so the mistake surfaces on deploy
+rather than on the first rep's first call. `StubCallProvider` is still the default and is **not** a
+placeholder: click-to-dial plus manual dispositions is a complete workflow.
 
 ## Provider keys and models (`nexus/providers/`) — superadmin, no redeploy
 
