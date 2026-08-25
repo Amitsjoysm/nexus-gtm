@@ -65,11 +65,22 @@ export function IntegrationsPage() {
   );
 }
 
-/** Providers a workspace can pick. Salesforce is listed but not connectable: the adapter is a
- *  stub, so accepting a token would store a secret that does nothing. */
+/**
+ * Providers a workspace can pick.
+ *
+ * Salesforce was listed as "coming soon" and disabled while its adapter was a stub — accepting a
+ * token then would have stored a secret that did nothing. The adapter is real now (OAuth2 + REST,
+ * SOQL-backed fetch and push, `test_connection` that reports the instance it reached), the server
+ * lists it in `LIVE_CRM_PROVIDERS`, and it has its own test file. The dropdown was the last thing
+ * still saying otherwise, which is the "configured and doing nothing" state this codebase keeps
+ * having to diagnose — only inverted: working and refusing to be offered.
+ *
+ * This list must stay in step with `crm_credentials.LIVE_CRM_PROVIDERS`; a provider offered here
+ * and rejected there is a form that fails on submit.
+ */
 const CRM_PROVIDERS: { value: string; label: string; disabled?: boolean }[] = [
   { value: "hubspot", label: "HubSpot" },
-  { value: "salesforce", label: "Salesforce — coming soon", disabled: true },
+  { value: "salesforce", label: "Salesforce" },
 ];
 
 /** Badge tone + copy per connection state, so the header reads honestly at a glance. */

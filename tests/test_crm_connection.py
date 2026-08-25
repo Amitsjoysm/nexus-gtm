@@ -682,3 +682,29 @@ async def test_crm_lookup_ignores_a_sep_row():
                                      secret=seal_crm_secret({"api_key": "b"})))
         await ts.flush()
         assert await get_connection(ts) is None
+
+
+async def test_the_dropdown_offers_exactly_the_providers_the_server_accepts():
+    """A provider offered in the UI and rejected by the server is a form that fails on submit;
+    one the server accepts and the UI hides is a working integration nobody can reach.
+
+    Salesforce spent a release in the second state: the adapter was real, `LIVE_CRM_PROVIDERS`
+    listed it, and the dropdown still said "coming soon" with the option disabled. There is no
+    frontend test runner here, so this reads the source — the same approach the nav/route guard
+    tests use.
+    """
+    import pathlib
+    import re
+
+    from nexus.ingestion.crm_credentials import LIVE_CRM_PROVIDERS
+
+    src = pathlib.Path("frontend/src/pages/IntegrationsPage.tsx").read_text(encoding="utf-8")
+    block = re.search(r"const CRM_PROVIDERS[^=]*=\s*\[(.*?)\];", src, re.S)
+    assert block, "CRM_PROVIDERS not found — was it renamed?"
+    offered = set(re.findall(r'value:\s*"([a-z_]+)"', block.group(1)))
+    disabled = set(re.findall(r'value:\s*"([a-z_]+)"[^}]*disabled:\s*true', block.group(1)))
+
+    assert offered == set(LIVE_CRM_PROVIDERS), (
+        f"dropdown offers {sorted(offered)}, server accepts {sorted(LIVE_CRM_PROVIDERS)}"
+    )
+    assert not disabled, f"{sorted(disabled)} are live on the server but disabled in the UI"
