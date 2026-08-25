@@ -10,6 +10,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from nexus.calling.provider import (
+    CallHandle,
+    CallProviderError,
+    TelephonyNotConfigured,
+    get_call_provider,
+)
 from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.models.calling import (
@@ -199,6 +205,45 @@ class CallQueueService:
             "talking_points": _talking_points(person, score, account),
         }
 
+    async def place_call(
+        self, ts: TenantSession, task_id: str, *, agent_number: str | None = None
+    ) -> CallHandle | None:
+        """Dial the task's contact through the configured telephony provider.
+
+        Under the default stub this places no call and returns a click-to-dial ``tel:`` URL —
+        the workflow reps use today. Under a live provider it rings ``agent_number`` (the rep's
+        own phone) and bridges to the contact. Raises rather than degrading, so a failed dial is
+        never reported as a placed call.
+        """
+        from nexus.core.config import get_settings
+        from nexus.models.account import Contact
+
+        task = await ts.get(CallTask, task_id)
+        if task is None:
+            return None
+        contact = await ts.get(Contact, task.contact_id) if task.contact_id else None
+        phone = ((contact.phone if contact else "") or "").strip()
+        if not phone:
+            raise CallProviderError("This contact has no phone number to dial.")
+
+        provider = get_call_provider()
+        from_number = (get_settings().telephony_from_number or "").strip()
+        if provider.name != "stub" and not from_number:
+            raise TelephonyNotConfigured(
+                "NEXUS_TELEPHONY_FROM_NUMBER is not set. A live call needs a caller ID "
+                "you own on the provider."
+            )
+        return await provider.place_call(
+            to=phone,
+            from_=from_number,
+            context={
+                "agent_number": agent_number,
+                "task_id": task.id,
+                "account_id": task.account_id,
+                "contact_id": task.contact_id,
+            },
+        )
+
     async def log_disposition(
         self,
         ts: TenantSession,
@@ -208,12 +253,31 @@ class CallQueueService:
         notes: str = "",
         duration_s: int | None = None,
         next_step: str | None = None,
+        provider_call_id: str | None = None,
     ) -> CallActivity | None:
         """Log a call outcome. Terminal dispositions close the task; re-queue dispositions
-        (no_answer/callback/gatekeeper) keep it open so the SDR can try again."""
+        (no_answer/callback/gatekeeper) keep it open so the SDR can try again.
+
+        When the call was placed live, ``provider_call_id`` pulls the provider's own record of
+        it — real duration, recording URL, transcript — onto the activity. That lookup is
+        best-effort: a provider hiccup, or a recording Twilio has not finished processing, must
+        never stop the rep from logging what happened.
+        """
         task = await ts.get(CallTask, task_id)
         if task is None:
             return None
+
+        recording_url = transcript = None
+        if provider_call_id:
+            provider = get_call_provider()
+            status = await provider.get_call_status(provider_call_id)
+            # The provider's duration is measured, not remembered — but an explicitly entered
+            # value is the rep's deliberate correction, so it wins.
+            if duration_s is None and status:
+                duration_s = status.get("duration_s")
+            recording_url = await provider.get_recording(provider_call_id)
+            transcript = await provider.get_transcript(provider_call_id)
+
         activity = CallActivity(
             tenant_id=ts.tenant_id,
             call_task_id=task.id,
@@ -224,6 +288,9 @@ class CallQueueService:
             duration_s=duration_s,
             next_step=next_step,
             occurred_at=utcnow(),
+            provider_call_id=provider_call_id,
+            recording_url=recording_url,
+            transcript=transcript,
         )
         ts.add(activity)
         if disposition not in REQUEUE_DISPOSITIONS:

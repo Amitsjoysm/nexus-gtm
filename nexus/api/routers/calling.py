@@ -15,9 +15,21 @@ from nexus.api.schemas import (
     CallScriptOut,
     CallTaskOut,
     CreateCallTaskIn,
+    DialIn,
+    DialOut,
     DispositionIn,
+    TelephonyStatusOut,
+)
+from nexus.calling.provider import (
+    AgentNumberRequired,
+    InvalidPhoneNumber,
+    TelephonyError,
+    TelephonyNotConfigured,
+    TelephonyNotImplemented,
+    get_call_provider,
 )
 from nexus.calling.service import get_call_queue_service
+from nexus.core.config import get_settings
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Account, Contact
@@ -32,7 +44,23 @@ def _activity_out(a) -> CallActivityOut:
         contact_id=a.contact_id, disposition=a.disposition, notes=a.notes or "",
         duration_s=a.duration_s, next_step=a.next_step,
         occurred_at=a.occurred_at.isoformat() if a.occurred_at else "",
+        provider_call_id=a.provider_call_id, recording_url=a.recording_url,
+        transcript=a.transcript,
     )
+
+
+def _telephony_http_error(exc: TelephonyError) -> HTTPException:
+    """Map a telephony failure to the status that tells the caller what to do about it.
+
+    A bad number or a missing rep phone is the request's fault (422); missing credentials or an
+    unknown provider is the deployment's (503); anything else means the provider refused or was
+    unreachable (502). Never 200 — a call that did not connect must not read as success.
+    """
+    if isinstance(exc, (InvalidPhoneNumber, AgentNumberRequired)):
+        return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+    if isinstance(exc, (TelephonyNotConfigured, TelephonyNotImplemented)):
+        return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
+    return HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
 
 
 @router.get("/queue", response_model=list[CallTaskOut])
@@ -124,6 +152,71 @@ async def call_brief(
     return CallBriefOut(**data)
 
 
+@router.get("/telephony", response_model=TelephonyStatusOut)
+async def telephony_status(
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> TelephonyStatusOut:
+    """Can this deployment place live calls? Drives which control the call console shows.
+
+    Reports only *whether* credentials are present — never their values. A selected-but-broken
+    provider is reported here rather than raised, so the console can fall back to click-to-dial
+    and tell the admin what to fix.
+    """
+    settings = get_settings()
+    name = (settings.telephony_provider or "stub").strip().lower()
+    from_number = (settings.telephony_from_number or "").strip()
+    try:
+        provider = get_call_provider()
+    except TelephonyError as exc:
+        return TelephonyStatusOut(
+            provider=name, mode="manual", from_number=from_number,
+            configured=False, detail=str(exc),
+        )
+
+    live = provider.name != "stub"
+    detail = None
+    if live and not from_number:
+        detail = "NEXUS_TELEPHONY_FROM_NUMBER is not set — set a caller ID you own."
+    return TelephonyStatusOut(
+        provider=provider.name,
+        mode="live" if live and not detail else "manual",
+        from_number=from_number,
+        configured=live and not detail,
+        record_calls=bool(getattr(provider, "record_calls", False)),
+        detail=detail,
+    )
+
+
+@router.post("/tasks/{task_id}/dial", response_model=DialOut)
+async def dial_call_task(
+    task_id: str,
+    body: DialIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> DialOut:
+    """Start the call.
+
+    Under the default stub nothing is dialled and a ``tel:`` URL comes back for the rep's own
+    phone. Under a live provider this places a real, billable call — send an ``Idempotency-Key``
+    header so a double-submit replays the first response instead of ringing the prospect twice.
+    """
+    task = await ts.get(CallTask, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Call task not found")
+    try:
+        handle = await get_call_queue_service().place_call(
+            ts, task_id, agent_number=body.agent_number
+        )
+    except TelephonyError as exc:
+        raise _telephony_http_error(exc) from None
+    if handle is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Call task not found")
+    return DialOut(
+        mode=handle.mode, dial_url=handle.dial_url,
+        provider_call_id=handle.provider_call_id,
+    )
+
+
 @router.post("/tasks/{task_id}/disposition", response_model=CallActivityOut)
 async def log_disposition(
     task_id: str,
@@ -136,6 +229,7 @@ async def log_disposition(
     activity = await get_call_queue_service().log_disposition(
         ts, task_id, disposition=body.disposition, notes=body.notes,
         duration_s=body.duration_s, next_step=body.next_step,
+        provider_call_id=body.provider_call_id,
     )
     if activity is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Call task not found")

@@ -28,6 +28,26 @@
   color: var(--text);
 }
 
+/* Live telephony only. The rep's own callback number is the first leg of the bridge, so it
+   sits directly under the Start call action rather than hiding in settings. */
+.bridge {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.bridgeMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
 .dialBtn {
   display: inline-flex;
   align-items: center;
