@@ -333,7 +333,7 @@
       <p>
         The observed usage mix comes from <strong>18 usage events across 4 active workspaces</strong>.
         That is enough to see the shape of demand and sanity-check a price. It is not enough to
-        forecast. §10 sets out what would change our minds.
+        forecast. §11 sets out what would change our minds.
       </p>
     </div>
     <p>
@@ -589,7 +589,116 @@
   </section>
 
   <section>
-    <div class="sec-head"><span class="sec-num">§6</span><h2>Why Scale is $149</h2></div>
+    <div class="sec-head"><span class="sec-num">§6</span><h2>What we pay, and the ceiling it sets</h2></div>
+    <p>
+      Checked against the providers we are actually configured to call, at August 2026 list prices —
+      not a generic blend.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Provider</th><th>What we use it for</th><th>List price</th></tr></thead>
+        <tbody>
+          <tr><td class="plan-name">Exa</td><td>All general search, lookalikes, ICP discovery</td><td><strong>$7 / 1,000</strong> standard ($0.007). Agentic $12/1k, Deep $15/1k</td></tr>
+          <tr><td class="plan-name">Firecrawl</td><td>Signal collection, page crawls</td><td><strong>1 credit per page</strong>; search ≈ 2 credits. Hobby $16/mo → 5,000 ($0.0032 each)</td></tr>
+          <tr><td class="plan-name">Apify</td><td>Phone lookup, LinkedIn personalisation</td><td><strong>$0.20 / compute unit</strong> (Starter); $0.16 Scale, $0.13 Business</td></tr>
+          <tr><td class="plan-name">Groq</td><td>Every LLM call</td><td><strong>$0.15 / M in, $0.60 / M out</strong> (gpt-oss-120b)</td></tr>
+          <tr><td>Serper</td><td>Alternative SERP</td><td>$0.30–1.00 / 1,000</td></tr>
+          <tr><td>Brave</td><td>Alternative SERP</td><td>$5.00 / 1,000</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <strong>The LLM is not the expensive part.</strong> At Groq’s rates the worst agent run we have
+      recorded — 1,694 tokens — costs <span class="mono">$0.00056</span>. A single Exa search costs
+      <span class="mono">$0.007</span>, twelve times more. Anyone modelling this as an AI-inference
+      cost structure is modelling the wrong line.
+    </p>
+
+    <h3>Where that left us mispriced</h3>
+    <div class="note risk">
+      <span class="tag">Two capabilities were under the margin floor</span>
+      <p>
+        <code>search.web</code> recorded $0.004 as an “exa/brave/serper blended” rate. We call Exa, at
+        $0.007 — so it sat at <strong>30% gross margin, below the enforced 50% floor</strong>, and
+        nothing complained. <code>signal.news_scan</code> was at 36% against Firecrawl’s real price.
+        <code>ai.account_qa</code> was at 52%, which is a rounding error away from breaching rather
+        than a margin. Repriced to 65%, 68% and 64%.
+      </p>
+      <p>
+        Everything else is costed <em>conservatively</em> — the LLM capabilities by 4–16×, the Apify
+        actors by about 1.5×. Those are left alone: over-stating cost under-states margin, which is
+        the safe direction to be wrong in.
+      </p>
+    </div>
+
+    <h3>The break-even ceiling</h3>
+    <p>
+      The most expensive capability costs <span class="mono">$0.00400</span> per credit. One dollar
+      buys 250 credits at cost, which sets a hard ceiling on how generous any plan can be.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th class="num">Credits per dollar</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="num">250</td><td>Zero margin at worst-case COGS. Never cross this, at any volume</td></tr>
+          <tr><td class="num">125</td><td>The 50% gross-margin floor the code already enforces</td></tr>
+          <tr class="mark"><td class="num">100</td><td><strong>The design rule</strong> — 60% margin, with buffer</td></tr>
+          <tr><td class="num">40.3</td><td>Where our most generous plan sits — 6.2× inside the survival limit</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <strong>When designing a plan, divide included credits by the dollar price and keep the answer
+      under 100.</strong>
+    </p>
+
+    <h3>Infrastructure, and why it changes the answer at low volume</h3>
+    <p>
+      The minimum production shape on Azure costs <strong>$110/month</strong>: Container Apps $72 for
+      app, worker and cache; Postgres B1ms $18; registry, logs and egress $20. Fixed cost per credit
+      falls as volume rises, so the fully loaded break-even moves.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th class="num">Credits sold / month</th><th class="num">Fully-loaded break-even</th></tr></thead>
+        <tbody>
+          <tr><td class="num">5,000</td><td class="num">38 cr/$ — below our richest plan</td></tr>
+          <tr><td class="num">25,000</td><td class="num">119 cr/$</td></tr>
+          <tr><td class="num">100,000</td><td class="num">196 cr/$</td></tr>
+          <tr><td class="num">1,000,000</td><td class="num">243 cr/$</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <strong>Below roughly 5,300 credits a month of total platform consumption, the richest tiers are
+      underwater once infrastructure is counted.</strong> Above it every tier is profitable even at
+      worst-case COGS. The platform has burned 3,094 credits all-time, so we sit below that line —
+      which is what pre-revenue looks like, and it resolves with one customer.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Shape</th><th class="num">Fixed / month</th><th class="num">Revenue to cover it</th></tr></thead>
+        <tbody>
+          <tr><td>Minimum (1 app replica)</td><td class="num">$110</td><td class="num">0.9 Scale customers</td></tr>
+          <tr><td>3 app replicas (declared max)</td><td class="num">$198</td><td class="num">1.6</td></tr>
+          <tr><td>+ Postgres D2ds, 128 GB</td><td class="num">$371</td><td class="num">3.0</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>Three customers cover all infrastructure at full declared scale.</strong></p>
+    <div class="note">
+      <span class="tag">A gap worth closing</span>
+      <p>
+        Prices can be changed from Admin without a deploy; <strong>costs cannot</strong>. There is no
+        admin surface for cost rates, so when a provider raises prices the margin floor goes on
+        validating against a stale number — the one input it exists to check. That is how
+        <code>search.web</code> sat at 30% margin with nothing complaining.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§7</span><h2>Why Scale is $149</h2></div>
     <p>
       This is where judgement enters, so it is the section to push on hardest.
     </p>
@@ -630,7 +739,7 @@
   </section>
 
   <section>
-    <div class="sec-head"><span class="sec-num">§7</span><h2>How the money is actually collected</h2></div>
+    <div class="sec-head"><span class="sec-num">§8</span><h2>How the money is actually collected</h2></div>
     <p>
       Application code calls one metering function and never mentions a plan or a price. Plans, quotas and
       prices are rows, not branches — which is what makes everything below configuration rather than
@@ -647,6 +756,13 @@
         overage per plan. Credits are pre-paid, so rating deducts what the period’s burns already covered
         — otherwise the customer pays twice for one overage. Corrections are compensating negative rows,
         never deletes, so the ledger stays auditable.
+        <br><br>
+        <strong>Overage is 5c per credit, above the dearest in-plan rate.</strong> It was 1c, which
+        inverted the ladder: in-plan credits sell for 2.48c to 4.75c, so overflowing was two to five
+        times cheaper per credit than upgrading to cover the same usage. A customer acting rationally
+        would sit on the smallest plan forever. The pressure is deliberately uneven — Core feels 5%,
+        Scale Annual feels 2x — because the customer on the cheapest rate has the most to gain from
+        moving up.
       </li>
       <li>
         <strong>Metered invoicing.</strong> Usage is rated by us and raised as a real invoice at Stripe,
@@ -660,7 +776,7 @@
         all start at nought. See §5.
       </li>
       <li>
-        <strong>Enterprise invoice.</strong> See §9.
+        <strong>Enterprise invoice.</strong> See §10.
       </li>
     </ul>
     <p>
@@ -669,7 +785,7 @@
   </section>
 
   <section>
-    <div class="sec-head"><span class="sec-num">§8</span><h2>Selling only part of the product</h2></div>
+    <div class="sec-head"><span class="sec-num">§9</span><h2>Selling only part of the product</h2></div>
     <p>
       “What if a customer wants three features and not the rest?” is a configuration change, not a build.
       It is the question the entitlement model exists to answer.
@@ -714,7 +830,7 @@
   </section>
 
   <section>
-    <div class="sec-head"><span class="sec-num">§9</span><h2>Enterprise</h2></div>
+    <div class="sec-head"><span class="sec-num">§10</span><h2>Enterprise</h2></div>
     <p>
       Enterprise is a different mechanism, not a bigger number on the same form.
     </p>
@@ -746,7 +862,7 @@
   </section>
 
   <section>
-    <div class="sec-head"><span class="sec-num">§10</span><h2>What we don’t know</h2></div>
+    <div class="sec-head"><span class="sec-num">§11</span><h2>What we don’t know</h2></div>
     <p>An investor should discount the following.</p>
     <div class="note risk">
       <span class="tag">No churn or conversion data</span>
@@ -773,7 +889,7 @@
   </section>
 
   <section>
-    <div class="sec-head"><span class="sec-num">§11</span><h2>What stops a bad price</h2></div>
+    <div class="sec-head"><span class="sec-num">§12</span><h2>What stops a bad price</h2></div>
     <p>For a finance reader these are the controls, and they are code rather than process.</p>
     <div class="scroll">
       <table>

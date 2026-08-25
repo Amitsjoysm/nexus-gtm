@@ -36,7 +36,7 @@ company-level margin, and this document does not claim they are.
 
 **The second honest caveat.** The observed usage mix is derived from **18 usage events across 4
 workspaces**. That is enough to see the *shape* of demand and to sanity-check a price. It is not
-enough to forecast. Section 11 says what would change our minds.
+enough to forecast. Section 12 says what would change our minds.
 
 ---
 
@@ -260,7 +260,90 @@ has no pull. The customer trades price for flexibility, knowingly.
 
 ---
 
-## 6. Why Scale is $149 and Scale Annual is $1,490
+## 6. What we pay, and the ceiling it sets
+
+### Provider list prices, August 2026
+
+Checked against the providers we are actually configured to call, not a generic blend.
+
+| Provider | What we use it for | List price |
+|---|---|---|
+| **Exa** | `search_provider` — all general search, lookalikes, ICP discovery | **$7 / 1,000** standard search ($0.007). Agentic $12/1k, Deep $15/1k. $10/mo free credit |
+| **Firecrawl** | `signal_search_provider` — signal collection, page crawls | **1 credit per page**; search ≈ 2 credits per 10 results. Hobby $16/mo → 5,000 credits ($0.0032/credit); Standard $83/mo → 100,000 ($0.00083) |
+| **Apify** | Phone lookup, LinkedIn personalisation | **$0.20 / compute unit** on Starter ($29/mo prepaid), $0.16 on Scale, $0.13 on Business. 1 CU = 1 GB-hour |
+| **Groq** (`openai/gpt-oss-120b`) | Every LLM call | **$0.15 / M input, $0.60 / M output**. Caching halves input; batch halves everything |
+| Serper | Alternative SERP | $0.30–1.00 / 1,000 |
+| Brave | Alternative SERP | $5.00 / 1,000 |
+
+**The LLM is not the expensive part.** At Groq's rates the worst observed agent run — 1,694 tokens
+— costs **$0.00056**. A single Exa search costs $0.007, twelve times more. Anyone modelling this
+business as an AI-inference cost structure is modelling the wrong line.
+
+### Where that left us mispriced
+
+Two capabilities were **below the 50% margin floor** once costed against real prices, and the audit
+that found them is the reason to do this exercise against invoices rather than assumptions:
+
+| Capability | Recorded cost | Real cost | Was | Now |
+|---|---|---|---|---|
+| `search.web` | $0.004 "blended" | **$0.007** (Exa) | 30% margin | 2 credits → 65% |
+| `signal.news_scan` | $0.004 | **$0.0064** (Firecrawl) | 36% margin | 2 credits → 68% |
+| `ai.account_qa` | $0.012 | **$0.0143** (2 Exa + model) | 52% margin | 4 credits → 64% |
+
+Everything else is costed **conservatively** — the LLM capabilities by 4–16×, the Apify actors by
+about 1.5×. Those are deliberately left alone: over-stating cost under-states margin, which is the
+safe direction to be wrong in.
+
+### The break-even ceiling
+
+The most expensive capability costs **$0.00400 per credit**. One dollar therefore buys 250 credits
+at cost, which sets a hard ceiling on how generous any plan can be:
+
+| Credits per dollar | Meaning |
+|---|---|
+| **250 cr/$** | Zero margin at worst-case COGS. Never cross this at any volume |
+| **125 cr/$** | The 50% gross-margin floor the code already enforces |
+| **100 cr/$** | **The design rule** — 60% margin, with buffer |
+| **40.3 cr/$** | Where our most generous plan actually sits — 6.2× inside the survival limit |
+
+**When designing a plan, divide included credits by the dollar price and keep the answer under 100.**
+
+### Infrastructure, and why it changes the answer at low volume
+
+The minimum production shape on Azure costs **$110/month**: Container Apps $72 (app, worker, cache),
+Postgres B1ms $18, registry, logs and egress $20. Fixed cost per credit falls as volume rises, so
+the *fully loaded* break-even moves:
+
+| Credits sold / month | Fully-loaded break-even |
+|---|---|
+| 5,000 | **38 cr/$** — below our richest plan |
+| 25,000 | 119 cr/$ |
+| 100,000 | 196 cr/$ |
+| 1,000,000 | 243 cr/$ → converging on 250 |
+
+**Below roughly 5,300 credits/month of total platform consumption, the richest tiers are underwater
+once infrastructure is counted.** Above it, every tier is profitable even at worst-case COGS. The
+platform has burned 3,094 credits all-time, so we are currently below that line — which is what
+pre-revenue looks like, and it resolves with one customer.
+
+Infrastructure is a step function, and the steps are shallow:
+
+| Shape | Fixed / month | Revenue to cover it |
+|---|---|---|
+| Minimum (1 app replica) | $110 | 0.9 Scale customers |
+| 3 app replicas (declared max) | $198 | 1.6 |
+| + Postgres D2ds, 128 GB | $371 | 3.0 |
+
+**Three customers cover all infrastructure at full declared scale.**
+
+> **A gap worth closing.** Prices can be changed from Admin without a deploy; **costs cannot**.
+> There is no admin surface for cost rates, so when a provider raises prices the margin floor goes
+> on validating against a stale number — the one input it exists to check. That is how `search.web`
+> sat at 30% margin without anything complaining.
+
+---
+
+## 7. Why Scale is $149 and Scale Annual is $1,490
 
 This is the section an investor should push on hardest, because it is where judgement enters.
 
@@ -296,7 +379,7 @@ clear the 50% floor by a wide margin.
 
 ---
 
-## 7. How we actually charge — the five routes to revenue
+## 8. How we actually charge — the five routes to revenue
 
 The billing engine has one seam. Application code calls `check_and_meter(...)` and never mentions a
 plan or a price; plans, quotas and prices are **rows, not branches**. That is what makes everything
@@ -315,6 +398,15 @@ Recurring revenue, collected automatically, no human in the loop.
 When a customer exceeds their included credits, the entitlement engine either blocks, throttles, or
 charges overage, per the plan's configuration for that capability. Overage is rated into an invoice
 at period close.
+
+**Overage is priced at 5c per credit, above the dearest in-plan rate.** It was 1c, and that inverted
+the ladder: in-plan credits sell for 2.48c to 4.75c, so exceeding your plan was two to five times
+cheaper per credit than upgrading to a tier that covered the same usage. A customer acting rationally
+would sit on the smallest plan and overflow forever, and the tier they were nominally on would stop
+meaning anything. The pressure is deliberately uneven — a Core customer feels a 5% premium, a Scale
+Annual customer feels 2x — because the customer on the cheapest rate has the most to gain from moving
+up. A plan can still override the rate per capability, which is how a negotiated enterprise deal
+avoids forking the catalog.
 
 **Credits are pre-paid, so rating deducts what a period's burns already covered** — otherwise the
 customer pays twice for one overage. Corrections are compensating negative rows, never deletes, so
@@ -335,11 +427,11 @@ No subscription, no allowance. Every action is rated onto a monthly invoice for 
 used. Mechanically it is the overage path with the quota set to zero, which is why it needed no new
 billing machinery — only a plan whose entitlements all start at nought. See §5.
 
-### Route 5 — Enterprise invoice (see §9)
+### Route 5 — Enterprise invoice (see §10)
 
 ---
 
-## 8. Selling part of the product
+## 9. Selling part of the product
 
 **"What if a customer only wants specific functionality?"** This is a configuration change, not a
 build. It is the question the whole entitlement model exists to answer.
@@ -387,11 +479,11 @@ of the only page where they could change the plan that locked them out.
 `module.api` exists as its own gate, so "API access" is a line item that can be sold, withheld, or
 priced separately at any tier. For a customer who wants *only* programmatic access, the packaging
 is: a plan with `module.api` on, the UI modules off, and a credit allowance sized to their expected
-call volume. That is a custom plan (§9), assembled from checkboxes, with no code change.
+call volume. That is a custom plan (§10), assembled from checkboxes, with no code change.
 
 ---
 
-## 9. Enterprise
+## 10. Enterprise
 
 Enterprise is a **different sales motion with different mechanics**, not a bigger number on the same
 form.
@@ -423,7 +515,7 @@ retroactively to everyone on the plan.
 
 ---
 
-## 10. Margin governance — what stops a bad price
+## 11. Margin governance — what stops a bad price
 
 For a finance reader, these are the controls, and they are code rather than process:
 
@@ -449,7 +541,7 @@ exceeds the cost of a wrongly-served one, at our stage, by a wide margin.
 
 ---
 
-## 11. What we do not know, and what would change our minds
+## 12. What we do not know, and what would change our minds
 
 An investor should discount the following.
 
