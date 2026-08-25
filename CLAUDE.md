@@ -751,8 +751,58 @@ you built is not a config change afterwards.
 - Gated on **`sources.manage`**, deliberately not folded into `admins.manage`: registering a data
   source and granting platform power are different acts, and only the `superadmin` preset has it.
   Every mutation is audited; the DSN is Fernet-sealed and is in **no** response model.
-- Still to build (step 7): the enrichment provider itself. **Failure posture when it lands: fall
-  through to the paid provider, never stop collection.** It is an optimisation, not a dependency.
+- **Step 7 — the enrichment provider — is built** (`nexus/sources/provider.py`), read *ahead of*
+  the paid APIs at three seams: the phone lookup (`nexus/people/enrich.py`, the priciest
+  capability on the rate card), account firmographics (`nexus/enrichment/account.py`) and the
+  contact waterfall (`SourceDatabaseProvider`, deliberately first). Hits land in the shared
+  `companies` / `people` stores, so an answer is bought once for every tenant.
+  - **Failure posture: fall through to the paid provider, never stop collection.** Every entry
+    point is total — unreachable, slow, or stale-mapping all return *no answer*, never an
+    exception, and sources are tried independently so one dead warehouse cannot hide the answer
+    in the next. It is an optimisation, not a dependency.
+  - **`WHERE domain IN (...)` is a candidate filter, not proof.** We do not control a foreign
+    database's normalisation, so every returned row is re-checked in Python against the identity
+    we asked for, through the same normalisers the shared stores key on. Skipping that check is
+    the wrong-attribution bug, written into a store every tenant reads.
+  - **A hit is metered identically to the paid lookup it replaced**, carrying `attrs.cached` like
+    `nexus/people/enrich.py`. The customer is charged for the answer, not for our infrastructure:
+    the saving is **COGS, not price**. Charging only on a source hit would make revenue depend on
+    our procurement.
+  - `phone` is mappable on a person but is **never an identity** — a switchboard is shared by a
+    whole company. Lookups may only be keyed on the fields in `engine.LOOKUP_FIELDS`.
+
+## Enrichment billing (`enrich.account`, `enrich.contact`)
+
+Both capabilities were catalogued, priced in `rates.py` and entitled on the Core plan while being
+metered at **no call site**. Enrichment is the most expensive thing the product does per unit — a
+search request, an LLM completion, a verification credit, sometimes an actor run — and none of it
+reached the usage stream, so quota and margin were unmeasurable for the largest line of COGS.
+
+The seam is the enricher, not the call site: `SearchBackedAccountEnricher.enrich` and
+`WaterfallEnricher.enrich_contact` each own both the free and the paid branch, so "a source
+database hit is billed like the paid provider it replaced" holds by construction rather than by
+five call sites remembering to agree.
+
+- **Providers are split by `costs_money`, and that split is the billing boundary.** Free ones
+  (today only `SourceDatabaseProvider`) run *outside* the meter; only the paid remainder runs
+  inside it. `costs_money` defaults **True** so a new provider that spends money but forgets to
+  say so cannot silently become free.
+- **`raise_on_block` is the difference between a person and a sweep.** The two `/enrich` endpoints
+  pass True and a blocked tenant gets a 402 carrying the upsell — a silent no-op there is
+  indistinguishable from "we looked and found nothing". Everything else (the refresh pipeline, ICP
+  discovery, lookalike, campaign sourcing) takes the default False: **an enrichment quota must
+  never take down signal collection**, and `pipeline.process_account` has no `try/except` around
+  its enrichment call, so an escaping 402 would do exactly that.
+- **Concurrent batches charge once, up front** (`enrich_batch`). `metered()` reads and writes the
+  TenantSession, and the candidate sweeps in `discovery/auto.py` and `lookalike/service.py`
+  `gather` over N accounts — metering inside that gather is the AsyncSession concurrency trap this
+  file documents for session-bound signal sources. One row with `quantity=N` before any of it
+  starts, the same shape as the bulk verifier in `routers/contacts.py`. `meter=False` on `enrich`
+  exists **only** for those two callers.
+- **Nothing bought, nothing charged.** An account with no name and no domain never issues a
+  request, so it is not billed — the rule that also keeps an unconfigured phone lookup off the bill.
+- On today's default `NEXUS_BILLING_ENFORCEMENT=shadow` this records and never blocks, so the
+  `would_block` counter is what says what flipping enforcement on would cost each tenant.
 
 ## Orchestrator intake (`nexus/orchestration/intake.py`)
 

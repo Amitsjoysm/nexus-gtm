@@ -127,10 +127,16 @@ async def test_enriches_candidates_before_scoring(monkeypatch):
            "countries": ["united states"], "required_tech": ["aws"]}
 
     class _FakeEnricher:  # stands in for the web crawler — fills the blanks search left
-        async def enrich(self, account):
+        async def enrich(self, ts, account, **kw):
             account.employee_count = 200
             account.tech_stack = ["aws"]
             return ["employee_count", "tech_stack"]
+
+        async def enrich_batch(self, ts, accounts, *, concurrency, user_id=None):
+            # Discovery enriches candidates through the batch entry point, which charges
+            # `enrich.account` once for the whole set rather than metering inside its own gather.
+            for account in accounts:
+                await self.enrich(ts, account)
 
     s = get_settings()
     monkeypatch.setattr(s, "icp_discovery_enrich_candidates", True)

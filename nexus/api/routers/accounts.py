@@ -430,7 +430,7 @@ async def add_from_lookalike(
 async def enrich_contact(
     contact_id: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ContactOut:
     contact = await ts.get(Contact, contact_id)
     if contact is None:
@@ -451,7 +451,11 @@ async def enrich_contact(
             f"This email was verified valid on {checked:%d %b %Y}; "
             f"re-verification is available on {next_due:%d %b %Y}.",
         )
-    await get_enricher().enrich_contact(ts, contact)
+    # A person pressed Enrich, so a quota block is theirs to see: `raise_on_block` turns it into
+    # the 402 carrying the upsell rather than a silent no-op that looks like "nothing was found".
+    await get_enricher().enrich_contact(
+        ts, contact, user_id=principal.user_id, raise_on_block=True
+    )
     # Fill the LinkedIn profile URL from web search (Exa) when blank — additive, never overwrites.
     from nexus.enrichment.linkedin import enrich_contact_linkedin
 
@@ -468,19 +472,25 @@ async def enrich_account(
     account_id: str,
     response: Response,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> AccountOut:
     """Fill blank firmographics/technographics (industry, size, country, tech, sub-industry,
-    revenue, HQ region/city, description, LinkedIn, keywords) from the web on demand. Uses Exa when
-    keyed, else DuckDuckGo, then the LLM; existing values are never overwritten. The list of fields
-    actually filled is returned in the ``X-Enriched-Fields`` header so the UI can report honestly
-    ("Added revenue, keywords" vs "No new public data found") instead of a blanket success."""
+    revenue, HQ region/city, description, LinkedIn, keywords) on demand. A registered source
+    database is read first when one holds the domain; otherwise Exa when keyed, else DuckDuckGo,
+    then the LLM. Existing values are never overwritten. The list of fields actually filled is
+    returned in the ``X-Enriched-Fields`` header so the UI can report honestly ("Added revenue,
+    keywords" vs "No new public data found") instead of a blanket success.
+
+    Billed as ``enrich.account``; over quota this is a 402 carrying the upsell, because the person
+    who clicked needs to know why nothing happened."""
     from nexus.enrichment.account import get_account_enricher
 
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
-    filled = await get_account_enricher().enrich(account)
+    filled = await get_account_enricher().enrich(
+        ts, account, user_id=principal.user_id, raise_on_block=True
+    )
     await ts.flush()
     response.headers["X-Enriched-Fields"] = ",".join(filled)
     return _account_out(account)

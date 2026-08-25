@@ -123,7 +123,10 @@ async def process_account(
     ):
         from nexus.enrichment.account import get_account_enricher
 
-        filled = await get_account_enricher().enrich(account)
+        # `raise_on_block` stays false: an enrichment quota must never take down the refresh it
+        # runs inside. A blocked tenant keeps collecting signals and simply stops gaining
+        # firmographics, which is a degraded account rather than a dark one.
+        filled = await get_account_enricher().enrich(ts, account)
         if filled:
             await ts.flush()
 

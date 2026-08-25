@@ -18,7 +18,6 @@ Accounts list shows a Fit badge immediately; the regular account-refresh tick la
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Awaitable, Callable
 
@@ -41,23 +40,19 @@ Search = Callable[..., Awaitable[list[CompanyCandidate]]]
 _EXCLUDE_CAP = 256
 
 
-async def _enrich_candidates(accounts: list[Account], *, concurrency: int) -> None:
+async def _enrich_candidates(
+    ts: TenantSession, accounts: list[Account], *, concurrency: int
+) -> None:
     """Crawl the web to fill each candidate's blank firmographics (industry/headcount/geo/tech) so
-    scoring can differentiate them. Concurrent, bounded, best-effort — the enricher already isolates
-    its own failures (returns [] on any error), so one bad candidate never sinks the run."""
+    scoring can differentiate them. Concurrent, bounded, best-effort.
+
+    Billing lives in ``enrich_batch``: one ``enrich.account`` charge for the whole batch, taken
+    before the concurrency starts, because metering N candidates inside the gather would put N
+    coroutines on one AsyncSession. A blocked tenant gets an unenriched candidate set — a worse
+    ranking — rather than a discovery run that dies partway."""
     from nexus.enrichment.account import get_account_enricher
 
-    enricher = get_account_enricher()
-    sem = asyncio.Semaphore(max(1, concurrency))
-
-    async def _one(acc: Account) -> None:
-        async with sem:
-            try:
-                await enricher.enrich(acc)
-            except Exception:  # belt-and-suspenders; enrich already swallows its own errors
-                pass
-
-    await asyncio.gather(*(_one(a) for a in accounts))
+    await get_account_enricher().enrich_batch(ts, accounts, concurrency=concurrency)
 
 
 def _profile_to_search_icp(profile) -> dict:
@@ -207,6 +202,7 @@ async def auto_discover_for_tenant(
         enrich = settings.account_enrich_enabled
     if enrich and built:
         await _enrich_candidates(
+            ts,
             built[: settings.icp_discovery_enrich_max],
             concurrency=settings.icp_discovery_enrich_concurrency,
         )
