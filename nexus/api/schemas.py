@@ -323,6 +323,9 @@ class DispositionIn(BaseModel):
     notes: str = ""
     duration_s: int | None = None
     next_step: str | None = None
+    # Set when the call was placed live: pulls the provider's real duration, recording, and
+    # transcript onto the activity. Absent for click-to-dial, which logs manually.
+    provider_call_id: str | None = None
 
 
 class CallActivityOut(BaseModel):
@@ -335,6 +338,34 @@ class CallActivityOut(BaseModel):
     duration_s: int | None = None
     next_step: str | None = None
     occurred_at: str
+    # Populated only for live calls; NULL for click-to-dial and for recordings the provider has
+    # not finished processing.
+    provider_call_id: str | None = None
+    recording_url: str | None = None
+    transcript: str | None = None
+
+
+class TelephonyStatusOut(BaseModel):
+    """Whether this deployment can place live calls — never the credentials themselves."""
+
+    provider: str = "stub"
+    mode: str = "manual"            # "manual" (click-to-dial) | "live"
+    from_number: str = ""           # caller ID shown to the prospect; not a secret
+    configured: bool = False
+    record_calls: bool = False
+    detail: str | None = None       # why a selected provider is unusable, for ops
+
+
+class DialIn(BaseModel):
+    # The rep's own phone. A live bridge rings it first, then dials the prospect; the stub
+    # ignores it because the rep's device does the dialling.
+    agent_number: str | None = None
+
+
+class DialOut(BaseModel):
+    mode: str = "manual"
+    dial_url: str | None = None
+    provider_call_id: str | None = None
 
 
 class CallBriefContact(BaseModel):

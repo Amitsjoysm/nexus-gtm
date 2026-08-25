@@ -12,8 +12,6 @@ hence most of the tests below.
 """
 from __future__ import annotations
 
-import pytest
-
 from tests.conftest import auth, signup
 
 

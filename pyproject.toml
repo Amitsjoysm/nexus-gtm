@@ -53,6 +53,15 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
+# Put the repo root on sys.path for every invocation. Test modules import each other's helpers as
+# `from tests.conftest import ...`, and `tests` is a plain directory, not an installed package.
+#
+# Without this the suite passes locally and fails in CI, which is exactly what happened: `python -m
+# pytest` prepends the working directory to sys.path, so `tests` resolves; CI runs bare `pytest`,
+# which does not, so 111 modules died on `ModuleNotFoundError: No module named 'tests'` while the
+# same tests were green on every developer's machine. Setting it here (rather than exporting
+# PYTHONPATH in the workflow) keeps the two invocations honest about the same thing.
+pythonpath = ["."]
 # Safety net (pytest-timeout): a test that accidentally blocks — e.g. a real network call that
 # slips past the offline stubs — is killed at 120s with a traceback and reported as a failure,
 # instead of hanging the whole run forever. Thread method is required on Windows (no SIGALRM).
