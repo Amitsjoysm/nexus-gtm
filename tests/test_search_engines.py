@@ -245,3 +245,64 @@ def test_build_search_provider_routes_known_tokens():
     assert isinstance(build_search_provider("stub"), StubSearchProvider)
     # exa with no configured key (test env) -> DuckDuckGo fallback.
     assert isinstance(build_search_provider("exa"), DuckDuckGoSearchProvider)
+
+
+# ---- a condemned key must be rotated past, not retried ------------------------------------------
+#
+# Rotation used to fire on 429 alone. A revoked key (401), a forbidden one (403), or one whose
+# credits ran out (402) fell through to `raise_for_status()`, was caught by the broad handler,
+# retried with backoff against the SAME dead key, and finally returned `[]` — which reads as
+# "no results". Because the index never advanced, one dead key at position 0 disabled the entire
+# pool while every other key sat unused. `integrations/apify.py` already handled this; these did
+# not.
+
+
+@pytest.mark.parametrize("status", [401, 402, 403])
+async def test_exa_rotates_past_a_condemned_key(monkeypatch, status):
+    from nexus.integrations.search import engines
+
+    ok = {"results": [{"title": "Acme", "url": "https://acme.com", "text": "logistics"}]}
+    client = _KeyAwareClient({"dead": _FakeResp(status), "live": _FakeResp(200, ok)})
+    monkeypatch.setattr(engines.httpx, "AsyncClient", lambda *a, **k: client)
+
+    provider = ExaSearchProvider(api_keys=["dead", "live"])
+    hits = await provider.search("logistics", limit=5)
+
+    assert len(hits) == 1, f"a {status} on key 0 still empties the pool"
+    # Tried the dead key exactly once — never retried — then moved on and stayed there.
+    assert client.used_keys == ["dead", "live"]
+    assert provider.api_key == "live"
+
+
+async def test_exa_stops_once_every_key_is_condemned(monkeypatch):
+    """Distinct from exhaustion-by-rate-limit: there is nothing to wait for, so do not burn the
+    backoff budget pretending otherwise."""
+    from nexus.integrations.search import engines
+
+    client = _KeyAwareClient({"a": _FakeResp(401), "b": _FakeResp(401)})
+    monkeypatch.setattr(engines.httpx, "AsyncClient", lambda *a, **k: client)
+
+    async def _nosleep(*a, **k):
+        return None
+
+    monkeypatch.setattr(engines.asyncio, "sleep", _nosleep)
+    provider = ExaSearchProvider(api_keys=["a", "b"])
+    assert await provider.search("logistics", limit=5) == []
+    # Each key tried once and only once — no retry against a key we know is dead.
+    assert client.used_keys == ["a", "b"]
+
+
+async def test_a_rate_limited_key_is_still_retried_not_condemned(monkeypatch):
+    """The guard must not swallow the 429 path: 429 is temporary and the key stays in rotation."""
+    from nexus.integrations.search import engines
+
+    ok = {"results": [{"title": "Acme", "url": "https://acme.com", "text": "x"}]}
+    client = _KeyAwareClient({"k1": _FakeResp(429), "k2": _FakeResp(200, ok)})
+    monkeypatch.setattr(engines.httpx, "AsyncClient", lambda *a, **k: client)
+
+    async def _nosleep(*a, **k):
+        return None
+
+    monkeypatch.setattr(engines.asyncio, "sleep", _nosleep)
+    provider = ExaSearchProvider(api_keys=["k1", "k2"])
+    assert len(await provider.search("x", limit=5)) == 1

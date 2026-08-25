@@ -1,0 +1,204 @@
+# nexus/api/routers/admin_provider_keys.py
+"""Provider API keys, managed from the Control plane.
+
+**The key itself is never in a response model** — not even for the superadmin who typed it.
+``key_hint`` (its last four characters) is what the UI identifies a row by. There is no endpoint
+that returns a stored key, deliberately: a panel that can display credentials is a panel that can
+leak them through a screenshot, a support session, or a browser cache.
+
+Gated on ``providers.manage``, which only the ``superadmin`` preset carries. A holder can spend
+money through someone else's API key, which is why it is not folded into ``admins.manage``.
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel, Field
+
+from nexus.api.deps import Principal, require_platform_permission
+from nexus.billing.audit import record_admin_action
+from nexus.billing.permissions import PROVIDERS_MANAGE
+from nexus.core.db import get_platform_sessionmaker
+from nexus.providers import service
+from nexus.providers.catalog import PROVIDERS
+
+router = APIRouter(prefix="/admin/provider-keys", tags=["admin-providers"])
+
+
+class ProviderKeyOut(BaseModel):
+    """Everything the UI needs and nothing it does not. No `key_encrypted`, ever."""
+
+    id: str
+    provider: str
+    label: str
+    key_hint: str
+    status: str
+    last_depth: str
+    last_error: str
+    last_error_status: int | None
+    enabled: bool
+    preferred: bool
+
+    @classmethod
+    def of(cls, row) -> "ProviderKeyOut":
+        return cls(
+            id=row.id, provider=row.provider, label=row.label, key_hint=row.key_hint,
+            status=row.status, last_depth=row.last_depth, last_error=row.last_error,
+            last_error_status=row.last_error_status, enabled=row.enabled,
+            preferred=row.preferred,
+        )
+
+
+class ProviderKeyIn(BaseModel):
+    # `forbid` so a body carrying `status` is rejected outright rather than quietly ignored. An
+    # admin who could set `verified` by hand could mark a dead key working.
+    model_config = {"extra": "forbid"}
+
+    provider: str
+    label: str = ""
+    key: str = Field(min_length=8)
+
+
+class LabelIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    label: str = ""
+
+
+@router.get("/providers", response_model=list[dict])
+async def list_supported_providers(
+    _: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> list[dict]:
+    """The provider ids the UI may offer. Declared before `/{key_id}` routes so the literal path
+    is not swallowed by the parameterised one."""
+    return [{"id": p.id, "label": p.label} for p in PROVIDERS.values()]
+
+
+@router.get("", response_model=list[ProviderKeyOut])
+async def list_provider_keys(
+    provider: str = "",
+    _: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> list[ProviderKeyOut]:
+    return [ProviderKeyOut.of(r) for r in await service.list_keys(provider)]
+
+
+@router.post("", response_model=ProviderKeyOut, status_code=status.HTTP_201_CREATED)
+async def create_provider_key(
+    body: ProviderKeyIn,
+    principal: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> ProviderKeyOut:
+    try:
+        row = await service.add_key(body.provider, body.label, body.key,
+                                    user_id=principal.user_id)
+    except service.DuplicateKey as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except service.UnknownProvider as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    # The audit records the hint, never the key.
+    await _audit(principal, "provider_key.create", row.id,
+                 {"provider": row.provider, "hint": row.key_hint})
+    return ProviderKeyOut.of(row)
+
+
+@router.put("/{key_id}/label", response_model=ProviderKeyOut)
+async def relabel_provider_key(
+    key_id: str,
+    body: LabelIn,
+    principal: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> ProviderKeyOut:
+    row = await service.update_label(key_id, body.label)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such key")
+    await _audit(principal, "provider_key.relabel", key_id, {"label": row.label})
+    return ProviderKeyOut.of(row)
+
+
+@router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_provider_key(
+    key_id: str,
+    principal: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> Response:
+    # An explicit Response, matching admin_sources: FastAPI refuses to build a response model for
+    # a 204, so a `-> None` annotation fails at import time rather than at request time.
+    if not await service.delete_key(key_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such key")
+    await _audit(principal, "provider_key.delete", key_id, {})
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{key_id}/prefer", response_model=ProviderKeyOut)
+async def prefer_provider_key(
+    key_id: str,
+    principal: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> ProviderKeyOut:
+    """Pin this key so it is tried first. Rotation then becomes the failure path, not the norm."""
+    row = await service.prefer_key(key_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such key")
+    await _audit(principal, "provider_key.prefer", key_id, {"provider": row.provider})
+    return ProviderKeyOut.of(row)
+
+
+@router.post("/{key_id}/enabled/{value}", response_model=ProviderKeyOut)
+async def set_provider_key_enabled(
+    key_id: str,
+    value: bool,
+    principal: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> ProviderKeyOut:
+    """Disabling is never refused — during an incident "stop using this" must not be blocked."""
+    row = await service.set_enabled(key_id, value)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such key")
+    await _audit(principal, "provider_key.enabled", key_id, {"enabled": value})
+    return ProviderKeyOut.of(row)
+
+
+@router.post("/{key_id}/test", response_model=dict)
+async def test_provider_key(
+    key_id: str,
+    depth: str = "probe",
+    principal: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> dict:
+    """``depth=probe`` proves the credential authenticates and costs nothing meaningful.
+    ``depth=verify`` makes a real call through the adapter and costs credits, which is why it is
+    never swept and never automatic.
+
+    Both are needed: on 2026-08-21 every Groq key passed the probe and failed every real call,
+    because the configured model had been withdrawn.
+    """
+    from nexus.models.provider_key import ProviderKey
+    from nexus.providers.crypto import KeyUnsealable, unseal_key
+    from nexus.providers.testing import probe, verify
+
+    if depth not in ("probe", "verify"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"unknown depth {depth!r}; expected 'probe' or 'verify'")
+
+    async with get_platform_sessionmaker()() as s:
+        row = await s.get(ProviderKey, key_id)
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such key")
+        provider = row.provider
+        try:
+            secret = unseal_key(row.key_encrypted)
+        except KeyUnsealable as exc:
+            # Distinct from a failed test: the credential was never reached. Marking it `failed`
+            # would send an operator to the provider when the problem is on our side.
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+    runner = verify if depth == "verify" else probe
+    result = await runner(provider, secret)
+    await service.mark_tested(key_id, status=result.status, depth=depth,
+                              error=result.detail, error_status=result.http_status)
+    await _audit(principal, "provider_key.test", key_id,
+                 {"depth": depth, "ok": result.ok, "status": result.status})
+    return {"ok": result.ok, "status": result.status, "detail": result.detail,
+            "http_status": result.http_status}
+
+
+async def _audit(principal: Principal, action: str, target: str, after: dict) -> None:
+    async with get_platform_sessionmaker()() as s:
+        await record_admin_action(s, actor=principal.user_id, action=action,
+                                  target=target, after=after)
+        await s.commit()

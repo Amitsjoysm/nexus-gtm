@@ -783,6 +783,40 @@ tier without sniffing the plan id for a `custom-` prefix. **No Stripe object is 
 seeded**: `create_checkout` calls `ensure_plan_price` on first purchase and caches `price_id` into
 `plan.meta`, verified live — `growth` carries a cached price, `core` stays `{}` until someone buys it.
 
+## CRM and telephony: what is actually connected
+
+Both were reported as "users can't add credentials". Neither had a credential surface at all, and
+each hid a different failure behind that.
+
+**CRM credentials are deployment-global env vars**, not per-tenant: `NEXUS_CRM_PROVIDER` plus
+`NEXUS_HUBSPOT_ACCESS_TOKEN`, resolved once into a module singleton. The Integrations screen looks
+like a connection form and is not one — `CrmCard` is a manual account-entry grid whose
+salesforce/hubspot dropdown is only a provenance label. There are no credential fields anywhere in
+the product.
+
+**HubSpot works; Salesforce is a stub.** A real pull returned 99 companies on the live token.
+`SalesforceConnector.fetch_accounts` returns an injected sample, so `NEXUS_CRM_PROVIDER=salesforce`
+yields zero accounts forever — silently, which is the not-configured-vs-no-results failure this
+codebase fixes everywhere else.
+
+**`/crm/sync` used to pick a connector CLASS by the wire value and call it with `sample=`.** That
+only worked because the Salesforce stub's constructor happens to take that keyword;
+`HubSpotConnector.__init__` takes an access token, so choosing HubSpot in the UI raised `TypeError`
+and the user got a 500. Measured before the fix: salesforce 200, hubspot 500 — the dropdown's
+second option was dead. `_PostedRows` carries the source as *data* instead, so the wire value can
+never select a constructor again. With no rows posted the endpoint pulls from the configured CRM,
+and asking for a provider this deployment is not wired to is a 400, because answering 0 accounts
+would read as "your CRM is empty".
+
+**There is no Twilio integration.** `nexus/calling/provider.py` ships one implementation —
+`StubCallProvider`, returning a click-to-dial `tel:` URL — and `build_call_provider` returned it for
+*every* input, so `NEXUS_TELEPHONY_PROVIDER=twilio` behaved exactly like leaving it blank. Worse,
+`get_call_provider()` had **no callers anywhere**, so the setting was inert twice over: an operator
+could set it, watch click-to-dial work, and never learn Twilio was not involved. It now raises
+`TelephonyNotImplemented`, resolved once in `main.py`'s `lifespan` so the mistake surfaces on deploy
+rather than on the first rep's first call. Calling itself works today as click-to-dial —
+`CallConsole.tsx` builds its own `tel:` link — plus manual dispositions.
+
 ## Apify actors (`nexus/integrations/apify.py`)
 
 The seam for lookups with no compliant public API. **Adding an actor is a line in `ACTORS`, not a new

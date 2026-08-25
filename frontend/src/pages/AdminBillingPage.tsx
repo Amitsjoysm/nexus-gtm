@@ -19,6 +19,7 @@ import {
   SUBSCRIPTIONS_WRITE,
   USERS_IMPERSONATE,
   USERS_MANAGE,
+  PROVIDERS_MANAGE,
 } from "@/lib/permissions";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
@@ -30,6 +31,7 @@ import type {
   RevenueReport,
 } from "@/lib/types";
 import { ApiError } from "@/lib/api";
+import { ProviderKeysTab } from "./admin/ProviderKeysTab";
 import styles from "./AdminBillingPage.module.css";
 
 const MARGIN_FLOOR = 0.5;
@@ -713,6 +715,10 @@ export function AdminBillingPage() {
     // to every reader.
     ...(can(PRICING_WRITE) ? [{ value: "flags", label: "Feature flags" }] : []),
     ...(can(ADMINS_MANAGE) ? [{ value: "access", label: "Access" }] : []),
+    // Provider credentials. Its own permission, not admins.manage: a holder can spend money
+    // through someone else's API key, so registering one and granting platform power stay
+    // separate acts.
+    ...(can(PROVIDERS_MANAGE) ? [{ value: "keys", label: "Provider keys" }] : []),
     // Gated on the user-admin permissions, NOT on admins.manage: `support` holds users.manage
     // and is precisely who does MFA resets, but must never reach the admin-granting surface.
     ...(can(USERS_MANAGE) || can(USERS_IMPERSONATE)
@@ -739,6 +745,7 @@ export function AdminBillingPage() {
           {tab === "revenue" && <Revenue />}
           {tab === "flags" && can(PRICING_WRITE) && <FeatureFlags />}
           {tab === "access" && can(ADMINS_MANAGE) && <PlatformAdmins />}
+          {tab === "keys" && can(PROVIDERS_MANAGE) && <ProviderKeysTab />}
           {tab === "users" && (can(USERS_MANAGE) || can(USERS_IMPERSONATE)) && (
             <UserAdmin />
           )}

@@ -1,0 +1,99 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+  align-items: end;
+  margin-top: var(--space-4);
+}
+
+.empty {
+  margin: 0;
+  max-width: 70ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+/* A plain list, not cards. Each row is a set of yes/no facts an operator scans down a column;
+   cards would add chrome to one-line answers and nest inside the Card already wrapping them. */
+.keys {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.key,
+.keyOff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* Dimmed, but the text stays readable: a disabled key is exactly the row an operator is most
+   likely to be reading when something is wrong. Opacity on the whole row would drop its contrast
+   below AA precisely when it matters. */
+.keyOff {
+  border-style: dashed;
+}
+
+.keyHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-default);
+}
+
+/* The last four characters — the only part of a key that ever reaches the browser. */
+.hint {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* Says why "Auth OK" is not "Verified". Without it the amber badge reads as a lesser green
+   rather than as a different claim. */
+.note {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+/* The provider's own error text, verbatim. `--danger` on the plain surface rather than on a tint:
+   compositing a 12% alpha under it drops the ratio below AA. */
+.error {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--danger);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

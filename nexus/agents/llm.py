@@ -244,6 +244,29 @@ class GroqLLMProvider(OpenAICompatProvider):
         self._keys = keys
         self._idx = 0  # sticky: start each call from the last key that worked
 
+    async def _refresh_keys(self) -> None:
+        """Re-read the managed pool so a key added in the Control plane reaches a RUNNING process.
+
+        The worker is a separate container, so nothing the API does can invalidate its memory.
+        Uses the MANAGED pool, not `key_pool`: the latter falls back to the environment,
+        so refreshing against it would overwrite keys a caller passed explicitly. The
+        lookup is TTL-cached, so this is a dict read on all but one call in thirty
+        seconds — cheap enough to sit on the hot path, and the only thing that makes "add a key and
+        it just works" true without a restart.
+
+        Resets the index to 0 so the operator's PINNED key is tried first after a change; rotation
+        is meant to be the failure path, not the resting state.
+        """
+        try:
+            from nexus.providers.resolver import managed_pool
+
+            pool = await managed_pool("groq")
+        except Exception:  # never let key management break the call it is meant to serve
+            return
+        if pool and pool != self._keys:
+            self._keys = pool
+            self._idx = 0
+
     async def complete(
         self,
         messages: list[LLMMessage],
@@ -259,6 +282,7 @@ class GroqLLMProvider(OpenAICompatProvider):
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        await self._refresh_keys()
         last_resp: httpx.Response | None = None
         for _ in range(len(self._keys)):
             key = self._keys[self._idx]
@@ -272,14 +296,46 @@ class GroqLLMProvider(OpenAICompatProvider):
                 self._idx = (self._idx + 1) % len(self._keys)
                 last_resp = resp
                 continue
+            if resp.status_code in (401, 403):
+                # Condemns the KEY, not the request — so rotate past it, exactly as
+                # `integrations/apify.py` and the search engines now do. Rotation used to fire on
+                # 429 alone, which meant one revoked key raised straight out of here, the
+                # FallbackLLMProvider caught it, and EVERY draft came from the stub while four
+                # working keys sat unused. The stub's output is emailed to real prospects, so that
+                # is not a graceful degradation.
+                logger.warning("Groq key #%d rejected (%d); rotating past it",
+                               self._idx, resp.status_code)
+                self._idx = (self._idx + 1) % len(self._keys)
+                last_resp = resp
+                continue
+            if resp.status_code == 404:
+                # Not a key problem, and rotating cannot help: 404 here means the MODEL does not
+                # exist for this account. Measured 2026-08-21: all five configured keys returned
+                # 404 for `llama-3.3-70b-versatile`, which Groq had withdrawn — so the chain fell
+                # to the stub on every call and nothing said why. Say it once, loudly, and stop.
+                detail = ""
+                try:
+                    detail = str(resp.json().get("error", {}).get("message", ""))[:200]
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"Groq rejected model {self.model!r} (404): {detail or 'model not found'}. "
+                    "Rotating keys cannot fix this — set NEXUS_GROQ_MODEL to a model this account "
+                    "can use (GET {base}/models lists them).".format(base=self.base_url)
+                )
             resp.raise_for_status()  # other HTTP errors propagate to the fallback chain
             data = resp.json()
             text = data["choices"][0]["message"]["content"]
             tokens = data.get("usage", {}).get("total_tokens", 0)
             return LLMResponse(text=text, tokens=tokens)
-        # Every key was rate-limited: raise so the caller can fall back.
+        # Every key was rate-limited or rejected: raise so the caller can fall back. The message no
+        # longer says "rate-limited" unconditionally — a pool of revoked keys and a pool of
+        # throttled keys need opposite fixes, and blaming the rate limit sends an operator to wait
+        # it out when the credentials are the problem.
         last_resp.raise_for_status()  # type: ignore[union-attr]
-        raise RuntimeError("all Groq keys rate-limited")  # pragma: no cover (defensive)
+        raise RuntimeError(  # pragma: no cover (defensive)
+            f"all {len(self._keys)} Groq key(s) were rate-limited or rejected"
+        )
 
 
 class AnthropicLLMProvider(LLMProvider):

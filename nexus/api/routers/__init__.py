@@ -5,6 +5,7 @@ from nexus.api.routers import (
     admin_billing_write,
     admin_users,
     admin_jobs,
+    admin_provider_keys,
     admin_sources,
     admin_health,
     billing_webhooks,
@@ -53,6 +54,7 @@ all_routers = [
     billing.router,
     billing_webhooks.router,
     admin_users.router,
+    admin_provider_keys.router,
     admin_sources.router,
     admin_health.router,
 ]

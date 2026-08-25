@@ -102,6 +102,26 @@ class ApifyClient:
         """The key currently in use. Rotates within the pool on rate-limit."""
         return self.api_keys[self._key_idx] if self.api_keys else ""
 
+    async def _refresh_keys(self) -> None:
+        """Re-read the managed pool so a key added in the Control plane reaches a RUNNING process.
+
+        The worker is a separate container, so nothing the API does can invalidate its memory.
+        Uses the MANAGED pool, not `key_pool`: the latter falls back to the environment,
+        so refreshing against it would overwrite keys a caller passed explicitly. The
+        lookup is TTL-cached, so this is a dict read on all but one call in thirty
+        seconds. Resets the index so the operator's PINNED key is tried first after a change —
+        rotation is the failure path, not the resting state.
+        """
+        try:
+            from nexus.providers.resolver import managed_pool
+
+            pool = await managed_pool("apify")
+        except Exception:  # key management must never break the call it exists to serve
+            return
+        if pool and pool != self.api_keys:
+            self.api_keys = pool
+            self._key_idx = 0
+
     async def run_actor(
         self, actor: str, run_input: dict, *, timeout: float | None = None,
     ) -> list[dict]:
@@ -110,9 +130,13 @@ class ApifyClient:
         ``actor`` is a logical name from ``ACTORS`` or a raw actor id, so a caller experimenting
         with a new actor does not have to edit this file first.
         """
+        # Before the configured check, so adding the FIRST key from the Control plane works on a
+        # client that was constructed with an empty pool.
+        await self._refresh_keys()
         if not self.api_keys:
             raise ApifyNotConfigured(
-                "Apify is not configured. Set NEXUS_APIFY_API_KEY or NEXUS_APIFY_API_KEYS."
+                "Apify is not configured. Add a key in the Control plane, or set "
+                "NEXUS_APIFY_API_KEY / NEXUS_APIFY_API_KEYS."
             )
         actor_id = ACTORS.get(actor, actor)
         url = f"{_BASE}/{actor_id}/run-sync-get-dataset-items"
