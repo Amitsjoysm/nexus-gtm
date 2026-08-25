@@ -1,0 +1,817 @@
+<title>The Credit Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  /* ── Tokens ────────────────────────────────────────────────────────────────
+     Light is the base. Dark redefines only these, under both the media query
+     (system default, nothing stamped) and the explicit stamp.               */
+  :root {
+    --paper:      #F7F8F9;
+    --surface:    #FFFFFF;
+    --sunk:       #F0F2F4;
+    --ink:        #14181D;
+    --ink-soft:   #4E5866;
+    --ink-faint:  #6B7684;
+    --rule:       #DCE0E5;
+    --rule-firm:  #B9C0C9;
+    --accent:     #0F4C5C;
+    --accent-tint:#E2EDF0;
+    --pos:        #16624A;
+    --caution:    #855312;
+    --neg:        #8C2F2F;
+
+    --measure: 66ch;
+    --step--1: 0.813rem;
+    --step-0:  1rem;
+    --step-1:  1.25rem;
+    --step-2:  1.563rem;
+    --step-3:  1.953rem;
+    --step-4:  2.6rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0E1216;
+      --surface:    #161B21;
+      --sunk:       #1B2128;
+      --ink:        #E7EBEF;
+      --ink-soft:   #A7B2BE;
+      --ink-faint:  #7E8A97;
+      --rule:       #2A323B;
+      --rule-firm:  #414B57;
+      --accent:     #6FB6C8;
+      --accent-tint:#15303A;
+      --pos:        #59B491;
+      --caution:    #D0A253;
+      --neg:        #D98080;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0E1216;
+    --surface:    #161B21;
+    --sunk:       #1B2128;
+    --ink:        #E7EBEF;
+    --ink-soft:   #A7B2BE;
+    --ink-faint:  #7E8A97;
+    --rule:       #2A323B;
+    --rule-firm:  #414B57;
+    --accent:     #6FB6C8;
+    --accent-tint:#15303A;
+    --pos:        #59B491;
+    --caution:    #D0A253;
+    --neg:        #D98080;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+    font-size: var(--step-0);
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 78rem;
+    margin: 0 auto;
+    padding: clamp(1.5rem, 4vw, 4rem) clamp(1.15rem, 4vw, 3rem) 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: clamp(2.5rem, 5vw, 4rem);
+  }
+
+  /* ── Masthead ─────────────────────────────────────────────────────────── */
+  .masthead { display: flex; flex-direction: column; gap: 1.25rem; }
+
+  .dateline {
+    display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: var(--step--1);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .dateline span { display: inline-flex; align-items: center; gap: 0.5rem; }
+  .dateline span::before {
+    content: ""; inline-size: 5px; block-size: 5px; border-radius: 50%;
+    background: var(--accent);
+  }
+
+  h1 {
+    font-family: Newsreader, ui-serif, Georgia, serif;
+    font-weight: 500;
+    font-size: clamp(2.2rem, 6vw, 3.6rem);
+    line-height: 1.06;
+    letter-spacing: -0.022em;
+    margin: 0;
+    text-wrap: balance;
+    max-width: 20ch;
+  }
+
+  .standfirst {
+    max-width: var(--measure);
+    font-size: var(--step-1);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0;
+    text-wrap: pretty;
+  }
+
+  /* ── The four headline figures ────────────────────────────────────────── */
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .fig { background: var(--surface); padding: 1.4rem 1.35rem; display: flex; flex-direction: column; gap: 0.4rem; }
+  .fig dt {
+    font-size: var(--step--1);
+    color: var(--ink-faint);
+    letter-spacing: 0.02em;
+  }
+  .fig dd {
+    margin: 0;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: var(--step-2);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+  }
+  .fig .basis {
+    font-size: var(--step--1);
+    color: var(--ink-faint);
+    font-style: italic;
+  }
+
+  /* ── Sections ─────────────────────────────────────────────────────────── */
+  section { display: flex; flex-direction: column; gap: 1.15rem; }
+
+  .sec-head {
+    display: flex; align-items: baseline; gap: 0.9rem;
+    padding-block-end: 0.7rem;
+    border-block-end: 1px solid var(--rule-firm);
+  }
+  /* Numbered because the document IS a sequence and is meant to be cited by
+     section — "see §4" — not as decoration. */
+  .sec-num {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: var(--step--1);
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.06em;
+  }
+  h2 {
+    font-family: Newsreader, ui-serif, Georgia, serif;
+    font-weight: 500;
+    font-size: clamp(1.5rem, 3.2vw, var(--step-3));
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: Newsreader, ui-serif, Georgia, serif;
+    font-weight: 600;
+    font-size: var(--step-1);
+    line-height: 1.25;
+    margin: 1rem 0 0;
+    text-wrap: balance;
+  }
+
+  p, li { max-width: var(--measure); text-wrap: pretty; }
+  p { margin: 0; }
+  section > p + p { margin-block-start: -0.15rem; }
+
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+
+  ul, ol { margin: 0; padding-inline-start: 1.35rem; display: flex; flex-direction: column; gap: 0.55rem; }
+  li::marker { color: var(--accent); }
+
+  code, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.88em;
+    background: var(--sunk);
+    padding: 0.1em 0.36em;
+    border-radius: 3px;
+  }
+
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px;
+  }
+
+  /* ── Tables ───────────────────────────────────────────────────────────── */
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 3px; background: var(--surface); }
+  table { border-collapse: collapse; inline-size: 100%; min-inline-size: 34rem; font-size: 0.94rem; }
+  thead th {
+    text-align: left;
+    font-size: var(--step--1);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding: 0.7rem 0.9rem;
+    border-block-end: 1px solid var(--rule-firm);
+    white-space: nowrap;
+  }
+  tbody td { padding: 0.62rem 0.9rem; border-block-end: 1px solid var(--rule); vertical-align: top; }
+  tbody tr:last-child td { border-block-end: none; }
+  td.num, th.num { text-align: right; font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tbody tr.mark td { background: var(--accent-tint); }
+  tbody tr.mark td:first-child { font-weight: 600; }
+  .plan-name { font-weight: 600; }
+
+  /* ── Callouts ─────────────────────────────────────────────────────────── */
+  .note {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 1.1rem 1.25rem;
+    display: flex; flex-direction: column; gap: 0.55rem;
+    max-width: calc(var(--measure) + 4rem);
+  }
+  .note .tag {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: var(--step--1);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--caution);
+    font-weight: 600;
+  }
+  .note.caveat .tag { color: var(--caution); }
+  .note.risk .tag { color: var(--neg); }
+  .note p { max-width: none; }
+
+  /* Curve strip — the credits-per-dollar ladder, drawn rather than tabled,
+     because the argument is that it rises monotonically. */
+  .curve { display: flex; flex-direction: column; gap: 0.55rem; }
+  .curve-row { display: grid; grid-template-columns: 8.5rem 1fr 4.5rem; align-items: center; gap: 0.85rem; font-size: 0.94rem; }
+  .curve-bar { block-size: 9px; background: var(--sunk); border-radius: 99px; overflow: hidden; }
+  .curve-bar > span { display: block; block-size: 100%; background: var(--accent); border-radius: inherit; }
+  .curve-row.mark .curve-bar > span { background: var(--pos); }
+  .curve-val { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; text-align: right; color: var(--ink-soft); }
+
+  footer {
+    border-block-start: 1px solid var(--rule-firm);
+    padding-block-start: 1.5rem;
+    color: var(--ink-faint);
+    font-size: var(--step--1);
+    display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  footer p { max-width: var(--measure); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    a { transition: opacity 140ms ease; }
+    a:hover { opacity: 0.75; }
+  }
+</style>
+
+<main class="page">
+
+  <header class="masthead">
+    <div class="dateline">
+      <span>Pricing &amp; unit economics</span>
+      <span>25 August 2026</span>
+      <span>Finance / investor review</span>
+    </div>
+    <h1>What a credit costs, and what we sell it for</h1>
+    <p class="standfirst">
+      NEXUS GTM prices a credit at roughly sixteen times what it costs us to serve. This document
+      shows the working: where the number comes from, why each tier sits where it does, how the
+      money is collected, and which parts of it we cannot yet evidence.
+    </p>
+
+    <dl class="figures">
+      <div class="fig">
+        <dt>Blended cost of one credit</dt>
+        <dd>$0.00188</dd>
+        <span class="basis">measured, at observed mix</span>
+      </div>
+      <div class="fig">
+        <dt>Price of one credit sold</dt>
+        <dd>$0.025–0.059</dd>
+        <span class="basis">measured, varies by tier</span>
+      </div>
+      <div class="fig">
+        <dt>Gross margin, observed mix</dt>
+        <dd>92.4–96.8%</dd>
+        <span class="basis">measured</span>
+      </div>
+      <div class="fig">
+        <dt>Gross margin, worst case</dt>
+        <dd>83.9–93.2%</dd>
+        <span class="basis">every credit on our dearest call</span>
+      </div>
+    </dl>
+  </header>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§1</span><h2>Two caveats, before the numbers</h2></div>
+    <div class="note caveat">
+      <span class="tag">Scope of the margin figure</span>
+      <p>
+        These are <strong>gross margins on cost of goods sold</strong> — the third-party API spend
+        attributable to a unit of usage. They exclude infrastructure, salaries and support. They are
+        the right number for “does the metering model work”. They are not company margin, and
+        nothing here claims otherwise.
+      </p>
+    </div>
+    <div class="note caveat">
+      <span class="tag">Size of the sample</span>
+      <p>
+        The observed usage mix comes from <strong>18 usage events across 4 active workspaces</strong>.
+        That is enough to see the shape of demand and sanity-check a price. It is not enough to
+        forecast. §10 sets out what would change our minds.
+      </p>
+    </div>
+    <p>
+      The margin floor is enforced in code rather than in policy. <code>validate_rate()</code> refuses
+      to store any price below 50% gross margin unless finance records an audited exception, and it
+      runs on the seed itself — so a bad price cannot reach the database, even by deploy.
+    </p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§2</span><h2>Why credits, and not seats</h2></div>
+    <p>
+      Our marginal cost is driven by what a user <em>does</em>, not by the fact of the user. A rep
+      running 400 enrichments a month costs us roughly forty times a rep who reads the dashboard.
+    </p>
+    <p>
+      Under per-seat pricing those two pay the same: the light user subsidises the heavy one, and the
+      heavy one is unprofitable at the margin. Worse, the customer’s rational move is to buy fewer
+      seats and share logins — suppressing the very adoption metric we would be selling on. Flat rate
+      has the same defect, unbounded: one bulk enrichment run can consume more COGS in a week than the
+      contract is worth in a year.
+    </p>
+    <p>
+      Credits align price with cost because they <em>are</em> cost, marked up. Each capability carries
+      a rate card and a cost rate; the ratio between them is that action’s margin. The customer sees
+      one simple currency. We see a per-action P&amp;L.
+    </p>
+    <h3>What we deliberately did not do</h3>
+    <p>
+      We do not price per API call. A credit attaches to a <strong>capability</strong> — “draft an
+      email”, “verify an address” — not to an endpoint. Endpoints move when we refactor; capabilities
+      do not. Pricing against endpoints would let a routing change silently reprice a customer.
+    </p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§3</span><h2>What customers actually spend on</h2></div>
+    <p>
+      Seventy billable capabilities are defined. All fifty-five priceable ones now carry a rate card
+      and a cost rate. Demand is not evenly spread across them, and the skew is the most important
+      empirical finding in this document.
+    </p>
+    <div class="note risk">
+      <span class="tag">A gap that had been hiding</span>
+      <p>
+        Thirty-three capabilities had no rate card. A capability with no rate card is metered and then
+        <em>rated at nothing</em>: usage accumulates, quotas count down, and no revenue line is ever
+        produced. It looks handled. The largest was <code>ai.scoring</code> —
+        <strong>4,090 runs, 98% of all agent activity, metered correctly and free.</strong>
+        <code>ai.tokens</code> was in the same state: the hook for token-metered billing existed and
+        had never been priced. A test now refuses any capability that is neither priced nor named as
+        exempt, so it cannot recur by omission.
+      </p>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption class="visually-hidden"></caption>
+        <thead>
+          <tr><th>Capability</th><th class="num">Share of credits burned</th><th class="num">Cost per credit</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>enrich.contact</code></td><td class="num">40.1%</td><td class="num">$0.00300</td></tr>
+          <tr><td><code>verify.email</code></td><td class="num">34.8%</td><td class="num">$0.00080</td></tr>
+          <tr><td><code>ai.email_draft</code></td><td class="num">14.2%</td><td class="num">$0.00060</td></tr>
+          <tr><td><code>ai.research_brief</code></td><td class="num">4.8%</td><td class="num">$0.00400</td></tr>
+          <tr><td><code>ai.account_qa</code></td><td class="num">4.7%</td><td class="num">$0.00240</td></tr>
+          <tr><td>everything else</td><td class="num">1.4%</td><td class="num">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <strong>Three-quarters of all credit consumption is enrichment and verification</strong> — not AI
+      generation, which is what the product leads with in marketing. Two consequences follow.
+    </p>
+    <ul>
+      <li>
+        <strong>Price against data cost, not token cost.</strong> LLM inference is cheap and falling;
+        contact data is neither. A model built around AI cost would be built around 14% of the bill.
+      </li>
+      <li>
+        <strong>COGS reduction must target enrichment</strong>, and it does. Shared company and people
+        stores mean forty workspaces tracking one company pay for a single crawl, and a recorded
+        “not found” is never re-purchased. Both attack the 40% line directly.
+      </li>
+    </ul>
+    <p>
+      Note that a cache hit is <em>still metered</em>. The customer received an answer and is billed for
+      the answer; what the shared store improves is COGS, not price. Billing only on a miss would hand
+      the saving to whichever customer happened to ask second, and make revenue depend on crawl order.
+    </p>
+    <p>
+      This skew is also why we price off the blended figure of <span class="mono">$0.00188</span> rather
+      than the catalog mean of <span class="mono">$0.00161</span>: real demand leans to the expensive end.
+    </p>
+
+    <h3>How AI is priced, and why not by the token</h3>
+    <p>
+      Per action, at a flat rate, with two token-metered escape hatches. The case for flat pricing is a
+      measurement, taken across <strong>4,174 real agent runs</strong>: token use spreads widely at the
+      extremes but tightly around the middle.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Agent</th><th class="num">Runs</th><th class="num">Median tokens</th><th class="num">Max</th><th class="num">Median → max</th></tr></thead>
+        <tbody>
+          <tr><td><code>scoring</code></td><td class="num">4,090</td><td class="num">226</td><td class="num">794</td><td class="num">3.5×</td></tr>
+          <tr><td><code>research</code></td><td class="num">21</td><td class="num">765</td><td class="num">1,425</td><td class="num">1.9×</td></tr>
+          <tr><td><code>messaging</code></td><td class="num">21</td><td class="num">275</td><td class="num">647</td><td class="num">2.4×</td></tr>
+          <tr><td><code>contact_rec</code></td><td class="num">12</td><td class="num">413</td><td class="num">1,694</td><td class="num">4.1×</td></tr>
+          <tr><td><code>qa</code></td><td class="num">5</td><td class="num">321</td><td class="num">951</td><td class="num">3.0×</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <strong>The worst case is about four times the median, which these margins absorb.</strong>
+      Against that, a flat rate buys the customer a bill they can predict — worth more to them than the
+      few percent of precision token-metering would add, and worth more to us than the support load of
+      explaining a variable line item.
+    </p>
+    <p>
+      Two capabilities exist for where that stops holding. <code>ai.tokens</code> (0.01 credits per
+      1,000) covers work a customer can make arbitrarily large — long-context analysis, document
+      ingestion — because the flat-rate argument depends on a bounded distribution and those have none.
+      <code>ai.premium_model</code> (4 credits) covers frontier models, which cost an order of magnitude
+      more than the default: charging the same for both means the customers who ask for the better model
+      are subsidised by the ones who do not.
+    </p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§4</span><h2>The ladder</h2></div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Plan</th><th class="num">Price</th><th class="num">Credits</th>
+            <th class="num">$ / credit</th><th class="num">COGS</th>
+            <th class="num">Margin</th><th class="num">Break-even burn</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="mark"><td class="plan-name">Pay as you go</td><td class="num">$0/mo</td><td class="num">0</td><td class="num">metered</td><td class="num">—</td><td class="num">—</td><td class="num">n/a</td></tr>
+          <tr class="mark"><td class="plan-name">Credit Pack</td><td class="num">$999/yr</td><td class="num">25,000</td><td class="num">0.0400</td><td class="num">$47.01</td><td class="num">95.3%</td><td class="num">531,244</td></tr>
+          <tr><td class="plan-name">Core</td><td class="num">$19/mo</td><td class="num">400</td><td class="num">0.0475</td><td class="num">$0.75</td><td class="num">96.0%</td><td class="num">10,104</td></tr>
+          <tr><td class="plan-name">Starter</td><td class="num">$44/mo</td><td class="num">1,000</td><td class="num">0.0440</td><td class="num">$1.88</td><td class="num">95.7%</td><td class="num">23,398</td></tr>
+          <tr><td class="plan-name">Growth</td><td class="num">$79/mo</td><td class="num">2,000</td><td class="num">0.0395</td><td class="num">$3.76</td><td class="num">95.2%</td><td class="num">42,010</td></tr>
+          <tr><td class="plan-name">Professional</td><td class="num">$129/mo</td><td class="num">4,000</td><td class="num">0.0323</td><td class="num">$7.52</td><td class="num">94.2%</td><td class="num">68,599</td></tr>
+          <tr class="mark"><td class="plan-name">Scale</td><td class="num">$149/mo</td><td class="num">5,000</td><td class="num">0.0298</td><td class="num">$9.40</td><td class="num">93.7%</td><td class="num">79,235</td></tr>
+          <tr><td class="plan-name">Business</td><td class="num">$199/mo</td><td class="num">8,000</td><td class="num">0.0249</td><td class="num">$15.04</td><td class="num">92.4%</td><td class="num">105,823</td></tr>
+          <tr class="mark"><td class="plan-name">Scale Annual</td><td class="num">$1,490/yr</td><td class="num">60,000</td><td class="num">0.0248</td><td class="num">$112.83</td><td class="num">92.4%</td><td class="num">792,346</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <strong>Break-even burn</strong> is how many credits a customer must consume before the plan stops
+      making money. Every tier carries an order of magnitude of headroom over its allowance. That is the
+      answer to “what if someone abuses it”: at these prices they cannot, without consuming fifteen to
+      twenty times their allowance — and the entitlement engine blocks or rates overage long before then.
+    </p>
+
+    <h3>The volume curve is deliberate</h3>
+    <p>
+      Credits per dollar rise with tier. A rising curve makes upgrading rational for the customer, keeps
+      our margin roughly flat in absolute dollars per account while revenue grows, and puts the customers
+      who cost us most on the tiers with the most headroom.
+    </p>
+    <div class="curve" role="img" aria-label="Credits per dollar by tier: Core 21.1, Starter 22.7, Growth 25.3, Professional 31.0, Scale 33.6, Business 40.2, Scale Annual 40.3">
+      <div class="curve-row"><span>Core</span><span class="curve-bar"><span style="inline-size:52%"></span></span><span class="curve-val">21.1</span></div>
+      <div class="curve-row"><span>Starter</span><span class="curve-bar"><span style="inline-size:56%"></span></span><span class="curve-val">22.7</span></div>
+      <div class="curve-row"><span>Growth</span><span class="curve-bar"><span style="inline-size:63%"></span></span><span class="curve-val">25.3</span></div>
+      <div class="curve-row"><span>Professional</span><span class="curve-bar"><span style="inline-size:77%"></span></span><span class="curve-val">31.0</span></div>
+      <div class="curve-row mark"><span>Scale</span><span class="curve-bar"><span style="inline-size:83%"></span></span><span class="curve-val">33.6</span></div>
+      <div class="curve-row"><span>Business</span><span class="curve-bar"><span style="inline-size:99%"></span></span><span class="curve-val">40.2</span></div>
+      <div class="curve-row mark"><span>Scale Annual</span><span class="curve-bar"><span style="inline-size:100%"></span></span><span class="curve-val">40.3</span></div>
+    </div>
+    <p>
+      <strong>Starter used to break this curve and has been fixed.</strong> It shipped at 17.0 credits
+      per dollar — below Core’s 21.1 — so a Core customer was better off buying overage than upgrading.
+      That inversion punishes exactly the behaviour a ladder exists to reward, and it was found by
+      drawing the curve rather than by reading the prices. The allowance went from 750 to 1,000 credits
+      at the same $44. Raising the allowance instead of cutting the price keeps revenue intact on new
+      business, and there were no subscribers to regrandfather.
+    </p>
+
+    <h3>Seats</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Core</th><th>Starter</th><th>Growth</th><th>Professional</th><th>Scale</th><th>Business</th><th>Scale Annual</th></tr></thead>
+        <tbody><tr class="mono"><td>$19</td><td>$39</td><td>$79</td><td>$129</td><td>$129</td><td>$199</td><td>$1,290/yr</td></tr></tbody>
+      </table>
+    </div>
+    <p>
+      <strong>Scale carries Professional’s seat price while including 25% more credits.</strong> That is
+      the tier’s proposition: a team that has outgrown Professional’s allowance but not its headcount
+      pays for credits, not for seats. It also keeps Scale from undercutting Business, which is priced
+      for teams that have outgrown both.
+    </p>
+    <p>
+      Seats are a <em>gauge</em>, not a counter — resolved from live membership rather than summed from
+      events, because a sum would only ever climb and a customer could never get back under a limit
+      after removing someone.
+    </p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§5</span><h2>Pay as you go</h2></div>
+    <p>
+      Two entry points with no monthly commitment, for the two customers a ladder always misses: the one
+      evaluating us who will not sign up to a subscription, and the one whose usage is lumpy enough that
+      any allowance is either wasted or exceeded.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Plan</th><th class="num">Price</th><th class="num">Allowance</th><th>Billing</th></tr></thead>
+        <tbody>
+          <tr><td class="plan-name">Pay as you go</td><td class="num">$0/mo</td><td class="num">none</td><td>Every action metered, invoiced monthly in arrears</td></tr>
+          <tr><td class="plan-name">Credit Pack</td><td class="num">$999/yr</td><td class="num">25,000</td><td>Prepaid, valid twelve months</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <strong>Pay as you go is the true metered plan.</strong> No base fee, no allowance, fifty-five
+      capabilities each rated individually onto a monthly invoice. It is the lowest-friction way to
+      start and the natural landing place for a self-serve trial that ran out.
+    </p>
+    <p>
+      <strong>The Credit Pack is the commitment-free annual.</strong> 25,000 credits at $999 is 25.0
+      credits per dollar — deliberately between Growth (25.3) and the entry tiers rather than at the
+      top. A customer who prepays but commits to no monthly floor gets a modest volume discount, not
+      the best rate on the sheet. Scale Annual, which does commit, gets 40.3.
+    </p>
+    <div class="note risk">
+      <span class="tag">The detail that nearly broke it</span>
+      <p>
+        Overage is charged only where a quota is <em>set</em>. A capability with no quota reads as
+        unlimited and is skipped. So a pay-as-you-go plan built the obvious way — clone a plan, set the
+        allowance to zero — inherits unlimited entitlements and <strong>bills nothing</strong>, while
+        metering happily. It would look correct until the first invoice came out at zero.
+      </p>
+      <p>
+        Two further traps surfaced by running it. Cloning a base plan’s entitlements covered five
+        capabilities out of fifty-five, because base plans carry few explicit rows and the rest fall
+        back to catalog defaults — so the first build billed for five things and gave away sixty. And
+        zeroing every quota zeroed the seat entitlement, which is billed as a seat price rather than in
+        credits, meaning the plan allowed <strong>no members at all</strong>.
+      </p>
+    </div>
+    <p>
+      At $0.040–0.0475 per credit, pay-as-you-go is priced at roughly the entry rate — the worst on the
+      sheet, which is correct. Committing to a plan should always beat not committing, or the ladder has
+      no pull. The customer trades price for flexibility, knowingly.
+    </p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§6</span><h2>Why Scale is $149</h2></div>
+    <p>
+      This is where judgement enters, so it is the section to push on hardest.
+    </p>
+    <p>
+      <strong>The gap is empirical.</strong> Our busiest workspace burned <span class="mono">3,056</span>
+      credits. Growth includes 2,000. That customer would exhaust their allowance and hit overage every
+      month — the worst possible outcome, because it converts a growth signal into a billing complaint.
+      The next tier up, Professional at 4,000, leaves only 31% headroom over observed peak demand, which
+      is thin for a customer whose usage is climbing.
+    </p>
+    <p>
+      <strong>5,000 credits gives 64% headroom over measured peak demand.</strong> That is the sizing
+      decision, and it comes from the data rather than from a round number.
+    </p>
+    <p>
+      <strong>$149 comes from the curve.</strong> Interpolating credits-per-dollar between Professional
+      (31.0) and Business (40.2) for a 5,000-credit allowance lands at 33.6 — which is $149. At $139 the
+      tier would sit at 36.0, undercutting Business on rate while offering less. At $159 it would sit at
+      31.4, barely improving on Professional. $149 is the price that keeps the ladder monotonic, and a
+      monotonic ladder is what stops customers gaming the tiers.
+    </p>
+    <h3>The annual trade, stated plainly</h3>
+    <p>
+      Scale Annual is $1,490 — ten months for twelve. A 16.7% discount for a twelve-month commitment sits
+      in the middle of the conventional 15–20% band.
+    </p>
+    <p>
+      <strong>We give up 16.7% of revenue per customer to convert monthly churn risk into a twelve-month
+      commitment, and to pull twelve months of cash forward.</strong> At our stage the cash timing is
+      worth more than the margin: annual prepay funds the enrichment spend the customer will incur over
+      that year, so working capital moves in our favour rather than against it.
+    </p>
+    <p>
+      At 40.3 credits per dollar the annual plan sits deliberately <em>level</em> with Business rather than
+      beyond it. Annual commitment is rewarded with a discount, not with a better unit rate that would
+      cannibalise the top monthly tier.
+    </p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§7</span><h2>How the money is actually collected</h2></div>
+    <p>
+      Application code calls one metering function and never mentions a plan or a price. Plans, quotas and
+      prices are rows, not branches — which is what makes everything below configuration rather than
+      engineering.
+    </p>
+    <ul>
+      <li>
+        <strong>Self-serve subscription.</strong> The customer picks a plan in-product, goes through hosted
+        Stripe Checkout, and the subscription reaches us by webhook — never by our own write. Card data
+        never touches our infrastructure, so PCI scope stays at the provider.
+      </li>
+      <li>
+        <strong>Usage overage.</strong> Past the included allowance, the engine blocks, throttles, or rates
+        overage per plan. Credits are pre-paid, so rating deducts what the period’s burns already covered
+        — otherwise the customer pays twice for one overage. Corrections are compensating negative rows,
+        never deletes, so the ledger stays auditable.
+      </li>
+      <li>
+        <strong>Metered invoicing.</strong> Usage is rated by us and raised as a real invoice at Stripe,
+        with our line items, a hosted payment page and a PDF. Our rating stays the source of truth; the
+        provider prices nothing. Collection is keyed by invoice id, so a retry cannot double-charge.
+      </li>
+      <li>
+        <strong>Pay as you go.</strong> No subscription and no allowance: every action is rated onto a
+        monthly invoice for exactly what was used. Mechanically it is the overage path with the quota
+        set to zero, which is why it needed no new billing machinery — only a plan whose entitlements
+        all start at nought. See §5.
+      </li>
+      <li>
+        <strong>Enterprise invoice.</strong> See §9.
+      </li>
+    </ul>
+    <p>
+      Dunning retries on a configured schedule and escalates to past-due. It never silently voids a debt.
+    </p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§8</span><h2>Selling only part of the product</h2></div>
+    <p>
+      “What if a customer wants three features and not the rest?” is a configuration change, not a build.
+      It is the question the entitlement model exists to answer.
+    </p>
+    <p>
+      Eleven module gates are independently sellable: agents, API, calling, discovery, integrations, lists,
+      network, outreach, plays, relevance, signals. Switching one off does three things at once.
+    </p>
+    <ol>
+      <li>The navigation item disappears — or becomes an upsell for admins who can actually change the plan.</li>
+      <li>The route is guarded, so the page is not reachable by URL, bookmark, or a link from a colleague on a richer plan.</li>
+      <li>The server refuses. The first two are presentation; this is the boundary.</li>
+    </ol>
+    <div class="note">
+      <span class="tag">The rule that makes a discount real</span>
+      <p>
+        A module gate that only hides a menu item is a discount with no cost saving. So each gate carries
+        its dependent spend: signals carries the signal scans and inbox tasks, agents carries orchestration
+        runs and AI chat, plays carries automated play runs. Disabling a module genuinely stops the money
+        going out — which is what makes a cheaper plan cheaper to <em>serve</em>, not just cheaper to buy.
+      </p>
+    </div>
+    <h3>Worked example — Core at $19</h3>
+    <p>
+      Eight modules off, leaving the ungateable floor plus Lists and Relevance. Two deliberate exceptions:
+      relevance <em>scoring</em> is not tied to the relevance module, and account refresh is tied to nothing.
+      Both appear on the Accounts page, which every plan includes, and cascading the gates would sell a page
+      with its point removed. The general principle: gate the module, never the thing that makes the
+      included pages worth opening.
+    </p>
+    <h3>API-only customers</h3>
+    <p>
+      API access is its own gate, so it can be sold, withheld or priced separately at any tier. For a
+      customer who wants only programmatic access the packaging is: API on, UI modules off, allowance sized
+      to expected call volume. That is a custom plan, assembled from checkboxes, with no code change.
+    </p>
+    <p>
+      Six surfaces can never be gated by any plan, and a test enforces it: Dashboard, Accounts, Contacts,
+      Members, Settings and Billing. Billing is the load-bearing one — gating it would lock a customer out
+      of the only page where they could change the plan that locked them out.
+    </p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§9</span><h2>Enterprise</h2></div>
+    <p>
+      Enterprise is a different mechanism, not a bigger number on the same form.
+    </p>
+    <p>
+      A negotiated deal becomes a per-tenant plan: modules selected, price and allowance set. Only
+      <em>changed</em> rows are stored, so a module we add to the base plan next quarter still reaches that
+      customer rather than freezing them in the past.
+    </p>
+    <p>
+      <strong>Custom and enterprise plans are refused by self-serve checkout.</strong> A tenant admin must
+      not be able to re-buy their own negotiated contract at whatever a public price row happens to say.
+      They are invoiced instead — our rating, raised at Stripe with a hosted payment page, or sent on terms.
+    </p>
+    <p>
+      Many enterprise subscriptions have no payment-provider object at all: a contract signed on paper and
+      invoiced never passes through a subscription lifecycle. Reconciliation therefore skips subscriptions
+      with no provider id, so real drift findings are not buried under deals that were never meant to be
+      there. And reconciliation <em>reports</em> — it never repairs. Which side is right depends on what the
+      customer agreed to, and an automated writer would resolve that wrongly and destroy the evidence.
+    </p>
+    <div class="note">
+      <span class="tag">Grandfathering</span>
+      <p>
+        Subscriptions carry frozen terms. Editing a plan must never reprice an existing subscriber: a rise
+        applies to new business and to renewals we choose to move, never retroactively to everyone on the
+        plan.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§10</span><h2>What we don’t know</h2></div>
+    <p>An investor should discount the following.</p>
+    <div class="note risk">
+      <span class="tag">No churn or conversion data</span>
+      <p>
+        No customer has yet completed a full billing cycle on a paid self-serve plan. The 16.7% annual
+        discount is priced off convention, not off observed churn. If churn is low we are over-discounting
+        annual; if high, under-discounting it.
+      </p>
+    </div>
+    <div class="note risk">
+      <span class="tag">COGS is not fixed</span>
+      <p>
+        LLM inference cost is falling fast. Contact-data cost is not, and it is 75% of our burn. A data
+        provider raising prices compresses margin on exactly the line that matters most. The mitigations
+        are built — shared stores, negative caching, source databases read ahead of paid providers — but
+        they are mitigations, not immunity.
+      </p>
+    </div>
+    <p>
+      <strong>What would change the ladder:</strong> a segment consuming more than 20,000 credits a month
+      (justifying a tier above Business); enrichment COGS moving more than 30% either way; or observed
+      monthly churn landing materially outside 3–7%, which would reprice the annual discount.
+    </p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">§11</span><h2>What stops a bad price</h2></div>
+    <p>For a finance reader these are the controls, and they are code rather than process.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Control</th><th>What it prevents</th></tr></thead>
+        <tbody>
+          <tr><td>50% margin floor on every rate</td><td>A capability priced below cost. Runs on the seed, so a bad price cannot arrive by deploy</td></tr>
+          <tr><td>Audited margin exception</td><td>Deliberate loss-leaders stay possible, but never silent</td></tr>
+          <tr><td>Plan-level margin warning</td><td>Flags a thin plan without blocking it — acquisition tiers and free are legitimately unprofitable</td></tr>
+          <tr><td>Every mutation audited, before and after</td><td>Price changes are attributable and reconstructable</td></tr>
+          <tr><td>Prices are rows, not code</td><td>A pricing error is minutes to fix, not a release cycle</td></tr>
+          <tr><td>New plans start as drafts</td><td>A half-configured tier cannot become purchasable the moment it is saved</td></tr>
+          <tr><td>Plan class set by the service, never the request</td><td>Nobody mints an unlimited or internal plan by typing a string</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Enforcement has both a kill switch and a shadow mode that evaluates every decision and records it
+      without blocking — which is how we measured “what happens if we turn this on?” without turning it on.
+    </p>
+    <div class="note">
+      <span class="tag">A deliberate commercial bias</span>
+      <p>
+        The engine is biased toward allowing. Unknown capability: allow. No subscription: allow. Engine
+        raises: allow. A billing bug must degrade to giving service away, never to blocking a paying
+        customer. At our stage the cost of a wrongly-blocked customer exceeds the cost of a wrongly-served
+        one by a wide margin.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      Every figure marked <em>measured</em> is drawn from the production database and is reproducible:
+      cost per credit is a capability’s unit cost divided by its credits per unit; the blended figure is
+      the share-weighted average across observed usage; plan margin is price less allowance times blended
+      cost, over price.
+    </p>
+    <p>NEXUS GTM · Pricing &amp; unit economics · 25 August 2026</p>
+  </footer>
+
+</main>

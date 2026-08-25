@@ -36,7 +36,7 @@ company-level margin, and this document does not claim they are.
 
 **The second honest caveat.** The observed usage mix is derived from **18 usage events across 4
 workspaces**. That is enough to see the *shape* of demand and to sanity-check a price. It is not
-enough to forecast. Section 10 says what would change our minds.
+enough to forecast. Section 11 says what would change our minds.
 
 ---
 
@@ -74,8 +74,20 @@ silently reprice a customer.
 
 ## 3. Unit economics (measured)
 
-70 billable capabilities are defined. 37 carry both a rate card and a cost rate; the remainder are
-either module gates (on/off, no per-unit cost) or capabilities not yet metered.
+70 billable capabilities are defined. **All 55 priceable ones now carry a rate card and a cost
+rate**; the other 15 are module gates (on/off, no per-unit cost) or are exempt by name with a stated
+reason — chiefly `seat.member`, which is billed as a seat price and would otherwise be charged twice.
+
+That was not true a week ago, and the gap is worth recording because it is the kind that hides.
+
+> **33 capabilities had no rate card.** A capability with no rate card is metered and then *rated at
+> nothing*: usage events accumulate, quotas count down, and no revenue line is ever produced. It
+> looks handled. The largest by far was **`ai.scoring` — 4,090 runs, 98% of all agent activity,
+> metered correctly at the call site, and free.** `ai.tokens` was in the same state: the hook for
+> token-metered billing existed and had never been priced.
+>
+> A test now refuses any capability that is neither priced nor named as exempt, so this cannot
+> recur by omission.
 
 **Cost per credit, by capability** — the spread is deliberate. A credit is a unit of *price*, not a
 unit of cost; capabilities that cost us more consume more credits.
@@ -87,7 +99,7 @@ unit of cost; capabilities that cost us more consume more credits.
 | $0.0010 – $0.0024 | 9 | `ai.account_qa`, `ai.chat_turn`, `workflow.orchestration_run` |
 | $0.0001 – $0.0009 | 17 | `outreach.email_send`, `verify.email`, `integration.crm_sync` |
 
-- **Catalog mean:** $0.00166 per credit
+- **Catalog mean:** $0.00161 per credit
 - **Median:** $0.00100 per credit
 - **Worst case:** $0.00400 per credit
 - **Blended at observed usage mix: $0.00188 per credit** ← the number to use
@@ -122,19 +134,50 @@ Note that **a cache hit is still metered**. The customer received an answer and 
 answer; what the shared store improves is COGS, not price. Billing only on a miss would hand the
 saving to whichever customer happened to ask second, and make revenue depend on crawl ordering.
 
+### How AI is priced, and why not by the token
+
+Per-action, at a flat rate, with two token-metered escape hatches.
+
+The case for flat pricing is a measurement. Across **4,174 real agent runs**, token consumption
+within a single agent spreads widely at the extremes but tightly around the middle:
+
+| Agent | Runs | Median tokens | Max | Median → max |
+|---|---|---|---|---|
+| `scoring` | 4,090 | 226 | 794 | 3.5× |
+| `research` | 21 | 765 | 1,425 | 1.9× |
+| `messaging` | 21 | 275 | 647 | 2.4× |
+| `contact_rec` | 12 | 413 | 1,694 | 4.1× |
+| `qa` | 5 | 321 | 951 | 3.0× |
+
+**The worst case is about 4× the median, and a 4× token cost is absorbed at these margins.** Against
+that, a flat rate buys the customer a bill they can predict — which is worth more to them than the
+few percent of precision token-metering would add, and worth more to us than the support load of
+explaining a variable line item.
+
+Two capabilities exist for where that stops holding:
+
+- **`ai.tokens`** (0.01 credits per 1,000 tokens) — for work a customer can make arbitrarily large:
+  long-context analysis, document ingestion. The flat-rate argument depends on a bounded
+  distribution, and these have none.
+- **`ai.premium_model`** (4 credits per call) — a frontier model costs an order of magnitude more
+  than the default. Charging the same for both means the customers who ask for the better model are
+  subsidised by the ones who do not.
+
 ---
 
 ## 4. The plan ladder and why each price
 
 | Plan | Price | Credits | $/credit sold | COGS at observed mix | Gross margin | Break-even burn |
 |---|---|---|---|---|---|---|
+| **Pay as you go** | **$0/mo** | **0** | metered | — | — | n/a |
+| **Credit Pack (annual)** | **$999/yr** | **25,000** | $0.0400 | $47.01 | **95.3%** | 531,244 cr |
 | Core | $19/mo | 400 | $0.0475 | $0.75 | **96.0%** | 10,104 cr |
-| Starter | $44/mo | 750 | $0.0587 | $1.41 | **96.8%** | 23,398 cr |
+| Starter | $44/mo | 1,000 | $0.0440 | $1.88 | **95.7%** | 23,398 cr |
 | Growth | $79/mo | 2,000 | $0.0395 | $3.76 | **95.2%** | 42,010 cr |
 | Professional | $129/mo | 4,000 | $0.0323 | $7.52 | **94.2%** | 68,599 cr |
-| **Scale** | **$149/mo** | **5,000** | **$0.0298** | **$9.40** | **93.7%** | **79,235 cr** |
+| **Scale** | **$149/mo** | **5,000** | $0.0298 | $9.40 | **93.7%** | 79,235 cr |
 | Business | $199/mo | 8,000 | $0.0249 | $15.04 | **92.4%** | 105,823 cr |
-| **Scale Annual** | **$1,490/yr** | **60,000** | **$0.0248** | **$112.83** | **92.4%** | **792,346 cr** |
+| **Scale Annual** | **$1,490/yr** | **60,000** | $0.0248 | $112.83 | **92.4%** | 792,346 cr |
 
 "Break-even burn" is how many credits a customer would have to consume in a period before the plan
 stops making money at the blended cost. Every tier has **an order of magnitude of headroom** over
@@ -144,10 +187,15 @@ overage long before that.
 
 ### The volume curve is deliberate
 
-Credits per dollar rise monotonically with tier: 21.1 → 25.3 → 31.0 → **33.6** → 40.2 → **40.3**.
+Credits per dollar rise monotonically across every monthly tier:
+21.1 → 22.7 → 25.3 → 31.0 → **33.6** → 40.2, with annual at **40.3**.
 
-(Starter is the one exception at 17.0 — it is priced as a seat-led tier where credits are secondary,
-which is a legacy of the original ladder and is flagged in §10 as worth revisiting.)
+**Starter was the exception and has been fixed.** It shipped at 17.0 credits per dollar — *below*
+Core's 21.1 — which meant a Core customer was better off buying overage than upgrading. That is an
+inversion that punishes exactly the behaviour a ladder exists to reward, and it was found by drawing
+the curve rather than by reading the prices. The allowance rose from 750 to 1,000 credits at the
+same $44, giving 22.7. Raising the allowance rather than cutting the price keeps revenue intact on
+new business, and there were no existing subscribers to regrandfather.
 
 A rising curve is standard volume discounting and it does three things: it makes upgrading rational
 for the customer, it keeps our margin roughly flat in absolute dollars per account while growing
@@ -172,7 +220,47 @@ limit after removing someone.
 
 ---
 
-## 5. Why Scale is $149 and Scale Annual is $1,490
+## 5. Pay as you go
+
+Two entry points that carry no monthly commitment, for the two customers a ladder always misses:
+the one evaluating us who will not sign up to a subscription, and the one whose usage is lumpy
+enough that any allowance is either wasted or exceeded.
+
+| | Price | Allowance | Billing |
+|---|---|---|---|
+| **Pay as you go** | $0/mo | none | Every action metered, invoiced monthly in arrears |
+| **Credit Pack** | $999/yr | 25,000 credits | Prepaid, valid twelve months |
+
+**Pay as you go is the true metered plan.** No base fee, no allowance, 55 capabilities each rated
+individually onto a monthly invoice. It is the lowest-friction way to start and the natural landing
+place for a self-serve trial that ran out.
+
+**The Credit Pack is the commitment-free annual.** 25,000 credits at $999 is 25.0 credits per dollar
+— deliberately *between* Growth (25.3) and the monthly tiers rather than at the top. A customer who
+prepays but commits to no monthly floor gets a modest volume discount, not the best rate on the
+sheet; Scale Annual, which does commit, gets 40.3.
+
+> **The implementation detail that makes this work, and nearly broke it.** Overage is only charged
+> where a quota is *set*. A capability with `quota = None` reads as unlimited and is skipped
+> entirely. So a pay-as-you-go plan built the obvious way — clone a plan, set the allowance to zero
+> — inherits unlimited entitlements and **bills the customer nothing**, while metering happily. It
+> would look correct until the first invoice came out at zero.
+>
+> Two further traps were found by running it. Cloning the base plan's entitlements covered five
+> capabilities out of fifty-five, because base plans carry few explicit rows and the rest fall back
+> to catalog defaults — so the first build billed for five things and gave away sixty. And zeroing
+> every quota zeroed `seat.member`, which is billed as a seat price rather than in credits, meaning
+> the plan allowed **no members at all**.
+
+### Where PAYG sits against the ladder
+
+At $0.04–0.0475 per credit, pay-as-you-go is priced at roughly the Core rate — the *worst* rate on
+the sheet, which is correct. Committing to a plan should always beat not committing, or the ladder
+has no pull. The customer trades price for flexibility, knowingly.
+
+---
+
+## 6. Why Scale is $149 and Scale Annual is $1,490
 
 This is the section an investor should push on hardest, because it is where judgement enters.
 
@@ -208,7 +296,7 @@ clear the 50% floor by a wide margin.
 
 ---
 
-## 6. How we actually charge — the four routes to revenue
+## 7. How we actually charge — the five routes to revenue
 
 The billing engine has one seam. Application code calls `check_and_meter(...)` and never mentions a
 plan or a price; plans, quotas and prices are **rows, not branches**. That is what makes everything
@@ -241,11 +329,17 @@ provider prices nothing. Collection is keyed by invoice id, so a retry can never
 Dunning retries on a configured schedule and escalates to `past_due`. It never silently voids a
 debt.
 
-### Route 4 — Enterprise invoice (see §8)
+### Route 4 — Pay as you go
+
+No subscription, no allowance. Every action is rated onto a monthly invoice for exactly what was
+used. Mechanically it is the overage path with the quota set to zero, which is why it needed no new
+billing machinery — only a plan whose entitlements all start at nought. See §5.
+
+### Route 5 — Enterprise invoice (see §9)
 
 ---
 
-## 7. Selling part of the product
+## 8. Selling part of the product
 
 **"What if a customer only wants specific functionality?"** This is a configuration change, not a
 build. It is the question the whole entitlement model exists to answer.
@@ -293,11 +387,11 @@ of the only page where they could change the plan that locked them out.
 `module.api` exists as its own gate, so "API access" is a line item that can be sold, withheld, or
 priced separately at any tier. For a customer who wants *only* programmatic access, the packaging
 is: a plan with `module.api` on, the UI modules off, and a credit allowance sized to their expected
-call volume. That is a custom plan (§8), assembled from checkboxes, with no code change.
+call volume. That is a custom plan (§9), assembled from checkboxes, with no code change.
 
 ---
 
-## 8. Enterprise
+## 9. Enterprise
 
 Enterprise is a **different sales motion with different mechanics**, not a bigger number on the same
 form.
@@ -329,7 +423,7 @@ retroactively to everyone on the plan.
 
 ---
 
-## 9. Margin governance — what stops a bad price
+## 10. Margin governance — what stops a bad price
 
 For a finance reader, these are the controls, and they are code rather than process:
 
@@ -355,7 +449,7 @@ exceeds the cost of a wrongly-served one, at our stage, by a wide margin.
 
 ---
 
-## 10. What we do not know, and what would change our minds
+## 11. What we do not know, and what would change our minds
 
 An investor should discount the following.
 
@@ -366,11 +460,6 @@ not forecastable from this. Every margin figure here is a unit economic, not a r
 **We have no churn or conversion data.** No customer has yet completed a full billing cycle on a paid
 self-serve plan. The 16.7% annual discount is therefore priced off convention, not off our own
 observed monthly churn. If churn turns out to be low, we are over-discounting annual; if high, under.
-
-**Starter is mispriced relative to the curve** (17.0 cr/$ against Core's 21.1). It was built as a
-seat-led tier before the credit ladder was regularised. It should be re-examined: as it stands a
-customer is better off on Core plus overage until roughly 750 credits, which is not a ladder we
-would design today.
 
 **COGS is not fixed.** LLM inference cost is falling fast; contact-data cost is not, and it is 75%
 of our burn. If a data provider raises prices, margin compresses on the line that matters most. The
