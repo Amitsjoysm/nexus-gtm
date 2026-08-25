@@ -29,7 +29,24 @@ from nexus.models.billing import (
 
 logger = logging.getLogger("nexus.billing.rating")
 
-CREDIT_CENTS = 1  # 1 credit = $0.01 = 1 cent
+# What one credit costs when bought as OVERAGE, in cents.
+#
+# This was 1 cent, and that inverted the ladder. In-plan credits sell for 2.48c (Scale Annual) to
+# 4.75c (Core), so overage at 1c made exceeding your plan **two to five times cheaper per credit
+# than upgrading to cover the same usage**. A customer acting rationally would sit on the smallest
+# plan and overflow forever, and the tier they were nominally on would stop meaning anything.
+#
+# 5c clears the dearest in-plan rate, so upgrading beats overflowing from every tier. The pressure
+# is deliberately uneven: a Core customer at 4.75c feels a 5% premium, a Scale Annual customer at
+# 2.48c feels 2x. That is the right way round — the customer on the cheapest rate has the most to
+# gain from moving up, so should feel the most reason to.
+#
+# Margin at worst-case COGS ($0.004/credit) is 92%, so this is not priced to punish; it is priced
+# to keep the ladder monotonic in the one place a customer can step outside it.
+#
+# A plan may still override per capability via `overage_price_credits`, which is how a negotiated
+# enterprise rate avoids forking the catalog.
+CREDIT_CENTS = 5
 
 # Plan classes that are never charged usage overage.
 _NO_OVERAGE_CLASSES = {"unlimited", "internal", "partner"}

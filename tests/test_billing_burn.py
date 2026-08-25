@@ -8,6 +8,8 @@ first, then credits, then an explicit overage price, then the wall.
 """
 from __future__ import annotations
 
+from nexus.billing.rating import CREDIT_CENTS
+
 import pytest
 
 from tests.conftest import make_tenant, tenant_session
@@ -218,4 +220,6 @@ async def test_overage_beyond_the_credit_balance_still_reaches_the_invoice(enfor
         lines = await ts.list(BillingInvoiceLine, BillingInvoiceLine.invoice_id == inv.id)
         overage = [ln for ln in lines if ln.kind == "overage"]
         assert len(overage) == 1
-        assert overage[0].amount_cents == 200
+        # 200 units x 1 credit x CREDIT_CENTS (5c). Overage is priced above the dearest in-plan
+        # rate so that upgrading always beats overflowing.
+        assert overage[0].amount_cents == 200 * CREDIT_CENTS

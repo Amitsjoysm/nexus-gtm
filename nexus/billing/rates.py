@@ -62,7 +62,9 @@ def _r(capability_id: str, credits: float, cost: float, source: str = "",
 RATE_SEED: list[dict] = [
     _r("ai.email_draft", 2, 0.0012, "groq llama-3.3-70b"),
     _r("outreach.cadence_touch", 2, 0.0013, "groq + smtp"),
-    _r("ai.account_qa", 3, 0.012, "groq + 2 web searches"),
+    # Two Exa searches at $0.007 plus the model. Was 52% — clearing the floor by 2 points is not
+    # a margin, it is a rounding error away from breaching it.
+    _r("ai.account_qa", 4, 0.0143, "groq + 2 exa searches @ $7/1k"),
     _r("ai.research_brief", 3, 0.012, "exa research + groq"),
     _r("ai.call_script", 2, 0.0016, "groq"),
     _r("ai.contact_rank", 1, 0.0009, "groq"),
@@ -95,8 +97,13 @@ RATE_SEED: list[dict] = [
     _r("workflow.orchestration_run", 5, 0.005, "multi-step tools"),
     _r("automation.play_run", 1, 0.0002, "compute"),
     _r("platform.storage", 25, 0.10, "postgres gb-month"),
-    _r("search.web", 1, 0.004, "exa/brave/serper blended"),
-    _r("signal.news_scan", 1, 0.004, "search"),
+    # Repriced 2026-08-25 against real provider prices. Exa standard search is $7/1k, so the
+    # recorded $0.004 was a blend that no longer matches what we are configured to call
+    # (NEXUS_SEARCH_PROVIDER=exa). At 1 credit it sat at 30% margin — below the floor.
+    _r("search.web", 2, 0.007, "exa standard search @ $7/1k (measured 2026-08)"),
+    # Signal search runs on Firecrawl (NEXUS_SIGNAL_SEARCH_PROVIDER=firecrawl): ~2 credits per
+    # search, $0.0032/credit on the Hobby tier. Was 36% margin at 1 credit.
+    _r("signal.news_scan", 2, 0.0064, "firecrawl search, 2 credits @ Hobby tier"),
 
     # ---- added 2026-08-25, after an audit found 33 capabilities with no rate card ------------
     #
@@ -108,7 +115,7 @@ RATE_SEED: list[dict] = [
     # metered at the call site, and free. It is priced low per unit on purpose (0.5 credits) —
     # it runs on every account on every refresh, so it has to be cheap enough not to dominate a
     # bill, and it is the volume that makes it material rather than the unit.
-    _r("ai.scoring", 0.5, 0.00022, "groq; median 226 tokens over 4,090 measured runs"),
+    _r("ai.scoring", 0.5, 0.00026, "groq gpt-oss-120b; 794 tokens, worst of 4,090 runs"),
 
     # **Token-metered AI.** The other capabilities price a whole action at a flat rate, which is
     # right for a predictable bill: measured token spread within one agent runs to 49x

@@ -1,6 +1,8 @@
 # tests/test_billing_rating.py
 from __future__ import annotations
 
+from nexus.billing.rating import CREDIT_CENTS
+
 from tests.conftest import make_tenant, tenant_session
 
 
@@ -64,8 +66,9 @@ async def test_rate_period_charges_overage_beyond_quota():
         over = [ln for ln in await _lines(ts, inv) if ln.kind == "overage"]
         assert len(over) == 1
         assert float(over[0].quantity) == 10
-        # 10 units x 2 credits x $0.01 = $0.20 = 20 cents
-        assert over[0].amount_cents == 20
+        # 10 units x 2 credits/unit x CREDIT_CENTS. Overage is priced ABOVE the dearest in-plan
+        # rate on purpose — at 1c it was cheaper to overflow than to upgrade.
+        assert over[0].amount_cents == 10 * 2 * CREDIT_CENTS
 
 
 async def test_plan_overage_price_overrides_the_rate_card():
@@ -86,8 +89,9 @@ async def test_plan_overage_price_overrides_the_rate_card():
         over = [ln for ln in await _lines(ts, inv) if ln.kind == "overage"]
         assert len(over) == 1
         assert float(over[0].unit_credits) == 1
-        assert over[0].amount_cents == 100                 # 100 x 1 credit, NOT 100 x 0.25
-        assert inv.total_cents == 7900 + 100               # base + overage
+        # 100 units x 1 credit (the plan's override, NOT the card's 0.25) x CREDIT_CENTS.
+        assert over[0].amount_cents == 100 * 1 * CREDIT_CENTS
+        assert inv.total_cents == 7900 + 100 * 1 * CREDIT_CENTS
 
 
 async def test_rating_is_deterministic_and_replayable():
@@ -219,3 +223,42 @@ async def test_rating_picks_the_subscription_deterministically():
         second = await rate_period(ts, period_key=key)
         assert first.total_cents == second.total_cents
         assert first.plan_id == second.plan_id
+
+
+async def test_overage_never_undercuts_the_cheapest_in_plan_rate():
+    """The ladder must not invert at its one escape hatch.
+
+    Overage was priced at 1 credit = 1 cent while in-plan credits sell for 2.48c (Scale Annual) to
+    4.75c (Core). Exceeding your plan was therefore **two to five times cheaper per credit than
+    upgrading to cover the same usage**, so a customer acting rationally would sit on the smallest
+    plan and overflow forever, and the tier they were nominally on would stop meaning anything.
+
+    This asserts the rule rather than the number: overage per credit must exceed what a credit
+    costs on the most generous plan we sell.
+    """
+    from sqlalchemy import select
+
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from nexus.billing.rating import CREDIT_CENTS
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.billing import BillingPlan
+
+    await sync_catalog()
+    await sync_plans()
+    async with get_sessionmaker()() as s:
+        plans = (await s.scalars(
+            select(BillingPlan).where(BillingPlan.plan_class == "standard")
+        )).all()
+
+    rates = [
+        p.base_price_cents / p.included_credits
+        for p in plans
+        if p.included_credits and p.base_price_cents
+    ]
+    assert rates, "expected some priced standard plans"
+    best_in_plan = min(rates)          # cents per credit on the most generous tier
+    assert CREDIT_CENTS > best_in_plan, (
+        f"overage at {CREDIT_CENTS}c/credit undercuts the best in-plan rate of "
+        f"{best_in_plan:.3f}c — a customer is better off overflowing than upgrading"
+    )
