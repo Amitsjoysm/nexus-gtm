@@ -1,5 +1,11 @@
 # tests/test_billing_checkout_api.py
-"""The two self-serve money actions: hosted Checkout and the hosted Customer Portal.
+"""Checkout, against the tiers that are actually on sale.
+
+Retargeted from `growth`/`professional` to `launch`/`accelerate` on 2026-08-26: the ladder was
+collapsed to Free / Launch / Accelerate and the old tiers are retired. A retired plan is refused by
+checkout with a 409 ("not on sale"), which is correct behaviour and would have made these tests
+assert the wrong thing.
+The two self-serve money actions: hosted Checkout and the hosted Customer Portal.
 
 Both are redirects. Neither writes a subscription — that is the webhook's job — so the tests
 here are about who may open them, which plans are eligible, and what the offline provider was
@@ -23,7 +29,7 @@ def noop_provider():
     set_payment_provider(None)
 
 
-async def _seeded_tenant(client, *, slug: str, plan_id: str = "growth"):
+async def _seeded_tenant(client, *, slug: str, plan_id: str = "launch"):
     """Signed-up owner with the catalog seeded and a subscription on ``plan_id``."""
     from nexus.billing.catalog import sync_catalog
     from nexus.billing.plans import sync_plans
@@ -52,7 +58,7 @@ def _rep_token(tid: str) -> str:
 # ---- authz -----------------------------------------------------------------------------------
 
 async def test_checkout_requires_auth(client, noop_provider):
-    r = await client.post("/api/billing/checkout", json={"plan_id": "growth"})
+    r = await client.post("/api/billing/checkout", json={"plan_id": "launch"})
     assert r.status_code in (401, 403)
 
 
@@ -65,7 +71,7 @@ async def test_a_rep_cannot_open_checkout(client, noop_provider):
     """Money actions are admin+, unlike the rep-level usage/credits read surface."""
     _, tid = await _seeded_tenant(client, slug="repck")
     r = await client.post(
-        "/api/billing/checkout", json={"plan_id": "growth"}, headers=auth(_rep_token(tid))
+        "/api/billing/checkout", json={"plan_id": "launch"}, headers=auth(_rep_token(tid))
     )
     assert r.status_code == 403, r.text
     assert noop_provider.checkout_sessions == []
@@ -93,17 +99,17 @@ async def test_checkout_returns_a_redirect_url(client, noop_provider):
     token, _ = await _seeded_tenant(client, slug="ck1")
     r = await client.post(
         "/api/billing/checkout",
-        json={"plan_id": "professional", "success_url": "https://app/ok",
+        json={"plan_id": "accelerate", "success_url": "https://app/ok",
               "cancel_url": "https://app/no"},
         headers=auth(token),
     )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["url"] and body["id"]
-    assert body["plan_id"] == "professional"
+    assert body["plan_id"] == "accelerate"
 
     sent = noop_provider.checkout_sessions[-1]
-    assert sent["plan_id"] == "professional"
+    assert sent["plan_id"] == "accelerate"
     assert sent["price_id"]                        # a price object was ensured at the provider
     assert sent["success_url"] == "https://app/ok"
 
@@ -113,7 +119,7 @@ async def test_checkout_stamps_the_tenant_on_the_session(client, noop_provider):
     would have nowhere to land."""
     token, tid = await _seeded_tenant(client, slug="ck2")
     r = await client.post(
-        "/api/billing/checkout", json={"plan_id": "growth"}, headers=auth(token)
+        "/api/billing/checkout", json={"plan_id": "launch"}, headers=auth(token)
     )
     assert r.status_code == 200, r.text
     assert noop_provider.checkout_sessions[-1]["metadata"]["tenant_id"] == tid
@@ -125,7 +131,7 @@ async def test_checkout_creates_and_stores_the_psp_customer(client, noop_provide
 
     token, tid = await _seeded_tenant(client, slug="ck3")
     r = await client.post(
-        "/api/billing/checkout", json={"plan_id": "growth"}, headers=auth(token)
+        "/api/billing/checkout", json={"plan_id": "launch"}, headers=auth(token)
     )
     assert r.status_code == 200, r.text
 
@@ -141,7 +147,7 @@ async def test_checkout_does_not_change_the_subscription(client, noop_provider):
 
     token, tid = await _seeded_tenant(client, slug="ck4", plan_id="starter")
     r = await client.post(
-        "/api/billing/checkout", json={"plan_id": "business"}, headers=auth(token)
+        "/api/billing/checkout", json={"plan_id": "accelerate"}, headers=auth(token)
     )
     assert r.status_code == 200, r.text
 
@@ -181,7 +187,7 @@ async def test_checkout_is_refused_for_an_admin_managed_workspace(client, noop_p
         await ts.flush()
 
     r = await client.post(
-        "/api/billing/checkout", json={"plan_id": "growth"}, headers=auth(token)
+        "/api/billing/checkout", json={"plan_id": "launch"}, headers=auth(token)
     )
     assert r.status_code == 409, r.text
     assert "admin-managed" in r.json()["detail"]
@@ -217,7 +223,7 @@ async def test_unconfigured_stripe_says_so_instead_of_500(client):
     try:
         token, _ = await _seeded_tenant(client, slug="nokey")
         r = await client.post(
-            "/api/billing/checkout", json={"plan_id": "growth"}, headers=auth(token)
+            "/api/billing/checkout", json={"plan_id": "launch"}, headers=auth(token)
         )
         assert r.status_code == 503, r.text
         assert "NEXUS_STRIPE_SECRET_KEY" in r.json()["detail"]

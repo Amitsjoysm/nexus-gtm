@@ -99,10 +99,15 @@ PLAN_SEED: list[dict] = [
         "entitlements": [],
     },
     {
+        # 1,000 credits, raised from 100 on 2026-08-26: the free tier now has to let someone try
+        # every feature, and 100 credits is roughly forty enrichments — not enough to reach the
+        # part of the product worth paying for. Costs $1.92 per fully-consuming user at blended
+        # COGS, $4.00 worst case. That is the acquisition budget, and the number to watch if
+        # signups outpace conversions.
         "id": "free", "name": "Free", "plan_class": "free", "status": "active",
-        "base_price_cents": 0, "seat_price_cents": 0, "included_credits": 100,
+        "base_price_cents": 0, "seat_price_cents": 0, "included_credits": 1000,
         "max_seats": 1, "sort_order": 10,
-        "description": "Explore NEXUS with a single seat.",
+        "description": "Try every feature with 1,000 credits.",
         "entitlements": _FREE_ENT,
     },
     {
@@ -125,35 +130,82 @@ PLAN_SEED: list[dict] = [
         # cheaper plan carries proportionally less usage. All of it is editable in Admin without a
         # redeploy: sync_plans only ever CREATES, so these numbers are a starting point and the
         # database wins from then on.
-        "id": "core", "name": "Core", "plan_class": "standard", "status": "active",
+        "id": "core", "name": "Core", "plan_class": "standard", "status": "retired",
         "base_price_cents": 1900, "seat_price_cents": 1900, "included_credits": 400,
         "max_seats": 3, "sort_order": 18,
         "description": "Accounts and contacts, with enrichment. No signals, outreach or agents.",
         "entitlements": _CORE_ENT,
     },
     {
-        "id": "starter", "name": "Starter", "plan_class": "standard", "status": "active",
+        "id": "starter", "name": "Starter", "plan_class": "standard", "status": "retired",
         "base_price_cents": 3900, "seat_price_cents": 3900, "included_credits": 750,
         "max_seats": 5, "sort_order": 20,
         "description": "For a first SDR running outbound.",
         "entitlements": _STARTER_ENT,
     },
     {
-        "id": "growth", "name": "Growth", "plan_class": "standard", "status": "active",
+        "id": "growth", "name": "Growth", "plan_class": "standard", "status": "retired",
         "base_price_cents": 7900, "seat_price_cents": 7900, "included_credits": 2000,
         "max_seats": 25, "sort_order": 30,
         "description": "Full GTM stack for a growing team.",
         "entitlements": _GROWTH_ENT,
     },
+    # Seeded as `retired`: the superseded tiers exist so their EXISTING subscribers keep resolving
+# entitlements from a real plan row, but a fresh install must not offer nine tiers. `sync_plans`
+# never mutates an existing plan, so this only affects new databases — a live deployment is moved
+# by `scripts/restructure_plans.py`, which retires the same set and reports who is on each.
+
+# ---- the ladder as of 2026-08-26 ------------------------------------------------------------
+    # Collapsed from eight public tiers to three plus two annuals. The superseded rows are RETIRED
+    # by `scripts/restructure_plans.py`, never deleted: `billing_subscriptions.plan_id` is a foreign
+    # key, and entitlements resolve from the plan ROW — so a deleted plan is either a constraint
+    # violation or a paying customer with no entitlements at all, which falls back to permissive
+    # catalog defaults and hands them everything.
+    #
+    # Sized against measured cost: blended $0.00192/credit, worst case $0.00400. Launch runs at
+    # 25.3 credits/$ and Accelerate at 40.2, against a 100 cr/$ design ceiling.
+    {
+        "id": "launch", "name": "Launch", "plan_class": "standard", "status": "active",
+        "base_price_cents": 9900, "seat_price_cents": 9900, "included_credits": 2500,
+        "max_seats": 25, "sort_order": 20, "interval": "month", "trial_days": 14,
+        "description": "Everything you need to run signal-led outreach.",
+        "entitlements": _GROWTH_ENT,
+    },
+    {
+        # A separate row rather than a flag, because `interval` lives on the plan. Sorted beside its
+        # monthly sibling by hand: the automatic position derives from price, and a yearly price
+        # would put every annual plan at the bottom of the ladder.
+        "id": "launch-annual", "name": "Launch (annual)", "plan_class": "standard",
+        "status": "active", "base_price_cents": 95000, "seat_price_cents": 95000,
+        "included_credits": 30000, "max_seats": 25, "sort_order": 21,
+        "interval": "year", "trial_days": 14,
+        "description": "Launch, paid yearly. Two months free.",
+        "entitlements": _GROWTH_ENT,
+    },
+    {
+        "id": "accelerate", "name": "Accelerate", "plan_class": "standard", "status": "active",
+        "base_price_cents": 19900, "seat_price_cents": 19900, "included_credits": 8000,
+        "max_seats": 100, "sort_order": 30, "interval": "month", "trial_days": 14,
+        "description": "For teams running the full loop at volume.",
+        "entitlements": _PRO_ENT,
+    },
+    {
+        "id": "accelerate-annual", "name": "Accelerate (annual)", "plan_class": "standard",
+        "status": "active", "base_price_cents": 191000, "seat_price_cents": 191000,
+        "included_credits": 96000, "max_seats": 100, "sort_order": 31,
+        "interval": "year", "trial_days": 14,
+        "description": "Accelerate, paid yearly. Two months free.",
+        "entitlements": _PRO_ENT,
+    },
     {
         "id": "professional", "name": "Professional", "plan_class": "standard",
-        "status": "active", "base_price_cents": 12900, "seat_price_cents": 12900,
+        "status": "retired", "base_price_cents": 12900, "seat_price_cents": 12900,
         "included_credits": 4000, "max_seats": 100, "sort_order": 40,
         "description": "API access and priority support.",
         "entitlements": _PRO_ENT,
     },
     {
-        "id": "business", "name": "Business", "plan_class": "standard", "status": "active",
+        "id": "business", "name": "Business", "plan_class": "standard", "status": "retired",
         "base_price_cents": 19900, "seat_price_cents": 19900, "included_credits": 8000,
         "max_seats": 250, "sort_order": 50,
         "description": "Scale outbound with advanced controls.",

@@ -278,3 +278,55 @@ async def test_the_provider_list_publishes_which_have_a_model(client, monkeypatc
     by_id = {r["id"]: r["has_model"] for r in rows}
     assert by_id["groq"] is True
     assert by_id["exa"] is False
+
+
+# ---- which key is actually live --------------------------------------------------------------
+
+async def test_the_key_list_says_which_one_is_in_use(client, monkeypatch):
+    """A pool of five keys and no sign of which one is serving is state without the state that
+    matters. Computed from the SAME ordering the resolver uses, so the light cannot disagree with
+    which credential is really being spent."""
+    token = await _superadmin(client, monkeypatch, slug="iu1", email="boss@iu1.com")
+    first = (await client.post("/api/admin/provider-keys", headers=auth(token),
+                               json={"provider": "brave", "label": "a",
+                                     "key": "sk-a-1111"})).json()
+    second = (await client.post("/api/admin/provider-keys", headers=auth(token),
+                                json={"provider": "brave", "label": "b",
+                                      "key": "sk-b-2222"})).json()
+
+    rows = {r["id"]: r for r in (await client.get(
+        "/api/admin/provider-keys?provider=brave", headers=auth(token))).json()}
+    assert rows[first["id"]]["in_use"] is True, "the oldest enabled key serves by default"
+    assert rows[second["id"]]["in_use"] is False
+
+    # Pinning moves the light, because pinning moves the resolver.
+    await client.post(f"/api/admin/provider-keys/{second['id']}/prefer", headers=auth(token))
+    rows = {r["id"]: r for r in (await client.get(
+        "/api/admin/provider-keys?provider=brave", headers=auth(token))).json()}
+    assert rows[second["id"]]["in_use"] is True
+    assert rows[first["id"]]["in_use"] is False
+
+
+async def test_a_disabled_key_is_never_shown_as_in_use(client, monkeypatch):
+    """The resolver filters on `enabled`. A disabled key showing green would send an operator to
+    debug a credential that is not being called at all."""
+    token = await _superadmin(client, monkeypatch, slug="iu2", email="boss@iu2.com")
+    only = (await client.post("/api/admin/provider-keys", headers=auth(token),
+                              json={"provider": "serper", "label": "x",
+                                    "key": "sk-x-3333"})).json()
+    await client.post(f"/api/admin/provider-keys/{only['id']}/enabled/false", headers=auth(token))
+    rows = (await client.get("/api/admin/provider-keys?provider=serper",
+                             headers=auth(token))).json()
+    assert rows[0]["in_use"] is False
+
+
+async def test_each_provider_has_its_own_live_key(client, monkeypatch):
+    """The pool is per provider, so exactly one key per provider is live — not one overall."""
+    token = await _superadmin(client, monkeypatch, slug="iu3", email="boss@iu3.com")
+    await client.post("/api/admin/provider-keys", headers=auth(token),
+                      json={"provider": "brave", "label": "b", "key": "sk-b-4444"})
+    await client.post("/api/admin/provider-keys", headers=auth(token),
+                      json={"provider": "serper", "label": "s", "key": "sk-s-5555"})
+    rows = (await client.get("/api/admin/provider-keys", headers=auth(token))).json()
+    live = [r for r in rows if r["in_use"]]
+    assert {r["provider"] for r in live} == {"brave", "serper"}

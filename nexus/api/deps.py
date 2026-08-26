@@ -186,7 +186,16 @@ def require_platform_permission(permission: str):
     individually annotated. Nobody loses access during the rollout.
     """
 
-    async def _dep(principal: Principal = Depends(get_principal)) -> Principal:
+    async def _dep(
+        request: Request,
+        principal: Principal = Depends(get_principal),
+    ) -> Principal:
+        # Origin first, and deliberately cheap: it reads a module-level cache, so an unlisted
+        # address is refused before it can spend a database query on permissions.
+        from nexus.api.deps_ip import check_admin_origin
+
+        check_admin_origin(request)
+
         held = await platform_permissions(principal)
         if permission not in held:
             # Same message and status as the plain admin gate: an admin probing which specific

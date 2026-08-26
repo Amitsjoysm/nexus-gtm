@@ -278,3 +278,45 @@ async def test_a_broken_config_read_does_not_stop_a_job(fresh_db, monkeypatch):
     monkeypatch.setattr(service, "refresh_if_stale", boom)
     result = await dispatch(Job(name="definitely_not_a_real_job", payload={}))
     assert result["error"] == "unknown_job"      # reached the handler lookup regardless
+
+
+# ---- has it actually taken effect? ---------------------------------------------------------------
+
+async def test_a_setting_reports_whether_it_has_taken_effect(client, monkeypatch):
+    """"Saved" and "in force" are different facts, and a panel showing only the first is how an
+    operator concludes a feature is on when it is not."""
+    token = await _superadmin(client, monkeypatch, slug="rc20", email="boss@rc20.com")
+    await client.put("/api/admin/runtime/settings/cadence_enabled", headers=auth(token),
+                     json={"value": True})
+
+    rows = (await client.get("/api/admin/runtime/settings", headers=auth(token))).json()
+    row = next(r for r in rows if r["key"] == "cadence_enabled")
+    assert row["overridden"] is True
+    assert row["in_effect"] is True, "set on this process, so it is live here"
+
+
+async def test_a_stored_value_the_process_has_not_picked_up_reads_as_pending(client, monkeypatch):
+    """A restart-only setting is stored and pending. Saying it is live would be a lie the operator
+    only discovers when the thing they enabled is still missing."""
+    from nexus.core.config import get_settings
+
+    token = await _superadmin(client, monkeypatch, slug="rc21", email="boss@rc21.com")
+    await client.put("/api/admin/runtime/settings/metrics_enabled", headers=auth(token),
+                     json={"value": False})
+    # A process that read the value at boot and still holds the old one.
+    monkeypatch.setattr(get_settings(), "metrics_enabled", True)
+
+    rows = (await client.get("/api/admin/runtime/settings", headers=auth(token))).json()
+    row = next(r for r in rows if r["key"] == "metrics_enabled")
+    assert row["overridden"] is True
+    assert row["in_effect"] is False
+
+
+async def test_a_setting_with_no_override_is_always_in_effect(client, monkeypatch):
+    """Nothing stored means the deployment's own value is what is running, by definition. Marking
+    those pending would put a warning on every untouched row and train people to ignore it."""
+    token = await _superadmin(client, monkeypatch, slug="rc22", email="boss@rc22.com")
+    rows = (await client.get("/api/admin/runtime/settings", headers=auth(token))).json()
+    for row in rows:
+        if not row["overridden"]:
+            assert row["in_effect"] is True, row["key"]

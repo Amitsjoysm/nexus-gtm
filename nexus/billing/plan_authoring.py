@@ -331,6 +331,11 @@ async def _position_on_ladder(session: AsyncSession, base_price_cents: int,
             select(BillingPlan).where(
                 BillingPlan.plan_class == SELLABLE_CLASS,
                 BillingPlan.interval == interval,
+                # ACTIVE only. A retired plan keeps its row so its subscribers keep resolving
+                # entitlements, but its sort_order describes a ladder that no longer exists —
+                # counting it puts new tiers in gaps between plans nobody can see. Measured: with
+                # five retired tiers still in the query, a $149 plan landed on top of the $199 one.
+                BillingPlan.status == "active",
             )
         )
     ).all()

@@ -30,7 +30,7 @@ async def _superadmin(client, monkeypatch, *, slug: str, email: str) -> str:
 
 def _plan(**over) -> dict:
     body = {
-        "plan_id": "scale", "name": "Scale", "base_plan_id": "growth",
+        "plan_id": "scale", "name": "Scale", "base_plan_id": "accelerate",
         "base_price_cents": 24900, "included_credits": 12000,
     }
     body.update(over)
@@ -122,7 +122,7 @@ async def test_an_override_turns_a_module_off_for_the_new_tier(client, monkeypat
 
     listed = (await client.get("/api/billing/plans", headers=auth(token))).json()
     lite = next(p for p in listed if p["id"] == "lite")
-    base = next(p for p in listed if p["id"] == "growth")
+    base = next(p for p in listed if p["id"] == "accelerate")
     # Asserted against the BASE plan rather than by module name: the picker renders display names
     # ("Relationship graph module"), not capability ids, and hard-coding one couples this test to
     # marketing copy. What matters is that the override removed something the base plan had.
@@ -289,18 +289,18 @@ async def test_a_new_tier_lands_between_the_plans_it_out_and_under_prices(client
     admin = (await client.get("/api/admin/billing/plans", headers=auth(token))).json()
     order = {p["id"]: p["sort_order"] for p in admin}
 
-    # $149 sits between Professional ($129) and Business ($199).
+    # $149 sits between Launch ($99) and Accelerate ($199).
     mid = (await client.post("/api/admin/billing/plans", headers=auth(token),
                              json=_plan(plan_id="between", base_price_cents=14900))).json()
-    assert order["professional"] < mid["sort_order"] < order["business"], (
-        f"{mid['sort_order']} is not between professional {order['professional']} "
-        f"and business {order['business']}"
+    assert order["launch"] < mid["sort_order"] < order["accelerate"], (
+        f"{mid['sort_order']} is not between launch {order['launch']} "
+        f"and accelerate {order['accelerate']}"
     )
 
     # Dearer than everything sorts last among the standard tiers.
     top = (await client.post("/api/admin/billing/plans", headers=auth(token),
                              json=_plan(plan_id="priciest", base_price_cents=90000))).json()
-    assert top["sort_order"] >= order["business"]
+    assert top["sort_order"] >= order["accelerate"]
 
 
 async def test_an_annual_plan_is_positioned_against_other_annual_plans(client, monkeypatch):
@@ -457,6 +457,6 @@ async def test_a_normal_plan_is_unaffected_by_the_flag_being_off(client, monkeyp
             select(BillingPlanEntitlement).where(BillingPlanEntitlement.plan_id == "normal")
         )).all()}
         base = {e.capability_id: e.quota for e in (await s.scalars(
-            select(BillingPlanEntitlement).where(BillingPlanEntitlement.plan_id == "growth")
+            select(BillingPlanEntitlement).where(BillingPlanEntitlement.plan_id == "accelerate")
         )).all()}
     assert new == base

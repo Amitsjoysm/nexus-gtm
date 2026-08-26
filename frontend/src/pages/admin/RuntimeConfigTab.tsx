@@ -93,7 +93,12 @@ function SettingRow({ row, onChanged }: { row: RuntimeSetting; onChanged: () => 
         <Badge tone={RISK_TONE[row.risk] ?? "neutral"} dot={row.risk === "high"}>
           {RISK_LABEL[row.risk] ?? row.risk}
         </Badge>
-        {row.overridden && <Badge tone="info">Set here</Badge>}
+        {row.overridden && row.in_effect && <Badge tone="success" dot>Live</Badge>}
+        {/* Stored but not what this process is running on. The distinction matters most for the
+            restart-only settings, where "saved" is the whole truth until someone restarts. */}
+        {row.overridden && !row.in_effect && (
+          <Badge tone="warning" dot>Saved, not yet live</Badge>
+        )}
         {row.requires_restart && <Badge tone="neutral">Needs restart</Badge>}
         <code className={styles.key}>{row.key}</code>
       </div>

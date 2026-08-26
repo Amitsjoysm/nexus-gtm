@@ -1,5 +1,9 @@
 # tests/test_core_plan.py
-"""The `core` plan: accounts and contacts, sold self-serve.
+"""The entry paid tier, sold self-serve, and the module gates that make it cheaper to SERVE.
+
+Retargeted from `core` to `launch` on 2026-08-26 when the ladder collapsed to Free / Launch /
+Accelerate. `core` is retired — it keeps its one subscriber and its entitlements, but it is off the
+price list, so the "is it buyable" assertions had to move to a tier that is.
 
 Two things have to be true at once, and they are enforced in different places:
 
@@ -51,7 +55,7 @@ def test_core_is_a_standard_plan_so_it_can_be_bought_self_serve():
     from nexus.api.routers.billing import ADMIN_MANAGED_PLAN_CLASSES
     from nexus.billing.plans import PLAN_SEED
 
-    core = next(p for p in PLAN_SEED if p["id"] == "core")
+    core = next(p for p in PLAN_SEED if p["id"] == "launch")
     assert core["plan_class"] == "standard"
     assert core["plan_class"] not in ADMIN_MANAGED_PLAN_CLASSES, (
         "a custom/enterprise plan is refused by /billing/checkout with a 409 — Core must not be one"
@@ -59,18 +63,21 @@ def test_core_is_a_standard_plan_so_it_can_be_bought_self_serve():
     assert core["status"] == "active"
 
 
-def test_core_sits_between_free_and_starter_on_the_price_list():
+def test_the_ladder_climbs_in_both_price_and_position():
+    """Free -> Launch -> Accelerate, in sort order, price and seats. A ladder that is not
+    monotonic in all three is one a customer can game."""
     from nexus.billing.plans import PLAN_SEED
 
     by_id = {p["id"]: p for p in PLAN_SEED}
-    core, free, starter = by_id["core"], by_id["free"], by_id["starter"]
-    assert free["sort_order"] < core["sort_order"] < starter["sort_order"]
-    assert free["base_price_cents"] < core["base_price_cents"] < starter["base_price_cents"]
-    # Fewer modules must not cost more than more modules.
-    assert core["max_seats"] < starter["max_seats"]
+    free, launch, accelerate = by_id["free"], by_id["launch"], by_id["accelerate"]
+    assert free["sort_order"] < launch["sort_order"] < accelerate["sort_order"]
+    assert (free["base_price_cents"] < launch["base_price_cents"]
+            < accelerate["base_price_cents"])
+    assert launch["included_credits"] < accelerate["included_credits"]
+    assert launch["max_seats"] < accelerate["max_seats"]
 
 
-async def test_core_is_offered_in_the_api_plan_list(client):
+async def test_the_entry_tier_is_offered_in_the_api_plan_list(client):
     """It has to actually appear where a customer would pick it."""
     from nexus.billing.plans import sync_plans
 
@@ -79,8 +86,8 @@ async def test_core_is_offered_in_the_api_plan_list(client):
     r = await client.get("/api/billing/plans", headers=auth(token))
     assert r.status_code == 200, r.text
     plans = {p["id"]: p for p in r.json()}
-    assert "core" in plans, "Core is not on the price list the customer sees"
-    assert plans["core"]["base_price_cents"] == 1900
+    assert "launch" in plans, "Launch is not on the price list the customer sees"
+    assert plans["launch"]["base_price_cents"] == 9900
 
 
 # ---- what the customer gets ---------------------------------------------------------------------
@@ -204,27 +211,29 @@ async def test_the_price_list_omits_what_checkout_would_refuse(client):
     assert "legacy-unlimited" not in ids
     assert "internal" not in ids
     assert "trial" not in ids, "a trial is entered by signing up, not bought"
-    assert {"core", "starter", "growth"} <= ids
+    assert {"free", "launch", "accelerate"} <= ids
 
 
 async def test_the_price_list_is_ordered_and_marks_the_current_plan(client):
-    token = await _tenant_on_plan(client, "pl2", "core")
+    token = await _tenant_on_plan(client, "pl2", "launch")
     rows = (await client.get("/api/billing/plans", headers=auth(token))).json()
     assert [p["sort_order"] for p in rows] == sorted(p["sort_order"] for p in rows)
     current = [p["id"] for p in rows if p["current"]]
-    assert current == ["core"], f"expected core marked current, got {current}"
+    assert current == ["launch"], f"expected launch marked current, got {current}"
 
 
 async def test_each_plan_reports_what_it_includes_not_what_the_caller_has(client):
     """The picker answers "what would I get if I switched", so modules must resolve against each
     PLAN. Resolving against the caller's subscription would show every row identically."""
-    token = await _tenant_on_plan(client, "pl3", "growth")
+    token = await _tenant_on_plan(client, "pl3", "accelerate")
     rows = {p["id"]: p for p in (await client.get("/api/billing/plans", headers=auth(token))).json()}
 
-    assert "Outreach module" in rows["growth"]["includes"]
-    # ...and Core still reports it excluded, even though the CALLER is on Growth.
-    assert "Outreach module" in rows["core"]["excludes"]
-    assert "Signals module" in rows["core"]["excludes"]
+    assert "Outreach module" in rows["accelerate"]["includes"]
+    # ...and Free still reports the restricted modules excluded, even though the CALLER is on
+    # Accelerate and has them. Resolving against the caller would show every row identically,
+    # which makes the picker useless for the one question it answers.
+    assert rows["free"]["excludes"], "the free tier must report what it does not include"
+    assert len(rows["free"]["includes"]) < len(rows["accelerate"]["includes"])
 
 
 async def test_a_retired_plan_leaves_the_price_list_without_a_deploy(client):

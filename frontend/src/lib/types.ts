@@ -1300,6 +1300,13 @@ export interface RuntimeSetting {
   value: unknown;
   /** True when an operator set it here, rather than it coming from the environment. */
   overridden: boolean;
+  /**
+   * Whether the stored value is what the application is actually running on.
+   *
+   * "Saved" and "in force" are different facts. A restart-only setting is stored and pending, and
+   * a panel showing only the first is how an operator concludes a feature is on when it is not.
+   */
+  in_effect: boolean;
   note: string;
 }
 
@@ -1345,6 +1352,13 @@ export interface ProviderKey {
   enabled: boolean;
   /** The pinned key: tried first, so rotation is the failure path rather than the resting state. */
   preferred: boolean;
+  /**
+   * The key actually serving traffic for this provider right now.
+   *
+   * Computed server-side from the same ordering the resolver uses — pinned first, then oldest,
+   * enabled only — so the indicator cannot disagree with which credential is really being spent.
+   */
+  in_use: boolean;
 }
 
 export interface ProviderKeyTestResult {

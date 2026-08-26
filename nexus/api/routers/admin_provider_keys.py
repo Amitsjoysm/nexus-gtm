@@ -37,14 +37,18 @@ class ProviderKeyOut(BaseModel):
     last_error_status: int | None
     enabled: bool
     preferred: bool
+    # Which key is actually serving traffic right now. A pool of five keys with no sign of which
+    # one is live shows state without showing the state that matters — an operator debugging a
+    # provider error needs to know which credential produced it before anything else.
+    in_use: bool = False
 
     @classmethod
-    def of(cls, row) -> "ProviderKeyOut":
+    def of(cls, row, *, in_use: bool = False) -> "ProviderKeyOut":
         return cls(
             id=row.id, provider=row.provider, label=row.label, key_hint=row.key_hint,
             status=row.status, last_depth=row.last_depth, last_error=row.last_error,
             last_error_status=row.last_error_status, enabled=row.enabled,
-            preferred=row.preferred,
+            preferred=row.preferred, in_use=in_use,
         )
 
 
@@ -83,7 +87,18 @@ async def list_provider_keys(
     provider: str = "",
     _: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
 ) -> list[ProviderKeyOut]:
-    return [ProviderKeyOut.of(r) for r in await service.list_keys(provider)]
+    rows = await service.list_keys(provider)
+
+    # Computed from the SAME ordering the resolver uses — `preferred` first, then `created_at`,
+    # enabled only — so the indicator cannot disagree with which key is really being spent. A
+    # separate "which is live" flag on the row would be a second source of truth, and the first
+    # thing to drift would be exactly the fact the light exists to report.
+    live: dict[str, str] = {}
+    for row in sorted(rows, key=lambda r: (not r.preferred, r.created_at)):
+        if row.enabled and row.provider not in live:
+            live[row.provider] = row.id
+
+    return [ProviderKeyOut.of(r, in_use=(live.get(r.provider) == r.id)) for r in rows]
 
 
 @router.post("", response_model=ProviderKeyOut, status_code=status.HTTP_201_CREATED)

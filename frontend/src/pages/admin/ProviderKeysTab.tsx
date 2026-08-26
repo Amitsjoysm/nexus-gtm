@@ -295,6 +295,10 @@ export function ProviderKeysTab() {
                   <Badge tone={STATUS_TONE[row.status] ?? "neutral"} dot>
                     {STATUS_LABEL[row.status] ?? row.status}
                   </Badge>
+                  {/* Which key is actually being spent. Distinct from "Pinned": pinning is what
+                      an operator asked for, this is what the resolver is doing — and when a key
+                      is disabled or rotation moves on, the two stop agreeing. */}
+                  {row.in_use && <Badge tone="success" dot>In use</Badge>}
                   {row.preferred && <Badge tone="info">Pinned</Badge>}
                   {!row.enabled && <Badge tone="neutral">Disabled</Badge>}
                 </div>

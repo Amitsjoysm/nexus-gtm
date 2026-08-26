@@ -1220,3 +1220,68 @@ async def upsert_cost_rate(
         # Empty when nothing broke. Non-empty is a work list, not an error — the write succeeded.
         "below_floor": breached,
     }
+
+
+# ---- authoring a billable capability ---------------------------------------------------------------
+# `CAPABILITY_SEED` in catalog.py was the only way to create one, so a new billable action meant a
+# code change and a release. `sync_catalog` never deletes and re-asserts managed fields only for ids
+# it seeds, so an admin-created capability is untouched by any later deploy.
+
+
+class CapabilityIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    id: str
+    name: str
+    category: str
+    unit: str = "action"
+    description: str = ""
+    sub_category: str = ""
+    meter_kind: str = "counter"
+    default_mode: str = "metered"
+    depends_on: list[str] = Field(default_factory=list)
+    # Optional, and its absence is warned about rather than refused: a module gate is a real
+    # capability with no unit price.
+    credits_per_unit: float | None = None
+    unit_cost_usd: float | None = None
+
+
+@router.post("/capabilities", status_code=status.HTTP_201_CREATED)
+async def create_capability_endpoint(
+    body: CapabilityIn,
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> dict:
+    """Add a billable capability without a deploy.
+
+    Gated on `pricing.write`: creating one with a price is setting a price, and creating one
+    without is opening a hole where usage rates to nothing. Both belong to whoever owns pricing.
+    """
+    from nexus.billing.capability_authoring import (
+        CapabilityError,
+        DuplicateCapability,
+        create_capability,
+    )
+    from nexus.billing.rates import MarginFloorError
+
+    async with get_sessionmaker()() as session:
+        try:
+            result = await create_capability(
+                session, capability_id=body.id, name=body.name, category=body.category,
+                unit=body.unit, description=body.description, sub_category=body.sub_category,
+                meter_kind=body.meter_kind, default_mode=body.default_mode,
+                depends_on=body.depends_on,
+                credits_per_unit=body.credits_per_unit, unit_cost_usd=body.unit_cost_usd,
+            )
+        except DuplicateCapability as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        except MarginFloorError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        except CapabilityError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+        await record_admin_action(
+            session, actor=principal.user_id, action="capability.create",
+            target=result["capability_id"], after=result,
+        )
+        await session.commit()
+    return result

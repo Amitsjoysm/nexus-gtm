@@ -50,6 +50,17 @@ async def run_agent(
         result = await get_agent_runtime().run(
             agent_name, ts, account_id=body.account_id, **body.inputs
         )
+
+    # Record what the model actually consumed, ALONGSIDE the flat per-action charge above. The flat
+    # rate is the bill and is what makes it predictable; this is the evidence that the flat rate is
+    # still the right one. `ai.tokens` was priced and metered nowhere until this call site existed.
+    #
+    # Outside the `metered` block on purpose: a token record must not be part of the transaction
+    # that decides whether the customer was allowed to run the agent at all.
+    from nexus.billing.tokens import meter_tokens
+
+    await meter_tokens(ts, tokens=getattr(result, "tokens", 0) or 0, agent=agent_name)
+
     return AgentRunResponse(
         agent=result.agent,
         status=result.status,

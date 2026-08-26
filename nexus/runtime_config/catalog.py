@@ -209,6 +209,16 @@ _SPECS: tuple[SettingSpec, ...] = (
         risk="high",
     ),
     SettingSpec(
+        key="admin_ip_allowlist", label="Control plane IP allowlist", group="Access", kind="str",
+        effect="Comma-separated IP addresses or CIDR ranges that may reach this Control plane. "
+               "Empty means any address.",
+        warning="At most two entries — use a CIDR range for an office. Get this wrong and you lock "
+                "yourself out of the panel you would use to fix it, so read the address in the "
+                "refusal message: behind a proxy it is often not the one you expect. A malformed "
+                "list is ignored rather than enforced, which is the deliberate escape hatch.",
+        risk="high",
+    ),
+    SettingSpec(
         key="calling_enabled", label="Calling module", group="Access", kind="bool",
         effect="Enables the call console, call queue and dispositions.",
         warning="Click-to-dial works without a telephony provider. Turning this off hides the "

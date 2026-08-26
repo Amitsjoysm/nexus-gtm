@@ -295,6 +295,11 @@ async def list_invoices(
 # let a tenant admin re-buy their own bespoke contract at whatever the price row happens to say.
 ADMIN_MANAGED_PLAN_CLASSES = ("custom", "enterprise")
 
+# Classes that appear on the price list but cannot be bought through hosted checkout. `free` is
+# there to be seen, not purchased: a $0 subscription is a downgrade, and routing it through a
+# payment page would create a Stripe product for a plan that never charges anyone.
+UNPURCHASABLE_PLAN_CLASSES = ("free",)
+
 
 class CheckoutRequest(BaseModel):
     plan_id: str
@@ -406,7 +411,14 @@ async def list_sellable_plans(
     rows = (
         await ts.session.scalars(
             select(BillingPlan)
-            .where(BillingPlan.plan_class == "standard", BillingPlan.status == "active")
+            # `free` is listed alongside the paid tiers: a price list that hides the free option
+            # is not a price list, it is a paywall with a gap. It is excluded from CHECKOUT below
+            # rather than from the list — moving to free is a downgrade, which the customer portal
+            # handles, not a purchase.
+            .where(
+                BillingPlan.plan_class.in_(("standard", "free")),
+                BillingPlan.status == "active",
+            )
             .order_by(BillingPlan.sort_order)
         )
     ).all()
@@ -492,6 +504,16 @@ async def create_checkout(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"'{plan.name}' is an admin-managed plan and cannot be bought self-serve.",
+        )
+    if plan.plan_class in UNPURCHASABLE_PLAN_CLASSES:
+        # `free` is on the price list to be SEEN, not bought. Routing a $0 plan through hosted
+        # checkout would create a Stripe product for something that never charges anyone, and put a
+        # card form in front of a customer who is downgrading. Moving to free is a plan change, and
+        # the customer portal is where plan changes belong.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"'{plan.name}' is free — there is nothing to check out. Manage your plan from the "
+            f"billing portal instead.",
         )
 
     sub = await _current_subscription(ts)

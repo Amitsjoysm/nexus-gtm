@@ -39,6 +39,37 @@ class UnknownSetting(ValueError):
     """Not in the catalog, so not settable from the panel."""
 
 
+def _set_allowlist(value) -> None:
+    from nexus.api.deps_ip import set_allowlist
+
+    set_allowlist(str(value))
+
+
+def _get_allowlist():
+    from nexus.api.deps_ip import current_allowlist
+
+    return current_allowlist()
+
+
+def _validate_allowlist(value) -> None:
+    from nexus.api.deps_ip import parse_allowlist
+
+    parse_allowlist(str(value))
+
+
+# Settings whose value does NOT live on the `Settings` object. Pydantic refuses an attribute it has
+# not declared, so anything `config.py` does not know about needs somewhere else to live and its own
+# reader. Keep this small: a growing list means the override mechanism is being worked around
+# rather than used.
+_EXTERNAL_SINKS = {"admin_ip_allowlist": _set_allowlist}
+_EXTERNAL_READERS = {"admin_ip_allowlist": _get_allowlist}
+# Run BEFORE the row is written. `coerce` only checks the declared kind, and for a string setting
+# that is no check at all — the real constraints live in the sink. Without this the row commits and
+# then the sink rejects it, leaving a stored override the panel reports as active and
+# `apply_overrides` silently skips forever.
+_EXTERNAL_VALIDATORS = {"admin_ip_allowlist": _validate_allowlist}
+
+
 def _spec(key: str):
     if key in FORBIDDEN:
         # A distinct message from "unknown". An operator hunting for a setting they know exists
@@ -88,7 +119,13 @@ async def apply_overrides() -> dict[str, object]:
             continue
         try:
             typed = coerce(spec, value)
-            setattr(settings, key, typed)
+            if key in _EXTERNAL_SINKS:
+                # Not a `Settings` field. Pydantic refuses an attribute it does not declare, so a
+                # setting `config.py` does not know about needs its own home — see
+                # `api/deps_ip.py` for why the IP allowlist is one of these.
+                _EXTERNAL_SINKS[key](typed)
+            else:
+                setattr(settings, key, typed)
             applied[key] = typed
         except Exception:
             logger.warning("runtime override for %s could not be applied", key, exc_info=True)
@@ -115,6 +152,11 @@ async def set_override(key: str, raw_value, *, note: str = "", user_id: str = ""
 
     spec = _spec(key)
     typed = coerce(spec, raw_value)
+    # Validate before writing. A value the sink will reject must never reach the table, or the
+    # panel shows an override that is stored, reported as set, and applied by nothing.
+    validator = _EXTERNAL_VALIDATORS.get(key)
+    if validator is not None:
+        validator(typed)
 
     async with get_platform_sessionmaker()() as s:
         row = (await s.scalars(select(RuntimeSetting).where(RuntimeSetting.key == key))).first()
@@ -126,7 +168,10 @@ async def set_override(key: str, raw_value, *, note: str = "", user_id: str = ""
         row.updated_by_user_id = user_id or None
         await s.commit()
 
-    setattr(get_settings(), key, typed)
+    if key in _EXTERNAL_SINKS:
+        _EXTERNAL_SINKS[key](typed)
+    else:
+        setattr(get_settings(), key, typed)
     return typed
 
 
@@ -147,6 +192,12 @@ async def clear_override(key: str) -> bool:
             return False
         await s.delete(row)
         await s.commit()
+    if spec.key in _EXTERNAL_SINKS:
+        # A `Settings` field reverts on the next TTL sweep from a fresh read; an external sink has
+        # no environment value to fall back to, so it has to be reset explicitly. Leaving a stale
+        # allowlist installed after clearing it would keep the panel locked to an address the
+        # operator believes they just removed.
+        _EXTERNAL_SINKS[spec.key]("")
     return True
 
 
@@ -166,6 +217,21 @@ async def current_values() -> list[dict]:
     out = []
     for spec in CATALOG.values():
         row = rows.get(spec.key)
+        live = (
+            _EXTERNAL_READERS[spec.key]()
+            if spec.key in _EXTERNAL_READERS
+            else getattr(settings, spec.key, None)
+        )
+        stored = raw.get(spec.key)
+        # "Saved" and "in force" are different facts. A restart-only setting is stored and pending,
+        # and a panel that showed only the first is how an operator concludes a feature is on when
+        # it is not.
+        in_effect = True
+        if stored is not None:
+            try:
+                in_effect = coerce(spec, stored) == live
+            except Exception:
+                in_effect = False
         out.append({
             "key": spec.key,
             "label": spec.label,
@@ -178,8 +244,9 @@ async def current_values() -> list[dict]:
             "options": list(spec.options),
             "minimum": spec.minimum,
             "maximum": spec.maximum,
-            "value": getattr(settings, spec.key, None),
+            "value": live,
             "overridden": spec.key in raw,
+            "in_effect": in_effect,
             "note": row.note if row is not None else "",
         })
     out.sort(key=lambda x: (x["group"], x["label"]))
