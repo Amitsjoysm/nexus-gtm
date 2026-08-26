@@ -21,6 +21,7 @@ import type {
   AutomationSettings,
   AdminPlan,
   AdminRateCard,
+  CostRateResult,
   AdminSubscription,
   BillingCredits,
   BillingUsage,
@@ -997,6 +998,17 @@ export class ApiClient {
   }
   upsertRateCard(capabilityId: string, body: Record<string, unknown>) {
     return this.request<AdminRateCard>(`/admin/billing/rates/${capabilityId}`, {
+      method: "PUT",
+      body,
+    });
+  }
+  /**
+   * Record what a capability costs US. Never refused, whatever it does to the margin — a cost is an
+   * observation about what a provider charges, not a pricing decision. The response carries a work
+   * list of every capability the change pushed below the floor.
+   */
+  upsertCostRate(capabilityId: string, body: { unit_cost_usd: number; source: string }) {
+    return this.request<CostRateResult>(`/admin/billing/costs/${capabilityId}`, {
       method: "PUT",
       body,
     });

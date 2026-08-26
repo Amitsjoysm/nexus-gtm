@@ -230,3 +230,137 @@ async def test_a_failed_audit_write_does_not_roll_back_the_mutation(client, monk
                            json={"base_price_cents": 4900})
     assert r.status_code == 200
     assert r.json()["base_price_cents"] == 4900
+
+
+# ---- cost rates ----------------------------------------------------------------------------------
+
+async def _pricing_admin(client, monkeypatch, *, slug: str, email: str) -> str:
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from nexus.billing.rates import sync_rates
+    from nexus.core.config import get_settings
+
+    await sync_catalog()
+    await sync_plans()
+    await sync_rates()
+    monkeypatch.setattr(get_settings(), "platform_admin_emails", email)
+    return await signup(client, slug=slug, email=email, company=slug.upper())
+
+
+async def test_a_cost_rise_is_recorded_even_when_it_breaks_the_margin(client, monkeypatch):
+    """The one write in billing admin that does not enforce the floor, and the asymmetry is the
+    whole point.
+
+    `validate_rate` refuses a PRICE below cost because a price is a decision. A COST is not a
+    decision — it is an observation about what a provider charges. Refusing to record that a vendor
+    raised prices would leave the guardrail comparing against the old number and reporting a healthy
+    margin, which is exactly the failure this endpoint exists to end: `search.web` carried a $0.004
+    cost while we were paying Exa $0.007, and sat at 30% margin with nothing complaining.
+    """
+    token = await _pricing_admin(client, monkeypatch, slug="cr1", email="boss@cr1.com")
+
+    # ai.email_draft is 2 credits. At $0.05 cost that is deeply underwater.
+    r = await client.put("/api/admin/billing/costs/ai.email_draft", headers=auth(token),
+                         json={"unit_cost_usd": 0.05, "source": "provider raised prices"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["unit_cost_usd"] == 0.05
+    assert body["gross_margin"] < 0.5
+
+    # And it actually persisted — the point is that the system now believes the true number.
+    rates = (await client.get("/api/admin/billing/rates", headers=auth(token))).json()
+    row = next(x for x in rates if x["capability_id"] == "ai.email_draft")
+    assert row["unit_cost_usd"] == 0.05
+
+
+async def test_it_reports_every_capability_the_change_pushed_under_the_floor(client, monkeypatch):
+    """Recording is not enough — the response has to be a work list.
+
+    Checks the WHOLE catalog rather than the one capability that was typed, because one provider
+    price change can move several that share the input, and an operator who only hears about the one
+    they edited will not go looking for the others.
+    """
+    token = await _pricing_admin(client, monkeypatch, slug="cr2", email="boss@cr2.com")
+    r = await client.put("/api/admin/billing/costs/ai.email_draft", headers=auth(token),
+                         json={"unit_cost_usd": 0.05})
+    breached = r.json()["below_floor"]
+    ids = [b["capability_id"] for b in breached]
+    assert "ai.email_draft" in ids
+    entry = next(b for b in breached if b["capability_id"] == "ai.email_draft")
+    # The operator came to record a cost, not to do algebra: what the price must become is given.
+    assert entry["credits_to_clear_floor"] == 10.0      # $0.05 / ($0.01 x 0.5)
+    assert entry["gross_margin"] < 0.5
+
+
+async def test_a_healthy_cost_change_reports_nothing_broken(client, monkeypatch):
+    """A work list on every write would be noise, and noise is how a real one gets ignored."""
+    token = await _pricing_admin(client, monkeypatch, slug="cr3", email="boss@cr3.com")
+    r = await client.put("/api/admin/billing/costs/ai.email_draft", headers=auth(token),
+                         json={"unit_cost_usd": 0.0001})
+    assert r.status_code == 200
+    assert r.json()["below_floor"] == []
+
+
+async def test_repricing_after_a_cost_rise_clears_the_breach(client, monkeypatch):
+    """The full loop the endpoint exists to enable: record the truth, then act on it."""
+    token = await _pricing_admin(client, monkeypatch, slug="cr4", email="boss@cr4.com")
+    await client.put("/api/admin/billing/costs/ai.email_draft", headers=auth(token),
+                     json={"unit_cost_usd": 0.05})
+
+    # The rate endpoint DOES enforce the floor, so the new price has to clear it.
+    low = await client.put("/api/admin/billing/rates/ai.email_draft", headers=auth(token),
+                           json={"credits_per_unit": 5})
+    assert low.status_code == 422, "5 credits against $0.05 is 0% margin and must be refused"
+
+    ok = await client.put("/api/admin/billing/rates/ai.email_draft", headers=auth(token),
+                          json={"credits_per_unit": 12})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["gross_margin"] >= 0.5
+
+    # And the breach is gone.
+    again = await client.put("/api/admin/billing/costs/ai.email_draft", headers=auth(token),
+                             json={"unit_cost_usd": 0.05})
+    assert not any(b["capability_id"] == "ai.email_draft"
+                   for b in again.json()["below_floor"])
+
+
+async def test_a_cost_change_is_audited_with_its_source(client, monkeypatch):
+    """The cost is the input the margin floor trusts, so "who says?" is the first question anyone
+    will ask of it."""
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingAuditLog
+
+    token = await _pricing_admin(client, monkeypatch, slug="cr5", email="boss@cr5.com")
+    await client.put("/api/admin/billing/costs/search.web", headers=auth(token),
+                     json={"unit_cost_usd": 0.007, "source": "Exa list price, Aug 2026: $7/1k"})
+
+    async with get_platform_sessionmaker()() as s:
+        rows = list((await s.scalars(select(BillingAuditLog))).all())
+    entry = next(r for r in rows if r.action == "cost.upsert")
+    assert entry.target == "search.web"
+    assert "Exa list price" in (entry.note or "")
+    assert (entry.before or {}).get("unit_cost_usd") is not None, "the previous cost is recorded"
+
+
+async def test_an_unknown_capability_is_a_404(client, monkeypatch):
+    token = await _pricing_admin(client, monkeypatch, slug="cr6", email="boss@cr6.com")
+    r = await client.put("/api/admin/billing/costs/nope.nothing", headers=auth(token),
+                         json={"unit_cost_usd": 0.01})
+    assert r.status_code == 404
+
+
+async def test_a_negative_cost_is_refused(client, monkeypatch):
+    """Not a margin judgement — a negative cost is not an observation about anything."""
+    token = await _pricing_admin(client, monkeypatch, slug="cr7", email="boss@cr7.com")
+    r = await client.put("/api/admin/billing/costs/ai.email_draft", headers=auth(token),
+                         json={"unit_cost_usd": -1})
+    assert r.status_code == 422
+
+
+async def test_a_tenant_owner_cannot_change_costs(client):
+    """Cost feeds the margin floor. Editing it is repricing power by another route."""
+    token = await signup(client, slug="cr8", email="o@cr8.com", company="CR8")
+    assert (await client.put("/api/admin/billing/costs/ai.email_draft", headers=auth(token),
+                             json={"unit_cost_usd": 0.01})).status_code == 403

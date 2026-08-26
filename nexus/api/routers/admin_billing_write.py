@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from nexus.api.deps import Principal, get_principal, require_platform_permission
 from nexus.billing.audit import record_admin_action, snapshot
+from nexus.billing.rates import CREDIT_USD
 from nexus.billing.permissions import ALL_PERMISSIONS, permissions_for_role, ADMINS_MANAGE, BILLING_READ, INVOICES_COLLECT, PRICING_WRITE, SUBSCRIPTIONS_WRITE
 from nexus.core.db import get_sessionmaker
 from nexus.core.tenancy import TenantSession, apply_rls
@@ -1112,3 +1113,110 @@ async def set_sellable_plan_status(
         await session.commit()
         return {"plan_id": plan_id, "status": plan.status,
                 "sellable": plan.status == "active"}
+
+
+# ---- cost rates ----------------------------------------------------------------------------------
+# Prices could be changed from Admin without a deploy; costs could not. That asymmetry is not a
+# missing CRUD screen, it is a hole in the guardrail: `validate_rate` compares a price against a
+# stored cost, so a stale cost means the margin floor keeps approving prices against a number that
+# stopped being true. Measured 2026-08-25 — `search.web` carried a $0.004 "blended" cost while we
+# were calling Exa at $0.007, and sat at 30% gross margin with nothing complaining.
+
+
+class CostRateIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # No upper bound and no floor check. See the endpoint: a cost is an observation, not a decision.
+    unit_cost_usd: float = Field(ge=0)
+    # Where the number came from — an invoice line, a published price, a measured run. The cost is
+    # the input the margin floor trusts, so "who says?" is the first question anyone will ask of it.
+    source: str = ""
+
+
+@router.put("/costs/{capability_id}")
+async def upsert_cost_rate(
+    capability_id: str,
+    body: CostRateIn,
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> dict:
+    """Record what a capability costs us. **Never refused, whatever it does to the margin.**
+
+    This is the one write in the billing admin that does not enforce the floor, and the asymmetry is
+    deliberate. `validate_rate` refuses a *price* below cost because a price is a decision, and a
+    decision to lose money on every call should have to be made explicitly. A *cost* is not a
+    decision — it is an observation about what a provider charges. Refusing to record that a vendor
+    raised their prices would leave the system believing the old number, which is precisely the
+    failure this endpoint exists to end: the guardrail would go on approving prices against a cost
+    that stopped being true, and report a healthy margin the whole time.
+
+    So it records, and then it *tells you what broke*. The response names every capability whose
+    margin has fallen below the floor as a result — including ones this call did not touch, because
+    a cost rise on a shared input can move several at once. Those need repricing, and the response
+    is the work list.
+    """
+    from sqlalchemy import select
+
+    from nexus.billing.rates import MIN_GROSS_MARGIN, gross_margin
+
+    async with get_sessionmaker()() as session:
+        if await session.get(BillingCapability, capability_id) is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, f"Unknown capability '{capability_id}'"
+            )
+
+        row = await session.get(BillingCostRate, capability_id)
+        before = snapshot(row, ("unit_cost_usd", "source"))
+        if row is None:
+            row = BillingCostRate(capability_id=capability_id)
+            session.add(row)
+        row.unit_cost_usd = body.unit_cost_usd
+        if hasattr(row, "source"):
+            row.source = body.source
+        await session.flush()
+
+        # Re-check the WHOLE catalog, not just this capability. One provider price change can move
+        # several capabilities that share the input, and an operator who only hears about the one
+        # they typed will not go looking for the others.
+        cards = {c.capability_id: c for c in (await session.scalars(select(BillingRateCard))).all()}
+        costs = {
+            c.capability_id: float(c.unit_cost_usd or 0)
+            for c in (await session.scalars(select(BillingCostRate))).all()
+        }
+        breached = []
+        for cid, card in cards.items():
+            credits = float(card.credits_per_unit or 0)
+            if credits <= 0 or not card.active:
+                continue
+            margin = gross_margin(credits, costs.get(cid, 0.0))
+            if margin < MIN_GROSS_MARGIN and not card.margin_exception:
+                breached.append({
+                    "capability_id": cid,
+                    "credits_per_unit": credits,
+                    "unit_cost_usd": costs.get(cid, 0.0),
+                    "gross_margin": round(margin, 4),
+                    # What the price would have to become to clear the floor again. The operator's
+                    # next action, precomputed — they came here to record a cost, not to do algebra.
+                    "credits_to_clear_floor": round(
+                        costs.get(cid, 0.0) / (CREDIT_USD * (1 - MIN_GROSS_MARGIN)), 2
+                    ),
+                })
+        breached.sort(key=lambda b: b["gross_margin"])
+
+        this_margin = gross_margin(
+            float(cards[capability_id].credits_per_unit) if capability_id in cards else 0.0,
+            body.unit_cost_usd,
+        )
+        await record_admin_action(
+            session, actor=principal.user_id, action="cost.upsert", target=capability_id,
+            before=before, after={"unit_cost_usd": body.unit_cost_usd, "source": body.source},
+            note=body.source,
+        )
+        await session.commit()
+
+    return {
+        "capability_id": capability_id,
+        "unit_cost_usd": body.unit_cost_usd,
+        "gross_margin": round(this_margin, 4),
+        # Empty when nothing broke. Non-empty is a work list, not an error — the write succeeded.
+        "below_floor": breached,
+    }

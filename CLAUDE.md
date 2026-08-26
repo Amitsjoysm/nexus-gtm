@@ -247,6 +247,16 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
 - **The margin floor is enforced, not aspirational.** `rates.validate_rate()` refuses any price
   below 50% gross margin unless finance records an explicit exception, and it runs on the seed
   itself so a bad price cannot reach the database.
+- **Costs are editable too, and recording one is NEVER refused** (`PUT /admin/billing/costs/{id}`).
+  That asymmetry against the price endpoint is the point: a price is a *decision*, and deciding to
+  lose money should be explicit; a cost is an *observation* about what a provider charges. Refusing
+  to record a vendor price rise would leave the floor validating against a stale number and
+  reporting a healthy margin — which is exactly what happened, measured 2026-08-25: `search.web`
+  carried a $0.004 "blended" cost while we were paying Exa $0.007, and sat at 30% margin with
+  nothing complaining. The response instead returns a **work list** of every capability the change
+  pushed under the floor, across the whole catalog rather than the one edited, because one provider
+  price change can move several that share the input. The UI writes cost **before** price for the
+  same reason: the true number lands even if the reprice is then rejected.
 - **Usage is an append-only event stream**; rollups are derived and rebuildable. Quota reads =
   period rollup + events still marked unrolled, so they stay exact between sweeps and degrade to
   slower — never to undercounting — if the rollup worker stops. Corrections are compensating

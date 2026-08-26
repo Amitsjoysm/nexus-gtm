@@ -1442,6 +1442,28 @@ export interface ProviderModels {
   detail: string;
 }
 
+/** One capability that a cost change pushed below the margin floor. */
+export interface CostRateBreach {
+  capability_id: string;
+  credits_per_unit: number;
+  unit_cost_usd: number;
+  gross_margin: number;
+  /** What the price must become to clear the floor again — the operator's next action, precomputed. */
+  credits_to_clear_floor: number;
+}
+
+export interface CostRateResult {
+  capability_id: string;
+  unit_cost_usd: number;
+  gross_margin: number;
+  /**
+   * Empty when nothing broke. Non-empty is a WORK LIST, not an error — the write succeeded.
+   * Covers the whole catalog, not just the capability edited: one provider price change can move
+   * several that share the input.
+   */
+  below_floor: CostRateBreach[];
+}
+
 export interface AdminRateCard {
   capability_id: string;
   name: string;
