@@ -1,0 +1,187 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.intro {
+  margin: var(--space-4) 0 0;
+  max-width: 78ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+/* A list, not cards. Each entry is a control with an explanation attached; cards would nest inside
+   the Card already wrapping the group and add chrome around prose. */
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.settings > .setting:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-default);
+}
+
+/* The env-var name. An operator who knows the deployment will recognise it faster than the label,
+   and it is what they will search the codebase for. */
+.key {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.effect {
+  margin: 0;
+  max-width: 76ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+/* Two weights of warning. `--warning` on the plain surface rather than a tint: compositing a low
+   alpha under this text drops it below AA. */
+.warn {
+  margin: 0;
+  max-width: 76ch;
+  color: var(--warning);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.warnHigh {
+  margin: 0;
+  max-width: 76ch;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--danger);
+  color: var(--danger);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.reason {
+  margin: 0;
+  max-width: 76ch;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+/* State in words as well as in the button, because a lone "Turn off" button is ambiguous about
+   which state it is describing. */
+.on {
+  color: var(--success);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.off {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* ---- webhook ------------------------------------------------------------------------------- */
+
+.webhook {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.urlBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunk, var(--surface));
+}
+
+.urlLabel {
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.url {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-default);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding-inline-start: 1.35rem;
+  max-width: 76ch;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.events summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-default);
+}
+
+.events ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.events li code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}

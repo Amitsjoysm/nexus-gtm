@@ -70,6 +70,18 @@ async def lifespan(app: FastAPI):
 
     get_call_provider()
 
+    # Runtime setting overrides, applied onto the live Settings object before anything reads one.
+    # Non-fatal for the same reason as the seed below: a configuration read that fails must leave
+    # the process running on the environment values it already had, not refuse to start.
+    try:
+        from nexus.runtime_config.service import apply_overrides
+
+        applied = await apply_overrides()
+        if applied:
+            logger.info("runtime overrides applied: %s", sorted(applied))
+    except Exception:
+        logger.warning("could not apply runtime overrides at startup", exc_info=True)
+
     # Billing catalog/plan seed: idempotent, additive, and non-fatal. A seed failure must never
     # stop the API from serving (docs/billing/15-Migration-Strategy.md).
     if get_settings().billing_seed_on_startup:

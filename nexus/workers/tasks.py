@@ -1021,6 +1021,17 @@ async def dispatch(job: Job) -> dict:
     here, which is how failed jobs went missing) as the same ``{"error": ...}`` shape plus
     ``JOB_FAILED_KEY``, so the worker loop can retry or dead-letter it.
     """
+    # Pick up any runtime setting an operator changed in the Control plane. The worker is a
+    # separate process with its own `Settings` singleton, so nothing the API does reaches it
+    # otherwise. TTL-guarded, so this is a clock comparison on all but one call in thirty seconds,
+    # and it never raises — a config read that fails must not stop a job from running.
+    try:
+        from nexus.runtime_config.service import refresh_if_stale
+
+        await refresh_if_stale()
+    except Exception:
+        logger.debug("runtime config refresh skipped", exc_info=True)
+
     handler = HANDLERS.get(job.name)
     if handler is None:
         # Not a retryable failure: an unroutable name will not route on the next attempt either,

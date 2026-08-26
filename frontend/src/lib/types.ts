@@ -1276,6 +1276,53 @@ export interface HostedSession {
 }
 
 /**
+ * One deployment setting a superadmin may change without a deploy.
+ *
+ * Only settings the server's catalog allows appear here. The 150-odd other fields on `Settings` are
+ * deploy-time - several are guards, and a guard that can be switched off from the interface it
+ * protects is not a guard.
+ */
+export interface RuntimeSetting {
+  key: string;
+  label: string;
+  group: string;
+  kind: "bool" | "int" | "float" | "str";
+  /** What changing it does, in one sentence. */
+  effect: string;
+  /** What it costs or breaks. Always present on medium and high risk. */
+  warning: string;
+  risk: "low" | "medium" | "high";
+  /** Read once into a module-level object; the value is stored and pending until a restart. */
+  requires_restart: boolean;
+  options: string[];
+  minimum: number | null;
+  maximum: number | null;
+  value: unknown;
+  /** True when an operator set it here, rather than it coming from the environment. */
+  overridden: boolean;
+  note: string;
+}
+
+export interface WebhookInfo {
+  path: string;
+  provider: string;
+  signing_secret_configured: boolean;
+  /** "control plane" | "environment" | "not set" - which of the two is actually in force. */
+  signing_secret_source: string;
+  stripe_account: string;
+  livemode: boolean;
+  events_handled: string[];
+  instructions: string[];
+}
+
+export interface WebhookTestResult {
+  ok: boolean;
+  url?: string;
+  http_status?: number;
+  detail: string;
+}
+
+/**
  * A platform provider API key. The key itself is NEVER sent to the client — `key_hint` is its last
  * four characters, which is all the UI needs to tell two rows apart.
  */

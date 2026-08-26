@@ -48,6 +48,7 @@ from nexus.models.page_snapshot import PageSnapshot
 from nexus.models.relevance import RelevanceProfile
 from nexus.models.signal import SignalEvent
 from nexus.models.payment_credential import PaymentCredential
+from nexus.models.runtime_setting import RuntimeSetting
 from nexus.models.provider_key import ProviderKey
 from nexus.models.provider_setting import ProviderSetting
 from nexus.models.source_db import SourceDatabase
@@ -71,6 +72,7 @@ __all__ = [
     "SignalSourceRun",
     "PaymentCredential",
     "ProviderKey",
+    "RuntimeSetting",
     "ProviderSetting",
     "SourceDatabase",
     "RelevanceProfile",

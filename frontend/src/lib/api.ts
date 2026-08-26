@@ -46,6 +46,9 @@ import type {
   PlatformOverview,
   SubscriptionPatch,
   ProviderModels,
+  RuntimeSetting,
+  WebhookInfo,
+  WebhookTestResult,
   SupportedProvider,
   SellablePlan,
   HostedSession,
@@ -858,6 +861,30 @@ export class ApiClient {
   /** Opens the hosted Customer Portal, where a card is changed or a plan is cancelled. */
   billingPortal() {
     return this.request<HostedSession>("/billing/portal", { method: "POST", body: {} });
+  }
+
+  // ---- runtime configuration (superadmin) ----
+  runtimeSettings(signal?: AbortSignal) {
+    return this.request<RuntimeSetting[]>("/admin/runtime/settings", { signal });
+  }
+  setRuntimeSetting(key: string, value: unknown, note = "") {
+    return this.request<{ key: string; value: unknown; overridden: boolean; note: string }>(
+      `/admin/runtime/settings/${key}`, { method: "PUT", body: { value, note } },
+    );
+  }
+  clearRuntimeSetting(key: string) {
+    return this.request<{ key: string; overridden: boolean; note: string }>(
+      `/admin/runtime/settings/${key}`, { method: "DELETE" },
+    );
+  }
+  webhookInfo(signal?: AbortSignal) {
+    return this.request<WebhookInfo>("/admin/runtime/webhook", { signal });
+  }
+  /** Posts a correctly signed event at our own endpoint. Proves the half we control. */
+  testWebhook(baseUrl: string) {
+    return this.request<WebhookTestResult>("/admin/runtime/webhook/test", {
+      method: "POST", body: { base_url: baseUrl },
+    });
   }
 
   // ---- platform provider keys (superadmin) ----

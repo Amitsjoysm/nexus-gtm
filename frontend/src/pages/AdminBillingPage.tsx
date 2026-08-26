@@ -35,6 +35,7 @@ import { ApiError } from "@/lib/api";
 import { CustomersTab } from "./admin/CustomersTab";
 import { PaymentsTab } from "./admin/PaymentsTab";
 import { ProviderKeysTab } from "./admin/ProviderKeysTab";
+import { RuntimeConfigTab } from "./admin/RuntimeConfigTab";
 import styles from "./AdminBillingPage.module.css";
 
 const MARGIN_FLOOR = 0.5;
@@ -799,6 +800,10 @@ export function AdminBillingPage() {
     // through someone else's API key, so registering one and granting platform power stay
     // separate acts.
     ...(can(PROVIDERS_MANAGE) ? [{ value: "keys", label: "Provider keys" }] : []),
+    // Its own tab, not folded into Provider keys: these decide whether the platform spends money
+    // unattended, which is a different question from which credential it spends it with. Gated on
+    // pricing-write for the same reason.
+    ...(can(PRICING_WRITE) ? [{ value: "runtime", label: "Configuration" }] : []),
     // Gated on the user-admin permissions, NOT on admins.manage: `support` holds users.manage
     // and is precisely who does MFA resets, but must never reach the admin-granting surface.
     ...(can(USERS_MANAGE) || can(USERS_IMPERSONATE)
@@ -828,6 +833,7 @@ export function AdminBillingPage() {
           {tab === "payments" && can(PRICING_WRITE) && <PaymentsTab />}
           {tab === "access" && can(ADMINS_MANAGE) && <PlatformAdmins />}
           {tab === "keys" && can(PROVIDERS_MANAGE) && <ProviderKeysTab />}
+          {tab === "runtime" && can(PRICING_WRITE) && <RuntimeConfigTab />}
           {tab === "users" && (can(USERS_MANAGE) || can(USERS_IMPERSONATE)) && (
             <UserAdmin />
           )}
