@@ -78,9 +78,13 @@ async def lifespan(app: FastAPI):
 
         applied = await apply_overrides()
         if applied:
-            logger.info("runtime overrides applied: %s", sorted(applied))
+            logging.getLogger("nexus.main").info(
+                "runtime overrides applied: %s", sorted(applied)
+            )
     except Exception:
-        logger.warning("could not apply runtime overrides at startup", exc_info=True)
+        logging.getLogger("nexus.main").warning(
+            "could not apply runtime overrides at startup", exc_info=True
+        )
 
     # Billing catalog/plan seed: idempotent, additive, and non-fatal. A seed failure must never
     # stop the API from serving (docs/billing/15-Migration-Strategy.md).

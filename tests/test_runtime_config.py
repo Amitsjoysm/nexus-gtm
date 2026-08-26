@@ -320,3 +320,26 @@ async def test_a_setting_with_no_override_is_always_in_effect(client, monkeypatc
     for row in rows:
         if not row["overridden"]:
             assert row["in_effect"] is True, row["key"]
+
+
+async def test_startup_logs_applied_overrides_without_blowing_up(fresh_db, caplog):
+    """The lifespan block that reports what it applied only runs when an override EXISTS, so a
+    NameError in it stayed hidden until the first real override — and then took the whole
+    application down at boot, which is the one place a config helper must not fail.
+
+    Exercises the logging path directly rather than booting the app.
+    """
+    import logging
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.runtime_setting import RuntimeSetting
+    from nexus.runtime_config.service import apply_overrides
+
+    async with get_platform_sessionmaker()() as s:
+        s.add(RuntimeSetting(key="cadence_enabled", value="True"))
+        await s.commit()
+
+    applied = await apply_overrides()
+    assert applied, "expected the override to apply"
+    # The exact call `main.lifespan` makes. A missing module-level logger raised NameError here.
+    logging.getLogger("nexus.main").info("runtime overrides applied: %s", sorted(applied))
