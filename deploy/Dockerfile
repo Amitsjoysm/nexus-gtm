@@ -31,7 +31,19 @@ WORKDIR /app
 # pip/setuptools/wheel are the base image's own preinstalled build tooling, and they are what
 # dragged in the `wheel` and `jaraco.context` findings. They are not used once the app is
 # installed, but they stay in the image, so they are part of its attack surface either way.
-RUN apt-get update \
+#
+# SECURITY_REFRESH exists because this layer is otherwise only as fresh as the build cache.
+# CI restores layers with cache-from, so an unrelated edit further down the file leaves this
+# one cached and the "upgrade" silently re-applies whatever was current when it last ran. That
+# is not hypothetical: the day after this layer was added, Debian published an openssl fix
+# (CVE-2026-14456, 3.5.6 -> 3.5.7) and the scan caught the image still on the old package,
+# because a change to the pip layer below had not invalidated this one.
+#
+# CI passes the current date, so the cache turns over daily — matching Trivy's own database
+# cadence — while repeat builds within a day still reuse it.
+ARG SECURITY_REFRESH=0
+RUN echo "security refresh: ${SECURITY_REFRESH}" \
+    && apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir --upgrade pip setuptools wheel
