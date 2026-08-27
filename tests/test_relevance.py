@@ -33,12 +33,28 @@ def test_perfect_fit_scores_high():
 
 
 def test_poor_fit_scores_low():
+    # The stack is KNOWN and does not match, which is what makes this a poor fit on all four
+    # dimensions. It used to be `[]`, and an empty stack now scores neutral rather than zero --
+    # "we have not enriched this account yet" is not evidence against it, and treating it as such
+    # dropped every newly-discovered account below the discovery gate (see
+    # tests/test_relevance_unknown_tech.py). Asserting a poor fit with UNKNOWN data would be
+    # asserting the bug.
     acc = Account(
         tenant_id="t", name="Misfit", industry="Agriculture",
-        employee_count=5, country="DE", tech_stack=[],
+        employee_count=5, country="DE", tech_stack=["mainframe"],
     )
     fit = ENGINE.score_icp_fit(_profile(), acc)
     assert fit.score < 30
+
+
+def test_an_unenriched_account_outscores_a_confirmed_mismatch():
+    """The distinction the change turns on, stated as an ordering rather than a threshold."""
+    unknown = Account(tenant_id="t", name="Unknown", industry="Agriculture",
+                      employee_count=5, country="DE", tech_stack=[])
+    mismatch = Account(tenant_id="t", name="Mismatch", industry="Agriculture",
+                       employee_count=5, country="DE", tech_stack=["mainframe"])
+    assert (ENGINE.score_icp_fit(_profile(), unknown).score
+            > ENGINE.score_icp_fit(_profile(), mismatch).score)
 
 
 def test_no_profile_is_neutral():

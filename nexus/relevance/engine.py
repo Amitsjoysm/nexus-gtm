@@ -131,14 +131,28 @@ class RelevanceEngine:
             sub["geo"] = 0.0
 
         required_tech = [t.lower() for t in icp.get("required_tech", [])]
+        owned = {t.lower() for t in (account.tech_stack or [])}
         if not required_tech:
             sub["tech"] = 0.5
+        elif not owned:
+            # UNKNOWN, not absent — and the distinction decides whether the account survives at all.
+            # A freshly discovered account has an empty stack because nothing has enriched it yet,
+            # and scoring that 0.0 (identical to a confirmed mismatch) put it under `min_fit` in
+            # nexus/discovery/auto.py. So requiring any tech returned ZERO accounts, and the
+            # enrichment that would have filled the field in never ran: the data that qualifies an
+            # account is fetched *after* the gate it just failed. Reported by a tester 2026-08-27.
+            #
+            # Neutral matches how industry and geo already treat missing data, and how
+            # `_passes_hard_filters` keeps an account whose headcount is None.
+            sub["tech"] = 0.5
+            reasons.append("tech stack unknown; not counted against fit")
         else:
-            owned = {t.lower() for t in (account.tech_stack or [])}
             hits = [t for t in required_tech if t in owned]
             sub["tech"] = len(hits) / len(required_tech)
             if hits:
                 reasons.append(f"uses {', '.join(hits)}")
+            else:
+                reasons.append(f"stack known, without {', '.join(required_tech)}")
 
         total_w = sum(weights[k] for k in sub) or 1.0
         score = round(sum(sub[k] * weights[k] for k in sub) / total_w * 100)
