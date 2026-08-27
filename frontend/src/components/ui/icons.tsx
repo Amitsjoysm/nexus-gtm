@@ -277,6 +277,12 @@ export const DownloadIcon = (props: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+export const UploadIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <path d="M12 17V5M7 9l5-5 5 5M5 20h14" />
+  </Svg>
+);
+
 export const WorkflowIcon = (props: SVGProps<SVGSVGElement>) => (
   <Svg {...props}>
     <circle cx="5" cy="6" r="2.5" />

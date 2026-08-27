@@ -1697,3 +1697,32 @@ export interface PlatformAdmin {
   note: string;
   created_at: string;
 }
+
+
+/** What `POST /imports/{accounts,contacts}/{csv,crm}` returns.
+ *
+ * `skipped` and `errors` are shown, never swallowed: a silently dropped row reads as data loss and
+ * the operator has no way to find which one it was. */
+export interface RecordImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  total_rows: number;
+  errors: string[];
+}
+
+/** `GET /imports/fields` — the mapping picker builds itself from the server rather than from a
+ * hard-coded list that drifts out of step with what the importer actually accepts. */
+export interface ImportFields {
+  account_fields: string[];
+  contact_fields: string[];
+  max_rows: number;
+  default_limit: number;
+  max_upload_bytes: number;
+}
+
+/** One signal kind and whether this workspace collects it. Absent server-side means enabled. */
+export interface SignalPreference {
+  kind: string;
+  enabled: boolean;
+}

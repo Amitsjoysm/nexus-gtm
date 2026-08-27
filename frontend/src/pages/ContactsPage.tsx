@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { RecordImportModal } from "@/components/imports/RecordImportModal";
 import {
   Badge,
   Button,
@@ -82,6 +83,7 @@ export function ContactsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reverifying, setReverifying] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [phoneId, setPhoneId] = useState<string | null>(null);
   const [callTask, setCallTask] = useState<CallTask | null>(null);
   const [emailFor, setEmailFor] = useState<WorkspaceContact | null>(null);
@@ -465,15 +467,31 @@ export function ContactsPage() {
         title="Contacts"
         description="Every person across this workspace. Click a row to open their account."
         actions={
-          <Button
-            variant="secondary"
-            iconLeft={<Icons.DownloadIcon />}
-            onClick={exportContacts}
-            loading={exporting}
-          >
-            Export CSV
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              iconLeft={<Icons.UploadIcon />}
+              onClick={() => setImportOpen(true)}
+            >
+              Import
+            </Button>
+            <Button
+              variant="secondary"
+              iconLeft={<Icons.DownloadIcon />}
+              onClick={exportContacts}
+              loading={exporting}
+            >
+              Export CSV
+            </Button>
+          </>
         }
+      />
+
+      <RecordImportModal
+        open={importOpen}
+        entity="contacts"
+        onClose={() => setImportOpen(false)}
+        onImported={() => void contacts.refetch()}
       />
 
       <div className={styles.toolbar}>

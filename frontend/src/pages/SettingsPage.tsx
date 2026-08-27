@@ -12,6 +12,7 @@ import {
   Modal,
   Select,
   Skeleton,
+  Spinner,
   useToast,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
@@ -20,7 +21,12 @@ import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatNumber, humanize } from "@/lib/format";
-import type { AutomationSettings, CRMSyncStatus, EmailAccount } from "@/lib/types";
+import type {
+  AutomationSettings,
+  CRMSyncStatus,
+  EmailAccount,
+  SignalPreference,
+} from "@/lib/types";
 import styles from "./SettingsPage.module.css";
 
 export function SettingsPage() {
@@ -131,6 +137,8 @@ export function SettingsPage() {
             )}
           </DataState>
         </Card>
+
+        <SignalCollectionCard />
 
         <MailboxesCard />
       </div>
@@ -531,5 +539,70 @@ function Switch({
         {checked && <Icons.CheckIcon />}
       </span>
     </button>
+  );
+}
+
+/**
+ * Which signal kinds this workspace collects.
+ *
+ * A tester asked why signals they had never enabled were appearing, and whether they were being
+ * billed for them. Everything is on by default and turning one off is what stops it being collected
+ * and stored — so the copy says that plainly rather than implying it only hides them.
+ */
+function SignalCollectionCard() {
+  const api = useApiClient();
+  const toast = useToast();
+  const prefs = useApi<SignalPreference[]>((signal) => api.listSignalPreferences(signal), []);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function toggle(kind: string, enabled: boolean) {
+    setBusy(kind);
+    try {
+      await api.setSignalPreference(kind, enabled);
+      await prefs.refetch();
+    } catch (err) {
+      toast.error(
+        "Couldn't save that",
+        err instanceof ApiError ? err.detail : "Try again.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card padding="lg">
+      <CardHeader
+        title="Signal collection"
+        subtitle="Which kinds of buying signal this workspace collects. Turning one off stops it being collected and billed, not just hidden."
+      />
+      <DataState
+        state={prefs}
+        errorTitle="Couldn't load signal settings"
+        skeleton={<Skeleton width="100%" height={140} />}
+      >
+        {(rows) => (
+          <ul className={styles.signalList}>
+            {rows.map((row) => (
+              <li key={row.kind} className={styles.signalRow}>
+                <label className={styles.signalLabel} htmlFor={`sig-${row.kind}`}>
+                  <span>{humanize(row.kind)}</span>
+                </label>
+                <div className={styles.signalControl}>
+                  {busy === row.kind && <Spinner size={16} />}
+                  <input
+                    id={`sig-${row.kind}`}
+                    type="checkbox"
+                    checked={row.enabled}
+                    disabled={busy === row.kind}
+                    onChange={(e) => void toggle(row.kind, e.target.checked)}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </DataState>
+    </Card>
   );
 }

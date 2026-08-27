@@ -20,6 +20,7 @@ import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
+import { RecordImportModal } from "@/components/imports/RecordImportModal";
 import { formatNumber } from "@/lib/format";
 import type { Account, AccountInput } from "@/lib/types";
 import styles from "./AccountsPage.module.css";
@@ -55,6 +56,7 @@ export function AccountsPage() {
   const [minFit, setMinFit] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
@@ -277,6 +279,13 @@ export function AccountsPage() {
           <>
             <Button
               variant="secondary"
+              iconLeft={<Icons.UploadIcon />}
+              onClick={() => setImportOpen(true)}
+            >
+              Import
+            </Button>
+            <Button
+              variant="secondary"
               iconLeft={<Icons.DownloadIcon />}
               onClick={exportAccounts}
               loading={exporting}
@@ -288,6 +297,13 @@ export function AccountsPage() {
             </Button>
           </>
         }
+      />
+
+      <RecordImportModal
+        open={importOpen}
+        entity="accounts"
+        onClose={() => setImportOpen(false)}
+        onImported={() => void accounts.refetch()}
       />
 
       <DataState

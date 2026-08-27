@@ -133,6 +133,9 @@ import type {
   NetworkIntroPath,
   NetworkIngestResult,
   NetworkOAuthStart,
+  ImportFields,
+  RecordImportResult,
+  SignalPreference,
 } from "./types";
 
 export class ApiError extends Error {
@@ -1329,6 +1332,62 @@ export class ApiClient {
     form.set("mapping", JSON.stringify(args.mapping));
     form.set("file", args.file);
     return this.requestForm<CsvImportResult>("/custom-fields/import", form, signal);
+  }
+
+  // ---- record import (creates accounts / contacts) ----
+  //
+  // Distinct from `importCustomFieldsCsv`, which annotates rows that already match and skips the
+  // rest. These CREATE, which is what a team arriving with an existing list needs.
+  importableFields(signal?: AbortSignal) {
+    return this.request<ImportFields>("/imports/fields", { signal });
+  }
+
+  importAccountsCsv(
+    args: { mapping: Record<string, string>; file: File },
+    signal?: AbortSignal,
+  ) {
+    const form = new FormData();
+    form.set("mapping", JSON.stringify(args.mapping));
+    form.set("file", args.file);
+    return this.requestForm<RecordImportResult>("/imports/accounts/csv", form, signal);
+  }
+
+  importContactsCsv(
+    args: { mapping: Record<string, string>; file: File },
+    signal?: AbortSignal,
+  ) {
+    const form = new FormData();
+    form.set("mapping", JSON.stringify(args.mapping));
+    form.set("file", args.file);
+    return this.requestForm<RecordImportResult>("/imports/contacts/csv", form, signal);
+  }
+
+  // The limit is required by the server and defaulted low: every imported account enters the
+  // refresh pipeline and starts spending credits.
+  importAccountsFromCrm(limit: number, signal?: AbortSignal) {
+    return this.request<RecordImportResult>(
+      `/imports/accounts/crm?limit=${encodeURIComponent(limit)}`,
+      { method: "POST", signal },
+    );
+  }
+
+  importContactsFromCrm(limit: number, signal?: AbortSignal) {
+    return this.request<RecordImportResult>(
+      `/imports/contacts/crm?limit=${encodeURIComponent(limit)}`,
+      { method: "POST", signal },
+    );
+  }
+
+  // ---- signal collection preferences ----
+  listSignalPreferences(signal?: AbortSignal) {
+    return this.request<SignalPreference[]>("/signals/preferences", { signal });
+  }
+
+  setSignalPreference(kind: string, enabled: boolean, signal?: AbortSignal) {
+    return this.request<SignalPreference>(
+      `/signals/preferences/${encodeURIComponent(kind)}`,
+      { method: "PUT", body: JSON.stringify({ enabled }), signal },
+    );
   }
 
   // ---- cross-workspace switch ----
