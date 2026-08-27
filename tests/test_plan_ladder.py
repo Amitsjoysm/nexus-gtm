@@ -22,9 +22,9 @@ async def test_the_ladder_is_free_launch_accelerate(fresh_db):
         rows = {p.id: p for p in (await s.scalars(select(BillingPlan))).all()}
 
     for pid, price, credits, interval in (
-        ("launch", 9900, 2500, "month"),
+        ("launch", 9900, 2000, "month"),
         ("accelerate", 19900, 8000, "month"),
-        ("launch-annual", 95000, 30000, "year"),
+        ("launch-annual", 95000, 24000, "year"),
         ("accelerate-annual", 191000, 96000, "year"),
     ):
         plan = rows.get(pid)
@@ -34,7 +34,33 @@ async def test_the_ladder_is_free_launch_accelerate(fresh_db):
         assert plan.interval == interval, pid
         assert plan.plan_class == "standard", pid
 
-    assert rows["free"].included_credits == 1000, "free must be enough to try every feature"
+    # 200 is a trial of the whole product, not a usable free tier. At the worst-case $0.004/credit
+    # it caps a free workspace at $0.80 of COGS, which is what makes an open signup funnel safe at
+    # any volume — the constraint free tiers actually fail on.
+    assert rows["free"].included_credits == 200, "free is a trial, not a usable tier"
+
+
+async def test_the_restructure_script_matches_the_seed(fresh_db):
+    """The seed moves a FRESH install; `scripts/restructure_plans.py` moves an established one,
+    because `sync_plans` never overwrites a live row. Drifting the two apart means the two kinds of
+    deployment sell different products under one name, and nothing in the running system would
+    report it."""
+    from sqlalchemy import select
+
+    from nexus.billing.plans import sync_plans
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.billing import BillingPlan
+    from scripts.restructure_plans import ALLOWANCES
+
+    await sync_plans()
+    async with get_sessionmaker()() as s:
+        rows = {p.id: p for p in (await s.scalars(select(BillingPlan))).all()}
+
+    for plan_id, (credits, _description) in ALLOWANCES.items():
+        assert rows[plan_id].included_credits == credits, (
+            f"{plan_id}: seed says {rows[plan_id].included_credits}, "
+            f"restructure_plans.py says {credits}"
+        )
 
 
 async def test_the_annuals_are_twenty_percent_off(fresh_db):

@@ -167,6 +167,28 @@ Two capabilities exist for where that stops holding:
 
 ## 4. The plan ladder and why each price
 
+> **Sections 5–7 below describe the eight-tier ladder as it was designed.** That ladder was
+> collapsed to Free / Launch / Accelerate on 2026-08-26 and resized on 2026-08-27; the retired tiers
+> are kept here because the *reasoning* is what an investor is buying, and it carried over intact.
+> **For current prices use the table immediately below, or `docs/RATE-CARD.md`.**
+
+### The current ladder
+
+| Plan | Price | Credits | $/credit sold | COGS at observed mix | Gross margin | Break-even burn |
+|---|---|---|---|---|---|---|
+| **Free** | **$0/mo** | **200** | — | $0.38 | — | n/a |
+| **Launch** | **$99/mo** | **2,000** | $0.0495 | $3.76 | **96.2%** | 52,660 cr |
+| **Launch (annual)** | **$950/yr** | **24,000** | $0.0396 | $45.12 | **95.3%** | 505,319 cr |
+| **Accelerate** | **$199/mo** | **8,000** | $0.0249 | $15.04 | **92.4%** | 105,851 cr |
+| **Accelerate (annual)** | **$1,910/yr** | **96,000** | $0.0199 | $180.48 | **90.6%** | 1,015,957 cr |
+| Overage / no commitment | metered | — | $0.0500 | — | — | n/a |
+
+Above the ladder sits a **volume rate card at 25K–100K credits/month** ($0.0170 down to $0.0125 per
+credit) and **custom enterprise plans** built per tenant in the Control plane. Both are in
+`docs/RATE-CARD.md`, with the discount floors.
+
+### The superseded ladder, for reference
+
 | Plan | Price | Credits | $/credit sold | COGS at observed mix | Gross margin | Break-even burn |
 |---|---|---|---|---|---|---|
 | **Pay as you go** | **$0/mo** | **0** | metered | — | — | n/a |
@@ -304,7 +326,8 @@ at cost, which sets a hard ceiling on how generous any plan can be:
 | **250 cr/$** | Zero margin at worst-case COGS. Never cross this at any volume |
 | **125 cr/$** | The 50% gross-margin floor the code already enforces |
 | **100 cr/$** | **The design rule** — 60% margin, with buffer |
-| **40.3 cr/$** | Where our most generous plan actually sits — 6.2× inside the survival limit |
+| **50.3 cr/$** | Where our most generous *published* plan sits — 5.0× inside the survival limit |
+| **80.0 cr/$** | The most generous thing sold anywhere — the 100K volume tier — 3.1× inside |
 
 **When designing a plan, divide included credits by the dollar price and keep the answer under 100.**
 
@@ -330,16 +353,22 @@ Infrastructure is a step function, and the steps are shallow:
 
 | Shape | Fixed / month | Revenue to cover it |
 |---|---|---|
-| Minimum (1 app replica) | $110 | 0.9 Scale customers |
-| 3 app replicas (declared max) | $198 | 1.6 |
-| + Postgres D2ds, 128 GB | $371 | 3.0 |
+| Minimum (1 app replica) | $110 | 1.1 Accelerate customers |
+| 3 app replicas (declared max) | $198 | 1.0 |
+| + Postgres D2ds, 128 GB | $371 | 1.9 |
 
-**Three customers cover all infrastructure at full declared scale.**
+**Two Accelerate customers cover all infrastructure at full declared scale** — or a fraction of one
+volume customer: any tier on the 25K–100K card covers the entire platform in under a month of its
+own MRR. This is why infrastructure is not loaded into an individual deal's economics; allocating
+all of it to one account is only correct if that account is the only one we have.
 
-> **A gap worth closing.** Prices can be changed from Admin without a deploy; **costs cannot**.
-> There is no admin surface for cost rates, so when a provider raises prices the margin floor goes
-> on validating against a stale number — the one input it exists to check. That is how `search.web`
-> sat at 30% margin without anything complaining.
+> **Closed 2026-08-26.** This previously read "there is no admin surface for cost rates, so when a
+> provider raises prices the margin floor goes on validating against a stale number" — which is how
+> `search.web` sat at 30% margin without anything complaining. `PUT /admin/billing/costs/{id}` now
+> exists, and **recording a cost is never refused**: a price is a decision, a cost is an observation
+> about what a provider charges, and refusing to record a vendor price rise leaves the floor
+> checking against a number we know to be wrong. The response returns a work list of every
+> capability the change pushed under the floor.
 
 ---
 

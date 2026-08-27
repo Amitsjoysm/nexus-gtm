@@ -105,7 +105,12 @@ PLAN_SEED: list[dict] = [
         # COGS, $4.00 worst case. That is the acquisition budget, and the number to watch if
         # signups outpace conversions.
         "id": "free", "name": "Free", "plan_class": "free", "status": "active",
-        "base_price_cents": 0, "seat_price_cents": 0, "included_credits": 1000,
+        # 200 credits is a TRIAL of the whole product, not a usable free tier, and that is the
+        # intent. At the worst-case $0.004/credit COGS a free workspace costs at most $0.80 to
+        # serve, so the entire funnel is affordable at any signup volume we can realistically get.
+        # It buys roughly 25 enriched accounts or 66 research briefs — enough to see the product
+        # work on the buyer's own data, not enough to run a territory on.
+        "base_price_cents": 0, "seat_price_cents": 0, "included_credits": 200,
         "max_seats": 1, "sort_order": 10,
         "description": "Try every feature with 1,000 credits.",
         "entitlements": _FREE_ENT,
@@ -166,7 +171,7 @@ PLAN_SEED: list[dict] = [
     # 25.3 credits/$ and Accelerate at 40.2, against a 100 cr/$ design ceiling.
     {
         "id": "launch", "name": "Launch", "plan_class": "standard", "status": "active",
-        "base_price_cents": 9900, "seat_price_cents": 9900, "included_credits": 2500,
+        "base_price_cents": 9900, "seat_price_cents": 9900, "included_credits": 2000,
         "max_seats": 25, "sort_order": 20, "interval": "month", "trial_days": 14,
         "description": "Everything you need to run signal-led outreach.",
         "entitlements": _GROWTH_ENT,
@@ -177,7 +182,11 @@ PLAN_SEED: list[dict] = [
         # would put every annual plan at the bottom of the ladder.
         "id": "launch-annual", "name": "Launch (annual)", "plan_class": "standard",
         "status": "active", "base_price_cents": 95000, "seat_price_cents": 95000,
-        "included_credits": 30000, "max_seats": 25, "sort_order": 21,
+        # 12 x the monthly allowance exactly. The annual discount is taken on PRICE (20% off) and
+        # deliberately not on credits: discounting both would compound into a cr/$ ratio well past
+        # the design ceiling, and the customer is paying up front for commitment, not for a
+        # cheaper unit of consumption.
+        "included_credits": 24000, "max_seats": 25, "sort_order": 21,
         "interval": "year", "trial_days": 14,
         "description": "Launch, paid yearly. Two months free.",
         "entitlements": _GROWTH_ENT,
