@@ -14,7 +14,15 @@ from nexus.models.account import Account, Contact
 from nexus.models.relevance import RelevanceProfile
 from nexus.models.signal import SignalEvent
 
-DEFAULT_WEIGHTS = {"industry": 0.35, "size": 0.30, "geo": 0.15, "tech": 0.20}
+DEFAULT_WEIGHTS = {
+    "industry": 0.35, "size": 0.30, "geo": 0.15, "tech": 0.20,
+    # Scored ONLY when the ICP names them (see `score_icp_fit`), so these three add nothing to a
+    # workspace that has not asked for them and existing scores do not move.
+    #
+    # Region and postal are deliberately HALF weight: they refine a geography `geo` already scores,
+    # and at full weight a single ICP could let location outvote industry and size together.
+    "region": 0.075, "postal": 0.075, "revenue": 0.30,
+}
 
 
 @dataclass(slots=True)
@@ -129,6 +137,45 @@ class RelevanceEngine:
             reasons.append(f"geo '{account.country}' in ICP")
         else:
             sub["geo"] = 0.0
+
+        # Region / postal / revenue are scored ONLY when the ICP asks for them, so a workspace that
+        # never sets one sees identical scores to before they existed. Each treats a NULL on the
+        # account as neutral rather than as a miss, matching country and tech: an account nobody has
+        # enriched must not be pushed below the discovery gate for data we simply have not fetched.
+        regions = [r.lower() for r in icp.get("regions", []) if r]
+        if regions:
+            if not account.region:
+                sub["region"] = 0.5
+            elif account.region.lower() in regions:
+                sub["region"] = 1.0
+                reasons.append(f"region '{account.region}' in ICP")
+            else:
+                sub["region"] = 0.0
+
+        # Prefix match, because GTM teams target AREAS rather than single codes — '941' should catch
+        # every San Francisco code. Requiring the whole string makes the filter useless for anything
+        # larger than one building.
+        postals = [str(p).strip() for p in icp.get("postal_codes", []) if str(p).strip()]
+        if postals:
+            if not account.postal_code:
+                sub["postal"] = 0.5
+            elif any(account.postal_code.startswith(p) for p in postals):
+                sub["postal"] = 1.0
+                reasons.append(f"postal '{account.postal_code}' in target area")
+            else:
+                sub["postal"] = 0.0
+
+        rev_min, rev_max = icp.get("revenue_min"), icp.get("revenue_max")
+        if rev_min is not None or rev_max is not None:
+            # `_band_score` already returns 0.5 for a None value, which is the unknown-is-neutral
+            # rule this engine applies everywhere else.
+            sub["revenue"] = _band_score(account.annual_revenue, rev_min, rev_max)
+            if account.annual_revenue is not None:
+                inside = sub["revenue"] >= 0.999
+                reasons.append(
+                    f"revenue {account.annual_revenue:,} "
+                    f"{'within' if inside else 'outside'} target band"
+                )
 
         required_tech = [t.lower() for t in icp.get("required_tech", [])]
         owned = {t.lower() for t in (account.tech_stack or [])}
