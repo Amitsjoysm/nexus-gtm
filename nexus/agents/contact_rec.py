@@ -36,12 +36,26 @@ class ContactRecAgent(BaseAgent):
         # buyer_titles let a tenant bias toward their economic buyer / champion personas.
         buyer_titles = ctx.inputs.get("buyer_titles") or []
 
+        # The level/keyword spec, for tenants who have moved past literal titles. Shared with
+        # contact SEARCH through `nexus.relevance.job_levels` — a private matching rule here would
+        # drift from the one search uses, and a contact that search finds but ranking calls
+        # irrelevant is a worse outcome than not finding them at all.
+        from nexus.relevance.job_levels import matches_title, spec_from_icp
+
+        title_spec = spec_from_icp(ctx.inputs)
+        has_spec = any(title_spec.values())
+
         ranked = []
         for c in ctx.contacts:
             seniority = _infer_seniority(c)
             score = SENIORITY_SCORE.get(seniority, 0.3)
             title = (c.title or "").lower()
-            if buyer_titles and any(bt.lower() in title for bt in buyer_titles):
+            # Substring matching was the reported bug: `'facilities director' in
+            # 'director of facilities'` is False, so a real target ranked as a non-match. The
+            # literal test is kept because a tenant using plain buyer_titles must be unaffected.
+            literal_hit = bool(buyer_titles) and any(bt.lower() in title for bt in buyer_titles)
+            spec_hit = has_spec and matches_title(c.title or "", title_spec)
+            if literal_hit or spec_hit:
                 score = min(1.0, score + 0.2)
             if c.email:  # reachable contacts rank higher
                 score = min(1.0, score + 0.05)

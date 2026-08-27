@@ -109,6 +109,17 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
         self, account: Account, icp: dict, *, limit: int = 3
     ) -> list[ContactCandidate]:
         titles = list((icp or {}).get("buyer_titles") or (icp or {}).get("titles") or [])
+
+        # A level/keyword spec expands into the phrasings a web index actually holds. Querying only
+        # the one literal title a rep typed is why a search for "Facilities Director" returned
+        # nothing while the index held "Director of Facilities" and "Head of Facilities".
+        from nexus.relevance.job_levels import expand_titles, matches_title, spec_from_icp
+
+        title_spec = spec_from_icp(icp)
+        expanded = expand_titles(title_spec)
+        if expanded:
+            titles = list(dict.fromkeys([*titles, *expanded]))
+
         try:
             hits = await self._gather_hits(account, titles, limit)
             if not hits:
@@ -124,6 +135,12 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
         for p in people:
             name = (p.get("full_name") or "").strip()
             if not name or name.lower() in seen:
+                continue
+            # Re-filter against the spec. The expanded queries deliberately over-match — a broad
+            # phrase costs a little recall noise, which is the right way round — but a person who
+            # does not satisfy the spec must not reach the rep. Only applied when a spec exists, so
+            # a workspace using plain buyer_titles is untouched.
+            if any(title_spec.values()) and not matches_title(p.get("title") or "", title_spec):
                 continue
             seen.add(name.lower())
             out.append(
@@ -190,6 +207,9 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
         )
         resp = await self.llm.complete(
             [LLMMessage("system", system), LLMMessage("user", user)],
-            temperature=0.0, max_tokens=700, purpose="contact_extract",
+            # A JSON ARRAY of up to `limit` people, four keys each (a LinkedIn URL alone
+            # runs ~20 tokens). 700 closed the array only for the smallest results; a
+            # truncated array parses to [] and reads as "this company has no contacts".
+            temperature=0.0, max_tokens=1600, purpose="contact_extract",
         )
         return _parse_people(resp.text)
