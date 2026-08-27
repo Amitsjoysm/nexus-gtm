@@ -161,7 +161,12 @@ async def test_outcomes_api_record_list_weights_summary(client):
     # Weights endpoint returns the fallback shape (one win = impact 4 < MIN_SIGNAL).
     weights = (await client.get("/api/outcomes/weights", headers=h)).json()
     assert weights["learned"] is False
-    assert set(weights["weights"]) == {"industry", "size", "geo", "tech"}
+    # Asserted against DEFAULT_WEIGHTS rather than a hard-coded set: the scoring dimensions grew
+    # (region, postal, revenue) and a literal list here would have to be edited every time, which
+    # trains people to edit the test instead of reading it. The four core dimensions are named
+    # explicitly below so a key genuinely going missing is still caught.
+    assert set(weights["weights"]) == set(DEFAULT_WEIGHTS)
+    assert {"industry", "size", "geo", "tech"} <= set(weights["weights"])
     assert weights["defaults"]["industry"] == DEFAULT_WEIGHTS["industry"]
 
 
