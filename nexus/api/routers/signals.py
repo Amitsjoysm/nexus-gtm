@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import SignalOut
@@ -57,3 +58,67 @@ async def list_signals(
     )
     rows = (await ts.session.scalars(stmt)).all()
     return [_signal_out(s) for s in rows]
+
+
+# ---- collection preferences -------------------------------------------------------------------
+#
+# A tester asked why signals they had never enabled were appearing, and whether they were being
+# billed for them. `signal_sources` is a deployment-global setting naming which COLLECTORS run;
+# this is the per-workspace control over which KINDS get kept.
+
+
+class SignalPreferenceOut(BaseModel):
+    kind: str
+    enabled: bool
+
+
+class SignalPreferenceIn(BaseModel):
+    """`extra="forbid"` so a typo'd field is a 422 rather than a silently ignored setting."""
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool
+
+
+@router.get("/preferences", response_model=list[SignalPreferenceOut])
+async def list_signal_preferences(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> list[SignalPreferenceOut]:
+    """Every known signal kind with its effective state.
+
+    Built from the catalogue and overlaid with stored rows, never from the rows alone — a screen
+    listing only what somebody already toggled cannot be used to toggle anything the first time.
+    """
+    from nexus.ingestion.preferences import current_preferences
+
+    return [
+        SignalPreferenceOut(kind=kind, enabled=enabled)
+        for kind, enabled in (await current_preferences(ts)).items()
+    ]
+
+
+@router.put("/preferences/{kind}", response_model=SignalPreferenceOut)
+async def set_signal_preference(
+    kind: str,
+    body: SignalPreferenceIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_relevance)),
+) -> SignalPreferenceOut:
+    """Switch one signal kind on or off for this workspace.
+
+    An unknown kind is refused rather than stored: a row for a kind nothing emits is invisible
+    configuration that reads as active and never applies — the same trap `runtime_config` avoids by
+    skipping rows whose key has left the catalogue.
+    """
+    from nexus.ingestion.preferences import set_kind
+    from nexus.ingestion.service import SIGNAL_KINDS
+
+    if kind not in SIGNAL_KINDS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"unknown signal kind {kind!r}. Known kinds: {', '.join(sorted(SIGNAL_KINDS))}",
+        )
+    row = await set_kind(ts, kind, enabled=body.enabled)
+    await ts.commit()
+    return SignalPreferenceOut(kind=row.kind, enabled=bool(row.enabled))

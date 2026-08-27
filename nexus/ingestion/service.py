@@ -57,10 +57,24 @@ class IngestionService:
             s.dedupe_key
             for s in await ts.list(SignalEvent, SignalEvent.account_id == account.id)
         }
+        # Kinds this workspace has switched off. Read ONCE per call, not per signal: a crawl hands
+        # over dozens of signals for one account and a query each would turn a config lookup into
+        # an N+1 on the hot ingestion path.
+        #
+        # Gated here, at the single persist point, rather than at source selection — one source
+        # yields several kinds (`WebNewsSource` alone returns funding, hiring and news), so
+        # disabling a source to silence a kind would take the other two with it. The shared-company
+        # fan-out writes through `ingest` too, so both paths are covered by this one rule.
+        from nexus.ingestion.preferences import disabled_kinds
+
+        muted = await disabled_kinds(ts)
+
         bus = get_event_bus()
         created: list[SignalEvent] = []
         for r in raw:
             if r.kind not in SIGNAL_KINDS:
+                continue
+            if r.kind in muted:
                 continue
             dedupe_key = _clamp_dedupe(r.dedupe_key)
             if dedupe_key in existing:

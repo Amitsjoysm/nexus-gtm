@@ -26,6 +26,7 @@ from nexus.models.audit import AuditLog
 from nexus.models.integration import IntegrationConnection
 from nexus.models.jobs import DeadLetterJob
 from nexus.models.mfa import MFARecoveryCode, UserMFA
+from nexus.models.signal_preference import SignalPreference
 from nexus.models.intelligence import AccountScore, AgentRun
 from nexus.models.orchestration import Approval, OrchestrationRun, RunEvent, RunStep
 from nexus.models.campaign import Campaign, CampaignTarget
@@ -56,6 +57,7 @@ from nexus.models.source_run import SignalSourceRun
 from nexus.models.workflow import InboxTask, ListItem, Play, PlayRun, ProspectList
 
 __all__ = [
+    "SignalPreference",
     "Person",
     "PersonIdentity",
     "Tenant",
