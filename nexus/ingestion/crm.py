@@ -49,6 +49,25 @@ class CRMAccount:
 
 
 @dataclass(slots=True)
+class CRMContact:
+    """A person pulled FROM the CRM.
+
+    ``account_domain`` is what attaches them to a company on our side — the same identity the CSV
+    import and the shared people store key on. A contact whose company cannot be resolved is still
+    worth importing (the email domain is a good fallback), but a contact matched to the WRONG
+    company is a rep phoning a stranger with someone else's context.
+    """
+
+    external_id: str
+    full_name: str
+    email: str | None = None
+    title: str | None = None
+    phone: str | None = None
+    account_domain: str | None = None
+    account_name: str | None = None
+
+
+@dataclass(slots=True)
 class CRMPushResult:
     ok: bool
     source: str
@@ -107,6 +126,15 @@ class CRMConnector(abc.ABC):
 
     @abc.abstractmethod
     async def fetch_accounts(self) -> list[CRMAccount]: ...
+
+    async def fetch_contacts(self, *, limit: int = 200) -> list[CRMContact]:
+        """Pull people FROM the CRM.
+
+        Concrete rather than abstract, returning ``[]``, so adding this cannot break a connector
+        that does not implement it — including the stub and any third-party subclass. A CRM we
+        cannot read contacts from must degrade to "no contacts", never to an import that raises.
+        """
+        return []
 
     async def sync_accounts(self, ts: TenantSession) -> list[Account]:
         """Upsert CRM accounts into NEXUS, keyed by (tenant, crm_source, crm_id)."""
@@ -341,6 +369,44 @@ class SalesforceConnector(CRMConnector):
                 ))
         except Exception as exc:
             logger.warning("[salesforce] fetch_accounts failed: %r", exc)
+        return out
+
+    async def fetch_contacts(self, *, limit: int = 200) -> list[CRMContact]:
+        """Pull Salesforce contacts with their Account's website.
+
+        `Account.Website` comes back on the same query through the relationship, which is what
+        attaches the person to the right company — the email domain alone is wrong for anyone at an
+        agency or a subsidiary.
+        """
+        if not self._live:
+            return []
+        out: list[CRMContact] = []
+        try:
+            # `limit` is an int bounded by the caller, never a user string, so it cannot carry SOQL.
+            st, body = await self._query(
+                "SELECT Id, Name, Email, Title, Phone, Account.Name, Account.Website "
+                f"FROM Contact ORDER BY LastModifiedDate DESC LIMIT {int(limit)}"
+            )
+            if st != 200:
+                logger.warning("[salesforce] fetch_contacts HTTP %s", st)
+                return []
+            for row in body.get("records", []):
+                account = row.get("Account") or {}
+                name = (row.get("Name") or "").strip()
+                email = (row.get("Email") or "").strip()
+                if not name and not email:
+                    continue
+                out.append(CRMContact(
+                    external_id=row.get("Id"),
+                    full_name=name or email.split("@")[0],
+                    email=email or None,
+                    title=row.get("Title"),
+                    phone=row.get("Phone"),
+                    account_domain=_domain_from_website(account.get("Website")),
+                    account_name=account.get("Name"),
+                ))
+        except Exception as exc:
+            logger.warning("[salesforce] fetch_contacts failed: %r", exc)
         return out
 
     # -- account resolution ------------------------------------------------------------
@@ -746,6 +812,46 @@ class HubSpotConnector(CRMConnector):
                 ))
         except Exception as exc:
             logger.warning("[hubspot] fetch_accounts failed: %r", exc)
+        return out
+
+    async def fetch_contacts(self, *, limit: int = 200) -> list[CRMContact]:
+        """Pull HubSpot contacts, with the company they belong to.
+
+        `associations=companies` is what makes a contact attachable to the right account. Without
+        it every contact would fall back to its email domain, which is wrong for anyone at an
+        agency, a subsidiary, or using a personal address — and attaching a person to the wrong
+        company is the expensive mistake, not the invisible one.
+        """
+        if not self._token:
+            return []
+        out: list[CRMContact] = []
+        # HubSpot caps `limit` at 100 per page; ask for what is left, never more.
+        page = max(1, min(100, limit))
+        try:
+            st, body = await self._request(
+                "GET",
+                f"/crm/v3/objects/contacts?limit={page}&associations=companies&properties="
+                "firstname,lastname,email,jobtitle,phone,company",
+            )
+            if st != 200:
+                logger.warning("[hubspot] fetch_contacts HTTP %s", st)
+                return []
+            for row in body.get("results", [])[:limit]:
+                p = row.get("properties", {})
+                name = " ".join(x for x in (p.get("firstname"), p.get("lastname")) if x).strip()
+                email = (p.get("email") or "").strip()
+                if not name and not email:
+                    continue
+                out.append(CRMContact(
+                    external_id=row.get("id"),
+                    full_name=name or email.split("@")[0],
+                    email=email or None,
+                    title=p.get("jobtitle"),
+                    phone=p.get("phone"),
+                    account_name=p.get("company"),
+                ))
+        except Exception as exc:
+            logger.warning("[hubspot] fetch_contacts failed: %r", exc)
         return out
 
     # -- connection health -------------------------------------------------------------
