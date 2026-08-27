@@ -343,3 +343,46 @@ async def test_startup_logs_applied_overrides_without_blowing_up(fresh_db, caplo
     assert applied, "expected the override to apply"
     # The exact call `main.lifespan` makes. A missing module-level logger raised NameError here.
     logging.getLogger("nexus.main").info("runtime overrides applied: %s", sorted(applied))
+
+
+async def test_every_module_that_logs_actually_defines_a_logger():
+    """The bug this exists to stop, which shipped twice in one day.
+
+    `main.py` referenced `logger` in a line that only runs when an override EXISTS, and `deps.py`
+    in a branch that only runs when a refresh FAILS. Neither module defined one. Both survived
+    every deploy until their branch was first reached — and `main.py`'s took the application down
+    at startup, which is the one place a config helper must never fail.
+
+    Rare branches are exactly where a NameError hides, so this is checked structurally rather than
+    by hoping a test happens to walk them.
+    """
+    import ast
+    import pathlib
+
+    offenders = []
+    for path in pathlib.Path("nexus").rglob("*.py"):
+        src = path.read_text(encoding="utf-8", errors="ignore")
+        if "logger." not in src:
+            continue
+        tree = ast.parse(src, filename=str(path))
+        # A module-level `logger = ...`, or a local one bound inside the function that uses it.
+        module_level = any(
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "logger" for t in node.targets)
+            for node in tree.body
+        )
+        if module_level:
+            continue
+        # Otherwise every `logger.` use must have a binding somewhere in its own scope.
+        bound_anywhere = any(
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "logger" for t in node.targets)
+            for node in ast.walk(tree)
+        )
+        if not bound_anywhere:
+            offenders.append(str(path))
+
+    assert not offenders, (
+        f"these modules call logger.* without ever binding one, so any branch that logs raises "
+        f"NameError: {offenders}"
+    )

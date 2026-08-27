@@ -1,6 +1,8 @@
 """FastAPI dependencies: DB sessions, authentication, tenant binding, permission checks."""
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 
@@ -16,6 +18,8 @@ from nexus.core.tenancy import (
     apply_rls,
     set_current_tenant,
 )
+
+logger = logging.getLogger("nexus.api.deps")
 
 _bearer = HTTPBearer(auto_error=True)
 
@@ -63,6 +67,15 @@ async def get_tenant_session(
     principal: Principal = Depends(get_principal),
 ) -> AsyncIterator[TenantSession]:
     """Bind the tenant for the request and hand back a tenant-scoped session."""
+    # Converge this process onto any runtime setting changed elsewhere. The API runs uvicorn with
+    # two workers and may run several replicas, each holding its OWN `Settings` singleton — a change
+    # applied by whichever process handled the write reaches the others only if something on their
+    # request path re-reads it. Without this an API replica keeps serving the old value until it
+    # restarts, and the panel honestly reports "saved, not yet live" forever.
+    #
+    # TTL-guarded, so on all but one request in thirty seconds this is a monotonic clock comparison.
+    await _refresh_runtime_config()
+
     set_current_tenant(principal.tenant_id)
     async with get_sessionmaker()() as session:
         await apply_rls(session, principal.tenant_id)
@@ -178,6 +191,19 @@ async def platform_permissions(principal: Principal) -> set[str]:
     return effective_permissions(row) if row is not None else set()
 
 
+async def _refresh_runtime_config() -> None:
+    """Re-apply runtime overrides onto this process, at most once per TTL. Never raises.
+
+    A configuration refresh must never fail a request that had nothing to do with configuration.
+    """
+    try:
+        from nexus.runtime_config.service import refresh_if_stale
+
+        await refresh_if_stale()
+    except Exception:
+        logger.debug("runtime config refresh skipped", exc_info=True)
+
+
 def require_platform_permission(permission: str):
     """Gate a staff endpoint on ONE named permission.
 
@@ -194,6 +220,8 @@ def require_platform_permission(permission: str):
         # address is refused before it can spend a database query on permissions.
         from nexus.api.deps_ip import check_admin_origin
 
+        # Before the origin check, so an allowlist changed on another process is the one enforced.
+        await _refresh_runtime_config()
         check_admin_origin(request)
 
         held = await platform_permissions(principal)
