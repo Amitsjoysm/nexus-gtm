@@ -5,6 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Float,
     ForeignKey,
     Index,
@@ -27,6 +28,18 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     industry: Mapped[str | None] = mapped_column(String(120), nullable=True)
     employee_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     country: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Sub-country geography and revenue. A tester could filter on Country and nothing finer, and
+    # had no revenue filter at all — both are table stakes for territory-based GTM.
+    #
+    # All nullable, and a NULL means "not known" rather than "does not match": the relevance engine
+    # scores an unknown neutral, for the same reason an unknown tech stack is neutral. Punishing an
+    # account for data nobody has fetched yet drops it below the discovery gate that would have
+    # triggered the fetch.
+    region: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # BigInteger: annual revenue in whole currency units overflows a 32-bit column at $2.1bn, which
+    # is an ordinary enterprise account, not an edge case.
+    annual_revenue: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     tech_stack: Mapped[list] = mapped_column(JSON, default=list)
     crm_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     crm_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
