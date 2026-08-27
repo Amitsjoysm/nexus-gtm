@@ -20,7 +20,8 @@ industry + ICP is more trustworthy than one matched on size alone.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 
 # Company-size bands (by employee count). Roles declare which bands they fit.
 SMB = "smb"          # < 200
@@ -108,6 +109,30 @@ ROLES: tuple[RoleTemplate, ...] = (
     RoleTemplate("Chief People Officer", "People", ECONOMIC, 50, (MID, ENT),
                  industries=("software", "saas", "technology"),
                  alternatives=("VP People", "Head of People", "CHRO"), seniority="c_level"),
+    # ---- Facilities / Workplace / Plant ----
+    #
+    # The catalogue was tech-GTM-shaped: 19 roles across Sales, Marketing, Engineering, Data and
+    # Security, and nothing on the operations side of a physical business. A tester running a
+    # facilities campaign got Chief Technology Officer and Head of Demand Generation back, and no
+    # amount of better scoring fixes that — the right answer was not in the list. Manufacturing,
+    # retail, healthcare, logistics and property are among the largest B2B segments there are.
+    RoleTemplate("Head of Facilities", "Facilities", CHAMPION, 58, (MID, ENT),
+                 industries=("manufacturing", "retail", "healthcare", "logistics", "real estate",
+                             "hospitality", "education"),
+                 alternatives=("Facilities Director", "Director of Facilities",
+                               "Facilities Manager", "VP Facilities"), seniority="director"),
+    RoleTemplate("Head of Workplace", "Facilities", CHAMPION, 52, (MID, ENT),
+                 industries=("software", "saas", "technology", "financial services"),
+                 alternatives=("Workplace Experience Manager", "Director of Workplace",
+                               "Head of Real Estate & Workplace"), seniority="director"),
+    RoleTemplate("Plant Manager", "Operations", TECHNICAL, 56, (MID, ENT),
+                 industries=("manufacturing", "industrial", "energy", "utilities"),
+                 alternatives=("Site Manager", "Operations Manager", "Production Manager"),
+                 seniority="manager"),
+    RoleTemplate("Head of Maintenance", "Operations", TECHNICAL, 50, (MID, ENT),
+                 industries=("manufacturing", "industrial", "energy", "utilities", "logistics"),
+                 alternatives=("Maintenance Manager", "Director of Maintenance",
+                               "Reliability Manager"), seniority="manager"),
 )
 
 
@@ -222,6 +247,54 @@ def recommend_titles(
     return out[: max(1, limit)]
 
 
+# Campaign-context keys. FOUR names for what is conceptually one thing, because the orchestrator,
+# the Relevance form and the ICP draft each spell it differently — reading only one means the
+# feature silently does nothing on the other two screens, which is the class of bug this whole
+# release is about.
+_CONTEXT_KEYS = ("value_props", "pains_solved", "product_context", "problem")
+
+# Words too common in GTM copy to distinguish one role from another. Without this, "sales",
+# "revenue" and "customer" appear in nearly every value proposition ever written and would boost
+# the same three roles for every campaign — reproducing the generic output being fixed.
+_CONTEXT_STOPWORDS = frozenset({
+    "sales", "revenue", "customer", "customers", "team", "teams", "company", "companies",
+    "business", "growth", "leader", "leaders", "officer", "chief", "head", "director", "manager",
+    "vice", "president", "senior", "global", "operations",
+})
+
+
+def _context_blob(icp: dict) -> str:
+    """Flatten every campaign-context field into one lowercase string."""
+    parts: list[str] = []
+    for key in _CONTEXT_KEYS:
+        value = icp.get(key)
+        if isinstance(value, (list, tuple)):
+            parts.extend(str(v) for v in value)
+        elif value:
+            parts.append(str(value))
+    return " ".join(parts).lower()
+
+
+def _context_bonus(title: str, rec, context_blob: str) -> int:
+    """How much this role's own vocabulary appears in the campaign context.
+
+    Reads the title, department and the role's alternatives — the alternatives matter most, because
+    they are where the real-world phrasings live ("Facilities Manager", "Maintenance Manager") and a
+    customer describes their problem in those words rather than in ours.
+
+    Capped, so context refines the ranking rather than replacing it: a role that is genuinely wrong
+    for the company size or industry must not be dragged to the top by a keyword coincidence.
+    """
+    words: set[str] = set()
+    for source in (title, getattr(rec, "department", "") or ""):
+        words.update(w for w in re.findall(r"[a-z]{4,}", source.lower()))
+    for alternative in getattr(rec, "alternatives", ()) or ():
+        words.update(w for w in re.findall(r"[a-z]{4,}", str(alternative).lower()))
+
+    hits = sum(1 for w in words - _CONTEXT_STOPWORDS if w in context_blob)
+    return min(hits * 6, 18)
+
+
 def recommend_titles_for_icp(icp: dict, *, limit: int = 10) -> list[TitleRecommendation]:
     """Recommend up to ``limit`` (capped at 10) buyer titles for a whole ICP, not one account.
 
@@ -230,6 +303,17 @@ def recommend_titles_for_icp(icp: dict, *, limit: int = 10) -> list[TitleRecomme
     already listed. Deterministic; safe on a partial/empty ICP (falls back to the base ranking).
     """
     icp = icp or {}
+
+    # Value props, pains and product context are the strongest available evidence about WHO feels
+    # the problem, and they were read by nothing — so a tester who filled in all three got the same
+    # generic committee back and reasonably concluded the AI was adding nothing.
+    #
+    # Matched deterministically against each role's own vocabulary. The LLM path (the
+    # `/suggest-titles` endpoint) phrases and re-ranks on top of this; this is the grounding it
+    # ranks over, and it has to work with the LLM unavailable — which is the state the deployment
+    # was actually in when the report came in.
+    context_blob = _context_blob(icp)
+
     industries = [i for i in (icp.get("industries") or []) if str(i).strip()] or [None]
     emin, emax = icp.get("employee_min"), icp.get("employee_max")
     if emin and emax:
@@ -252,5 +336,15 @@ def recommend_titles_for_icp(icp: dict, *, limit: int = 10) -> list[TitleRecomme
             current = best.get(rec.title)
             if current is None or rec.priority_score > current.priority_score:
                 best[rec.title] = rec
+
+    if context_blob:
+        # A role whose own vocabulary appears in the campaign context outranks a generic one.
+        # Applied AFTER the per-industry best-of, so the bonus cannot be double-counted by a role
+        # that scored well in several industries.
+        for title, rec in list(best.items()):
+            bonus = _context_bonus(title, rec, context_blob)
+            if bonus:
+                best[title] = replace(rec, priority_score=rec.priority_score + bonus)
+
     out = sorted(best.values(), key=lambda r: (-r.priority_score, -r.confidence, r.title))
     return out[: min(10, max(1, limit))]
