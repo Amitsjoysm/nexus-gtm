@@ -101,6 +101,52 @@ async def list_provider_keys(
     return [ProviderKeyOut.of(r, in_use=(live.get(r.provider) == r.id)) for r in rows]
 
 
+@router.get("/pool-health", response_model=list[dict])
+async def pool_health(
+    _: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> list[dict]:
+    """Warn where adding managed keys has SHRUNK the usable pool.
+
+    The resolver falls back to the environment pool only when a provider has **no** managed key, so
+    adding one takes over completely. Measured 2026-08-26: adding a single Groq key through this
+    panel replaced a five-key environment pool — and because each Groq key is a separate
+    organisation with its own 8,000 tokens-per-minute budget, the deployment's usable throughput
+    dropped from about 40,000 TPM to 8,000 in one click. Nothing said so, and the symptom was
+    unrelated-looking 429s on `/enrich` and `/lookalikes`.
+
+    That is the override behaving exactly as documented. What was missing was anyone being told.
+    """
+    from nexus.providers.catalog import PROVIDERS, env_pool
+
+    managed = await service.list_keys()
+    by_provider: dict[str, int] = {}
+    for row in managed:
+        if row.enabled:
+            by_provider[row.provider] = by_provider.get(row.provider, 0) + 1
+
+    out = []
+    for pid in PROVIDERS:
+        env_count = len(env_pool(pid))
+        managed_count = by_provider.get(pid, 0)
+        if managed_count == 0 or env_count == 0:
+            continue
+        if managed_count < env_count:
+            out.append({
+                "provider": pid,
+                "managed_keys": managed_count,
+                "environment_keys": env_count,
+                "severity": "warning",
+                "detail": (
+                    f"{managed_count} managed key(s) have taken over from {env_count} in the "
+                    f"environment. Managed keys replace the environment pool entirely rather than "
+                    f"adding to it, so this deployment now has fewer keys to rotate through than "
+                    f"before — and for rate-limited providers that is a direct cut to throughput. "
+                    f"Add the remaining keys here, or delete these to fall back to the environment."
+                ),
+            })
+    return out
+
+
 @router.post("", response_model=ProviderKeyOut, status_code=status.HTTP_201_CREATED)
 async def create_provider_key(
     body: ProviderKeyIn,

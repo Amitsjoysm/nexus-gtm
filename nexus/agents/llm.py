@@ -220,6 +220,44 @@ class OpenAICompatProvider(LLMProvider):
         return LLMResponse(text=text, tokens=tokens)
 
 
+def _prompt_budget() -> int:
+    """How many tokens one prompt may spend, from settings when set.
+
+    Runtime-settable, because the ceiling is a property of the ACCOUNT TIER rather than of the
+    model — which is exactly how this bug arrived. Switching to `openai/gpt-oss-120b` moved the
+    deployment onto an 8,000 TPM tier, and nothing in the codebase knew that number.
+    """
+    from nexus.agents.token_budget import DEFAULT_MAX_PROMPT_TOKENS
+
+    configured = getattr(get_settings(), "llm_max_prompt_tokens", 0) or 0
+    return int(configured) if configured > 0 else DEFAULT_MAX_PROMPT_TOKENS
+
+
+def _retry_after_seconds(resp) -> float:
+    """Seconds the provider asked us to wait. Its number, not a guess of ours.
+
+    Groq returns fractional seconds here (measured: 28-33 on an exhausted minute). Falls back to a
+    sane pause rather than zero — a `Retry-After` we cannot parse must not become a busy loop.
+    """
+    raw = resp.headers.get("retry-after", "")
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 5.0
+
+
+def _error_detail(resp) -> str:
+    """The provider's own message. It states the real limit, which is worth more than our constant."""
+    try:
+        body = resp.json()
+        err = body.get("error") if isinstance(body, dict) else None
+        if isinstance(err, dict):
+            return str(err.get("message") or err)
+        return str(err or body)
+    except Exception:
+        return (getattr(resp, "text", "") or "")[:300]
+
+
 class GroqLLMProvider(OpenAICompatProvider):
     """Groq exposes an OpenAI-compatible /chat/completions endpoint (preset URL+model).
 
@@ -286,6 +324,19 @@ class GroqLLMProvider(OpenAICompatProvider):
         # BEFORE the payload is built: the refresh can change `self.model`, and a payload
         # assembled first would send the stale one and only pick the new model up next call.
         await self._refresh_keys()
+
+        # Fit the prompt to the account's per-request token ceiling BEFORE sending. Measured
+        # 2026-08-26: this account is capped at 8,000 TPM, and a request above it returns 413
+        # "Request too large ... on tokens per minute", which no retry and no key rotation can fix.
+        # Trimming here is what makes the whole thing work on a small tier; everything below only
+        # handles the cases where traffic, not size, is the problem.
+        from nexus.agents.token_budget import GATE, fit_messages, parse_limit
+
+        budget = _prompt_budget()
+        messages, trimmed = fit_messages(list(messages), budget)
+        if trimmed:
+            logger.info("prompt trimmed to fit %d tokens for %s", budget, purpose or "completion")
+
         payload = {
             "model": self.model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
@@ -293,16 +344,76 @@ class GroqLLMProvider(OpenAICompatProvider):
             "max_tokens": max_tokens,
         }
         last_resp: httpx.Response | None = None
-        for _ in range(len(self._keys)):
+        # Bounded process-wide. The token budget belongs to the account and is shared by every
+        # endpoint — `/enrich`, `/lookalikes` and `/source-contacts` fired in the same second in the
+        # reported failure, and each holding its own limiter would have allowed exactly that.
+        async with GATE():
+            return await self._complete_bounded(payload, messages, budget, max_tokens, purpose)
+
+    async def _complete_bounded(self, payload, messages, budget, max_tokens, purpose):
+        import asyncio
+
+        from nexus.agents.token_budget import fit_messages, parse_limit
+
+        last_resp: httpx.Response | None = None
+        waited = 0.0
+        # One pass per key plus a couple of waits: the keys are separate organizations with separate
+        # budgets (verified by reading four different org ids out of four 429s), so rotating is
+        # worth doing FIRST — but once they are all exhausted only time helps.
+        for attempt in range(len(self._keys) + 2):
             key = self._keys[self._idx]
             resp = await self._http().post(
                 f"{self.base_url}/chat/completions",
                 json=payload,
                 headers={"Authorization": f"Bearer {key}"},
             )
-            if resp.status_code == 429:  # rate-limited on this key -> rotate and retry
-                logger.warning("Groq key #%d rate-limited (429); rotating", self._idx)
+            if resp.status_code == 429:
+                # Rotate FIRST — each key is a separate organization with its own minute budget, so
+                # the next one may well be clear. Only once we have been round them all is waiting
+                # the answer, and then `Retry-After` says how long (measured: 28-33 seconds).
+                #
+                # The old code rotated with no backoff at all, so a burst burned every key within a
+                # second or two and raised — and the caller fell through to the stub, whose output
+                # is emailed to real prospects.
+                retry_after = _retry_after_seconds(resp)
+                logger.warning(
+                    "Groq key #%d rate-limited (429), retry-after=%.0fs; %s",
+                    self._idx, retry_after,
+                    "rotating" if attempt < len(self._keys) else "waiting",
+                )
                 self._idx = (self._idx + 1) % len(self._keys)
+                last_resp = resp
+                if attempt >= len(self._keys):
+                    # Cap the wait: a caller blocked for a full minute is worse than a clear
+                    # failure it can retry, and the job queue will bring the work back.
+                    delay = min(retry_after, 20.0)
+                    waited += delay
+                    await asyncio.sleep(delay)
+                continue
+
+            if resp.status_code == 413:
+                # A single request bigger than the whole minute budget. Rotation and waiting are
+                # both useless — only a smaller prompt works. Shrink to whatever the provider says
+                # its limit actually is and try once more, because its number is current and ours
+                # is a constant that the account tier can move under.
+                detail = _error_detail(resp)
+                stated = parse_limit(detail)
+                if stated and stated < budget:
+                    budget = int(stated * 0.75)
+                else:
+                    budget = max(512, budget // 2)
+                messages, shrank = fit_messages(messages, budget)
+                logger.warning(
+                    "Groq refused a request as too large (413); retrying at %d tokens. %s",
+                    budget, detail[:160],
+                )
+                if not shrank:
+                    # Already at the floor and still refused: say so plainly rather than looping.
+                    raise RuntimeError(
+                        f"Groq refused this request as too large even after trimming to {budget} "
+                        f"tokens: {detail[:200]}"
+                    )
+                payload["messages"] = [{"role": m.role, "content": m.content} for m in messages]
                 last_resp = resp
                 continue
             if resp.status_code in (401, 403):
