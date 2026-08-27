@@ -189,7 +189,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0049_integration_connections`. The chain is
+Alembic under `migrations/versions/`. Head: `0050_runtime_settings`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -197,7 +197,7 @@ Alembic under `migrations/versions/`. Head: `0049_integration_connections`. The 
 `companies`, proration, shared `people`, `crawl_verdict`, user suspension, digest delivery) →
 `0041` (`source_databases`) → `0042` (`accounts.next_refresh_at`) → `0043` (`signal_events.subtype`) →
 `0044`–`0046` (`provider_keys`, `provider_settings`, `payment_credentials`) → `0047`–`0049`
-(`crm_connections`, `audit_log`, `integration_connections`). Every tenant-scoped table gets RLS via
+(`crm_connections`, `audit_log`, `integration_connections`) -> `0050` (`runtime_settings`). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -308,6 +308,139 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   deliberately name their tenant column `subject_tenant_id` so `apply_rls.py` — which enrolls any
   table having `tenant_id` — does not hide them from the operators who must read them.
   `dead_letter_jobs` (below) follows the same rule for the same reason.
+
+## The plan ladder (`nexus/billing/plans.py`)
+
+**Free / Launch / Accelerate, plus 20%-off annuals.** Collapsed from eight public tiers on
+2026-08-26. Sized against measured cost — blended $0.00192/credit, worst case $0.00400 — so the
+whole ladder sits inside the 100 credits-per-dollar design ceiling (survival limit is 250; see
+`docs/PRICING-AND-PACKAGING.md`).
+
+| Plan | Price | Credits | cr/$ |
+|---|---|---|---|
+| Free | $0 | 1,000 | — |
+| Launch | $99/mo | 2,500 | 25.3 |
+| Launch (annual) | $950/yr | 30,000 | 31.6 |
+| Accelerate | $199/mo | 8,000 | 40.2 |
+| Accelerate (annual) | $1,910/yr | 96,000 | 50.3 |
+
+**Superseded tiers are RETIRED, never deleted, and the distinction is not cosmetic.**
+`billing_subscriptions.plan_id` is a foreign key, and entitlements resolve from the plan ROW rather
+than from whether it is on sale — so deleting a plan with subscribers is either a constraint
+violation or a paying customer with *no* entitlements at all, which falls back to permissive catalog
+defaults and hands them everything. `status="retired"` takes a plan off `GET /billing/plans` (which
+filters on `active`) and leaves its subscribers exactly where they are.
+
+The seed marks them retired so a **fresh install** gets the current ladder; `sync_plans` never
+mutates an existing row, so an established deployment is moved by `scripts/restructure_plans.py`
+instead — idempotent, with a dry run that prints subscriber counts before anything is written.
+
+**`free` is on the price list but refused by checkout** (`UNPURCHASABLE_PLAN_CLASSES`). A price list
+that hides the free option is a paywall with a gap; a $0 hosted checkout would create a Stripe
+product for something that never charges anyone and put a card form in front of a downgrade.
+
+Two things that were wrong and are now pinned by tests:
+
+- **Ladder positioning must ignore retired plans.** `_position_on_ladder` read every `standard` row,
+  and a retired tier's `sort_order` describes a ladder that no longer exists. Measured: with five
+  retired tiers still counted, a $149 plan landed *after* the $199 one.
+- **Overage must never undercut the cheapest in-plan rate.** It was 1c against in-plan rates of
+  2.48–4.75c, so overflowing was two to five times cheaper than upgrading — a customer acting
+  rationally would sit on the smallest plan forever.
+
+## Authoring a capability (`nexus/billing/capability_authoring.py`)
+
+`CAPABILITY_SEED` in `catalog.py` was the **only** write path to `billing_capabilities` — the table
+was always writable, the API was the missing half — so a new billable action meant a code change and
+a release. `POST /admin/billing/capabilities` closes that.
+
+Safe to add because of two existing properties of the seed: `sync_catalog` **never deletes**, and
+`_MANAGED_FIELDS` re-asserts `category`/`unit`/`depends_on` only for ids the seed names. An
+admin-created capability is invisible to it, so no later deploy can revert or clobber one. Pinned by
+`test_a_redeploy_does_not_disturb_an_admin_created_capability`.
+
+- **Pricing is offered in the same call, and its absence is warned about.** A capability with no rate
+  card is metered and then *rated at nothing*: usage accumulates, quotas count down, no revenue line
+  appears. It looks handled. That shipped once — `ai.scoring`, 4,090 runs, free. A `module.` gate is
+  the one case that legitimately has no unit price and gets no warning.
+- **`depends_on` is validated against existing rows.** Naming a capability that does not exist gates
+  this one behind something unresolvable: permanently unusable, and silently.
+- The id must be `category.name`, lowercase. It appears in URLs, entitlement rows, usage events and
+  invoice lines, and the Admin UI groups on the prefix.
+
+## Token metering (`nexus/billing/tokens.py`)
+
+`ai.tokens` was priced and metered at no call site. It now records alongside the flat per-action
+charge in `routers/agents.py`, **not instead of it**: the flat rate is the bill and is what makes it
+predictable, this is the evidence that the flat rate is still the right one.
+
+Flat pricing is defended by measurement rather than assumed. Across 4,174 real agent runs, token
+spread within one agent is up to 49x min-to-max but only ~4x **median-to-max**, which these margins
+absorb — but that is a fact about today's prompts, and prompts change. Called outside the `metered`
+block, because a token record must not be part of the transaction that decides whether the customer
+was allowed to run the agent at all. Never raises.
+
+## Runtime configuration (`nexus/runtime_config/`)
+
+Deployment settings changeable from the Control plane without a deploy. **The mechanism is one
+line:** `get_settings()` is an `lru_cache` over a *mutable* object, so an override applied with
+`setattr` reaches all 142 call sites without any of them changing. The alternative — a resolver each
+call site adopts, as `providers/resolver.py` does for keys — would have been 142 opportunities to
+miss one, and missing one is invisible: the toggle reads "off" and the feature keeps running.
+
+**The catalog is an allowlist and its exclusions carry more weight than its inclusions.** Named in
+`FORBIDDEN`, not merely absent, so the reason survives and the refusal says the setting is withheld
+on purpose rather than mistyped:
+
+- `source_db_allow_private` — the SSRF guard. An admin must not switch off a guard from the form the
+  guard protects.
+- `security_headers_enabled`, `auth_rate_limit_enabled` — the same argument aimed at the web surface
+  through the exact interface it defends.
+- `demo_signals_enabled` — fabricated signals in a real inbox is what `nexus/ingestion` was rebuilt
+  to prevent.
+- `billing_seed_on_startup` — startup-only, so a control for it would be a lie.
+- `env`, `secret_key`, database URLs, every `*_enc_key` — identity and cryptographic roots.
+
+Rules that are load-bearing:
+
+- **Every entry states its `effect`, and anything medium or high risk states its `warning`**, asserted
+  by test. A toggle whose result nobody can state in a sentence is a trap.
+- **Values are coerced against the declared type.** The panel posts JSON, so a boolean arrives as the
+  string `"false"` — which is truthy in Python and would switch a setting ON while the control read
+  "off".
+- **A row whose key has left the catalog is skipped, not applied.** Otherwise removing a setting from
+  the panel leaves it taking effect from a row nobody can see.
+- **`apply_overrides` never raises.** A config read that fails must leave the process on the values it
+  already had; a database blip must not take down an application whose settings were fine a second
+  ago. Wired into the API lifespan and into worker `dispatch` on a 30s TTL.
+- **`in_effect` is reported separately from `overridden`.** "Saved" and "in force" are different facts,
+  and a panel showing only the first is how an operator concludes a feature is on when it is not.
+
+**Note the shape of the one bug this shipped with**: the lifespan block logs what it applied, and
+that line only runs when an override *exists*. A `NameError` in it (there is no module-level
+`logger` in `main.py`) survived every deploy until the first real override was stored, then refused
+to boot — a config helper whose entire contract is "never take the process down" taking the process
+down, at startup.
+
+**`admin_ip_allowlist` lives outside `Settings`** (`api/deps_ip.py`), because pydantic refuses an
+attribute `config.py` has not declared — so it keeps its own module cache and its own reader,
+registered in `_EXTERNAL_SINKS`. Keep that map small: a growing list means the override mechanism is
+being worked around rather than used. Empty means open (default-closed would lock every existing
+deployment out of its own panel on upgrade), at most two entries, and a malformed list is ignored
+rather than enforced — the only place to fix a bad allowlist is the panel it would have closed.
+Validation runs **before** the row is written: `coerce` only checks the declared kind, which for a
+string is no check at all, and a committed-then-rejected value is an override the panel reports as
+active and nothing ever applies.
+
+`GET /admin/runtime/webhook` shows what to paste into Stripe and which events to select; the URL is
+not ours to set and nothing here can set it. `POST .../webhook/test` posts a correctly signed event
+at our own endpoint — it proves the signing secret verifies and the route is live, and deliberately
+does **not** claim Stripe can reach the host, which depends on DNS and firewalls outside the process.
+
+**Which provider key is live** is computed in `routers/admin_provider_keys.py` from the *same*
+ordering the resolver uses — pinned first, then oldest, enabled only. A separate flag on the row
+would be a second source of truth, and the first thing to drift would be exactly the fact the
+indicator exists to report.
 
 ## Authoring a sellable plan (`nexus/billing/plan_authoring.py`)
 
