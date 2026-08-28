@@ -463,7 +463,14 @@ async def check_and_meter(
             await _lock_capability(ts, capability_id)
             used = await current_usage(ts, capability_id)
             limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
-            over = used + quantity - limit
+            # The part of THIS call that falls beyond the line — not the running total by which
+            # the tenant is over it. `used + quantity - limit` is the second thing, and it grows
+            # by one on every subsequent call, so the Nth overage unit was charged N times its
+            # price: 20 units past a quota cost 210 units' worth of credits instead of 20. Every
+            # pre-existing test fired exactly one call past the quota, where the two expressions
+            # coincide. Clamped to `quantity` so a call that starts inside the quota pays only
+            # for the part that crosses.
+            over = min(float(quantity), used + quantity - limit)
             if over > 0:
                 # Past what the plan includes. Spend credits first — that is what they are for.
                 # An explicit overage price means "keep going and invoice it", not "stop", so it

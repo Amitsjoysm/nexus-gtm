@@ -87,7 +87,11 @@ class SearchBackedAccountEnricher:
                                "(the company's LinkedIn page URL if present, else \"\"). Use "
                                "null/\"\"/[] when unknown. JSON only, no prose."),
                 ],
-                temperature=0.0, max_tokens=400, purpose="account_enrich",
+                # 11 keys including a sentence of description and a keyword array. Measured live
+                # 2026-08-27: at 400 the model stopped inside "description", `_parse_obj`
+                # returned {}, and every candidate scored 65 against discovery's gate of 70 —
+                # so nothing was ever enriched and nothing was ever discovered, silently.
+                temperature=0.0, max_tokens=1200, purpose="account_enrich",
             )
         except Exception as exc:
             logger.warning("account enrich LLM failed for %r: %r", label, exc)

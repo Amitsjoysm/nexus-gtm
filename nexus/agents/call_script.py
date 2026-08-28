@@ -7,6 +7,7 @@ same LLM chain (with Groq key rotation + stub fallback), so it works offline in 
 from __future__ import annotations
 
 import json
+import re
 
 from nexus.agents.copy import CALL_RULES, first_pain, format_pains
 from nexus.agents.llm import LLMMessage
@@ -15,10 +16,17 @@ from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 _KEYS = ("opener", "hook", "value_prop", "discovery_questions", "objections", "cta", "voicemail")
 
 
+# The first {...} in the response. Models add a lead-in sentence and a ``` fence however firmly
+# the prompt forbids them, and throwing away an otherwise-complete script over its wrapper costs
+# the rep the whole call.
+_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
 def _coerce(raw: str, *, account: str, contact: str) -> dict:
     """Parse the model's JSON; on any failure degrade to a minimal usable script (never raise)."""
+    match = _JSON_OBJ_RE.search(raw or "")
     try:
-        data = json.loads(raw)
+        data = json.loads(match.group(0) if match else raw)
         if isinstance(data, dict):
             return {
                 "opener": str(data.get("opener", "")),
@@ -33,7 +41,10 @@ def _coerce(raw: str, *, account: str, contact: str) -> dict:
         pass
     return {
         "opener": f"Hi {contact}, this is <your name> from <your company> — do you have 30 seconds?",
-        "hook": raw.strip()[:280],
+        # Deliberately NOT the raw response. This slot is read aloud, and a truncated JSON
+        # document in front of a rep mid-dial is worse than a plain sentence: it cannot be
+        # spoken, and it looks like the product is broken to the one person holding the phone.
+        "hook": f"I wanted to reach out about what's happening at {account}.",
         "value_prop": "",
         "discovery_questions": [],
         "objections": [],
@@ -93,6 +104,11 @@ class CallScriptAgent(BaseAgent):
         raw = await ctx.complete(
             [ctx.system_message(), LLMMessage(role="user", content=content)],
             purpose="call_script",
+            # 7 keys, two of them arrays (discovery questions; objection/response pairs).
+            # Measured live 2026-08-27: the inherited default of 800 stopped mid-sentence at
+            # 2,483 chars and the whole script fell back to the generic stub; 1,800 closed and
+            # produced 5 questions and 4 objections.
+            max_tokens=1800,
             variables={
                 "account": ctx.account.name,
                 "contact": contact_name,

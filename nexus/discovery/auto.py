@@ -165,8 +165,6 @@ async def auto_discover_for_tenant(
 
     relevance = get_relevance_engine()
     settings = get_settings()
-    fallback_industry = icp["industries"][0] if icp["industries"] else None
-    fallback_country = icp["geo"][0] if icp["geo"] else None
 
     # 1) Build distinct, net-new candidate accounts (transient — not persisted yet). Dedup in-memory
     #    against everything we already track (the `tracked` set) + within-run dups, so a company is
@@ -187,8 +185,15 @@ async def auto_discover_for_tenant(
                 tenant_id=ts.tenant_id,
                 name=(cand.name or domain).strip(),
                 domain=domain,
-                industry=cand.industry or fallback_industry,
-                country=cand.country or fallback_country,
+                # Left BLANK when the search backend did not report one, never defaulted to
+                # the ICP's own first industry/country. `apply()` fills blanks only (so a
+                # tenant's CRM data is never overwritten), which means a stamped value is
+                # permanent — and `score_icp_fit` would then award the industry and geo weights
+                # for values the ICP supplied itself. Measured: a steel supplier and a
+                # steelmaker were both stored as "Software & SaaS" and scored 80/100 against a
+                # SaaS ICP, with "industry 'Software & SaaS' is in ICP" given as the reason.
+                industry=cand.industry,
+                country=cand.country,
                 employee_count=cand.employee_count,
                 source="auto_discovery",
             )
