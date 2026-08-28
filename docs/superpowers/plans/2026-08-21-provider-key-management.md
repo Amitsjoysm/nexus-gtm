@@ -323,6 +323,7 @@ async def test_a_provider_key_row_stores_no_plaintext():
     from nexus.models.provider_key import ProviderKey
     from nexus.providers.crypto import key_digest, key_hint, seal_key
 
+    # gitleaks:allow - fabricated literal; the assertion below is that it is NOT stored.
     secret = "sk-test-abcdefgh1234"
     async with get_platform_sessionmaker()() as s:
         row = ProviderKey(
