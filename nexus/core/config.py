@@ -123,6 +123,28 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./nexus.db"
 
+    # Connection-pool sizing (Postgres only; SQLite ignores both). Peak connections per PROCESS
+    # is `db_pool_size + db_max_overflow`, plus the small platform pool below — and a managed
+    # Postgres has a hard, SKU-dependent `max_connections` that is easy to exceed without
+    # noticing. The defaults preserve the previous hardcoded values exactly, so nothing changes
+    # for an existing deployment; they exist so a small instance can be tuned DOWN in config
+    # rather than by editing code or by paying for a larger SKU.
+    #
+    # Budget the whole fleet, not one process, and remember a rolling deploy runs the old and
+    # new revisions SIMULTANEOUSLY — app connections roughly double for the length of a release,
+    # which is why this reads fine in steady state and then fails during a deploy:
+    #
+    #   peak = app_replicas x processes x (pool + overflow + platform_pool + platform_overflow)
+    #          x 2 during a rollout, + the worker's single process
+    #
+    # See docs/deployment/06-POSTGRESQL.md for the sizing table.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    # Platform (RLS-bypassing, cross-tenant) reads are rare compared with tenant traffic, so this
+    # pool stays small — but it is still charged against the same server-wide connection limit.
+    db_platform_pool_size: int = 2
+    db_platform_max_overflow: int = 3
+
     # Task queue
     queue_backend: Literal["memory", "redis"] = "memory"
     redis_url: str = "redis://localhost:6379/0"
@@ -141,7 +163,13 @@ class Settings(BaseSettings):
     llm_provider: Literal["stub", "openai_compat", "anthropic", "groq", "auto"] = "stub"
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
+    # Must live in the DEFAULT PROVIDER's namespace. Every real deployment sets
+    # NEXUS_LLM_PROVIDER=auto, which builds a **Groq** chain — so an OpenAI model name here is an
+    # HTTP 404 `model_not_found` on every completion, and `GroqLLMProvider` returns '' rather than
+    # raising. Measured live on 2026-08-27: website analysis, Suggest Titles, contact extraction
+    # and personalization were all silently dead, reported as four separate bugs.
+    # Pinned by tests/test_llm_model_default.py.
+    llm_model: str = "openai/gpt-oss-120b"
     # Blended $/1k tokens used to attribute real COGS to a metered action. Config, never a
     # constant: providers reprice, and margin reporting must follow without a redeploy.
     llm_usd_per_1k_tokens: float = 0.0006
@@ -300,7 +328,7 @@ class Settings(BaseSettings):
     account_hot_signal_window_days: int = 30
     account_refresh_batch_size: int = 100       # max accounts claimed per tick across tenants
     # Run an account's signal sources concurrently rather than one after another. Measured over 355
-    # real crawls: sum of the five sources is 26.98s, the slowest single source is 14.94s â€” a 1.81x
+    # real crawls: sum of the five sources is 26.98s, the slowest single source is 14.94s — a 1.81x
     # cut in per-account wall time for no extra CPU, because the pipeline is ~99% await-on-network.
     # A kill switch rather than a rollout flag: if a provider turns out to rate-limit on
     # concurrency, this restores the old behaviour without a deploy.

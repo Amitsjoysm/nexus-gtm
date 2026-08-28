@@ -83,7 +83,9 @@ def get_engine() -> AsyncEngine:
         settings = get_settings()
         kwargs: dict = {"future": True, "pool_pre_ping": True}
         if settings.is_postgres:
-            kwargs.update(pool_size=10, max_overflow=20)
+            kwargs.update(
+                pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow
+            )
         elif settings.is_sqlite:
             # Wait up to 30s for a lock instead of erroring immediately: the API and the
             # always-on worker can write the same file concurrently in dev. Pairs with the
@@ -121,8 +123,12 @@ def get_platform_sessionmaker() -> async_sessionmaker[AsyncSession]:
         url = settings.db_owner_url or settings.database_url
         kwargs: dict = {"future": True, "pool_pre_ping": True}
         if url.startswith("postgresql"):
-            # Small pool: platform reads are rare compared with tenant traffic.
-            kwargs.update(pool_size=2, max_overflow=3)
+            # Small pool: platform reads are rare compared with tenant traffic. Still counts
+            # against the server's max_connections — see Settings.db_platform_pool_size.
+            kwargs.update(
+                pool_size=settings.db_platform_pool_size,
+                max_overflow=settings.db_platform_max_overflow,
+            )
         _platform_engine = create_async_engine(url, **kwargs)
         _platform_sessionmaker = async_sessionmaker(
             _platform_engine, expire_on_commit=False, class_=AsyncSession

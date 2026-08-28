@@ -27,6 +27,7 @@ import os
 import sys
 
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 APP_ROLE = "nexus_app"
@@ -110,12 +111,59 @@ async def main() -> None:
                     f"END $$;"
                 )
             )
-            await conn.execute(
-                text(
-                    f"ALTER ROLE {APP_ROLE} WITH LOGIN PASSWORD '{pw}' "
-                    f"NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT"
+            # MANAGED POSTGRES IS NOT SUPERUSER. On Azure Database for PostgreSQL Flexible Server
+            # (and RDS) the admin role is a member of azure_pg_admin / rds_superuser, NOT a real
+            # superuser — and Postgres refuses NOSUPERUSER and NOBYPASSRLS from a non-superuser
+            # even when setting them to the value the role ALREADY has:
+            #   InsufficientPrivilegeError: permission denied to alter role
+            #   DETAIL: Only roles with the SUPERUSER attribute may change the SUPERUSER attribute.
+            #
+            # Both are already the CREATE ROLE defaults, so dropping them changes nothing about the
+            # role — but "it's the default" is not something to take on trust for the two attributes
+            # that decide whether RLS is a tenant boundary or a decoration. BYPASSRLS in particular
+            # would make every policy below silently inert. So: try the explicit form first (it is
+            # the stronger statement of intent, and works on self-hosted Postgres), fall back to the
+            # attributes a managed admin may actually set, and then VERIFY against pg_roles rather
+            # than assume.
+            base_attrs = "NOCREATEDB NOCREATEROLE NOINHERIT"
+            try:
+                await conn.execute(
+                    text(
+                        f"ALTER ROLE {APP_ROLE} WITH LOGIN PASSWORD '{pw}' "
+                        f"NOSUPERUSER NOBYPASSRLS {base_attrs}"
+                    )
                 )
-            )
+            except ProgrammingError as exc:
+                if "permission denied to alter role" not in str(exc):
+                    raise
+                print(
+                    "[apply_rls] non-superuser admin (managed Postgres): setting role attributes "
+                    "without NOSUPERUSER/NOBYPASSRLS, then verifying."
+                )
+                await conn.execute(
+                    text(f"ALTER ROLE {APP_ROLE} WITH LOGIN PASSWORD '{pw}' {base_attrs}")
+                )
+
+            # Verify, do not assume. A role that is superuser or has BYPASSRLS ignores every policy
+            # this script creates, and nothing downstream would report it — cross-tenant reads would
+            # simply succeed. Fail the deploy instead.
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = :r"
+                    ),
+                    {"r": APP_ROLE},
+                )
+            ).first()
+            if row is None:
+                raise RuntimeError(f"[apply_rls] role {APP_ROLE} missing after ALTER ROLE")
+            if row.rolsuper or row.rolbypassrls:
+                raise RuntimeError(
+                    f"[apply_rls] REFUSING TO CONTINUE: {APP_ROLE} has "
+                    f"rolsuper={row.rolsuper} rolbypassrls={row.rolbypassrls}. Row-level security "
+                    f"would not be enforced for this role, so tenant isolation would be absent "
+                    f"while appearing configured."
+                )
 
             # 2. Privileges: connect + DML on existing and future objects (DDL stays with owner).
             await conn.execute(text(f'GRANT CONNECT ON DATABASE "{dbname}" TO {APP_ROLE}'))
