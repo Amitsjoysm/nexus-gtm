@@ -20,10 +20,66 @@ DOMAIN="${2:-}"
 ACTION="${3:-apply}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
-ENV_FILE="$REPO_ROOT/deploy/.env"
 PROJECT="${PROJECT:-nexus}"
 REGION="${AWS_REGION:-us-east-1}"
 LOCATION="${AZURE_LOCATION:-eastus2}"
+ENV_NAME="${ENV_NAME:-prod}"
+
+# EACH ENVIRONMENT GETS ITS OWN SECRETS, and this is not a preference.
+#
+# This was a single hardcoded `deploy/.env`, so a staging deploy inherited PRODUCTION's secrets
+# wholesale. The JWT signing key is the obvious objection — a token minted by staging verifies in
+# production — but the expensive one is the API keys:
+#
+#   * Staging test runs burn production's Groq/Exa quota, and a rate limit hit in staging is a
+#     rate limit hit for real customers.
+#   * A live Stripe key in that file means a staging test can CHARGE A REAL CARD. Money fails
+#     silently; nothing in the product would report it.
+#   * The database passwords are shared across two servers, so a leak from the lower-trust
+#     environment is a leak of production's credentials.
+#
+# Resolution order, most specific first:
+#   1. $ENV_FILE, if explicitly set          — full manual control
+#   2. deploy/.env.<env>, if it exists       — the safety net: it cannot be forgotten
+#   3. deploy/.env                           — unchanged behaviour for single-environment setups
+#
+# Step 2 is deliberately automatic rather than opt-in. An opt-in flag is one a tired operator
+# forgets exactly once, and the failure is invisible: staging comes up perfectly, having quietly
+# armed itself with production's credentials.
+if [ -n "${ENV_FILE:-}" ]; then
+  :
+elif [ -f "$REPO_ROOT/deploy/.env.$ENV_NAME" ]; then
+  ENV_FILE="$REPO_ROOT/deploy/.env.$ENV_NAME"
+  echo ">> using per-environment secrets: deploy/.env.$ENV_NAME"
+else
+  ENV_FILE="$REPO_ROOT/deploy/.env"
+  # Warn, do not fail: a single-environment deployment legitimately has only deploy/.env, and
+  # refusing it would break every existing user of this script for a risk they do not have.
+  if [ "$ENV_NAME" != "prod" ]; then
+    echo ">> WARNING: no deploy/.env.$ENV_NAME — falling back to deploy/.env."
+    echo ">>          '$ENV_NAME' will run with PRODUCTION's secrets: same JWT signing key,"
+    echo ">>          same database passwords, and the SAME API KEYS (including any payment"
+    echo ">>          provider key). Create deploy/.env.$ENV_NAME before deploying anything"
+    echo ">>          that sends email, calls a paid API, or takes money."
+  fi
+fi
+
+# THE IMAGE REPOSITORY IS NOT THE PROJECT NAME, and conflating them cost a production revert.
+#
+# `PROJECT` names Azure RESOURCES (nexus-prod-rg, nexus-prod-app, the ACR). The image repository
+# inside that registry is a separate identifier, and both Azure Pipelines files have always
+# called it `nexus-gtm` (azure-pipelines-ci.yml IMAGE_REPO). This script used $PROJECT for both,
+# so it pushed `nexus:<tag>` while CI pushed `nexus-gtm:<sha>` — two repositories in one registry
+# holding the same application.
+#
+# That is not merely untidy. CD updates the running app out of band with `az containerapp update`,
+# so Terraform's recorded `image` stays at whatever THIS script last bootstrapped. The next
+# `terraform apply` — a routine scaling change, an alert-email edit — then reverts production to
+# a months-old bootstrap image. Silently, and reported as a successful apply.
+#
+# Renaming PROJECT instead would rename every Azure resource, which is a rebuild. So the image
+# repo becomes its own variable, defaulting to what the pipelines already expect.
+IMAGE_REPO="${IMAGE_REPO:-nexus-gtm}"
 
 { [ -z "$CLOUD" ] || [ -z "$DOMAIN" ]; } && { echo "usage: deploy.sh <aws|azure> <domain> [destroy]"; exit 1; }
 [ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE (fill secrets; gitignored)"; exit 1; }
@@ -104,7 +160,7 @@ fi
 
 # ============================ Azure (Container Apps) ============================
 cd "$HERE/azure"
-TF=(-var "project=$PROJECT" -var "location=$LOCATION" -var "domain=$DOMAIN")
+TF=(-var "project=$PROJECT" -var "env=$ENV_NAME" -var "location=$LOCATION" -var "domain=$DOMAIN")
 
 # Alert routing. azurerm_monitor_action_group creates its email receiver only when this is
 # non-empty, so an unset value produces an action group with ZERO RECEIVERS and a metric alert
@@ -160,12 +216,58 @@ if [ -n "$_sa" ] && [ -n "$_sc" ] && [ -n "$_srg" ]; then
   fi
 fi
 
-terraform init -input=false
+# The backend key is per-environment (versions.tf is a PARTIAL backend — see the comment there).
+# `-reconfigure` is required because the key changes between a staging and a production run in the
+# same checkout: without it Terraform reuses the key cached in .terraform/ from the previous run
+# and would apply staging's config against production's state.
+STATE_KEY="${STATE_KEY:-$PROJECT/$ENV_NAME.tfstate}"
+echo ">> terraform init (state key: $STATE_KEY)"
+terraform init -input=false -reconfigure -backend-config="key=$STATE_KEY"
 if [ "$ACTION" = "destroy" ]; then terraform destroy "${TF[@]}" -auto-approve; exit 0; fi
 
-echo ">> creating ACR..."
-terraform apply "${TF[@]}" -target=azurerm_container_registry.main -auto-approve -input=false
-REG="$(terraform output -raw acr_login_server)" # e.g. nexusprodacr.azurecr.io
+# ---- The registry: create it, or consume the one production already owns ----------------------
+# Staging must push to PRODUCTION'S registry, because azure-pipelines-cd.yml promotes a release by
+# deploying the same image digest to both. See the comment on azurerm_container_registry.main.
+#
+#   ACR_SHARED_NAME= (unset)  -> this environment creates and owns a registry  (production)
+#   ACR_SHARED_NAME=<name>    -> look up and push to that one                  (staging)
+if [ -n "${ACR_SHARED_NAME:-}" ]; then
+  [ -n "${ACR_SHARED_RG:-}" ] || { echo "ACR_SHARED_NAME is set but ACR_SHARED_RG is not. Both are required."; exit 1; }
+  TF+=(-var "acr_shared_name=$ACR_SHARED_NAME" -var "acr_shared_resource_group=$ACR_SHARED_RG")
+  # Derived, not read from `terraform output`: on a first staging deploy nothing has been applied
+  # yet, so the output does not exist. The login server for an ACR is always <name>.azurecr.io.
+  REG="${ACR_SHARED_NAME}.azurecr.io"
+  echo ">> using shared ACR: $REG (resource group $ACR_SHARED_RG)"
+else
+  echo ">> creating ACR..."
+  # `[0]` because the resource is now count-gated. Targeting the bare address fails with
+  # "Resource not found in configuration" — which reads like the resource was deleted.
+  terraform apply "${TF[@]}" -target='azurerm_container_registry.main[0]' -auto-approve -input=false
+
+  # A -TARGETED APPLY DOES NOT RELIABLY WRITE OUTPUTS, and this one does not.
+  #
+  # `output.acr_login_server` reads `local.acr`, which is a conditional over BOTH
+  # `azurerm_container_registry.main[0]` and the shared-registry DATA SOURCE. Under `-target`
+  # Terraform prunes the graph to the targeted node and its dependencies; the data source is
+  # outside that set, so the local is never evaluated and the output never reaches state.
+  #
+  # `terraform output -raw` then prints an EMPTY STRING and exits non-zero on stderr only, so
+  # the old unguarded assignment produced `az acr build --registry ""` — which fails with
+  # "Registry names may contain only alpha numeric characters and must be between 5 and 50
+  # characters", a complaint about a name nobody typed, pointing at the registry rather than at
+  # the empty variable. Measured on a real first deploy 2026-08-28.
+  #
+  # Asking Azure is authoritative and independent of Terraform's targeting semantics: at this
+  # point the registry demonstrably exists, because the apply above just created it.
+  REG="$(terraform output -raw acr_login_server 2>/dev/null || true)"
+  if [ -z "$REG" ]; then
+    echo ">> output not populated by the targeted apply; asking Azure directly..."
+    REG="$(az acr list --resource-group "${PROJECT}-${ENV_NAME}-rg" --query '[0].loginServer' -o tsv 2>/dev/null || true)"
+  fi
+  # Never let an empty value reach `az acr build`. The failure is confusing enough with a name;
+  # without one it sends the operator to check the registry, which is not the problem.
+  [ -n "$REG" ] || { echo "ERROR: could not resolve the ACR login server in ${PROJECT}-${ENV_NAME}-rg"; exit 1; }
+fi
 
 # Build ON ACR, not on this machine. `az acr build` uploads the build context and runs the
 # Dockerfile in ACR Tasks, which matters for three reasons:
@@ -179,14 +281,14 @@ REG="$(terraform output -raw acr_login_server)" # e.g. nexusprodacr.azurecr.io
 #     — on a slow link that is the difference between a 5-minute and a 25-minute deploy.
 #
 # The AWS path above still uses docker build+push; ECR has no server-side build equivalent.
-echo ">> build on ACR: $REG/$PROJECT:$TAG"
+echo ">> build on ACR: $REG/$IMAGE_REPO:$TAG"
 az acr build \
   --registry "${REG%%.*}" \
-  --image "$PROJECT:$TAG" \
-  --image "$PROJECT:latest" \
+  --image "$IMAGE_REPO:$TAG" \
+  --image "$IMAGE_REPO:latest" \
   --file "$REPO_ROOT/deploy/Dockerfile" \
   "$REPO_ROOT"
 echo ">> full apply..."
-terraform apply "${TF[@]}" -var "image=$REG/$PROJECT:$TAG" -auto-approve -input=false
+terraform apply "${TF[@]}" -var "image=$REG/$IMAGE_REPO:$TAG" -auto-approve -input=false
 echo; echo "Done. App (default ingress): $(terraform output -raw app_default_url)"
 echo ">> Custom domain: $(terraform output -raw custom_domain_next_step)"

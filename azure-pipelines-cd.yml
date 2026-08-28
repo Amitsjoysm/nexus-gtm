@@ -3,19 +3,24 @@
 # Triggered by a version tag (vX.Y.Z). Infrastructure is Terraform (deploy/cloud/azure) and is
 # applied separately; this pipeline only ships a new image to Container Apps that already exist.
 #
-# THREE RULES THAT ARE NOT STYLISTIC:
+# FOUR RULES THAT ARE NOT STYLISTIC:
 #
 #  1. DEPLOY THE TESTED ARTIFACT. This pipeline never builds. CI already built and Trivy-scanned
 #     `<repo>:<sha>` on ACR; a rebuild here would produce a different image (new base-image
 #     layers, new transitive wheels) than the one that passed the gates. So CD RESOLVES the tag
 #     to its commit SHA and REFUSES TO DEPLOY if that image is not in the registry.
 #
-#  2. APP BEFORE WORKER, ALWAYS. deploy/entrypoint.sh runs `alembic upgrade head` +
+#  2. STAGING BEFORE PRODUCTION, AND THE SAME SHA IN BOTH. The identical image digest is deployed
+#     to staging, validated, and only then promoted. Nothing is rebuilt in between — promotion is
+#     literally the same `az containerapp update --image` against a different resource group.
+#
+#  3. APP BEFORE WORKER, ALWAYS. deploy/entrypoint.sh runs `alembic upgrade head` +
 #     scripts/apply_rls.py on the APP ONLY (NEXUS_RUN_MIGRATIONS=1); the worker deliberately
 #     does neither, to avoid a migration race. Roll the worker first and it consumes jobs
-#     against a stale schema. The Terraform encodes this with depends_on; so does this file.
+#     against a stale schema. The Terraform encodes this with depends_on; so does the shared
+#     step template both environments use.
 #
-#  3. THE SMOKE TEST GATES THE RELEASE, and it hits /ready — not /health. Readiness gates on the
+#  4. THE SMOKE TEST GATES THE RELEASE, and it hits /ready — not /health. Readiness gates on the
 #     database being reachable, so a replica that is up but cannot serve is never called good.
 #
 # Rollback is a revision pin, captured BEFORE the update. See the Rollback stage.
@@ -32,12 +37,24 @@ pool:
 
 variables:
   # Pipeline variables (Pipelines > Edit > Variables), or an ADO variable group:
-  #   AZURE_SUBSCRIPTION  workload-identity-federation service connection name
-  #   ACR_NAME            e.g. nexusprodacr
-  #   RESOURCE_GROUP      nexus-prod-rg
-  #   APP_NAME            nexus-prod-app
-  #   WORKER_NAME         nexus-prod-worker
-  #   APP_URL             https://app.example.com
+  #
+  #   AZURE_SUBSCRIPTION          workload-identity-federation service connection name
+  #   ACR_NAME                    e.g. nexusgtmprodacr1a2b3c4d  (SHARED by both environments)
+  #
+  #   RESOURCE_GROUP              nexus-prod-rg
+  #   APP_NAME                    nexus-prod-app
+  #   WORKER_NAME                 nexus-prod-worker
+  #   APP_URL                     https://gtm.infojoy.com
+  #
+  #   STAGING_RESOURCE_GROUP      nexus-staging-rg
+  #   STAGING_APP_NAME            nexus-staging-app
+  #   STAGING_WORKER_NAME         nexus-staging-worker
+  #   STAGING_APP_URL             https://<staging ACA ingress FQDN>
+  #
+  # ONE REGISTRY, TWO ENVIRONMENTS, ON PURPOSE. Rule 2 above requires production to run the exact
+  # image staging validated. Two registries would mean copying the image between them, and a copy
+  # is a new artifact — at which point "the same image was tested" becomes an assumption instead
+  # of a fact the `Verify` stage can check.
   - name: IMAGE_REPO
     value: nexus-gtm
 
@@ -84,145 +101,115 @@ stages:
                 echo "Found $(IMAGE_REPO):${SHA} — this is the image CI tested."
 
   # ============================================================================
-  # Stage 2 — Deploy. `environment: production` is the manual approval gate;
-  # configure required approvers in ADO under Pipelines > Environments.
+  # Stage 2 — STAGING. No approval: staging is where the artifact earns the right
+  # to be offered to production, so a human gate here would only add latency to a
+  # decision nobody can make without the result.
   # ============================================================================
-  - stage: Deploy
-    displayName: Deploy to Container Apps
+  - stage: DeployStaging
+    displayName: Deploy to staging
     dependsOn: Verify
     condition: succeeded()
     variables:
       imageSha: $[ stageDependencies.Verify.verify.outputs['resolve.imageSha'] ]
     jobs:
-      - deployment: deploy
-        displayName: Roll out app, then worker
+      - deployment: deploy_staging
+        displayName: Roll out app, then worker (staging)
+        environment: staging # no required approvers — see the stage comment
+        timeoutInMinutes: 45
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: deploy/pipelines/deploy-containerapp.yml
+                  parameters:
+                    envName: staging
+                    azureSubscription: $(AZURE_SUBSCRIPTION)
+                    resourceGroup: $(STAGING_RESOURCE_GROUP)
+                    appName: $(STAGING_APP_NAME)
+                    workerName: $(STAGING_WORKER_NAME)
+                    appUrl: $(STAGING_APP_URL)
+                    acrName: $(ACR_NAME)
+                    imageRepo: $(IMAGE_REPO)
+                    imageSha: $(imageSha)
+
+  # ============================================================================
+  # Stage 3 — Validate staging. THE QUALITY GATE. Production is unreachable
+  # unless every assertion here passes; each corresponds to a failure this
+  # deployment has actually had (docs/deployment/10-ISSUE-LOG.md).
+  # ============================================================================
+  - stage: ValidateStaging
+    displayName: Staging validation gate
+    dependsOn: DeployStaging
+    condition: succeeded()
+    jobs:
+      - job: validate
+        displayName: Assert staging is genuinely usable
+        timeoutInMinutes: 20
+        steps:
+          - checkout: self
+          - template: deploy/pipelines/staging-validation.yml
+            parameters:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              resourceGroup: $(STAGING_RESOURCE_GROUP)
+              appName: $(STAGING_APP_NAME)
+              workerName: $(STAGING_WORKER_NAME)
+              appUrl: $(STAGING_APP_URL)
+
+  # ============================================================================
+  # Stage 4 — PRODUCTION. `environment: production` is the manual approval gate;
+  # configure required approvers in ADO under Pipelines > Environments.
+  #
+  # dependsOn ValidateStaging, NOT DeployStaging: deploying to staging is not the
+  # gate, PASSING there is. Depending on the deploy stage would let a broken
+  # artifact reach the approval prompt, where the reviewer has no evidence and
+  # the natural action is to approve.
+  # ============================================================================
+  - stage: DeployProduction
+    displayName: Deploy to production
+    dependsOn: [Verify, ValidateStaging]
+    condition: succeeded()
+    variables:
+      imageSha: $[ stageDependencies.Verify.verify.outputs['resolve.imageSha'] ]
+    jobs:
+      - deployment: deploy_production
+        displayName: Roll out app, then worker (production)
         environment: production # <-- add required approvers here
         timeoutInMinutes: 45
         strategy:
           runOnce:
             deploy:
               steps:
-                # Capture the currently-serving revision FIRST. After the update it is gone from
-                # `--query properties.latestRevisionName`, and a rollback with no recorded target
-                # is a guess. This is the whole rollback story in one step.
-                - task: AzureCLI@2
-                  displayName: Record current revision (rollback target)
-                  inputs:
+                - template: deploy/pipelines/deploy-containerapp.yml
+                  parameters:
+                    envName: production
                     azureSubscription: $(AZURE_SUBSCRIPTION)
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      set -euo pipefail
-                      PREV_IMAGE=$(az containerapp show \
-                        --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
-                        --query "properties.template.containers[0].image" -o tsv)
-                      PREV_REV=$(az containerapp show \
-                        --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
-                        --query "properties.latestReadyRevisionName" -o tsv)
-                      echo "Rollback target: revision=${PREV_REV} image=${PREV_IMAGE}"
-                      echo "##vso[task.setvariable variable=prevImage]${PREV_IMAGE}"
-                      echo "##vso[task.setvariable variable=prevRevision]${PREV_REV}"
-
-                # APP FIRST — it runs the migrations. See rule 2 in the header.
-                - task: AzureCLI@2
-                  displayName: Update app (runs migrations + RLS on boot)
-                  inputs:
-                    azureSubscription: $(AZURE_SUBSCRIPTION)
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      set -euo pipefail
-                      IMAGE="$(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(imageSha)"
-                      echo "Deploying ${IMAGE} to $(APP_NAME)"
-                      az containerapp update \
-                        --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
-                        --image "${IMAGE}" \
-                        --output none
-                      az containerapp revision list \
-                        --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
-                        --query "[?properties.active].{rev:name,healthy:properties.healthState,running:properties.runningState}" \
-                        -o table
-
-                # Wait for the new revision to be genuinely healthy before touching the worker.
-                # Without this the worker can start against a half-migrated schema.
-                - task: AzureCLI@2
-                  displayName: Wait for app revision to become healthy
-                  inputs:
-                    azureSubscription: $(AZURE_SUBSCRIPTION)
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      set -euo pipefail
-                      for i in $(seq 1 60); do
-                        STATE=$(az containerapp show \
-                          --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
-                          --query "properties.runningStatus" -o tsv 2>/dev/null || echo "Unknown")
-                        REV=$(az containerapp show \
-                          --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
-                          --query "properties.latestReadyRevisionName" -o tsv 2>/dev/null || echo "")
-                        echo "[$i/60] runningStatus=${STATE} latestReady=${REV}"
-                        if [ "${STATE}" = "Running" ] && [ -n "${REV}" ]; then
-                          echo "App is running and has a ready revision."
-                          exit 0
-                        fi
-                        sleep 10
-                      done
-                      echo "##[error]App did not reach a healthy revision within 10 minutes."
-                      az containerapp logs show --name "$(APP_NAME)" \
-                        --resource-group "$(RESOURCE_GROUP)" --tail 100 || true
-                      exit 1
-
-                # WORKER SECOND — same image, no migrations, single replica (the scheduler
-                # advisory lock in nexus/workers/scheduler.py makes >1 safe, but 1 is the
-                # provisioned shape until queue depth justifies more).
-                - task: AzureCLI@2
-                  displayName: Update worker
-                  inputs:
-                    azureSubscription: $(AZURE_SUBSCRIPTION)
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      set -euo pipefail
-                      IMAGE="$(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(imageSha)"
-                      az containerapp update \
-                        --name "$(WORKER_NAME)" --resource-group "$(RESOURCE_GROUP)" \
-                        --image "${IMAGE}" \
-                        --output none
-                      echo "Worker updated to ${IMAGE}"
-
-                # THE GATE. /ready, not /health — readiness includes database reachability.
-                - bash: |
-                    set -euo pipefail
-                    for p in /health /ready; do
-                      code=$(curl -s -o /dev/null -w '%{http_code}' \
-                        --max-time 10 --retry 6 --retry-delay 5 --retry-all-errors \
-                        "$(APP_URL)${p}")
-                      echo "GET ${p} -> ${code}"
-                      if [ "$code" != "200" ]; then
-                        echo "##[error]Smoke test failed on ${p} (HTTP ${code})"
-                        exit 1
-                      fi
-                    done
-                    echo "Smoke test passed — $(Build.SourceBranchName) is live and healthy."
-                  displayName: Post-deploy smoke test (gates the release)
+                    resourceGroup: $(RESOURCE_GROUP)
+                    appName: $(APP_NAME)
+                    workerName: $(WORKER_NAME)
+                    appUrl: $(APP_URL)
+                    acrName: $(ACR_NAME)
+                    imageRepo: $(IMAGE_REPO)
+                    imageSha: $(imageSha)
 
                 - bash: |
-                    echo "Deployed $(Build.SourceBranchName) ($(imageSha))"
-                    echo "Rollback target if needed: $(prevImage)"
+                    echo "Deployed $(Build.SourceBranchName) ($(imageSha)) to production."
+                    echo "This is the same image digest validated in staging."
                   displayName: Record deployment outcome
                   condition: always()
 
   # ============================================================================
-  # Stage 3 — Automatic rollback if Deploy failed.
+  # Stage 5 — Automatic rollback if the PRODUCTION deploy failed.
   #
   # Container Apps is in Single revision mode (see deploy/cloud/azure/container_apps.tf), so
   # rollback is a redeploy of the previous IMAGE rather than an instant traffic shift. That is
   # a real limitation and it is why this stage exists rather than a one-line traffic weight.
-  # See docs/deployment/19-CICD.md for the Multiple-revision upgrade path.
+  #
+  # Deliberately NOT wired to a staging failure: a broken staging deploy has harmed nothing, and
+  # rolling it back would destroy the evidence needed to diagnose why the artifact was bad.
   # ============================================================================
   - stage: Rollback
-    displayName: Rollback on failure
-    dependsOn: Deploy
+    displayName: Rollback production on failure
+    dependsOn: DeployProduction
     condition: failed()
     jobs:
       - job: rollback

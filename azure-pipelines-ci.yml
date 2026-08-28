@@ -253,7 +253,7 @@ stages:
             displayName: Publish coverage
 
           # The budget line. Printed every run so "are we going to blow 1,800 minutes?" is a
-          # number you read, not a number you guess. See docs/deployment/19-CICD.md.
+          # number you read, not a number you guess. See docs/deployment/14-AZURE-DEPLOY-GUIDE.md Part 12.
           - bash: |
               echo "=============================================="
               echo " pytest wall-clock: $(pytestSeconds)s"

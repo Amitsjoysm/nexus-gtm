@@ -1,0 +1,145 @@
+# Reusable deploy steps for ONE Container Apps environment (staging or production).
+#
+# WHY A TEMPLATE RATHER THAN TWO COPIES.
+#
+# Staging's only job is to be a faithful rehearsal of production. Two hand-maintained copies of
+# these steps diverge — and the first thing to diverge is never the cosmetic part. It is the
+# ordering rule below: app before worker, because deploy/entrypoint.sh runs `alembic upgrade head`
+# and scripts/apply_rls.py on the APP ONLY (NEXUS_RUN_MIGRATIONS=1). A staging copy that rolls the
+# worker first would pass, prove nothing about the production sequence, and leave the one race
+# this pipeline exists to prevent completely untested.
+#
+# So both stages call this file. Divergence becomes a parameter you can see, not a drift you cannot.
+
+parameters:
+  - name: envName # display only — appears in step names so the log says which estate was touched
+    type: string
+  - name: azureSubscription # ADO service connection (workload identity federation)
+    type: string
+  - name: resourceGroup
+    type: string
+  - name: appName
+    type: string
+  - name: workerName
+    type: string
+  - name: appUrl # https://... — the smoke test target
+    type: string
+  - name: acrName
+    type: string
+  - name: imageRepo
+    type: string
+  - name: imageSha # the CI-built, Trivy-scanned commit SHA. NEVER "latest".
+    type: string
+
+steps:
+  # ---------------------------------------------------------------------------------------------
+  # Capture the rollback target BEFORE changing anything. After the update it is gone from
+  # `properties.latestRevisionName`, and a rollback with no recorded target is a guess.
+  # ---------------------------------------------------------------------------------------------
+  - task: AzureCLI@2
+    displayName: "[${{ parameters.envName }}] Record current revision (rollback target)"
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        PREV_IMAGE=$(az containerapp show \
+          --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
+          --query "properties.template.containers[0].image" -o tsv)
+        PREV_REV=$(az containerapp show \
+          --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
+          --query "properties.latestReadyRevisionName" -o tsv)
+        echo "Rollback target: revision=${PREV_REV} image=${PREV_IMAGE}"
+        echo "##vso[task.setvariable variable=prevImage]${PREV_IMAGE}"
+        echo "##vso[task.setvariable variable=prevRevision]${PREV_REV}"
+
+  # ---------------------------------------------------------------------------------------------
+  # APP FIRST — it runs the migrations. See the header.
+  # ---------------------------------------------------------------------------------------------
+  - task: AzureCLI@2
+    displayName: "[${{ parameters.envName }}] Update app (runs migrations + RLS on boot)"
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        IMAGE="${{ parameters.acrName }}.azurecr.io/${{ parameters.imageRepo }}:${{ parameters.imageSha }}"
+        echo "Deploying ${IMAGE} to ${{ parameters.appName }}"
+        az containerapp update \
+          --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
+          --image "${IMAGE}" \
+          --output none
+        az containerapp revision list \
+          --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
+          --query "[?properties.active].{rev:name,healthy:properties.healthState,running:properties.runningState}" \
+          -o table
+
+  # ---------------------------------------------------------------------------------------------
+  # Wait for genuine health before touching the worker, or the worker starts against a
+  # half-migrated schema.
+  # ---------------------------------------------------------------------------------------------
+  - task: AzureCLI@2
+    displayName: "[${{ parameters.envName }}] Wait for app revision to become healthy"
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        for i in $(seq 1 60); do
+          STATE=$(az containerapp show \
+            --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
+            --query "properties.runningStatus" -o tsv 2>/dev/null || echo "Unknown")
+          REV=$(az containerapp show \
+            --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
+            --query "properties.latestReadyRevisionName" -o tsv 2>/dev/null || echo "")
+          echo "[$i/60] runningStatus=${STATE} latestReady=${REV}"
+          if [ "${STATE}" = "Running" ] && [ -n "${REV}" ]; then
+            echo "App is running and has a ready revision."
+            exit 0
+          fi
+          sleep 10
+        done
+        echo "##[error]App did not reach a healthy revision within 10 minutes."
+        az containerapp logs show --name "${{ parameters.appName }}" \
+          --resource-group "${{ parameters.resourceGroup }}" --tail 100 || true
+        exit 1
+
+  # ---------------------------------------------------------------------------------------------
+  # WORKER SECOND — same image, no migrations.
+  # ---------------------------------------------------------------------------------------------
+  - task: AzureCLI@2
+    displayName: "[${{ parameters.envName }}] Update worker"
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        IMAGE="${{ parameters.acrName }}.azurecr.io/${{ parameters.imageRepo }}:${{ parameters.imageSha }}"
+        az containerapp update \
+          --name "${{ parameters.workerName }}" --resource-group "${{ parameters.resourceGroup }}" \
+          --image "${IMAGE}" \
+          --output none
+        echo "Worker updated to ${IMAGE}"
+
+  # ---------------------------------------------------------------------------------------------
+  # THE GATE. /ready, not /health — readiness includes database reachability, so a replica that is
+  # up but cannot serve is never called good.
+  # ---------------------------------------------------------------------------------------------
+  - bash: |
+      set -euo pipefail
+      for p in /health /ready; do
+        code=$(curl -s -o /dev/null -w '%{http_code}' \
+          --max-time 10 --retry 6 --retry-delay 5 --retry-all-errors \
+          "${{ parameters.appUrl }}${p}")
+        echo "GET ${p} -> ${code}"
+        if [ "$code" != "200" ]; then
+          echo "##[error]Smoke test failed on ${p} (HTTP ${code})"
+          exit 1
+        fi
+      done
+      echo "Smoke test passed — ${{ parameters.envName }} is live and healthy."
+    displayName: "[${{ parameters.envName }}] Post-deploy smoke test (gates the release)"

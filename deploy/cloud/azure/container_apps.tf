@@ -107,14 +107,14 @@ resource "azurerm_container_app" "app" {
   revision_mode                = "Single"
 
   registry {
-    server               = azurerm_container_registry.main.login_server
-    username             = azurerm_container_registry.main.admin_username
+    server               = local.acr.login_server
+    username             = local.acr.admin_username
     password_secret_name = "acr-password"
   }
 
   secret {
     name  = "acr-password"
-    value = azurerm_container_registry.main.admin_password
+    value = local.acr.admin_password
   }
   dynamic "secret" {
     for_each = local.app_secrets
@@ -197,8 +197,25 @@ resource "azurerm_container_app" "app" {
   # Azure defaults workload_profile_name to "Consumption" server-side; config does not set it, so
   # every plan shows `"Consumption" -> null` forever. Same class of phantom diff as
   # infrastructure_resource_group_name on the environment (see platform.tf).
+  #
+  # `image` IS IGNORED BECAUSE CD OWNS IT, AND OMITTING IT REVERTED PRODUCTION.
+  #
+  # Two systems write this field. Terraform sets it once at bootstrap from var.image; thereafter
+  # azure-pipelines-cd.yml advances it on every release with `az containerapp update --image`,
+  # deliberately — that pipeline exists to promote the exact image CI built and Trivy-scanned.
+  #
+  # Without this line Terraform still believes the bootstrap tag is correct, so the NEXT apply for
+  # any unrelated reason — raising app_max, changing alarm_email, adding a subnet — quietly rolls
+  # the application back to the image it was first deployed with. It is reported as a successful
+  # apply, the container restarts normally, and the only symptom is that the product loses however
+  # many releases have happened since. `terraform plan` does show the image line, but it is one
+  # row in a diff an operator is reading for the change they actually intended.
+  #
+  # Ignoring it makes the ownership split explicit: Terraform owns the infrastructure, CD owns
+  # what runs on it. To move the image deliberately from Terraform, use `-replace` or update the
+  # app with `az containerapp update` — the same command CD uses.
   lifecycle {
-    ignore_changes = [workload_profile_name, tags]
+    ignore_changes = [workload_profile_name, tags, template[0].container[0].image]
   }
 }
 
@@ -209,14 +226,14 @@ resource "azurerm_container_app" "worker" {
   revision_mode                = "Single"
 
   registry {
-    server               = azurerm_container_registry.main.login_server
-    username             = azurerm_container_registry.main.admin_username
+    server               = local.acr.login_server
+    username             = local.acr.admin_username
     password_secret_name = "acr-password"
   }
 
   secret {
     name  = "acr-password"
-    value = azurerm_container_registry.main.admin_password
+    value = local.acr.admin_password
   }
   dynamic "secret" {
     for_each = local.worker_secrets
@@ -259,7 +276,12 @@ resource "azurerm_container_app" "worker" {
   # Azure defaults workload_profile_name to "Consumption" server-side; config does not set it, so
   # every plan shows `"Consumption" -> null` forever. Same class of phantom diff as
   # infrastructure_resource_group_name on the environment (see platform.tf).
+  #
+  # `image` is ignored for the same reason as on the app above — CD advances it, Terraform must
+  # not roll it back. It matters MORE here, not less: the worker runs no migrations, so a silently
+  # reverted worker consumes today's queue against yesterday's code with nothing failing loudly.
+  # The app at least re-runs `alembic upgrade head` on boot and would be visibly inconsistent.
   lifecycle {
-    ignore_changes = [workload_profile_name, tags]
+    ignore_changes = [workload_profile_name, tags, template[0].container[0].image]
   }
 }

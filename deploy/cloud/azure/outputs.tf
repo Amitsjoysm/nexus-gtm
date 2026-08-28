@@ -18,7 +18,7 @@ output "app_default_url" {
 }
 
 output "acr_login_server" {
-  value = azurerm_container_registry.main.login_server
+  value = local.acr.login_server
 }
 
 output "postgres_fqdn" {

@@ -32,8 +32,27 @@ locals {
   redis_name = "${local.name}-redis-${local.uniq}"
 }
 
-# Container registry (admin creds for a simple ACA pull; managed identity is the hardening path).
+# ============================ Container registry ============================
+#
+# ONE REGISTRY IS SHARED BY STAGING AND PRODUCTION, and that is a correctness requirement rather
+# than a saving.
+#
+# azure-pipelines-cd.yml promotes a release by deploying THE SAME IMAGE DIGEST to staging, then
+# to production, with no rebuild in between — that is what makes "this artifact was tested" a
+# fact the Verify stage can check rather than an assumption. Give each environment its own
+# registry and promotion becomes a COPY between registries, which produces a new artifact and
+# quietly removes the guarantee. The pipeline would still be green; it would just no longer be
+# testing what it ships.
+#
+# So: production creates the registry, staging consumes it by name.
+#
+#   var.acr_shared_name == ""   -> create one here (production, and any standalone deploy)
+#   var.acr_shared_name != ""   -> look up the existing one (staging points at production's)
+#
+# Defaulting to "create" keeps a single-environment deployment working exactly as before this
+# existed — the same additive posture the rest of this stack takes.
 resource "azurerm_container_registry" "main" {
+  count               = var.acr_shared_name == "" ? 1 : 0
   name                = local.acr_name
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
@@ -43,6 +62,35 @@ resource "azurerm_container_registry" "main" {
   # re-push and no downtime.
   sku           = "Basic"
   admin_enabled = true
+}
+
+# The shared registry, when this environment consumes one instead of owning it (staging).
+# `data` rather than a second resource: staging must never be able to create, modify or —
+# critically — DESTROY the registry that holds production's images. A `terraform destroy` of
+# staging would otherwise take production's entire image history with it, including every tag
+# the Rollback stage relies on to recover.
+data "azurerm_container_registry" "shared" {
+  count               = var.acr_shared_name == "" ? 0 : 1
+  name                = var.acr_shared_name
+  resource_group_name = var.acr_shared_resource_group
+
+  # Naming the missing variable beats Azure's own error, which reports "registry not found" and
+  # names the REGISTRY — sending an operator to check a registry that exists perfectly well while
+  # the actual fault is an empty resource group in their tfvars.
+  lifecycle {
+    precondition {
+      condition     = trimspace(var.acr_shared_resource_group) != ""
+      error_message = "acr_shared_name is set but acr_shared_resource_group is empty. Both are required to consume an existing registry. Find them with: az acr list -o table"
+    }
+  }
+}
+
+# One place the rest of the stack reads the registry from, whichever branch produced it. Without
+# this indirection every consumer would need its own `var.acr_shared_name == ""` conditional, and
+# the first one written wrongly would be an authentication failure at container pull time — which
+# surfaces as a container that will not start, not as a registry error.
+locals {
+  acr = var.acr_shared_name == "" ? azurerm_container_registry.main[0] : data.azurerm_container_registry.shared[0]
 }
 
 # Container Apps environment (VNet-integrated so it can reach the private DB + Redis).

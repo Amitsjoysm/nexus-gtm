@@ -3,14 +3,14 @@
 # ============================ STAGE 0 — 10-15 users ============================
 # The smallest production-correct shape. Est. ~$75-105/month (ESTIMATE, not verified against
 # live Azure pricing). Every value here scales up in place. See:
-#   docs/deployment/04-COST-MODEL.md      what each line costs
-#   docs/deployment/23-SCALING-ROADMAP.md when to change it and what to change it to
+#   docs/deployment/14-AZURE-DEPLOY-GUIDE.md  what each line costs (Part 0)
+#   docs/deployment/06-SCALING.md            when to change it and what to change it to
 
 location    = "eastus2" # NOT eastus — PG Flexible Server provisioning is restricted there; see variables.tf
 project     = "nexus"
-env         = "prod"
-domain      = "app.example.com"
-alarm_email = "ops@example.com"
+env         = "prod" # also selects the state key (nexus/prod.tfstate) and enables the deletion locks
+domain      = "gtm.infojoy.com"
+alarm_email = "ops@infojoy.com"
 
 # ---- Data tier ----
 # B1ms: ~50 max connections. This is the binding constraint on app_min and on the pool sizes in
@@ -19,6 +19,23 @@ alarm_email = "ops@example.com"
 pg_sku        = "B_Standard_B1ms"
 pg_storage_mb = 32768
 pg_ha_enabled = false # Stage 0: backups + PITR cover data loss; HA buys faster RECOVERY.
+
+# 14 days of PITR. Changeable in place at any time, unlike the geo setting below.
+pg_backup_retention_days = 14
+
+# CREATE-TIME ONLY. Turning this on later requires building a new server and migrating the data,
+# so it is on from the start. Protects against losing the entire primary region and enables
+# geo-restore.
+#
+# VERIFIED 2026-08-28 on B_Standard_B1ms in eastus2: geo-redundant backup works on the Burstable
+# tier. It is NOT tier-gated, unlike zone-redundant HA (`pg_ha_enabled`), which Burstable really
+# does refuse — the two get confused because they are both "redundancy" settings on the same
+# server. Only HA is restricted.
+#
+# If a create genuinely is rejected for this in some other region, set false and record the
+# reduced DR posture — do NOT change the region instead, because everything else here is
+# regional too and you would be rebuilding the whole stack for one backup setting.
+pg_geo_redundant_backup = true
 
 # Redis: no variables. Azure Cache for Redis is RETIRED and refuses to create; Valkey runs as
 # an internal-only Container App instead (~$10/mo vs $40-300 for Azure Managed Redis).

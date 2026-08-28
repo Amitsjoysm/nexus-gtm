@@ -32,6 +32,13 @@ rebuild, and [10-ISSUE-LOG.md](10-ISSUE-LOG.md) or
 | [10-ISSUE-LOG.md](10-ISSUE-LOG.md) | **Every issue hit and how it was resolved** — read when anything breaks |
 | [11-DESTROY-REBUILD.md](11-DESTROY-REBUILD.md) | **Exact copy-paste commands** to tear down and rebuild to fully live |
 | [12-RESOURCE-INVENTORY.md](12-RESOURCE-INVENTORY.md) | **Every resource and file that keeps the site alive** — purpose, cost, what breaks without it |
+| [13-DATABASE-ACCESS.md](13-DATABASE-ACCESS.md) | Reaching the database — why `psql` from your laptop cannot work, and what to use instead |
+| [14-AZURE-DEPLOY-GUIDE.md](14-AZURE-DEPLOY-GUIDE.md) | **Start here for a NEW deployment** — empty subscription to `gtm.infojoy.com`, staging + production + CI/CD, every command with its verification |
+
+> **01 vs 14.** `01-LAUNCH.md` documents the original single-environment production build.
+> `14-AZURE-DEPLOY-GUIDE.md` supersedes it for anything new: it adds the separate staging estate,
+> the shared registry that makes artifact promotion honest, the deletion locks, and the Azure
+> Pipelines staging gate. Where the two disagree, 14 is current.
 
 ## The deployment in one picture
 

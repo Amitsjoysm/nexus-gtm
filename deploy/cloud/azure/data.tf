@@ -15,8 +15,20 @@ resource "azurerm_postgresql_flexible_server" "main" {
   administrator_password        = local.pg_password
   sku_name                      = var.pg_sku
   storage_mb                    = var.pg_storage_mb
-  backup_retention_days         = 14
-  geo_redundant_backup_enabled  = false
+  backup_retention_days = var.pg_backup_retention_days
+
+  # DECIDE THIS NOW OR REBUILD THE SERVER LATER. `geo_redundant_backup_enabled` is settable ONLY
+  # AT CREATION on Flexible Server — Azure refuses to toggle it on a live server, so turning it on
+  # afterwards means provisioning a new server, dumping, restoring and re-pointing the app. It is
+  # the one setting in this file where the default costs a migration rather than an edit.
+  #
+  # What it buys: backups replicated to the Azure paired region, so the estate survives losing the
+  # whole primary region — and `geo-restore` becomes available. Without it, backups live only in
+  # the primary region and a regional failure takes the data with it.
+  # What it costs: roughly the price of the backup storage again. On a 32 GB server that is a
+  # rounding error against the compute, which is why prod defaults ON despite Stage-0 frugality.
+  geo_redundant_backup_enabled = var.pg_geo_redundant_backup
+
   public_network_access_enabled = false
 
   # zone deliberately UNSET. Pinning a zone narrows the SKU/region/zone combination Azure must

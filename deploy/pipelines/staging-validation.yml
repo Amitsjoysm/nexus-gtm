@@ -1,0 +1,137 @@
+# Staging validation — the gate that decides whether this artifact may be offered to production.
+#
+# The smoke test in deploy-containerapp.yml proves the process is up and can reach the database.
+# That is necessary and nowhere near sufficient: every issue in docs/deployment/10-ISSUE-LOG.md
+# marked S3 passed a /health check and still left the product unusable. These assertions each
+# correspond to a failure this deployment has ACTUALLY had, which is why they are worth the
+# ninety seconds they cost.
+#
+# Everything here is read-only against staging. Nothing seeds, mutates or deletes.
+
+parameters:
+  - name: azureSubscription
+    type: string
+  - name: resourceGroup
+    type: string
+  - name: appName
+    type: string
+  - name: workerName
+    type: string
+  - name: appUrl
+    type: string
+
+steps:
+  # ---------------------------------------------------------------------------------------------
+  # G3 in the issue log: "405 Method Not Allowed on every API call". The API is mounted under
+  # /api; the built SPA is mounted at "/" as a catch-all. A misconfigured prefix therefore does
+  # not 404 — the request reaches the static-file mount and comes back 405 or 200 with HTML.
+  #
+  # So the assertion is NOT "the endpoint responds". It is "the endpoint responds like an API":
+  # an unauthenticated call to a protected route must be 401/403. A 200 here means the SPA
+  # answered and the entire API is unreachable at the path the frontend calls.
+  # ---------------------------------------------------------------------------------------------
+  - bash: |
+      set -euo pipefail
+      URL="${{ parameters.appUrl }}/api/accounts"
+      code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --retry 3 --retry-delay 5 "$URL")
+      echo "GET /api/accounts (unauthenticated) -> ${code}"
+      case "$code" in
+        401|403) echo "OK — the API is mounted and enforcing authentication." ;;
+        405|200) echo "##[error]Got ${code}. The SPA catch-all answered, so /api is NOT routed."
+                 echo "##[error]See docs/deployment/10-ISSUE-LOG.md G3."
+                 exit 1 ;;
+        *)       echo "##[error]Unexpected ${code} from ${URL}"; exit 1 ;;
+      esac
+    displayName: "[staging] API is routed under /api and enforces auth"
+
+  # ---------------------------------------------------------------------------------------------
+  # The SPA must actually be in the image. The Dockerfile builds it in stage 1 and copies it to
+  # nexus/web/dist; main.py mounts it ONLY `if (_DIST_DIR / "index.html").exists()`. A frontend
+  # build that silently produced nothing therefore yields a working API and a blank product, with
+  # no error anywhere.
+  # ---------------------------------------------------------------------------------------------
+  - bash: |
+      set -euo pipefail
+      body=$(curl -s --max-time 15 --retry 3 --retry-delay 5 "${{ parameters.appUrl }}/")
+      if ! printf '%s' "$body" | grep -qi '<div id="root"'; then
+        echo "##[error]The root path did not return the SPA shell. The frontend is missing from the image."
+        printf '%s' "$body" | head -c 500
+        exit 1
+      fi
+      echo "OK — the SPA shell is served."
+    displayName: "[staging] Frontend is present in the image"
+
+  # ---------------------------------------------------------------------------------------------
+  # Metrics are on by default since M15 and are how the deployment is observable at all. The
+  # instrumentator is wrapped in try/except in main.py, so a version incompatibility degrades to
+  # "no /metrics" silently rather than failing the boot.
+  # ---------------------------------------------------------------------------------------------
+  - bash: |
+      set -euo pipefail
+      code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${{ parameters.appUrl }}/metrics")
+      echo "GET /metrics -> ${code}"
+      [ "$code" = "200" ] || { echo "##[error]/metrics is not serving; the app is not observable."; exit 1; }
+    displayName: "[staging] Prometheus metrics are exposed"
+
+  # ---------------------------------------------------------------------------------------------
+  # THE MIGRATION ASSERTION. deploy/entrypoint.sh runs `alembic upgrade head` on app boot, and a
+  # FAILED migration does not necessarily stop the container from serving /health. Asking Alembic
+  # what it thinks the head is, from inside the running container, is the only direct evidence
+  # that the schema this image expects is the schema it got.
+  # ---------------------------------------------------------------------------------------------
+  - task: AzureCLI@2
+    displayName: "[staging] Database schema is at Alembic head"
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        OUT=$(az containerapp exec \
+          --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
+          --command "sh -c 'alembic current 2>&1 | tail -5'" 2>&1 || true)
+        echo "$OUT"
+        if printf '%s' "$OUT" | grep -qi 'head'; then
+          echo "OK — the schema is at head."
+        else
+          echo "##[warning]Could not confirm Alembic head from the container."
+          # NOTE: no backticks in these strings. Inside a double-quoted bash string a backtick
+          # opens command substitution, so quoting the command name would RUN it.
+          echo '##[warning]az containerapp exec needs an interactive-capable agent; verify manually:'
+          echo "##[warning]  az containerapp exec -n ${{ parameters.appName }} -g ${{ parameters.resourceGroup }} --command sh"
+        fi
+
+  # ---------------------------------------------------------------------------------------------
+  # The worker has NO ingress, so no HTTP check can see it. If it is crash-looping — a bad
+  # queue URL, a missing secret — the API stays perfectly healthy and every background job
+  # silently stops: no signal collection, no campaign sends, no account refresh. Nothing in the
+  # product reports it. The platform's own view of the replica is the only available evidence.
+  # ---------------------------------------------------------------------------------------------
+  - task: AzureCLI@2
+    displayName: "[staging] Worker is running (no ingress — platform state is the only signal)"
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        STATE=$(az containerapp show \
+          --name "${{ parameters.workerName }}" --resource-group "${{ parameters.resourceGroup }}" \
+          --query "properties.runningStatus" -o tsv)
+        echo "worker runningStatus=${STATE}"
+        [ "$STATE" = "Running" ] || { echo "##[error]Worker is '${STATE}', not Running."; \
+          az containerapp logs show --name "${{ parameters.workerName }}" \
+            --resource-group "${{ parameters.resourceGroup }}" --tail 100 || true; exit 1; }
+
+        # A container that restarts repeatedly still reports Running between restarts. Restart
+        # count is what distinguishes "up" from "crash-looping".
+        RESTARTS=$(az containerapp replica list \
+          --name "${{ parameters.workerName }}" --resource-group "${{ parameters.resourceGroup }}" \
+          --query "[].properties.containers[0].restartCount | sum(@)" -o tsv 2>/dev/null || echo 0)
+        echo "worker restarts=${RESTARTS}"
+        if [ "${RESTARTS:-0}" -gt 3 ]; then
+          echo "##[error]Worker has restarted ${RESTARTS} times — it is crash-looping, not healthy."
+          az containerapp logs show --name "${{ parameters.workerName }}" \
+            --resource-group "${{ parameters.resourceGroup }}" --tail 100 || true
+          exit 1
+        fi

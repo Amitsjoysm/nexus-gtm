@@ -56,6 +56,35 @@ variable "name_suffix" {
   default = ""
 }
 
+# ---- Shared container registry (staging points at production's) --------------------------------
+# Empty (the default) means THIS environment creates and owns its registry — the behaviour every
+# single-environment deployment had before staging existed.
+#
+# Set both to consume an existing one instead. Staging must, because azure-pipelines-cd.yml
+# promotes a release by deploying the same image digest to staging and then to production; two
+# registries would turn that promotion into a copy, and a copy is a different artifact. See the
+# long comment on azurerm_container_registry.main in platform.tf.
+#
+# They are two variables rather than one resource id because the `azurerm_container_registry`
+# data source is looked up by name + resource group, and a newbie can read both values straight
+# off `az acr list -o table` without constructing an ARM id.
+variable "acr_shared_name" {
+  type        = string
+  default     = ""
+  description = "Existing ACR name to consume (e.g. nexusprodacr1a2b3c4d). Empty = create one here."
+}
+
+variable "acr_shared_resource_group" {
+  type        = string
+  default     = ""
+  description = "Resource group holding var.acr_shared_name."
+}
+
+# Setting one without the other is silently wrong, and it is caught by a `precondition` on the
+# data source in platform.tf rather than here. A `validation` block can only reference the
+# variable it is attached to, so cross-variable rules are not expressible at this level — writing
+# one that appears to work is worse than not having it.
+
 # PostgreSQL major version. A variable rather than a literal because version availability is
 # per-region AND per-subscription, and the failure mode is opaque: an unregistered provider or an
 # unsupported version both surface as `400 ... 'Version' should be in: []`, an EMPTY list that
@@ -76,7 +105,7 @@ variable "image" {
 # ============================== Sizing (Stage 0) ==============================
 # These defaults are deliberately the SMALLEST shape that is still production-correct for the
 # current workload (10-15 users). Every one of them scales up in place — none is an
-# architectural dead end. Triggers and target values: docs/deployment/23-SCALING-ROADMAP.md.
+# architectural dead end. Triggers and target values: docs/deployment/06-SCALING.md.
 
 variable "app_cpu" { default = 0.5 }
 variable "app_memory" { default = "1Gi" }
@@ -117,6 +146,38 @@ variable "pg_sku" {
 variable "pg_storage_mb" {
   type    = number
   default = 32768
+}
+
+# Backup retention. 14 days is well inside the 7-35 range Flexible Server allows and is settable
+# in place, unlike geo-redundancy below. Staging can safely run at 7 (the tfvars sets it) — its
+# data is disposable by definition and retention is billed per GB-day of backup held.
+variable "pg_backup_retention_days" {
+  type    = number
+  default = 14
+
+  validation {
+    condition     = var.pg_backup_retention_days >= 7 && var.pg_backup_retention_days <= 35
+    error_message = "Azure PostgreSQL Flexible Server accepts a backup retention between 7 and 35 days."
+  }
+}
+
+# CREATE-TIME ONLY — see the long comment at its use site in data.tf. Defaults TRUE because the
+# default here is not "the cheap option" but "the option that does not require rebuilding the
+# server to change your mind". Staging overrides it to false in terraform.tfvars.staging.
+#
+# MEASURED 2026-08-28: geo-redundant backup IS supported on the Burstable tier. A
+# B_Standard_B1ms server in eastus2 provisioned with `geoRedundantBackup: Enabled` from exactly
+# this configuration.
+#
+# Recording that because it was briefly changed to `false` on the belief that geo-redundancy
+# required General Purpose or Memory Optimized — a restriction that holds for zone-redundant HA
+# (`pg_ha_enabled`, which Burstable genuinely does not support) and was wrongly carried across to
+# backups. The two are different features and only one of them is tier-gated. Do not "fix" this
+# default back to false without provisioning a server and reading `backup.geoRedundantBackup`
+# off the result.
+variable "pg_geo_redundant_backup" {
+  type    = bool
+  default = true
 }
 # HA off at Stage 0: ZoneRedundant HA runs a full standby and roughly doubles the DB bill for an
 # availability guarantee this user count does not yet need. Backups + PITR still cover data loss;

@@ -1,0 +1,57 @@
+# STAGING — copy to terraform.tfvars.staging (gitignored) or pass with -var-file.
+#
+# Staging exists to answer ONE question: "would this artifact survive production?" Everything here
+# follows from that. It is shaped like production where the answer depends on the shape, and
+# cheaper everywhere else.
+#
+#   Deploy:  ENV_NAME=staging ALARM_EMAIL=ops@infojoy.com \
+#            ACR_SHARED_NAME=<production's ACR> ACR_SHARED_RG=nexus-prod-rg \
+#            deploy/cloud/deploy.sh azure staging-gtm.infojoy.com
+#
+# ACR_SHARED_* IS NOT OPTIONAL FOR STAGING. Without it staging builds its own registry, and the
+# release pipeline can no longer promote one verified image digest from staging to production —
+# it would be shipping a different artifact than the one it tested. Passed as environment
+# variables rather than set here because deploy.sh needs the value too (to know where to push).
+#
+# Est. ~$55-70/month. See docs/deployment/14-AZURE-DEPLOY-GUIDE.md for the full cost model.
+
+location = "eastus2" # MUST match prod — a region difference makes staging a test of the wrong thing
+project  = "nexus"
+env      = "staging" # drives every resource name AND the state key (nexus/staging.tfstate)
+
+domain      = "staging-gtm.infojoy.com"
+alarm_email = "ops@infojoy.com"
+
+# ---- Data tier ----
+# SAME SKU as production, deliberately. The B1ms ~50-connection ceiling is the binding constraint
+# on this whole architecture (see the CONNECTION BUDGET comment in variables.tf). Staging on a
+# larger SKU would pass exactly the rollout that exhausts production's connections — which is the
+# single most likely way this stack fails, and the one thing staging most needs to catch.
+pg_sku        = "B_Standard_B1ms"
+pg_storage_mb = 32768
+
+# HA off in both environments today, so this matches prod as well.
+pg_ha_enabled = false
+
+# CHEAPER THAN PROD, and safe to be. Staging holds seeded test data; losing it costs a re-seed,
+# not a customer. 7 is the Azure minimum.
+pg_backup_retention_days = 7
+
+# FALSE here, TRUE in prod. Geo-redundancy protects against losing a whole Azure region — a
+# staging environment does not need to survive that, it needs to be rebuildable. This is also the
+# one setting that cannot be changed later without rebuilding the server, so the asymmetry is
+# recorded rather than discovered.
+pg_geo_redundant_backup = false
+
+# ---- App sizing ----
+# Same min as prod. Staging must reproduce the rollout connection spike (old + new revision live
+# simultaneously), which is exactly what app_min controls.
+app_min = 1
+# Lower ceiling than prod's 3: staging takes no real traffic, so the extra headroom would only
+# ever be paid for, never used.
+app_max = 2
+
+# ---- Logs ----
+# 30 days in prod, 7 here. Log Analytics bills on ingestion far more than retention, but staging
+# generates its volume from test runs nobody reads a month later.
+log_retention_days = 7
