@@ -114,6 +114,10 @@ async def collect_invoice(
         }
 
     paid = str(raised.get("status", "")) == "paid"
+    # Mirrored onto the indexed column as well as into meta. The column is what a webhook looks
+    # up (meta is JSON and unindexable); meta stays because the reconciler reads it and because a
+    # row written by the previous release only has the meta copy.
+    inv.psp_invoice_id = raised.get("id", "") or None
     inv.meta = {
         **(inv.meta or {}),
         "psp": provider.name,
@@ -125,6 +129,7 @@ async def collect_invoice(
     }
     if paid:
         inv.status = "paid"
+        inv.psp_reference = raised.get("id", "") or None
         inv.meta = {**inv.meta, "psp_reference": raised.get("id", ""),
                     "collected_at": utcnow().isoformat()}
     else:

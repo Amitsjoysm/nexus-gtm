@@ -53,6 +53,34 @@ class ResolvedEntitlement:
     source: str = "catalog"         # plan_class | plan | catalog | unknown
 
 
+# Platform-wide per-minute ceilings for capabilities a person triggers ONE AT A TIME.
+#
+# `burst_limit` has been read by this engine since M2 and was set on no plan entitlement anywhere,
+# so the throttle never fired: a tenant looping an agent endpoint could drive unbounded COGS with
+# nothing but the monthly quota in the way.
+#
+# Deliberately narrow, because the wrong entry here is an outage rather than a saving:
+#
+#   * `search.web` genuinely runs hundreds of times a minute for one tenant during a crawl — the
+#     dork source alone issues several queries per account across a 100-account batch.
+#   * The bulk paths (`verify.email`, `enrich.account`, `enrich.contact`) record ONE event with
+#     `quantity=N`, not N events, and `_over_burst` counts events. A limit there would either do
+#     nothing or refuse a legitimate sweep, depending on batch size.
+#   * `ai.scoring` and `ai.tokens` are recorded alongside other work rather than requested.
+#
+# What is left is the set a human asks for and waits on. The numbers are set where no real
+# workflow reaches them: they exist to stop a runaway loop, not to shape usage — quotas do that.
+# A plan may still override per capability, in either direction.
+DEFAULT_BURST_LIMITS: dict[str, int] = {
+    "ai.email_draft": 120,
+    "ai.call_script": 120,
+    "ai.chat_turn": 120,
+    "ai.research_brief": 60,
+    "ai.account_qa": 120,
+    "ai.icp_from_website": 60,
+}
+
+
 async def _active_subscription(ts: TenantSession) -> BillingSubscription | None:
     rows = await ts.list(BillingSubscription, limit=5)
     live = [s for s in rows if s.status in _LIVE_STATUSES]
@@ -81,6 +109,10 @@ async def resolve_entitlement(
             unit=cap.unit,
             depends_on=tuple(cap.depends_on or ()),
             source="catalog",
+            # Platform default. A plan entitlement overrides it below when it names one; an
+            # `unlimited` plan class returns before this is ever consulted, because a throttle on
+            # a plan that exists to observe cost is still a gate.
+            burst_limit=DEFAULT_BURST_LIMITS.get(capability_id),
         )
 
         sub = await _active_subscription(ts)
@@ -102,6 +134,7 @@ async def resolve_entitlement(
         if plan is not None and plan.plan_class in _UNLIMITED_CLASSES:
             base.mode = "unlimited"
             base.quota = None
+            base.burst_limit = None    # a throttle is a gate; this class exists not to gate
             base.source = "plan_class"
             return base        # unlimited classes bypass module gates by definition
 
@@ -122,7 +155,9 @@ async def resolve_entitlement(
         base.hard_limit = ent.hard_limit
         base.overage_price_credits = ent.overage_price_credits
         base.cooldown_s = ent.cooldown_s
-        base.burst_limit = ent.burst_limit
+        # `or` rather than a straight assignment: a plan that simply does not mention a burst
+        # keeps the platform default, while one that names a number — higher or lower — wins.
+        base.burst_limit = ent.burst_limit if ent.burst_limit is not None else base.burst_limit
         base.reset_policy = ent.reset_policy
         base.source = "plan"
 

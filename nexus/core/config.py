@@ -189,6 +189,12 @@ class Settings(BaseSettings):
     # rubber stamp; a ceiling keeps the blast radius small while leaving the workflow usable.
     billing_support_credit_cap: float = 1000.0
     stripe_secret_key: str = ""
+    # Ask Stripe to compute sales tax / VAT at Checkout. OFF by default and deliberately so:
+    # Stripe REJECTS `automatic_tax` outright on an account without Stripe Tax configured, so a
+    # default of True would break checkout on every deployment that has not set it up. Turning it
+    # on also makes Checkout collect a billing address, because a rate cannot be computed without
+    # one.
+    stripe_automatic_tax: bool = False
     stripe_webhook_secret: str = ""
     # Anthropic (preferred when keyed) — native /v1/messages API.
     anthropic_api_key: str = ""

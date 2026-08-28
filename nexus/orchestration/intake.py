@@ -164,14 +164,103 @@ def _split_phrases(text: str) -> list[str]:
     return [p.strip(" .\t").strip() for p in parts if p.strip(" .\t").strip()]
 
 
+# Words a request opens with that are instructions to the orchestrator, not part of a job title.
+# Stripped from the FRONT only: "Head of Sales Development" must keep its "of".
+_IMPERATIVE_PREFIXES = (
+    "find me", "find", "show me", "show", "get me", "get", "list", "search for", "search",
+    "look for", "look up", "i want", "i need", "we want", "we need", "please", "give me",
+    "who are", "who is", "identify", "target", "pull",
+)
+# Connectives keep their lowercase inside a title. Title-casing them reads as machine output —
+# "VP Of Sales" is not how anyone writes the role, and it is what gets searched for.
+_TITLE_LOWERCASE = {"of", "the", "a", "an", "and", "or", "at", "in", "for", "to", "on"}
+# A job title is a noun phrase, not a sentence. Anything longer is the rest of the request that
+# happened to survive the split on "and" — measured: the whole trailing clause of a real query
+# was stored as one title and then used as a search term.
+_MAX_TITLE_WORDS = 6
+
+
+def _strip_imperative(p: str) -> str:
+    low = p.lower().strip()
+    for prefix in _IMPERATIVE_PREFIXES:
+        if low.startswith(prefix + " "):
+            return p.strip()[len(prefix):].strip()
+    return p.strip()
+
+
+# Words at which a role stops and the rest of the request begins. Used to TRIM an over-long
+# phrase back to its title rather than discard it: "CRO contacts at mid-market SaaS companies"
+# carries a real title, and dropping the whole phrase loses the second role the user asked for.
+# Deliberately excludes "of" and "and" — the first is inside real titles ("Head of Sales"), the
+# second is what `_split_phrases` already broke on.
+_TITLE_BOUNDARIES = (
+    "contacts", "contact", "people", "person", "persons", "leads", "prospects", "roles",
+    "at", "in", "that", "who", "from", "working", "based", "across", "within",
+)
+
+
+def _trim_to_title(p: str) -> str:
+    """Cut a phrase at the first word that starts describing something other than the role."""
+    words = p.split()
+    for i, w in enumerate(words):
+        if i > 0 and w.lower().strip(",.") in _TITLE_BOUNDARIES:
+            return " ".join(words[:i])
+    return p
+
+
+def _looks_like_a_title(p: str) -> bool:
+    """A phrase short enough to be a role, and not obviously a clause about companies."""
+    words = p.split()
+    if not words or len(words) > _MAX_TITLE_WORDS:
+        return False
+    low = p.lower()
+    # These name the ACCOUNT side of the request, so a phrase built around them is describing
+    # which companies to look at, not which person to look for.
+    return not any(
+        tok in low for tok in ("compan", "match our", "that match", "accounts", "organisations",
+                               "organizations")
+    )
+
+
 def _title_case_phrase(p: str) -> str:
     # Preserve well-known acronyms; otherwise title-case words.
     acronyms = {"vp": "VP", "cro": "CRO", "cmo": "CMO", "ceo": "CEO", "cto": "CTO",
                 "cfo": "CFO", "coo": "COO", "us": "US", "uk": "UK", "saas": "SaaS"}
     words = []
-    for w in p.split():
-        words.append(acronyms.get(w.lower(), w if w[:1].isupper() else w.capitalize()))
+    for i, w in enumerate(p.split()):
+        low = w.lower()
+        if low in acronyms:
+            words.append(acronyms[low])
+        elif i > 0 and low in _TITLE_LOWERCASE:
+            words.append(low)
+        else:
+            words.append(w if w[:1].isupper() else w.capitalize())
     return " ".join(words)
+
+
+def _extract_titles(text: str) -> list[str]:
+    """Job titles named anywhere in a message.
+
+    Each candidate is stripped of a leading imperative and length-bounded before it is accepted:
+    `_split_phrases` breaks on "and", which turns one request into two halves that BOTH carry a
+    title token — the first still carrying the verb, the second carrying the rest of the sentence.
+    Both were kept verbatim and both went on to drive contact search.
+    """
+    out: list[str] = []
+    for part in _split_phrases(text):
+        if not any(tok in part.lower() for tok in _TITLE_TOKENS):
+            continue
+        candidate = _strip_imperative(part)
+        if not _looks_like_a_title(candidate):
+            # Trim the trailing clause and try again before giving up: the phrase still names a
+            # role, it just names the target companies after it.
+            candidate = _trim_to_title(candidate)
+            if not candidate or not _looks_like_a_title(candidate):
+                continue
+        if not any(tok in candidate.lower() for tok in _TITLE_TOKENS):
+            continue        # the trim removed the only reason this phrase qualified
+        out.append(_title_case_phrase(candidate))
+    return list(dict.fromkeys(out))
 
 
 def extract_slots(text: str, icp_state: dict, pending_slot: str | None) -> dict:
@@ -210,10 +299,9 @@ def extract_slots(text: str, icp_state: dict, pending_slot: str | None) -> dict:
         year = ym.group(1) if ym else None
         delta["intent_signals"] = [f"{s} {year}" if year else s for s in signals]
 
-    titles = [_title_case_phrase(p) for p in _split_phrases(text)
-              if any(tok in p.lower() for tok in _TITLE_TOKENS)]
+    titles = _extract_titles(text)
     if titles:
-        delta["titles"] = list(dict.fromkeys(titles))
+        delta["titles"] = titles
 
     # A reference URL / domain the user pastes ("here's our site: acme.com"). Stored as a scalar
     # so the discovery agent can seed research from it. Normalized to an https:// URL.
@@ -229,6 +317,13 @@ def extract_slots(text: str, icp_state: dict, pending_slot: str | None) -> dict:
         cl = cand.lower()
         if not cand or cl in _GEO_STOPWORDS or cl in _INDUSTRY_KEYWORDS or any(c.isdigit() for c in cand):
             continue
+        # Resolve through the alias table first. This path exists for places the gazetteer does
+        # NOT list, but the cue regex also matches ones it does — "in the US" arrived here as the
+        # raw "US" and was appended beside the "United States" the alias pass had already added.
+        # The ICP then carried one country under two spellings, and a search excluding one of them
+        # excluded neither.
+        cand = _COUNTRY_ALIASES.get(cl, cand)
+        cl = cand.lower()
         existing = list(delta.get("geo", []))
         if cl not in {str(x).lower() for x in existing}:
             delta["geo"] = existing + [cand]

@@ -524,9 +524,24 @@ class StripePaymentProvider(PaymentProvider):
             # every single one.
             "subscription_data[metadata][tenant_id]": tenant_id,
             "subscription_data[metadata][plan_id]": plan_id,
+            # Without this Checkout shows no coupon field at all, so a discount could only be
+            # given by moving the customer onto an admin-managed custom plan — the expensive path,
+            # for what should be a promo code.
+            "allow_promotion_codes": "true",
         }
         if customer_id:
             form["customer"] = customer_id
+
+        from nexus.core.config import get_settings
+
+        if getattr(get_settings(), "stripe_automatic_tax", False):
+            # Opt-in: Stripe errors on this parameter unless Stripe Tax is configured on the
+            # account. A rate needs an address, and Checkout does not collect one unless asked.
+            form["automatic_tax[enabled]"] = "true"
+            form["billing_address_collection"] = "required"
+            if customer_id:
+                # Only valid alongside an existing customer; sending it without one is an error.
+                form["customer_update[address]"] = "auto"
         # Deliberately NO idempotency key. Checkout sessions expire, and replaying the key
         # would hand a customer a dead URL instead of a fresh one; nothing is charged by
         # creating a session, so there is no double-spend to guard against.

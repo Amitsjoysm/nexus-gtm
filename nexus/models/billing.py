@@ -326,6 +326,11 @@ class BillingInvoice(IdMixin, TimestampMixin, TenantScoped, Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "period_key", name="uq_invoice_period"),
         Index("ix_invoice_tenant_status", "tenant_id", "status"),
+        # A payment webhook arrives with a provider reference and NO tenant, so matching it is a
+        # platform-wide lookup on these two columns. They were only ever inside `meta`, which is
+        # JSON and unindexable, so every event scanned the whole table.
+        Index("ix_invoice_psp_reference", "psp_reference"),
+        Index("ix_invoice_psp_invoice_id", "psp_invoice_id"),
     )
 
     number: Mapped[str] = mapped_column(String(40), default="")
@@ -336,6 +341,11 @@ class BillingInvoice(IdMixin, TimestampMixin, TenantScoped, Base):
     total_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     plan_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
     finalized_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    # The provider's own ids, promoted out of `meta` so a webhook can find this row by index.
+    # Still ALSO written into `meta` by collection.py: the mirrored copy is what keeps a row
+    # created by the previous release findable, and what the reconciler already reads.
+    psp_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    psp_invoice_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     meta: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 

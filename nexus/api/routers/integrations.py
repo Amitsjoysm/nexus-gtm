@@ -234,6 +234,23 @@ async def crm_sync_status(
 # sweep pushed every tenant's accounts to whichever portal the env pointed at.
 
 
+def _env_has_credentials(provider: str) -> bool:
+    """Does the DEPLOYMENT hold a usable credential for this provider?
+
+    Reports existence only — the value itself appears in no response model, here or anywhere.
+    Unknown providers answer False: claiming a credential we cannot name is worse than
+    under-reporting one, because the first sends an admin looking for a problem elsewhere.
+    """
+    s = get_settings()
+    if provider == "hubspot":
+        return bool((s.hubspot_access_token or "").strip())
+    if provider == "salesforce":
+        # Salesforce is env-configured through the OAuth connection rather than a single token,
+        # so there is nothing here to assert on; the tenant row is the only source of truth.
+        return False
+    return False
+
+
 def _connection_out(row: IntegrationConnection | None, *, env_provider: str) -> CRMConnectionOut:
     """Project a stored row (or the env fallback) into the response model.
 
@@ -259,8 +276,16 @@ def _connection_out(row: IntegrationConnection | None, *, env_provider: str) -> 
             updated_at=row.updated_at.isoformat() if row.updated_at else None,
         )
     if env_provider and env_provider != "stub":
-        # Configured deployment-wide. Never tested from here, so it is not claimed as verified.
-        return CRMConnectionOut(provider=env_provider, source="env", status="unverified")
+        # Configured deployment-wide. Never tested from here, so it is not claimed as verified —
+        # but whether a credential EXISTS is knowable and must be reported. Hard-coding this false
+        # told an admin they were disconnected on a deployment where the sync was working, which
+        # is what makes someone paste a second token to fix nothing.
+        return CRMConnectionOut(
+            provider=env_provider,
+            source="env",
+            has_credentials=_env_has_credentials(env_provider),
+            status="unverified",
+        )
     return CRMConnectionOut(provider=env_provider or "stub", source="none", status="none")
 
 

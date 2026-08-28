@@ -196,12 +196,19 @@ SUBSCRIPTION_EVENTS = (
     "customer.subscription.created",
     "customer.subscription.updated",
     "customer.subscription.deleted",
+    # A trial ending is the moment a customer starts being charged. Unhandled, the first thing
+    # they knew about it was the charge. Recorded on the row rather than acted on: what to SEND
+    # is a product decision, and the notification layer reads this.
+    "customer.subscription.trial_will_end",
 )
 
 INVOICE_EVENTS = (
     "invoice.paid",
     "invoice.payment_failed",
     "invoice.finalized",
+    # Stripe's advance notice of what the next renewal will cost, several days out. Several
+    # jurisdictions expect a renewal notice and this is the only event that can trigger one.
+    "invoice.upcoming",
 )
 
 
@@ -356,6 +363,14 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
             sub.status = "active"
             sub.cancel_at_period_end = False
         meta["checkout_session_id"] = _str(obj.get("id"))
+    elif event.event_type == "customer.subscription.trial_will_end":
+        # Advance notice only. The trial has NOT ended, so touching `status` here would move a
+        # customer out of `trialing` days before Stripe does and start enforcing paid entitlements
+        # against someone still inside their trial.
+        meta["trial_will_end_at"] = (
+            _epoch(obj.get("trial_end")).isoformat() if _epoch(obj.get("trial_end")) else ""
+        )
+        meta["trial_will_end_notified_from_event"] = event.event_id
     elif event.event_type == "customer.subscription.deleted":
         # Terminal, and terminal in one direction only. Stripe has stopped billing; leaving us
         # "active" would keep entitlements open for a customer who is no longer paying.
@@ -405,11 +420,9 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
     provider's own statement about that, and two handlers writing the same field from different
     events is how a customer ends up flapping between ``active`` and ``past_due``.
     """
-    from sqlalchemy import select
 
     from nexus.core.db import utcnow
     from nexus.core.tenancy import apply_rls
-    from nexus.models.billing import BillingInvoice
 
     psp_invoice_id = _str(obj.get("id"))
     payment_intent = _str(obj.get("payment_intent"))
@@ -418,24 +431,32 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
     if sub is not None:
         outcome["tenant_id"] = sub.tenant_id
 
+    if event.event_type == "invoice.upcoming":
+        # A PREVIEW of the next renewal. It has no persisted invoice at the provider and none
+        # here; writing a row from it would bill the customer for a period twice — once from this
+        # preview and once from the invoice that is actually raised. Record the figure on the
+        # subscription so the customer's billing page can show what is coming, and stop.
+        if sub is None:
+            outcome["note"] = "no matching subscription"
+            return outcome
+        from nexus.core.tenancy import apply_rls as _rls
+
+        await _rls(session, sub.tenant_id)
+        next_attempt = _epoch(obj.get("next_payment_attempt"))
+        sub.meta = {
+            **(sub.meta or {}),
+            "upcoming_amount_due_cents": obj.get("amount_due"),
+            "upcoming_at": next_attempt.isoformat() if next_attempt else "",
+        }
+        await session.flush()
+        outcome["applied"] = True
+        outcome["note"] = "recorded upcoming renewal"
+        return outcome
+
     # Match our own invoice by either reference we could have stored: the PaymentIntent written
     # by collect_invoice, or the provider invoice id written by a previous event in this family.
-    candidates = list(
-        (
-            await session.scalars(
-                select(BillingInvoice).where(
-                    BillingInvoice.status.in_(("finalized", "paid"))
-                )
-            )
-        ).all()
-    )
-    invoice = next(
-        (
-            i for i in candidates
-            if (payment_intent and (i.meta or {}).get("psp_reference") == payment_intent)
-            or (psp_invoice_id and (i.meta or {}).get("psp_invoice_id") == psp_invoice_id)
-        ),
-        None,
+    invoice = await find_invoice_by_provider_reference(
+        session, payment_intent=payment_intent, psp_invoice_id=psp_invoice_id
     )
 
     if invoice is None:
@@ -462,6 +483,15 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
     outcome["tenant_id"] = invoice.tenant_id
     meta = dict(invoice.meta or {})
     meta["psp_invoice_id"] = psp_invoice_id or meta.get("psp_invoice_id", "")
+
+    # Promote the references onto the indexed columns. A row reached through the meta fallback
+    # must not stay on the slow path — this is the same copy migration 0054 performs, done at the
+    # moment the row is touched, so the unmigrated set shrinks toward empty instead of persisting
+    # for the life of the invoice. Fill-only: never overwrite what collection.py recorded.
+    if not invoice.psp_reference:
+        invoice.psp_reference = (meta.get("psp_reference") or "") or None
+    if not invoice.psp_invoice_id:
+        invoice.psp_invoice_id = (meta.get("psp_invoice_id") or "") or None
 
     if event.event_type == "invoice.paid":
         invoice.status = "paid"
@@ -491,16 +521,96 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
     return outcome
 
 
+async def find_invoice_by_provider_reference(
+    session, *, payment_intent: str, psp_invoice_id: str
+):
+    """The invoice a payment event concerns, by indexed lookup.
+
+    This used to select EVERY finalized-or-paid invoice platform-wide, hydrate them all, and
+    compare `meta["psp_reference"]` in Python — O(total invoices) per webhook, against a provider
+    that retries. `psp_reference` / `psp_invoice_id` are now real indexed columns.
+
+    Cross-tenant is correct and deliberate: the event carries no tenant context and the provider
+    reference is globally unique. What changed is the cost, not the scope.
+
+    The `meta` fallback covers rows written before the columns existed and anything in flight
+    during the backfill. It is the slow path and is only reached when the indexed lookup misses,
+    so the common case never pays for it. Rows it finds are promoted onto the columns by the
+    caller, so the set it has to search shrinks toward empty instead of growing.
+    """
+    from sqlalchemy import or_, select
+
+    from nexus.models.billing import BillingInvoice
+
+    refs = [r for r in (payment_intent, psp_invoice_id) if r]
+    if not refs:
+        # No reference at all. Returning "no match" beats returning whichever row sorted first.
+        return None
+
+    stmt = (
+        select(BillingInvoice)
+        .where(
+            BillingInvoice.status.in_(("finalized", "paid")),
+            or_(
+                BillingInvoice.psp_reference.in_(refs),
+                BillingInvoice.psp_invoice_id.in_(refs),
+            ),
+        )
+        # A provider reference is unique, so this orders a one-row result in practice. It is here
+        # so that if that ever stops being true, every retry of an event picks the SAME invoice
+        # rather than alternating between two — silent double-application on the money path.
+        .order_by(BillingInvoice.created_at.asc(), BillingInvoice.id.asc())
+        .limit(1)
+    )
+    found = (await session.scalars(stmt)).first()
+    if found is not None:
+        return found
+
+    return await _find_invoice_in_meta(session, refs)
+
+
+async def _find_invoice_in_meta(session, refs: list[str]):
+    """Pre-column rows only: the reference is matched in SQL, inside the JSON blob.
+
+    This deliberately does NOT take the newest N rows and filter them in Python. Both columns
+    are NULL on every invoice between finalization and collection, and on every zero-total
+    invoice — ordinary rows, far newer than any legacy one, and numerous exactly at month end.
+    A row window therefore fills with rows that can never match and pushes the one row it exists
+    to find out of range. Measured: 520 ordinary finalized invoices hid a legacy invoice
+    completely (`test_legacy_rows_are_not_crowded_out_by_ordinary_invoices`).
+
+    Matching in SQL has no window to overflow. It is an unindexed predicate, but it runs only
+    when the indexed lookup missed, returns at most one row, and hydrates only that row.
+    """
+    from sqlalchemy import or_, select
+
+    from nexus.models.billing import BillingInvoice
+
+    stmt = (
+        select(BillingInvoice)
+        .where(
+            BillingInvoice.status.in_(("finalized", "paid")),
+            BillingInvoice.psp_reference.is_(None),
+            BillingInvoice.psp_invoice_id.is_(None),
+            or_(
+                BillingInvoice.meta["psp_reference"].as_string().in_(refs),
+                BillingInvoice.meta["psp_invoice_id"].as_string().in_(refs),
+            ),
+        )
+        .order_by(BillingInvoice.created_at.asc(), BillingInvoice.id.asc())
+        .limit(1)
+    )
+    return (await session.scalars(stmt)).first()
+
+
 async def handle_event(session, event: VerifiedEvent) -> dict:
     """Apply a verified, not-yet-seen event.
 
     Only events that change money state are acted on; everything else is recorded and ignored,
     so an expanded Stripe event list can never break the endpoint.
     """
-    from sqlalchemy import select
 
     from nexus.core.db import utcnow
-    from nexus.models.billing import BillingInvoice
 
     obj = _object(event)
     reference = str(obj.get("id") or "")
@@ -525,15 +635,8 @@ async def handle_event(session, event: VerifiedEvent) -> dict:
     # Find the invoice this event concerns by the reference we stored when collecting. Reading
     # across tenants is correct here: the event arrives with no tenant context, and the
     # provider reference is globally unique.
-    invoices = (
-        await session.scalars(
-            select(BillingInvoice).where(
-                BillingInvoice.status.in_(("finalized", "paid"))
-            )
-        )
-    ).all()
-    invoice = next(
-        (i for i in invoices if (i.meta or {}).get("psp_reference") == reference), None
+    invoice = await find_invoice_by_provider_reference(
+        session, payment_intent=reference, psp_invoice_id=""
     )
     if invoice is None:
         outcome["note"] = "no matching invoice"
@@ -542,6 +645,15 @@ async def handle_event(session, event: VerifiedEvent) -> dict:
     outcome["invoice_id"] = invoice.id
     outcome["tenant_id"] = invoice.tenant_id
     meta = dict(invoice.meta or {})
+
+    # Promote the references onto the indexed columns. A row reached through the meta fallback
+    # must not stay on the slow path — this is the same copy migration 0054 performs, done at the
+    # moment the row is touched, so the unmigrated set shrinks toward empty instead of persisting
+    # for the life of the invoice. Fill-only: never overwrite what collection.py recorded.
+    if not invoice.psp_reference:
+        invoice.psp_reference = (meta.get("psp_reference") or "") or None
+    if not invoice.psp_invoice_id:
+        invoice.psp_invoice_id = (meta.get("psp_invoice_id") or "") or None
 
     if event.event_type == "payment_intent.succeeded":
         invoice.status = "paid"

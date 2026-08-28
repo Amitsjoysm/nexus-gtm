@@ -70,6 +70,25 @@ async def lifespan(app: FastAPI):
 
     get_call_provider()
 
+    # Share the auth rate-limit counter across processes when Valkey is available. Without this
+    # the limit is per uvicorn worker: compose runs two replicas of two workers, so a "10 per
+    # minute" limit was really 40, and it reset on every deploy. Non-fatal and best-effort — a
+    # limiter that refused to start without its store would make a cache blip a boot failure, and
+    # `ratelimit` already falls back to in-process counters on its own.
+    try:
+        settings_now = get_settings()
+        if settings_now.queue_backend == "redis" and settings_now.redis_url:
+            import redis.asyncio as _redis
+
+            from nexus.core.ratelimit import set_shared_backend
+
+            set_shared_backend(_redis.from_url(settings_now.redis_url, decode_responses=True))
+            logging.getLogger("nexus.main").info("auth rate limit sharing counters via Valkey")
+    except Exception:
+        logging.getLogger("nexus.main").warning(
+            "shared rate-limit store unavailable; using in-process counters", exc_info=True
+        )
+
     # Runtime setting overrides, applied onto the live Settings object before anything reads one.
     # Non-fatal for the same reason as the seed below: a configuration read that fails must leave
     # the process running on the environment values it already had, not refuse to start.
