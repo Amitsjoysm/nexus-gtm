@@ -25,6 +25,18 @@ async def _admin(client, monkeypatch, slug: str):
     return await signup(client, slug=slug, email="boss@nexus.com", company=slug.upper())
 
 
+async def _suspendable(client, slug: str) -> str:
+    """A user OTHER than the admin, to be suspended.
+
+    Suspending an account now revokes the sessions it already holds (nexus/auth/sessions.py), so
+    an admin who suspends the account they are signed in as is immediately logged out — correctly.
+    These tests used one account for both roles, so they were asserting on a request made with a
+    token their own previous request had just invalidated.
+    """
+    await signup(client, slug=slug, email=f"{slug}@target.com", company=slug.upper())
+    return f"{slug}@target.com"
+
+
 async def _user_id(email: str) -> str:
     from nexus.core.db import get_sessionmaker
     from nexus.models.identity import User
@@ -137,10 +149,11 @@ async def test_admin_actions_against_the_account_are_shown(client, monkeypatch):
     """The other half of most tickets is "why can't I log in?", and a suspension with no visible
     record is exactly the one that gets reversed by mistake."""
     token = await _admin(client, monkeypatch, "ua7")
-    await client.post("/api/admin/users/boss@nexus.com/suspend",
+    target = await _suspendable(client, "uatgt7")
+    await client.post(f"/api/admin/users/{target}/suspend",
                       headers=auth(token), json={"reason": "ticket 42 — abuse report"})
 
-    body = (await client.get("/api/admin/users/boss@nexus.com/activity",
+    body = (await client.get(f"/api/admin/users/{target}/activity",
                              headers=auth(token))).json()
     assert body["suspended"] is True
     actions = {a["action"]: a for a in body["admin_actions"]}
@@ -150,9 +163,10 @@ async def test_admin_actions_against_the_account_are_shown(client, monkeypatch):
 
 async def test_a_suspension_reason_is_surfaced(client, monkeypatch):
     token = await _admin(client, monkeypatch, "ua8")
-    await client.post("/api/admin/users/boss@nexus.com/suspend",
+    target = await _suspendable(client, "uatgt8")
+    await client.post(f"/api/admin/users/{target}/suspend",
                       headers=auth(token), json={"reason": "payment dispute"})
-    body = (await client.get("/api/admin/users/boss@nexus.com/activity",
+    body = (await client.get(f"/api/admin/users/{target}/activity",
                              headers=auth(token))).json()
     assert body["suspended_reason"] == "payment dispute"
 

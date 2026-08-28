@@ -117,4 +117,11 @@ async def reset_password(db: AsyncSession, *, email: str, token: str, new_passwo
         raise generic
     user.password_hash = hash_password(new_password)
     pr.used = True
+    # A reset is normally somebody reacting to a compromise. Leaving the attacker's existing token
+    # valid for the rest of its TTL makes the reset a formality.
+    from nexus.api.deps import clear_session_version_cache
+    from nexus.auth.sessions import revoke_user_sessions
+
+    await revoke_user_sessions(db, user.id)
     await db.commit()
+    clear_session_version_cache()

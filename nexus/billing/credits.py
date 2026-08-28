@@ -50,6 +50,39 @@ async def _append(
     return True
 
 
+async def _lock_tenant_credits_impl(ts: TenantSession) -> None:
+    """Serialize balance-gated burns for one tenant.
+
+    The balance is a TENANT-wide pot, but the metering engine's `_lock_capability` is keyed
+    `meter:{tenant}:{capability}`. Two different capabilities burning at the same moment take two
+    different locks, both read the same balance, and both conclude there is enough — so the
+    account goes negative without anyone passing `allow_negative`.
+
+    Transaction-scoped, so it releases on commit or rollback and cannot leak. Postgres only;
+    SQLite serializes writers anyway. Taken BEFORE reading the balance, and only on the path that
+    can refuse — an `allow_negative` burn has no check to lose, so it pays nothing for a lock.
+
+    Never raises: a lock we could not take leaves us with the pre-existing race rather than a
+    failed charge.
+    """
+    try:
+        bind = ts.session.get_bind()
+        if bind.dialect.name != "postgresql":
+            return
+        from sqlalchemy import text
+
+        await ts.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+            {"k": f"credits:{ts.tenant_id}"},
+        )
+    except Exception:
+        logger.warning("tenant credit lock failed for %s", ts.tenant_id, exc_info=True)
+
+
+# Indirected so a test can assert the lock is taken, and on which key.
+_lock_tenant_credits = _lock_tenant_credits_impl
+
+
 async def grant_credits(
     ts: TenantSession, amount: float, *, kind: str = "grant", reason: str = "",
     idempotency_key: str, expires_at: datetime | None = None, actor: str = "system",
@@ -76,8 +109,11 @@ async def burn_credits(
     """
     if amount <= 0:
         return False
-    if not allow_negative and await balance(ts) < amount:
-        return False
+    if not allow_negative:
+        # Lock first, then read. The other order is the race itself.
+        await _lock_tenant_credits(ts)
+        if await balance(ts) < amount:
+            return False
     applied = await _append(
         ts, -float(amount), kind="burn", reason=reason, idempotency_key=idempotency_key,
         capability_id=capability_id, period_key=period_key, actor=actor,

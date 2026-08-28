@@ -40,6 +40,7 @@ from nexus.api.schemas import (
     TokenResponse,
 )
 from nexus.auth import mfa_service
+from nexus.auth.sessions import current_token_version
 from nexus.auth.mfa_service import MFAError
 from nexus.auth.password_reset import request_password_reset, reset_password
 from nexus.auth.registration import (
@@ -124,7 +125,10 @@ async def register_verify(
         user, tenant = await verify_and_create(db, email=req.email, code=req.code)
     except RegistrationError as exc:
         raise HTTPException(exc.status_code, exc.detail)
-    token = create_access_token(user_id=user.id, tenant_id=tenant.id, role="owner")
+    token = create_access_token(
+        user_id=user.id, tenant_id=tenant.id, role="owner",
+        token_version=await current_token_version(db, user.id),
+    )
     return TokenResponse(access_token=token, tenant_id=tenant.id, role="owner")
 
 
@@ -173,7 +177,10 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db_session))
             status.HTTP_409_CONFLICT, "Company slug or email already registered"
         )
 
-    token = create_access_token(user_id=user.id, tenant_id=tenant.id, role="owner")
+    token = create_access_token(
+        user_id=user.id, tenant_id=tenant.id, role="owner",
+        token_version=await current_token_version(db, user.id),
+    )
     return TokenResponse(access_token=token, tenant_id=tenant.id, role="owner")
 
 
@@ -225,7 +232,8 @@ async def login(
         return await _mfa_challenge(db, user, membership)
 
     token = create_access_token(
-        user_id=user.id, tenant_id=membership.tenant_id, role=membership.role
+        user_id=user.id, tenant_id=membership.tenant_id, role=membership.role,
+        token_version=await current_token_version(db, user.id),
     )
     return TokenResponse(access_token=token, tenant_id=membership.tenant_id, role=membership.role)
 
@@ -290,7 +298,8 @@ async def mfa_verify(
         raise HTTPException(exc.status_code, exc.detail)
 
     token = create_access_token(
-        user_id=user.id, tenant_id=membership.tenant_id, role=membership.role
+        user_id=user.id, tenant_id=membership.tenant_id, role=membership.role,
+        token_version=await current_token_version(db, user.id),
     )
     return TokenResponse(access_token=token, tenant_id=membership.tenant_id, role=membership.role)
 
@@ -538,7 +547,10 @@ async def create_workspace(
         await db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "That workspace URL is already taken")
 
-    token = create_access_token(user_id=principal.user_id, tenant_id=tenant.id, role="owner")
+    token = create_access_token(
+        user_id=principal.user_id, tenant_id=tenant.id, role="owner",
+        token_version=await current_token_version(db, principal.user_id),
+    )
     return TokenResponse(access_token=token, tenant_id=tenant.id, role="owner")
 
 
@@ -560,7 +572,8 @@ async def switch_tenant(
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No membership in the requested tenant")
     token = create_access_token(
-        user_id=principal.user_id, tenant_id=membership.tenant_id, role=membership.role
+        user_id=principal.user_id, tenant_id=membership.tenant_id, role=membership.role,
+        token_version=await current_token_version(db, principal.user_id),
     )
     return TokenResponse(
         access_token=token, tenant_id=membership.tenant_id, role=membership.role

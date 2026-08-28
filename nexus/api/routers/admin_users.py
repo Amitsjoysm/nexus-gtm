@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 from nexus.api.deps import Principal, require_platform_permission
 from nexus.billing.audit import record_admin_action
 from nexus.billing.permissions import USERS_IMPERSONATE, USERS_MANAGE
+from nexus.api.deps import clear_session_version_cache
+from nexus.auth.sessions import revoke_user_sessions
 from nexus.core.db import get_sessionmaker
 
 logger = logging.getLogger("nexus.api.admin_users")
@@ -70,6 +72,10 @@ async def suspend_user(
         user.suspended_reason = reason[:300]
         user.suspended_by = principal.user_id
         await session.flush()
+        # End the sessions they already hold. Without this a suspended user keeps working for the
+        # rest of their token's TTL, which is the whole point of suspending them.
+        await revoke_user_sessions(session, user.id)
+        clear_session_version_cache()
         await record_admin_action(
             session, actor=principal.user_id, action="user.suspend", target=target,
             before=before, after={"suspended": True}, note=reason,
@@ -103,6 +109,10 @@ async def reactivate_user(
         user.suspended_reason = None
         user.suspended_by = None
         await session.flush()
+        # Also on the way back in: a token minted before the suspension must not spring back to
+        # life, or reactivating is quietly weaker than issuing a fresh sign-in.
+        await revoke_user_sessions(session, user.id)
+        clear_session_version_cache()
         await record_admin_action(
             session, actor=principal.user_id, action="user.reactivate", target=target,
             before=was, after={"suspended": False},

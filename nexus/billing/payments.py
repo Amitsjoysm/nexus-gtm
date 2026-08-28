@@ -284,9 +284,32 @@ class StripePaymentProvider(PaymentProvider):
     name = "stripe"
     BASE = "https://api.stripe.com/v1"
 
-    def __init__(self, secret_key: str, *, timeout_s: float = 20.0) -> None:
+    # Pinned, never the account default. Unpinned, Stripe can change a response shape under a
+    # running deployment with no deploy on our side — and every field this module reads
+    # (`status`, `current_period_end`, `hosted_invoice_url`) is a shape. Raising this is a
+    # deliberate migration with the changelog read, not a dependency bump.
+    API_VERSION = "2024-06-20"
+
+    # Stripe rate-limits, and infrastructure returns 502/503/504. Retrying is safe here ONLY
+    # because every mutating call already carries an Idempotency-Key, which Stripe honours: the
+    # retry re-reads the original result instead of creating a second charge.
+    RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+    def __init__(
+        self,
+        secret_key: str,
+        *,
+        timeout_s: float = 20.0,
+        max_retries: int = 3,
+        retry_base_delay_s: float = 0.5,
+    ) -> None:
         self.secret_key = secret_key or ""
         self.timeout_s = timeout_s
+        self.max_retries = max(1, max_retries)
+        self.retry_base_delay_s = retry_base_delay_s
+        # Injected by tests (httpx.MockTransport). None means a real connection.
+        self._transport = None
+        self._client = None
 
     @property
     def configured(self) -> bool:
@@ -299,27 +322,85 @@ class StripePaymentProvider(PaymentProvider):
                 "Set it, or use NEXUS_PAYMENT_PROVIDER=noop."
             )
 
-    async def _post(self, path: str, form: dict[str, Any], idempotency_key: str = "") -> dict:
-        import httpx
-
-        headers = {"Authorization": f"Bearer {self.secret_key}"}
+    def _headers(self, idempotency_key: str = "") -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.secret_key}",
+            "Stripe-Version": self.API_VERSION,
+        }
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
-        async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-            resp = await client.post(f"{self.BASE}{path}", data=form, headers=headers)
-        if resp.status_code >= 400:
-            raise PaymentError(f"stripe {path} -> {resp.status_code}: {resp.text[:300]}")
-        return resp.json()
+        return headers
 
-    async def _get(self, path: str) -> dict:
+    def _http(self):
+        """One pooled client for the process.
+
+        A fresh AsyncClient per call meant a TCP handshake and a TLS negotiation for every Stripe
+        request, on the latency path of checkout and invoice collection.
+        """
         import httpx
 
-        headers = {"Authorization": f"Bearer {self.secret_key}"}
-        async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-            resp = await client.get(f"{self.BASE}{path}", headers=headers)
-        if resp.status_code >= 400:
-            raise PaymentError(f"stripe {path} -> {resp.status_code}: {resp.text[:300]}")
-        return resp.json()
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout_s, transport=self._transport
+            )
+        return self._client
+
+    async def _request(
+        self, method: str, path: str, *, form: dict[str, Any] | None = None,
+        idempotency_key: str = "",
+    ) -> dict:
+        """One Stripe call, retried on transient failures only.
+
+        A 4xx other than 429 is a final answer — `card_declined` retried three times is three
+        declines and a slower error — so only RETRY_STATUSES and transport errors come back here.
+        The idempotency key is reused unchanged across attempts; minting a new one per attempt
+        would make the retry a second, independent charge.
+        """
+        import asyncio
+        import random
+
+        import httpx
+
+        client = self._http()
+        headers = self._headers(idempotency_key)
+        url = f"{self.BASE}{path}"
+        last: Exception | None = None
+
+        for attempt in range(self.max_retries):
+            try:
+                if method == "POST":
+                    resp = await client.post(url, data=form or {}, headers=headers)
+                else:
+                    resp = await client.get(url, headers=headers)
+            except httpx.HTTPError as exc:      # connect/read timeout, reset connection
+                last = PaymentError(f"stripe {path} -> transport error: {exc}")
+            else:
+                if resp.status_code < 400:
+                    return resp.json()
+                last = PaymentError(
+                    f"stripe {path} -> {resp.status_code}: {resp.text[:300]}"
+                )
+                if resp.status_code not in self.RETRY_STATUSES:
+                    raise last
+            if attempt < self.max_retries - 1 and self.retry_base_delay_s:
+                # Jittered, so a fleet retrying after one Stripe blip does not resynchronise
+                # into a second one.
+                delay = self.retry_base_delay_s * (2 ** attempt)
+                await asyncio.sleep(delay * (0.5 + random.random()))
+        raise last if last else PaymentError(f"stripe {path} failed")
+
+    async def _post(self, path: str, form: dict[str, Any], idempotency_key: str = "") -> dict:
+        return await self._request(
+            "POST", path, form=form, idempotency_key=idempotency_key
+        )
+
+    async def _get(self, path: str) -> dict:
+        return await self._request("GET", path)
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def _default_payment_method(self, customer_id: str) -> str:
         """The card we bill. An off-session PaymentIntent does not read invoice_settings on its

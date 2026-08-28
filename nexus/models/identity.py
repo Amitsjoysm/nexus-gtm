@@ -62,6 +62,10 @@ class User(IdMixin, TimestampMixin, Base):
     # to log in anywhere, and a per-membership flag would leave every other workspace reachable.
     # Removing someone from one workspace is what deleting a membership already does.
     # A timestamp rather than a boolean, so "when" is answerable without reading the audit log.
+    # Bumped by nexus/auth/sessions.py to invalidate every access token already issued to this
+    # user. Stamped into the JWT as `tv` and compared on every request. Defaults to 0 so existing
+    # rows need no backfill, and a token carrying no `tv` at all is accepted (previous release).
+    token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     suspended_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
     suspended_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
     suspended_by: Mapped[str | None] = mapped_column(String(255), nullable=True)

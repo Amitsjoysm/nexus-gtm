@@ -48,12 +48,62 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
             raise
 
 
-def get_principal(
+# user_id -> (token_version, monotonic deadline). A revocation is a rare event and this is on
+# every authenticated request, so it is read through a short TTL rather than per request. The TTL
+# is the worst-case delay between revoking and the token stopping — seconds, against the 60
+# minutes it was before this existed. Same 30s idiom as the runtime-config and provider-key
+# resolvers, and bounded so a large estate cannot grow it without limit.
+_SESSION_VERSION_TTL_S = 30.0
+_SESSION_VERSION_MAX = 50_000
+_session_versions: dict[str, tuple[int, float]] = {}
+
+
+def clear_session_version_cache() -> None:
+    """Drop the cache (revocation endpoints and tests call this for an immediate effect)."""
+    _session_versions.clear()
+
+
+async def _live_token_version(user_id: str) -> int:
+    import time
+
+    cached = _session_versions.get(user_id)
+    now = time.monotonic()
+    if cached is not None and cached[1] > now:
+        return cached[0]
+    from nexus.auth.sessions import current_token_version
+
+    async with get_sessionmaker()() as session:
+        version = await current_token_version(session, user_id)
+    if len(_session_versions) >= _SESSION_VERSION_MAX:
+        _session_versions.clear()
+    _session_versions[user_id] = (version, now + _SESSION_VERSION_TTL_S)
+    return version
+
+
+async def get_principal(
     creds: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> Principal:
     payload = decode_access_token(creds.credentials)
     if not payload or "sub" not in payload or "tid" not in payload:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
+
+    # Session revocation. A token carrying no `tv` claim was issued by the release before this
+    # existed and is accepted on purpose — refusing them would log every active user out at the
+    # moment of deploy. They age out within one token TTL on their own.
+    claimed = payload.get("tv")
+    if claimed is not None:
+        try:
+            if int(claimed) < await _live_token_version(payload["sub"]):
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED, "Session ended. Please sign in again."
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # A lookup failure must not lock everyone out of the product. Degrading to "accept"
+            # restores the pre-existing behaviour rather than inventing a new outage.
+            logger.warning("token version check failed for %s", payload["sub"], exc_info=True)
+
     return Principal(
         user_id=payload["sub"],
         tenant_id=payload["tid"],

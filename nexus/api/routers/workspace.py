@@ -9,7 +9,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 
-from nexus.api.deps import Principal, get_tenant_session, require
+from nexus.auth.sessions import revoke_user_sessions
+from nexus.api.deps import clear_session_version_cache, Principal, get_tenant_session, require
 from nexus.api.schemas import (
     AuditEntryOut,
     AutomationSettingsIn,
@@ -524,6 +525,10 @@ async def change_member_role(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot demote the last owner")
     membership.role = body.role
     await ts.flush()
+    # The role is baked into the JWT, so a demoted admin keeps admin rights until their token
+    # expires unless the token is invalidated here.
+    await revoke_user_sessions(ts.session, membership.user_id)
+    clear_session_version_cache()
     return _member_out(membership)
 
 
@@ -538,6 +543,12 @@ async def remove_member(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
     if membership.role == "owner" and await _count_owners(ts) <= 1:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove the last owner")
+    removed_user_id = membership.user_id
     await ts.delete(membership)
     await ts.flush()
+    # The tenant is pinned in the token, so a removed member keeps reading this workspace until
+    # it expires. Revoking is global to the user; they re-authenticate and simply no longer see
+    # this workspace in the switcher.
+    await revoke_user_sessions(ts.session, removed_user_id)
+    clear_session_version_cache()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

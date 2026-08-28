@@ -39,7 +39,9 @@ def verify_password(plain: str, hashed: str) -> bool:
     return _pwd.verify(plain, hashed)
 
 
-def create_access_token(*, user_id: str, tenant_id: str, role: str) -> str:
+def create_access_token(
+    *, user_id: str, tenant_id: str, role: str, token_version: int | None = None
+) -> str:
     settings = get_settings()
     now = utcnow()
     payload = {
@@ -49,6 +51,10 @@ def create_access_token(*, user_id: str, tenant_id: str, role: str) -> str:
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=settings.access_token_ttl_min)).timestamp()),
     }
+    # Omitted when the caller does not know it, so a token minted by a path that has not been
+    # taught about revocation still works rather than being born invalid.
+    if token_version is not None:
+        payload["tv"] = int(token_version)
     return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
 
 

@@ -129,6 +129,16 @@ class CollectionHealth:
     invoices: int = 0
     paid_invoices: int = 0
     failed_invoices: int = 0
+    # Money collected and then given back. Reported BESIDE `paid_cents` rather than deducted from
+    # it: "did the collection succeed" and "did we keep the money" are different questions, and a
+    # refund rate hidden inside a single net figure is a refund rate nobody can see.
+    refunded_cents: int = 0
+    refunded_invoices: int = 0
+
+    @property
+    def net_paid_cents(self) -> int:
+        """What we actually kept. This is the revenue figure."""
+        return self.paid_cents - self.refunded_cents
 
     @property
     def collection_rate(self) -> float:
@@ -144,6 +154,9 @@ class CollectionHealth:
             "invoices": self.invoices,
             "paid_invoices": self.paid_invoices,
             "failed_invoices": self.failed_invoices,
+            "refunded_cents": self.refunded_cents,
+            "refunded_invoices": self.refunded_invoices,
+            "net_paid_cents": self.net_paid_cents,
             "collection_rate": round(self.collection_rate, 4),
         }
 
@@ -176,6 +189,18 @@ async def collection_health(*, since: str = "") -> CollectionHealth:
             if inv.status == "paid":
                 out.paid_invoices += 1
                 out.paid_cents += total
+                # Stripe's `amount_refunded` is CUMULATIVE for the charge, so reading it as an
+                # absolute is what makes a replayed or partial-then-full refund converge instead
+                # of accumulating. Capped at the invoice total: the figure is the provider's, not
+                # ours, and a bad one must not drive reported revenue negative.
+                refunded = (inv.meta or {}).get("amount_refunded")
+                try:
+                    refunded = int(refunded or 0)
+                except (TypeError, ValueError):
+                    refunded = 0
+                if refunded > 0:
+                    out.refunded_cents += min(refunded, total)
+                    out.refunded_invoices += 1
             else:
                 out.outstanding_cents += total
                 if (inv.meta or {}).get("last_error"):
