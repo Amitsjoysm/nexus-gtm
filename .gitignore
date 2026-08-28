@@ -21,6 +21,12 @@ node_modules/
 
 # Deployment secrets + release artifacts (never committed)
 deploy/.env
+# ...and every variant of it. `deploy/.env.bak-premodel` sat untracked with 13 real credential
+# lines in it for a whole release cycle: one `git add -A` would have written Groq, Exa, Apify,
+# Firecrawl and Stripe keys into history permanently. Matching only the exact filename means the
+# habit of copying a secrets file before editing it defeats the rule.
+deploy/.env.*
+!deploy/.env.example
 release/
 
 # Terraform (cloud deploy) — never commit state or per-env secrets
@@ -48,3 +54,4 @@ backups/
 # window and must survive a fresh clone (tests/test_retention.py asserts it is present).
 !scripts/partition_usage_events.sql
 nexus.db.stale-*
+.audit/
