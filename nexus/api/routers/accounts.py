@@ -47,7 +47,16 @@ def _account_out(a: Account, *, fit_score: int | None = None) -> AccountOut:
         description=cf.get("description"),
         sub_industry=cf.get("sub_industry"),
         revenue=cf.get("revenue"),
-        region=cf.get("region"),
+        # The stored COLUMN wins, with the enrichment value as the fallback. `region` predates the
+        # column and was populated only by enrichment into `custom_fields`; reading just one source
+        # would either hide what an import wrote or throw away what enrichment found. Column first,
+        # because it is what the operator typed or imported.
+        region=a.region or cf.get("region"),
+        postal_code=a.postal_code or cf.get("postal_code"),
+        # Deliberately NOT folded into `revenue`: that is an enrichment BAND ("$10M-$50M") and this
+        # is an exact figure the ICP scores a numeric range against. Merging them would make the
+        # field mean two different things depending on where the value came from.
+        annual_revenue=a.annual_revenue,
         city=cf.get("city"),
         keywords=cf.get("keywords") or [],
         source=a.source,

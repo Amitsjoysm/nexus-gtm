@@ -221,8 +221,13 @@ class AccountOut(AccountIn):
     # Extra firmographics / technographics surfaced from web enrichment (stored in custom_fields).
     # Surfaced so the Account 360 Overview can show a fuller picture than name/industry/size alone.
     sub_industry: str | None = None       # more specific niche (e.g. "Neobank")
-    revenue: str | None = None            # annual revenue estimate, e.g. "$10M-$50M"
+    revenue: str | None = None            # annual revenue BAND from enrichment, e.g. "$10M-$50M"
     region: str | None = None             # state / province / region
+    postal_code: str | None = None        # ZIP / postal code
+    # The exact figure, kept apart from the `revenue` band above: the ICP scores a numeric range
+    # against this, and one field holding sometimes a string band and sometimes a number would mean
+    # two different things depending on where the value came from.
+    annual_revenue: int | None = None
     city: str | None = None
     keywords: list[str] = Field(default_factory=list)  # focus keywords describing what they do
     source: str | None = None             # discovery | csv | crm — where the account came from
