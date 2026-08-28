@@ -98,70 +98,129 @@ async def bench_process_account(n: int) -> None:
     print(f"  -> serial floor: {1 / statistics.mean(times):.2f} accounts/sec/worker")
 
 
+def _limits() -> list[int | None]:
+    """Concurrency caps to probe, as ``run_worker(concurrency=...)`` values.
+
+    ``1`` reproduces the pre-M-perf serial loop exactly, which is what makes the before/after in
+    the README a like-for-like comparison rather than two numbers from two builds. ``None`` means
+    "whatever the DB pool allows" — the shipped default.
+    """
+    raw = os.environ.get("BENCH_CONC_LIMITS", "1,default")
+    out: list[int | None] = []
+    for token in (t.strip() for t in raw.split(",") if t.strip()):
+        out.append(None if token == "default" else int(token))
+    return out
+
+
+async def _drain_with_worker(n: int, done: asyncio.Event, limit: int | None, budget: float) -> float:
+    """Run ``run_worker`` until ``done``, and return the wall time it took.
+
+    Waits on completion of the Nth job rather than on the queue emptying: with jobs in flight the
+    queue empties long before the work is finished, and timing that instead would flatter the
+    concurrent numbers by exactly the amount being measured.
+    """
+    from nexus.workers.worker import run_worker
+
+    stop = asyncio.Event()
+    started = time.perf_counter()
+    task = asyncio.create_task(run_worker(stop=stop, poll_timeout=0.05, concurrency=limit))
+    try:
+        await asyncio.wait_for(done.wait(), timeout=budget)
+        return time.perf_counter() - started
+    finally:
+        stop.set()
+        await task
+
+
+def _report_drain(label: str, n: int, elapsed: float, limit: int | None, unit: str) -> None:
+    from nexus.workers.worker import resolve_worker_concurrency
+
+    shown = resolve_worker_concurrency() if limit is None else limit
+    tag = f"cap={shown}{' (pool-derived default)' if limit is None else ''}"
+    print(f"  {label:<28} {tag:<30} {elapsed:7.2f}s -> {n / elapsed:6.2f} {unit}")
+
+
 async def bench_worker_drain(n: int) -> None:
     """[C] the real run_worker loop draining N jobs. Measures the loop, not the handler."""
     from nexus.ingestion.service import get_ingestion_service
-    from nexus.workers.worker import run_worker
+    from nexus.workers import tasks as tasks_module
+    from nexus.workers.worker import run_worker  # noqa: F401  (imported for the probe's contract)
 
     rows = await _sample_accounts(n) if n > 0 else []
     if not rows:
         return
     service = get_ingestion_service()
     original, service.sources = service.sources, []
-    queue = InMemoryTaskQueue()
-    set_task_queue(queue)
-    for tenant_id, account_id in rows:
-        await queue.enqueue(
-            Job(name="process_account", payload={"tenant_id": tenant_id, "account_id": account_id})
-        )
+    real_handler = tasks_module.HANDLERS["process_account"]
     print(f"\n[C] run_worker draining {len(rows)} process_account jobs (sources removed)")
-    stop = asyncio.Event()
-    started = time.perf_counter()
-    task = asyncio.create_task(run_worker(stop=stop, poll_timeout=0.2))
     try:
-        while await queue.depth():
-            await asyncio.sleep(0.05)
-        elapsed = time.perf_counter() - started
+        for limit in _limits():
+            completed = 0
+            done = asyncio.Event()
+
+            async def counted(payload: dict) -> dict:
+                nonlocal completed
+                result = await real_handler(payload)
+                completed += 1
+                if completed >= len(rows):
+                    done.set()
+                return result
+
+            tasks_module.HANDLERS["process_account"] = counted
+            queue = InMemoryTaskQueue()
+            set_task_queue(queue)
+            for tenant_id, account_id in rows:
+                await queue.enqueue(
+                    Job(
+                        name="process_account",
+                        payload={"tenant_id": tenant_id, "account_id": account_id},
+                    )
+                )
+            elapsed = await _drain_with_worker(len(rows), done, limit, budget=600.0)
+            _report_drain(f"{len(rows)} accounts", len(rows), elapsed, limit, "accounts/sec")
     finally:
-        stop.set()
-        await task
+        tasks_module.HANDLERS["process_account"] = real_handler
         service.sources = original
-    print(f"  drained {len(rows)} jobs in {elapsed:.2f}s -> "
-          f"{len(rows) / elapsed:.2f} jobs/sec (single worker)")
 
 
 async def bench_worker_concurrency(n: int, sleep_s: float) -> None:
-    """[D] is run_worker serial or concurrent? N jobs x sleep_s. Serial => ~N*sleep_s."""
+    """[D] is run_worker serial or concurrent? N jobs x sleep_s. Serial => ~N*sleep_s.
+
+    A sleep stands in for the real handler on purpose: ``process_account`` is ~99%
+    await-on-network, so this measures the property that actually governs throughput — how many
+    of those waits the loop is willing to overlap — without a third-party API in the loop.
+    """
     from nexus.workers import tasks as tasks_module
-    from nexus.workers.worker import run_worker
 
     if n <= 0:
         return
 
-    async def slow(payload: dict) -> dict:
-        await asyncio.sleep(sleep_s)
-        return {"ok": True}
-
-    tasks_module.HANDLERS["bench_sleep"] = slow
-    queue = InMemoryTaskQueue()
-    set_task_queue(queue)
-    for i in range(n):
-        await queue.enqueue(Job(name="bench_sleep", payload={"i": i}))
-    print(f"\n[D] run_worker concurrency probe: {n} jobs x {sleep_s}s sleep")
-    stop = asyncio.Event()
-    started = time.perf_counter()
-    task = asyncio.create_task(run_worker(stop=stop, poll_timeout=0.1))
+    print(f"\n[D] run_worker concurrency probe: {n} jobs x {sleep_s}s sleep "
+          f"(serial ~{n * sleep_s:.1f}s)")
     try:
-        while await queue.depth():
-            await asyncio.sleep(0.02)
-        await asyncio.sleep(sleep_s + 0.2)  # let the last in-flight job finish
-        elapsed = time.perf_counter() - started
+        for limit in _limits():
+            completed = 0
+            done = asyncio.Event()
+
+            async def slow(payload: dict) -> dict:
+                nonlocal completed
+                await asyncio.sleep(sleep_s)
+                completed += 1
+                if completed >= n:
+                    done.set()
+                return {"ok": True}
+
+            tasks_module.HANDLERS["bench_sleep"] = slow
+            queue = InMemoryTaskQueue()
+            set_task_queue(queue)
+            for i in range(n):
+                await queue.enqueue(Job(name="bench_sleep", payload={"i": i}))
+            elapsed = await _drain_with_worker(n, done, limit, budget=n * sleep_s + 120.0)
+            _report_drain(f"{n} jobs", n, elapsed, limit, "jobs/sec")
+            print(f"  {'':<28} {'':<30} effective concurrency = "
+                  f"{n * sleep_s / elapsed:.2f}")
     finally:
-        stop.set()
-        await task
         tasks_module.HANDLERS.pop("bench_sleep", None)
-    print(f"  drained in {elapsed:.2f}s (serial ~{n * sleep_s:.1f}s, concurrent ~{sleep_s:.1f}s)")
-    print(f"  -> effective concurrency = {n * sleep_s / elapsed:.2f}")
 
 
 async def main() -> None:

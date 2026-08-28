@@ -1,0 +1,112 @@
+# NEXUS GTM — scheduled advisory checks.
+#
+# Everything here is valuable but slow-moving, and NONE of it should sit between a developer and
+# a merge. A dependency advisory published on Tuesday is not a reason to block Tuesday's PR; it
+# is a reason to open a ticket. Running these weekly instead of per-push is also most of how the
+# 1,800-minute free grant stays sufficient.
+#
+# `continue-on-error` throughout: these SURFACE risk, they do not gate. Promote a check into
+# azure-pipelines-ci.yml once it has been clean for a while — a permanently-red advisory job
+# teaches people to ignore red, which is worse than not running it.
+
+name: nightly-$(Date:yyyyMMdd)
+
+trigger: none
+pr: none
+
+schedules:
+  - cron: "0 3 * * 1" # 03:00 UTC every Monday
+    displayName: Weekly dependency + image audit
+    branches:
+      include: [master, main]
+    always: true # run even when nothing changed — new CVEs land against unchanged code
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - name: IMAGE_REPO
+    value: nexus-gtm
+
+jobs:
+  - job: audit
+    displayName: Dependency + container audit (advisory)
+    timeoutInMinutes: 30
+    steps:
+      - checkout: self
+        fetchDepth: 1
+
+      - task: UsePythonVersion@0
+        inputs: { versionSpec: "3.10" }
+
+      - bash: |
+          set -uo pipefail
+          pip install --quiet pip-audit
+          pip install --quiet -e . >/dev/null 2>&1
+          pip freeze > /tmp/frozen.txt
+          pip-audit -r /tmp/frozen.txt || true
+        displayName: Python dependency audit (pip-audit)
+        continueOnError: true
+
+      - task: NodeTool@0
+        inputs: { versionSpec: "20" }
+
+      - bash: |
+          set -uo pipefail
+          npm audit --audit-level=high || true
+        workingDirectory: frontend
+        displayName: npm audit
+        continueOnError: true
+
+      # Full sweep, including CVEs with no fix available. The CI gate deliberately uses
+      # --ignore-unfixed so it stays actionable; this is the wider picture you review weekly,
+      # because "unfixable today" becomes "fixable next month" without any code change.
+      - task: AzureCLI@2
+        displayName: Trivy full sweep on the live image
+        continueOnError: true
+        inputs:
+          azureSubscription: $(AZURE_SUBSCRIPTION)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -uo pipefail
+            az acr login --name "$(ACR_NAME)"
+            curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+              | sh -s -- -b /tmp v0.55.2
+            /tmp/trivy image --severity MEDIUM,HIGH,CRITICAL --no-progress \
+              "$(ACR_NAME).azurecr.io/$(IMAGE_REPO):latest" || true
+
+  # The migration chain must replay onto an empty database — CLAUDE.md treats this as an
+  # invariant and tests/test_migrations_replay.py enforces it. It is checked here rather than
+  # per-PR because it is slow and it only breaks when migrations/ changes, which is rare.
+  - job: migrations
+    displayName: Migration replay onto an empty Postgres
+    timeoutInMinutes: 20
+    services:
+      postgres: postgres
+    steps:
+      - checkout: self
+        fetchDepth: 1
+      - task: UsePythonVersion@0
+        inputs: { versionSpec: "3.10" }
+      - bash: |
+          set -euo pipefail
+          pip install --quiet -e ".[dev,migrate,postgres,redis]"
+          pytest tests/test_migrations_replay.py -p no:cacheprovider -q
+        env:
+          NEXUS_TEST_POSTGRES_URL: postgresql+asyncpg://nexus:nexus@localhost:5432/nexus
+        displayName: alembic upgrade head from empty + diff against Base.metadata
+
+resources:
+  containers:
+    - container: postgres
+      image: postgres:16-alpine
+      env:
+        POSTGRES_USER: nexus
+        POSTGRES_PASSWORD: nexus
+        POSTGRES_DB: nexus
+      ports:
+        - 5432:5432
+      options: >-
+        --health-cmd "pg_isready -U nexus" --health-interval 5s
+        --health-timeout 3s --health-retries 10

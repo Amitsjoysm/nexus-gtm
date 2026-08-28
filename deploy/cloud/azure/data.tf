@@ -5,10 +5,10 @@ locals {
 
 # ============================ PostgreSQL Flexible Server ============================
 resource "azurerm_postgresql_flexible_server" "main" {
-  name                          = "${local.name}-pg"
+  name                          = local.pg_name # globally unique — see local.uniq in platform.tf
   resource_group_name           = azurerm_resource_group.main.name
   location                      = azurerm_resource_group.main.location
-  version                       = "16"
+  version                       = var.pg_version
   delegated_subnet_id           = azurerm_subnet.db.id
   private_dns_zone_id           = azurerm_private_dns_zone.postgres.id
   administrator_login           = "nexus"
@@ -18,7 +18,13 @@ resource "azurerm_postgresql_flexible_server" "main" {
   backup_retention_days         = 14
   geo_redundant_backup_enabled  = false
   public_network_access_enabled = false
-  zone                          = "1"
+
+  # zone deliberately UNSET. Pinning a zone narrows the SKU/region/zone combination Azure must
+  # satisfy, and a zone without capacity for the chosen SKU makes an otherwise-valid server
+  # unprovisionable. With HA off (pg_ha_enabled = false at Stage 0) a specific zone buys nothing —
+  # there is no standby to place in a different one. Let Azure choose a zone with capacity.
+  # Set this only alongside high_availability, where the standby zone must differ.
+  # zone                        = "1"
 
   dynamic "high_availability" {
     for_each = var.pg_ha_enabled ? [1] : []
@@ -26,6 +32,24 @@ resource "azurerm_postgresql_flexible_server" "main" {
       mode                      = "ZoneRedundant"
       standby_availability_zone = "2"
     }
+  }
+
+  # ZONE IS AZURE'S TO OWN, NOT TERRAFORM'S.
+  #
+  # With `zone` unset, Azure assigns whichever zone has capacity — which is the point (pinning a
+  # zone can make an otherwise-valid SKU unprovisionable). But Terraform then reads back the
+  # assigned value, compares it with the null in config, and proposes a change. Azure refuses it:
+  #   `zone` can only be changed when exchanged with the zone specified in
+  #   `high_availability.0.standby_availability_zone`
+  # so every subsequent plan is permanently dirty and every apply fails on a server that is
+  # perfectly healthy. Hardcoding a zone instead just moves the problem: the correct value is
+  # whatever Azure happened to pick, which is not knowable before the create.
+  #
+  # ignore_changes is the honest expression of "Azure decides this": set at create, never
+  # reconciled afterwards. Remove it only alongside high_availability, where the standby zone
+  # must differ from the primary and both become deliberate choices.
+  lifecycle {
+    ignore_changes = [zone]
   }
 
   depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres]
@@ -45,33 +69,20 @@ resource "azurerm_postgresql_flexible_server_configuration" "no_tls" {
   value     = "OFF"
 }
 
-# ============================ Azure Cache for Redis ============================
-resource "azurerm_redis_cache" "main" {
-  name                          = "${local.name}-redis"
-  resource_group_name           = azurerm_resource_group.main.name
-  location                      = azurerm_resource_group.main.location
-  capacity                      = var.redis_capacity
-  family                        = "C"
-  sku_name                      = var.redis_sku
-  non_ssl_port_enabled          = true # plain redis:// on 6379 over the private endpoint
-  minimum_tls_version           = "1.2"
-  public_network_access_enabled = false
-}
-
-resource "azurerm_private_endpoint" "redis" {
-  name                = "${local.name}-redis-pe"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  subnet_id           = azurerm_subnet.pe.id
-
-  private_service_connection {
-    name                           = "redis"
-    private_connection_resource_id = azurerm_redis_cache.main.id
-    subresource_names              = ["redisCache"]
-    is_manual_connection           = false
-  }
-  private_dns_zone_group {
-    name                 = "redis"
-    private_dns_zone_ids = [azurerm_private_dns_zone.redis.id]
-  }
-}
+# ============================ Redis / Valkey ============================
+# There is deliberately NO managed cache resource here.
+#
+# Azure Cache for Redis (Microsoft.Cache/Redis, `azurerm_redis_cache`) is RETIRED: as of
+# 2026-08 a create returns
+#   400 BadRequest: Azure Cache for Redis is retiring, create Azure Managed Redis instead.
+# That is the resource TYPE being refused, not a deprecated argument - renaming
+# `enable_non_ssl_port` does nothing for it.
+#
+# The successor, Azure Managed Redis (Microsoft.Cache/redisEnterprise), starts around $40-90/mo
+# and, on the azurerm ~> 3.110 pin here, likely exposes only the Enterprise_E* SKUs at ~$300/mo.
+# Against a ~$90/mo total budget for 10-15 users that is the single largest line item, for a
+# component used in exactly two places: the job queue (nexus/workers/queue.py) and the
+# idempotency store (nexus/core/idempotency.py).
+#
+# So Valkey runs as an internal-only Container App instead - see azurerm_container_app.valkey in
+# container_apps.tf. Same valkey:8-alpine image deploy/docker-compose.prod.yml already runs.

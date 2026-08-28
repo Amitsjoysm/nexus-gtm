@@ -11,11 +11,42 @@ container image and `deploy/.env`.
 ## Deploy
 
 ```bash
-deploy/cloud/deploy.sh azure app.example.com
+ALARM_EMAIL=ops@example.com deploy/cloud/deploy.sh azure app.example.com
 ```
 
-Prereqs: `terraform` ≥ 1.6, `docker`, `az` CLI authenticated (`az login`), and a filled `deploy/.env`.
-The script provisions the registry, builds + pushes the image to ACR, then applies the full stack.
+Prereqs: `terraform` ≥ 1.6, `az` CLI authenticated, and a filled `deploy/.env`. **Docker is not
+required** — the image is built server-side with `az acr build`, so this runs unchanged in Azure
+Cloud Shell (which has terraform and az preinstalled and no Docker daemon).
+
+`domain` is optional in practice: it provisions nothing, feeding only the
+`custom_domain_next_step` output. Until a custom domain is bound the app serves on the
+ACA-assigned `*.azurecontainerapps.io` FQDN with a Microsoft-managed certificate.
+
+## First-deploy failures this stack has actually hit
+
+Every one of these was measured on a real subscription, and each is now guarded. Listed because
+the guards are easy to remove by accident, and because the error messages mostly do **not** say
+what is wrong.
+
+| Symptom | Real cause | Guard |
+|---|---|---|
+| `400 The value of the 'Version' should be in: []` | `Microsoft.DBforPostgreSQL` unregistered. The **empty list** reads as "PG 16 unsupported here" and sends you to change the version or region — neither is the problem. | `deploy.sh` registers providers first |
+| `409 MissingSubscriptionRegistration: Microsoft.App` | Same, for Container Apps | ditto |
+| `404 The specified container does not exist` on `terraform init` | The state blob **container** was never created (the storage account exists, so this misleads) | `deploy.sh` preflight creates it |
+| `the name "nexusprodacr" ... is already in use` | ACR names are unique across **all of Azure**, and `<project><env>acr` is what every deployment computes | `local.uniq` suffix in `platform.tf` |
+| `Name unavailable for reservation` (Redis) | Same, and worse — Azure **reserves a cache name even after deletion**, and releasing it needs a support ticket | `local.redis_name` |
+| Alerts never arrive | `alarm_email` empty ⇒ action group with **zero receivers**. The portal still shows an alert rule, so it reads as configured. | `deploy.sh` warns; pass `ALARM_EMAIL` |
+| `AuthorizationPermissionMismatch` creating the state container | Subscription **Contributor does not grant blob data access** (needs Storage Blob Data Contributor) | preflight uses the account key, not AAD |
+
+Two more that are configuration, not bugs:
+
+- **`enable_non_ssl_port` vs `non_ssl_port_enabled`** — the argument was renamed in azurerm 4.0.
+  `versions.tf` pins `~> 3.110`, so `data.tf` uses the 3.x spelling. **Bumping the provider pin
+  means changing that line too.**
+- **`CHANGE_ME` is not a value.** `.env.production.example` ships placeholder secrets and claims
+  `deploy.sh` replaces them. It now does — previously a plain truthiness test wrote `CHANGE_ME`
+  through as the live Postgres admin password and the JWT signing key, neither of which fails
+  loudly.
 
 ## What it provisions
 

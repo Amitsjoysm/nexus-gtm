@@ -78,9 +78,10 @@ the real `handle_refresh_due_accounts` / `process_account` / `run_worker` code:
 | Enqueue ceiling (`batch 100` / `tick 60s`) | 1.67 accounts/sec |
 | **Drain rate, one worker, real sources** | **0.036 accounts/sec** |
 
-`run_worker` is **strictly serial** — one `dequeue`, one awaited `dispatch`, repeat. Verified
-directly: 20 jobs × 1 s sleep drained in 20.24 s, **effective concurrency 0.99**. There is one
-worker replica, so the platform has exactly one account-processing slot.
+`run_worker` **was strictly serial** — one `dequeue`, one awaited `dispatch`, repeat. Verified
+directly: 20 jobs × 1 s sleep drained in 20.24 s, **effective concurrency 0.99**. There was one
+worker replica, so the platform had exactly one account-processing slot. (Fixed — see "Bounded
+in-flight concurrency" below.)
 
 Per-account cost, from **355 real crawls** recorded in `signal_source_runs` on the live stack:
 **26.98 s mean** (p50 25.3 s, p95 44.9 s) across 5 sequential sources, plus **0.53 s** for the
@@ -119,16 +120,52 @@ Three changes landed (2026-08-05), each re-measured against the same 500k-accoun
   are deliberately excluded from the gather: a change detector borrows the caller's TenantSession,
   and SQLAlchemy's AsyncSession is not safe for concurrent use.
 
-**This does not close the gap, and it was wrong to suggest it would.** Supply is still one serial
-worker: ~15.65 s per account (14.94 crawl + 0.53 scoring + DB) = **0.064 accounts/sec**, against
-5.11/s demand at a 15% hot ratio. That is **80×**, down from 640×.
+**Those three did not close the gap, and it was wrong to suggest they would.** Supply was still
+one serial worker: ~15.65 s per account (14.94 crawl + 0.53 scoring + DB) = **0.064
+accounts/sec**, against 5.11/s demand at a 15% hot ratio. That is **80×**, down from 640×.
 
-The remaining lever is the one the numbers have pointed at throughout: **bounded in-flight
-concurrency in `run_worker`**, which is still strictly serial (measured effective concurrency
-0.99). `process_account` is ~99% await-on-network, so N in-flight jobs is ~N× throughput for
-almost no CPU — bounded by the DB pool, since each in-flight job holds a session
-(`pool_size=10 + max_overflow=20` = 25-ish usable). At ~25 in flight that is ~1.6/s per worker,
-so **3-4 worker replicas** reach 5.11/s. Three or four containers is a normal answer; 623 was not.
+### Bounded in-flight concurrency (2026-08-20) — the fourth change, and its measurement
+
+`run_worker` now runs N consumers over the one queue instead of one. N is **derived from the DB
+pool rather than chosen** — `db_pool_size + db_max_overflow - POOL_RESERVE` = 10 + 20 - 5 = **25**
+— because every handler runs inside `tasks.tenant_session` and therefore holds a connection for
+its whole life. Fanning out wider than the pool buys no throughput; it converts throughput into
+`TooManyConnectionsError` for jobs that would otherwise have succeeded. The reserve keeps
+connections for the scheduler's advisory lock, the state-metrics sweep and the dead-letter writer,
+which needs one at exactly the moment things are already going wrong.
+`NEXUS_WORKER_MAX_CONCURRENCY` pins it — set it to 1 to restore the serial loop without a deploy.
+
+Re-measured with the same probes against the same 500k-row scratch database, with `cap=1`
+reproducing the old serial loop so this is a like-for-like comparison rather than two numbers from
+two builds (`BENCH_CONC_LIMITS=1,default`):
+
+| probe | serial (cap=1) | concurrent (cap=25) | |
+|---|---|---|---|
+| [D] 100 jobs × 1 s await | 100.67 s — **0.99** effective concurrency | 5.00 s — **19.98** | 20× |
+| [D] 50 jobs × 15.65 s await (the real per-account cost) | 782.5 s — 0.064 accounts/sec | **31.38 s — 1.59 accounts/sec** | 24.8× |
+| [C] 50 real `process_account`, **sources removed** | 9.98 s — 5.01 accounts/sec | 9.52 s — 5.25 accounts/sec | 1.05× |
+
+**[C] barely moves, and that is the expected answer rather than a disappointment.** [C] deletes
+the signal sources, so what remains is the DB + scoring floor: CPU and Postgres round-trips, not
+await-on-network. Concurrency overlaps *waiting*, and that probe has nothing left to wait on. It
+is still the number worth having, because it says the serialized floor tops out at **5.25
+accounts/sec per worker** — comfortably above the 1.59/s the pool cap allows. The network crawl
+governs; the database does not. If that floor ever falls below ~1.6/s, the cap stops being the
+binding constraint and this table needs re-reading.
+
+So one worker goes **0.064 → 1.59 accounts/sec (24.8×)**, and **4 replicas clear 5.11/s** at a 15%
+hot ratio. Four containers is a normal answer; 623 was not.
+
+What the [D] rows are and are not: a sleep stands in for the handler, so they measure the *loop's*
+willingness to overlap network waits — the property that governs throughput while
+`process_account` is ~99% await-on-network. They are not an end-to-end run against live Exa /
+Firecrawl. Read 1.59/s as "the loop can now sustain 25 concurrent crawls", not as a promise about
+any particular provider's rate limits.
+
+Durability is unchanged and is tested *under* concurrency in `tests/test_worker_concurrency.py`:
+retries, dead-lettering, and the shutdown flush of in-flight backoffs. One ordering constraint is
+new and load-bearing — the flush runs **after** the in-flight drain, because flushing first drops
+exactly the retries scheduled during shutdown. There is a test that fails if it moves.
 
 ### Reproducing the heartbeat measurement
 

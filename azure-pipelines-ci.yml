@@ -1,0 +1,327 @@
+# NEXUS GTM — CI on Azure DevOps (Microsoft-hosted, free grant).
+#
+# BUDGET IS THE DESIGN CONSTRAINT. The free grant is ONE parallel job and 1,800 minutes/month,
+# so stages run SERIALLY and every minute is spent on purpose:
+#
+#   * Gates are MERGED into as few jobs as possible. Each extra job costs ~30-60s of agent
+#     provisioning + checkout before it runs a single useful command. On a parallel-8 system
+#     (the GitHub workflow this replaces) that cost is hidden; here it is added to the bill.
+#   * Stages are ordered CHEAPEST-FAILURE-FIRST. A ruff error must not cost a pytest run.
+#   * Path filters skip whole stages. A frontend-only change must not run 1,350 backend tests.
+#   * The image build runs on ACR (`az acr build`), NOT on the agent — it is off-budget.
+#   * Coverage instrumentation runs on master only. It slows every test and its value is a
+#     trend line, not a per-PR gate.
+#
+# Anything advisory or slow-moving (dependency audits, full image CVE sweeps) lives in
+# azure-pipelines-nightly.yml on a schedule, so it never sits between a developer and a merge.
+
+name: $(Date:yyyyMMdd).$(Rev:r)
+
+trigger:
+  branches:
+    include: [master, main]
+pr:
+  branches:
+    include: [master, main]
+
+pool:
+  vmImage: ubuntu-latest
+
+# Service containers for the integration stage. Declared here, bound per-job under `services:`.
+# Versions match deploy/docker-compose.prod.yml (postgres:16) and the GitHub workflow this
+# replaces — CI must exercise the engine production actually runs, or the advisory-lock and RLS
+# behaviour it exists to prove is untested.
+resources:
+  containers:
+    - container: postgres
+      image: postgres:16-alpine
+      env:
+        POSTGRES_USER: nexus
+        POSTGRES_PASSWORD: nexus
+        POSTGRES_DB: nexus
+      ports:
+        - 5432:5432
+      options: >-
+        --health-cmd "pg_isready -U nexus" --health-interval 5s
+        --health-timeout 3s --health-retries 10
+    - container: redis
+      image: redis:7-alpine
+      ports:
+        - 6379:6379
+      options: >-
+        --health-cmd "redis-cli ping" --health-interval 5s
+        --health-timeout 3s --health-retries 10
+
+variables:
+  - name: PYTHON_VERSION
+    value: "3.10"
+  - name: NODE_VERSION
+    value: "20"
+  # Set these as pipeline variables in the ADO UI (Pipelines > Edit > Variables):
+  #   ACR_NAME            e.g. nexusprodacr
+  #   AZURE_SUBSCRIPTION  the workload-identity-federation service connection name
+  - name: IMAGE_REPO
+    value: nexus-gtm
+
+stages:
+  # ============================================================================
+  # Stage 0 — what actually changed. Drives every downstream stage's condition.
+  # ============================================================================
+  - stage: Changes
+    displayName: Detect changed paths
+    jobs:
+      - job: detect
+        displayName: Detect
+        steps:
+          - checkout: self
+            fetchDepth: 0 # need history to diff against the merge base
+
+          - bash: |
+              set -euo pipefail
+              # PRs diff against the target branch; branch builds against the previous commit.
+              if [ "${BUILD_REASON}" = "PullRequest" ]; then
+                BASE="origin/${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
+                git fetch --no-tags --depth=50 origin "${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
+                RANGE="$(git merge-base HEAD "$BASE")...HEAD"
+              else
+                RANGE="HEAD~1...HEAD"
+              fi
+              CHANGED="$(git diff --name-only $RANGE || git ls-files)"
+              echo "--- changed files ---"; echo "$CHANGED"
+
+              backend=false; frontend=false
+              echo "$CHANGED" | grep -qE '^(nexus/|tests/|tests_integration/|migrations/|scripts/|pyproject\.toml|constraints\.txt|alembic\.ini|deploy/Dockerfile|Dockerfile)' && backend=true
+              echo "$CHANGED" | grep -qE '^frontend/' && frontend=true
+
+              # The image bakes the SPA in, so a frontend change is also an image change.
+              echo "##vso[task.setvariable variable=backend;isOutput=true]$backend"
+              echo "##vso[task.setvariable variable=frontend;isOutput=true]$frontend"
+              echo "backend=$backend frontend=$frontend"
+            name: paths
+            displayName: Diff against merge base
+
+  # ============================================================================
+  # Stage 1 — Fast gates. One job, ~4-6 min. Fails 90% of bad pushes before any
+  # expensive stage starts. ruff/gitleaks/tsc/vite build all live here together
+  # precisely because separate jobs would each pay agent + checkout overhead.
+  # ============================================================================
+  - stage: Fast
+    displayName: Fast gates (lint, secrets, types, build)
+    dependsOn: Changes
+    variables:
+      backend: $[ stageDependencies.Changes.detect.outputs['paths.backend'] ]
+      frontend: $[ stageDependencies.Changes.detect.outputs['paths.frontend'] ]
+    jobs:
+      - job: fast
+        displayName: Lint + secrets + typecheck + frontend build
+        timeoutInMinutes: 15
+        steps:
+          - checkout: self
+            fetchDepth: 0 # gitleaks scans history
+
+          # ---- Secret scan. First, because a leaked credential is the one failure whose
+          # cost keeps rising the longer the pipeline runs. Pinned version: an unpinned
+          # scanner that changes its ruleset overnight turns CI red with no code change.
+          - bash: |
+              set -euo pipefail
+              curl -sSfL -o /tmp/gitleaks.tar.gz \
+                https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+              tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+              /tmp/gitleaks detect --source . --redact --no-banner --exit-code 1
+            displayName: Secret scan (gitleaks)
+
+          - task: UsePythonVersion@0
+            inputs: { versionSpec: $(PYTHON_VERSION) }
+            displayName: Use Python $(PYTHON_VERSION)
+
+          # ruff is a single pinned wheel — a pip cache here would cost more than it saves.
+          - bash: |
+              set -euo pipefail
+              pip install --quiet 'ruff>=0.5'
+              ruff check nexus tests
+            displayName: Lint (ruff)
+            condition: and(succeeded(), eq(variables.backend, 'true'))
+
+          - task: NodeTool@0
+            inputs: { versionSpec: $(NODE_VERSION) }
+            displayName: Use Node $(NODE_VERSION)
+            condition: and(succeeded(), eq(variables.frontend, 'true'))
+
+          # npm ci from cold is ~60-90s; the cache makes it ~10s. Keyed on the lockfile, so a
+          # dependency change invalidates it and nothing else does.
+          - task: Cache@2
+            inputs:
+              key: 'npm | "$(Agent.OS)" | frontend/package-lock.json'
+              restoreKeys: 'npm | "$(Agent.OS)"'
+              path: $(Pipeline.Workspace)/.npm
+            displayName: Cache npm
+            condition: and(succeeded(), eq(variables.frontend, 'true'))
+
+          - bash: |
+              set -euo pipefail
+              npm config set cache "$(Pipeline.Workspace)/.npm" --global
+              npm ci
+              npm run typecheck
+              npm run build
+            workingDirectory: frontend
+            displayName: Typecheck + build frontend
+            condition: and(succeeded(), eq(variables.frontend, 'true'))
+
+  # ============================================================================
+  # Stage 2 — Tests. The expensive one, and the reason the budget is tight.
+  #
+  # Per CLAUDE.md the suite is ~1,350 tests where `fresh_db` drops and recreates every table
+  # per test, so the run is dominated by schema work and scales with core count. A hosted
+  # agent is 2 vCPU, so `-n auto` resolves to 2 workers. `--dist loadfile` is NOT optional:
+  # several suites share module-level state and splitting a file makes them flaky.
+  #
+  # Integration tests run against REAL Postgres + Redis in the same job. They are the highest
+  # value tests in this repo — they are what proves the advisory-lock scheduler singleton and
+  # Redis idempotency — and starting two containers costs seconds, not minutes.
+  # ============================================================================
+  - stage: Test
+    displayName: Tests
+    dependsOn: [Changes, Fast]
+    condition: and(succeeded(), eq(dependencies.Changes.outputs['detect.paths.backend'], 'true'))
+    jobs:
+      - job: test
+        displayName: pytest (unit + integration)
+        timeoutInMinutes: 45
+        services:
+          postgres: postgres
+          redis: redis
+        steps:
+          - checkout: self
+            fetchDepth: 1
+
+          - task: UsePythonVersion@0
+            inputs: { versionSpec: $(PYTHON_VERSION) }
+            displayName: Use Python $(PYTHON_VERSION)
+
+          - task: Cache@2
+            inputs:
+              key: 'pip | "$(Agent.OS)" | pyproject.toml | constraints.txt'
+              restoreKeys: 'pip | "$(Agent.OS)"'
+              path: $(Pipeline.Workspace)/.pip
+            displayName: Cache pip
+
+          - bash: |
+              set -euo pipefail
+              pip install --cache-dir "$(Pipeline.Workspace)/.pip" -e ".[dev,migrate,postgres,redis]"
+            displayName: Install dependencies
+
+          # Coverage instrumentation slows every test. On a PR the number is noise; on master
+          # it is a trend and a gate. So PRs run bare and master pays for the signal.
+          - bash: |
+              set -euo pipefail
+              START=$(date +%s)
+              if [ "${BUILD_REASON}" = "PullRequest" ]; then
+                pytest -n auto -p no:cacheprovider --timeout=120 -q \
+                  --junitxml=junit-unit.xml
+              else
+                pytest -n auto -p no:cacheprovider --timeout=120 -q \
+                  --junitxml=junit-unit.xml \
+                  --cov=nexus --cov-report=xml --cov-report=term-missing --cov-fail-under=60
+              fi
+              ELAPSED=$(( $(date +%s) - START ))
+              echo "PYTEST_SECONDS=${ELAPSED}"
+              echo "##vso[task.setvariable variable=pytestSeconds]${ELAPSED}"
+            displayName: pytest (unit)
+
+          # Real Postgres + Redis. NEXUS_TEST_* are the same variables the GitHub workflow used,
+          # so tests_integration/conftest.py needs no change.
+          - bash: |
+              set -euo pipefail
+              pytest tests_integration -p no:cacheprovider --timeout=120 -q \
+                --junitxml=junit-integration.xml
+            env:
+              NEXUS_TEST_POSTGRES_URL: postgresql+asyncpg://nexus:nexus@localhost:5432/nexus
+              NEXUS_TEST_REDIS_URL: redis://localhost:6379/0
+            displayName: pytest (integration — real Postgres + Redis)
+
+          - task: PublishTestResults@2
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: junit-*.xml
+              failTaskOnFailedTests: true
+            displayName: Publish test results
+
+          - task: PublishCodeCoverageResults@2
+            condition: and(always(), ne(variables['Build.Reason'], 'PullRequest'))
+            inputs: { summaryFileLocation: coverage.xml }
+            displayName: Publish coverage
+
+          # The budget line. Printed every run so "are we going to blow 1,800 minutes?" is a
+          # number you read, not a number you guess. See docs/deployment/19-CICD.md.
+          - bash: |
+              echo "=============================================="
+              echo " pytest wall-clock: $(pytestSeconds)s"
+              echo " Free grant: 1800 min/month, 1 parallel job."
+              echo "=============================================="
+            displayName: Minute-budget telemetry
+            condition: always()
+
+  # ============================================================================
+  # Stage 3 — Package. master only.
+  #
+  # `az acr build` ships the build context to ACR and builds THERE. The agent waits on a
+  # stream instead of running docker, so a ~5 minute image build costs ~5 minutes of ACR
+  # Tasks (cheap, separately metered) instead of ~5 minutes of a 1,800-minute grant.
+  #
+  # Tagged with the commit SHA. The CD pipeline DEPLOYS THAT EXACT TAG and never rebuilds —
+  # a rebuild at deploy time ships an image that nothing in this pipeline ever scanned.
+  # ============================================================================
+  - stage: Package
+    displayName: Build image (on ACR) + scan
+    dependsOn: [Changes, Fast, Test]
+    condition: |
+      and(
+        succeeded(),
+        in(dependencies.Test.result, 'Succeeded', 'Skipped'),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        in(variables['Build.SourceBranch'], 'refs/heads/master', 'refs/heads/main')
+      )
+    jobs:
+      - job: package
+        displayName: az acr build + Trivy
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+            fetchDepth: 1
+
+          - task: AzureCLI@2
+            displayName: Build + push image on ACR
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                az acr build \
+                  --registry "$(ACR_NAME)" \
+                  --image "$(IMAGE_REPO):$(Build.SourceVersion)" \
+                  --image "$(IMAGE_REPO):latest" \
+                  --file deploy/Dockerfile \
+                  .
+                echo "Pushed $(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(Build.SourceVersion)"
+
+          # Trivy against the pushed image. `--exit-code 1` with `--ignore-unfixed` keeps the
+          # gate actionable: it fails only on CVEs you can actually do something about.
+          - task: AzureCLI@2
+            displayName: Trivy scan (fail on fixable HIGH/CRITICAL)
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                az acr login --name "$(ACR_NAME)"
+                curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+                  | sh -s -- -b /tmp v0.55.2
+                /tmp/trivy image \
+                  --severity HIGH,CRITICAL \
+                  --ignore-unfixed \
+                  --exit-code 1 \
+                  --no-progress \
+                  "$(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(Build.SourceVersion)"

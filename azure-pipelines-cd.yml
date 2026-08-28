@@ -1,0 +1,257 @@
+# NEXUS GTM — CD to Azure Container Apps.
+#
+# Triggered by a version tag (vX.Y.Z). Infrastructure is Terraform (deploy/cloud/azure) and is
+# applied separately; this pipeline only ships a new image to Container Apps that already exist.
+#
+# THREE RULES THAT ARE NOT STYLISTIC:
+#
+#  1. DEPLOY THE TESTED ARTIFACT. This pipeline never builds. CI already built and Trivy-scanned
+#     `<repo>:<sha>` on ACR; a rebuild here would produce a different image (new base-image
+#     layers, new transitive wheels) than the one that passed the gates. So CD RESOLVES the tag
+#     to its commit SHA and REFUSES TO DEPLOY if that image is not in the registry.
+#
+#  2. APP BEFORE WORKER, ALWAYS. deploy/entrypoint.sh runs `alembic upgrade head` +
+#     scripts/apply_rls.py on the APP ONLY (NEXUS_RUN_MIGRATIONS=1); the worker deliberately
+#     does neither, to avoid a migration race. Roll the worker first and it consumes jobs
+#     against a stale schema. The Terraform encodes this with depends_on; so does this file.
+#
+#  3. THE SMOKE TEST GATES THE RELEASE, and it hits /ready — not /health. Readiness gates on the
+#     database being reachable, so a replica that is up but cannot serve is never called good.
+#
+# Rollback is a revision pin, captured BEFORE the update. See the Rollback stage.
+
+name: $(Build.SourceBranchName)-$(Rev:r)
+
+trigger:
+  tags:
+    include: ["v*"]
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Pipeline variables (Pipelines > Edit > Variables), or an ADO variable group:
+  #   AZURE_SUBSCRIPTION  workload-identity-federation service connection name
+  #   ACR_NAME            e.g. nexusprodacr
+  #   RESOURCE_GROUP      nexus-prod-rg
+  #   APP_NAME            nexus-prod-app
+  #   WORKER_NAME         nexus-prod-worker
+  #   APP_URL             https://app.example.com
+  - name: IMAGE_REPO
+    value: nexus-gtm
+
+stages:
+  # ============================================================================
+  # Stage 1 — Verify the artifact exists. Cheap, and it turns "deployed nothing"
+  # into a clear failure instead of a confusing ACA error ten minutes later.
+  # ============================================================================
+  - stage: Verify
+    displayName: Verify tested image exists
+    jobs:
+      - job: verify
+        displayName: Resolve tag to SHA and confirm image
+        timeoutInMinutes: 10
+        steps:
+          - checkout: self
+            fetchDepth: 0 # need the tag's commit
+
+          - bash: |
+              set -euo pipefail
+              SHA="$(git rev-list -n 1 HEAD)"
+              echo "Tag $(Build.SourceBranchName) -> commit ${SHA}"
+              echo "##vso[task.setvariable variable=imageSha;isOutput=true]${SHA}"
+            name: resolve
+            displayName: Resolve tag to commit SHA
+
+          - task: AzureCLI@2
+            displayName: Confirm the CI-built, Trivy-scanned image is in ACR
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                SHA="$(resolve.imageSha)"
+                if ! az acr repository show-tags \
+                      --name "$(ACR_NAME)" --repository "$(IMAGE_REPO)" \
+                      --output tsv | grep -qx "${SHA}"; then
+                  echo "##[error]No image $(IMAGE_REPO):${SHA} in $(ACR_NAME)."
+                  echo "##[error]CI must build and scan this commit on master before it can be tagged and released."
+                  echo "##[error]Refusing to build here: a deploy-time build ships an image nothing has scanned."
+                  exit 1
+                fi
+                echo "Found $(IMAGE_REPO):${SHA} — this is the image CI tested."
+
+  # ============================================================================
+  # Stage 2 — Deploy. `environment: production` is the manual approval gate;
+  # configure required approvers in ADO under Pipelines > Environments.
+  # ============================================================================
+  - stage: Deploy
+    displayName: Deploy to Container Apps
+    dependsOn: Verify
+    condition: succeeded()
+    variables:
+      imageSha: $[ stageDependencies.Verify.verify.outputs['resolve.imageSha'] ]
+    jobs:
+      - deployment: deploy
+        displayName: Roll out app, then worker
+        environment: production # <-- add required approvers here
+        timeoutInMinutes: 45
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Capture the currently-serving revision FIRST. After the update it is gone from
+                # `--query properties.latestRevisionName`, and a rollback with no recorded target
+                # is a guess. This is the whole rollback story in one step.
+                - task: AzureCLI@2
+                  displayName: Record current revision (rollback target)
+                  inputs:
+                    azureSubscription: $(AZURE_SUBSCRIPTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      PREV_IMAGE=$(az containerapp show \
+                        --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+                        --query "properties.template.containers[0].image" -o tsv)
+                      PREV_REV=$(az containerapp show \
+                        --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+                        --query "properties.latestReadyRevisionName" -o tsv)
+                      echo "Rollback target: revision=${PREV_REV} image=${PREV_IMAGE}"
+                      echo "##vso[task.setvariable variable=prevImage]${PREV_IMAGE}"
+                      echo "##vso[task.setvariable variable=prevRevision]${PREV_REV}"
+
+                # APP FIRST — it runs the migrations. See rule 2 in the header.
+                - task: AzureCLI@2
+                  displayName: Update app (runs migrations + RLS on boot)
+                  inputs:
+                    azureSubscription: $(AZURE_SUBSCRIPTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      IMAGE="$(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(imageSha)"
+                      echo "Deploying ${IMAGE} to $(APP_NAME)"
+                      az containerapp update \
+                        --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+                        --image "${IMAGE}" \
+                        --output none
+                      az containerapp revision list \
+                        --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+                        --query "[?properties.active].{rev:name,healthy:properties.healthState,running:properties.runningState}" \
+                        -o table
+
+                # Wait for the new revision to be genuinely healthy before touching the worker.
+                # Without this the worker can start against a half-migrated schema.
+                - task: AzureCLI@2
+                  displayName: Wait for app revision to become healthy
+                  inputs:
+                    azureSubscription: $(AZURE_SUBSCRIPTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      for i in $(seq 1 60); do
+                        STATE=$(az containerapp show \
+                          --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+                          --query "properties.runningStatus" -o tsv 2>/dev/null || echo "Unknown")
+                        REV=$(az containerapp show \
+                          --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+                          --query "properties.latestReadyRevisionName" -o tsv 2>/dev/null || echo "")
+                        echo "[$i/60] runningStatus=${STATE} latestReady=${REV}"
+                        if [ "${STATE}" = "Running" ] && [ -n "${REV}" ]; then
+                          echo "App is running and has a ready revision."
+                          exit 0
+                        fi
+                        sleep 10
+                      done
+                      echo "##[error]App did not reach a healthy revision within 10 minutes."
+                      az containerapp logs show --name "$(APP_NAME)" \
+                        --resource-group "$(RESOURCE_GROUP)" --tail 100 || true
+                      exit 1
+
+                # WORKER SECOND — same image, no migrations, single replica (the scheduler
+                # advisory lock in nexus/workers/scheduler.py makes >1 safe, but 1 is the
+                # provisioned shape until queue depth justifies more).
+                - task: AzureCLI@2
+                  displayName: Update worker
+                  inputs:
+                    azureSubscription: $(AZURE_SUBSCRIPTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      IMAGE="$(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(imageSha)"
+                      az containerapp update \
+                        --name "$(WORKER_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+                        --image "${IMAGE}" \
+                        --output none
+                      echo "Worker updated to ${IMAGE}"
+
+                # THE GATE. /ready, not /health — readiness includes database reachability.
+                - bash: |
+                    set -euo pipefail
+                    for p in /health /ready; do
+                      code=$(curl -s -o /dev/null -w '%{http_code}' \
+                        --max-time 10 --retry 6 --retry-delay 5 --retry-all-errors \
+                        "$(APP_URL)${p}")
+                      echo "GET ${p} -> ${code}"
+                      if [ "$code" != "200" ]; then
+                        echo "##[error]Smoke test failed on ${p} (HTTP ${code})"
+                        exit 1
+                      fi
+                    done
+                    echo "Smoke test passed — $(Build.SourceBranchName) is live and healthy."
+                  displayName: Post-deploy smoke test (gates the release)
+
+                - bash: |
+                    echo "Deployed $(Build.SourceBranchName) ($(imageSha))"
+                    echo "Rollback target if needed: $(prevImage)"
+                  displayName: Record deployment outcome
+                  condition: always()
+
+  # ============================================================================
+  # Stage 3 — Automatic rollback if Deploy failed.
+  #
+  # Container Apps is in Single revision mode (see deploy/cloud/azure/container_apps.tf), so
+  # rollback is a redeploy of the previous IMAGE rather than an instant traffic shift. That is
+  # a real limitation and it is why this stage exists rather than a one-line traffic weight.
+  # See docs/deployment/19-CICD.md for the Multiple-revision upgrade path.
+  # ============================================================================
+  - stage: Rollback
+    displayName: Rollback on failure
+    dependsOn: Deploy
+    condition: failed()
+    jobs:
+      - job: rollback
+        displayName: Restore previous image
+        timeoutInMinutes: 30
+        steps:
+          - task: AzureCLI@2
+            displayName: Roll app and worker back
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                # Read the last known-good image straight from the platform rather than trusting
+                # a variable from a stage that failed partway through.
+                PREV=$(az containerapp revision list \
+                  --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+                  --query "sort_by([?properties.healthState=='Healthy'], &properties.createdTime)[-2].properties.template.containers[0].image" \
+                  -o tsv)
+                if [ -z "${PREV}" ] || [ "${PREV}" = "None" ]; then
+                  echo "##[error]No previous healthy revision found. MANUAL INTERVENTION REQUIRED."
+                  echo "##[error]Inspect: az containerapp revision list -n $(APP_NAME) -g $(RESOURCE_GROUP) -o table"
+                  exit 1
+                fi
+                echo "Rolling back to ${PREV}"
+                az containerapp update -n "$(APP_NAME)"    -g "$(RESOURCE_GROUP)" --image "${PREV}" --output none
+                az containerapp update -n "$(WORKER_NAME)" -g "$(RESOURCE_GROUP)" --image "${PREV}" --output none
+                echo "##[warning]Rolled back to ${PREV}. The failed release was NOT deployed."
+                echo "##[warning]NOTE: a rollback does NOT revert database migrations. Migrations in"
+                echo "##[warning]this repo are additive-only (see CLAUDE.md), so the previous image"
+                echo "##[warning]runs correctly against the newer schema — but verify before assuming."

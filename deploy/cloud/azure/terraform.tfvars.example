@@ -1,15 +1,36 @@
 # Copy to terraform.tfvars (gitignored) OR let deploy.sh pass these. Secrets come via TF_VAR_secrets.
-location      = "eastus"
-project       = "nexus"
-env           = "prod"
-domain        = "app.example.com"
-alarm_email   = "ops@example.com"
+#
+# ============================ STAGE 0 — 10-15 users ============================
+# The smallest production-correct shape. Est. ~$75-105/month (ESTIMATE, not verified against
+# live Azure pricing). Every value here scales up in place. See:
+#   docs/deployment/04-COST-MODEL.md      what each line costs
+#   docs/deployment/23-SCALING-ROADMAP.md when to change it and what to change it to
 
-# Data tier (managed)
-pg_sku        = "GP_Standard_D2ds_v5"
-pg_ha_enabled = true
-redis_sku     = "Standard"
+location    = "eastus2" # NOT eastus — PG Flexible Server provisioning is restricted there; see variables.tf
+project     = "nexus"
+env         = "prod"
+domain      = "app.example.com"
+alarm_email = "ops@example.com"
 
-# App sizing
-app_min = 2
-app_max = 10
+# ---- Data tier ----
+# B1ms: ~50 max connections. This is the binding constraint on app_min and on the pool sizes in
+# var.common_env — read the CONNECTION BUDGET comment in variables.tf before changing any of the
+# three, because they are not independent knobs.
+pg_sku        = "B_Standard_B1ms"
+pg_storage_mb = 32768
+pg_ha_enabled = false # Stage 0: backups + PITR cover data loss; HA buys faster RECOVERY.
+
+# Redis: no variables. Azure Cache for Redis is RETIRED and refuses to create; Valkey runs as
+# an internal-only Container App instead (~$10/mo vs $40-300 for Azure Managed Redis).
+
+# ---- App sizing ----
+# app_min = 1 is a single point of failure, accepted at this user count. Raising it to 2 does NOT
+# fit the B1ms connection budget during a rollout (75 of ~50) — it requires a larger SKU or a
+# smaller pool. Do not raise it on its own.
+app_min = 1
+app_max = 3
+
+# ---- Logs ----
+# 30 days. Ingestion is the cost driver, not retention; set a daily cap on the workspace in the
+# portal so a log storm cannot produce a surprise bill.
+log_retention_days = 30
