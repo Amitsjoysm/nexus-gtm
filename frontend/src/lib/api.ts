@@ -1386,7 +1386,9 @@ export class ApiClient {
   setSignalPreference(kind: string, enabled: boolean, signal?: AbortSignal) {
     return this.request<SignalPreference>(
       `/signals/preferences/${encodeURIComponent(kind)}`,
-      { method: "PUT", body: JSON.stringify({ enabled }), signal },
+      // NOT JSON.stringify: `request()` already serialises `body`. Double-encoding sends a JSON
+      // *string* where the server expects an object, which is a 422 with no useful detail.
+      { method: "PUT", body: { enabled }, signal },
     );
   }
 

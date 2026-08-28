@@ -12,6 +12,41 @@ from __future__ import annotations
 
 from tests.conftest import auth, signup
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_runtime_overridable_settings():
+    """Undo every settings mutation this module's endpoints make.
+
+    `get_settings()` is an `lru_cache` over a MUTABLE object, and `apply_overrides` reaches all 142
+    call sites by `setattr` on it — that is the whole mechanism, not an accident. It also means a
+    `PUT /admin/runtime/settings/{key}` inside a test permanently mutates the cached Settings for
+    the whole worker process, and `monkeypatch` cannot undo it: monkeypatch snapshots at the moment
+    it patches, so a test that PUTs first and monkeypatches second "restores" to the already-mutated
+    value.
+
+    Measured on a full run 2026-08-28: this module left `metrics_enabled=False` behind and
+    `tests/test_incident_hardening.py::test_instrumentation_never_breaks_the_app` failed on another
+    file sharing the worker — a failure with no connection to the code it was testing, in a suite
+    that passes when either file runs alone.
+
+    Snapshot every catalog key rather than the ones today's tests happen to touch: a test added
+    later would otherwise reintroduce exactly this, and the symptom lands in somebody else's file.
+    """
+    from nexus.core.config import get_settings
+    from nexus.runtime_config.catalog import CATALOG
+
+    settings = get_settings()
+    keys = list(CATALOG)  # CATALOG is a dict keyed by setting name
+    before = {k: getattr(settings, k) for k in keys if hasattr(settings, k)}
+    try:
+        yield
+    finally:
+        for key, value in before.items():
+            setattr(settings, key, value)
+
+
 
 async def _superadmin(client, monkeypatch, *, slug: str, email: str) -> str:
     from nexus.core.config import get_settings
