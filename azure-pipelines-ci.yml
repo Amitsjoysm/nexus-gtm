@@ -53,6 +53,7 @@ resources:
         --health-timeout 3s --health-retries 10
 
 variables:
+  - group: gtm-deploy
   - name: PYTHON_VERSION
     value: "3.10"
   - name: NODE_VERSION
