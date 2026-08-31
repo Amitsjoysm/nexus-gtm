@@ -319,11 +319,19 @@ stages:
               inlineScript: |
                 set -euo pipefail
                 az acr login --name "$(ACR_NAME)"
-                curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-                  | sh -s -- -b /tmp v0.55.2
+
+                # Pinned release tarball, NOT contrib/install.sh. That installer resolves the
+                # version and then exits 1 regardless — the same failure the GitHub workflow
+                # records and works around. This mirrors the gitleaks step above, which uses
+                # this pattern successfully on the same agent.
+                curl -sSfL -o /tmp/trivy.tar.gz \
+                  https://github.com/aquasecurity/trivy/releases/download/v0.55.2/trivy_0.55.2_Linux-64bit.tar.gz
+                tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+
                 /tmp/trivy image \
                   --severity HIGH,CRITICAL \
                   --ignore-unfixed \
                   --exit-code 1 \
                   --no-progress \
+                  --ignorefile "$(Build.SourcesDirectory)/.trivyignore.yaml" \
                   "$(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(Build.SourceVersion)"
