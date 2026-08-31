@@ -1,0 +1,31 @@
+# gitleaks configuration.
+#
+# `useDefault = true` keeps every upstream rule — this file only ADDS exceptions, so a genuine
+# credential still fails the build.
+#
+# EXCEPTIONS ARE LISTED BY LITERAL VALUE, NOT BY PATH. Allowlisting `tests/**` or `docs/**`
+# wholesale would be easier and is exactly wrong: a real key pasted into a test fixture is one
+# of the likelier ways a credential reaches this repository, and a path allowlist would make
+# that invisible. Each entry below is a specific fake string somebody chose deliberately, so a
+# new finding is always a new decision rather than something the config silently swallowed.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Verified false positives, reviewed 2026-08-31. None is a live credential."
+regexes = [
+  # ---- Azure Container Apps: a secret's NAME, not its value ----------------------------
+  # container_apps.tf declares `password_secret_name = "acr-password"`, which points the
+  # registry block at a secret whose value is `local.acr.admin_password` — a Terraform
+  # reference, never a literal. gitleaks' hashicorp-tf-password rule matches any
+  # `*password* =` assignment in a .tf file and cannot tell a name from a value.
+  '''password_secret_name\s*=''',
+
+  # ---- Deterministic test fixtures and documentation examples --------------------------
+  # Each is a made-up constant chosen to be obviously fake. They are load-bearing for the
+  # tests that assert on them, so they cannot simply be removed.
+  '''isolation-test-pw-123''',   # docs/deployment/04-ENDPOINT-TESTS.md — curl example
+  '''cust-dir-probe-1''',        # tests/test_admin_customers.py — a lookup key, not a secret
+  '''sk-test-abcdefgh1234''',    # tests/test_provider_keys.py + the plan doc quoting it
+  '''s3cr3t-pw-9f2a1c''',        # tests/test_source_databases.py — fixture DSN password
+]
