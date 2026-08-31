@@ -320,18 +320,19 @@ stages:
                 set -euo pipefail
                 az acr login --name "$(ACR_NAME)"
 
-                # Pinned release tarball, NOT contrib/install.sh. That installer resolves the
-                # version and then exits 1 regardless — the same failure the GitHub workflow
-                # records and works around. This mirrors the gitleaks step above, which uses
-                # this pattern successfully on the same agent.
-                curl -sSfL -o /tmp/trivy.tar.gz \
-                  https://github.com/aquasecurity/trivy/releases/download/v0.55.2/trivy_0.55.2_Linux-64bit.tar.gz
-                tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
-
-                /tmp/trivy image \
+                # The scanner's OWN IMAGE — no installer, no release-asset filename to guess.
+                # contrib/install.sh resolves the version then exits 1 regardless (recorded in
+                # .github/workflows/ci.yml), and the release tarball naming is not stable enough
+                # to hardcode. Same version the GitHub workflow pins, so both gates scan
+                # identically. `.trivyignore.yaml` is mounted because the file lives in the
+                # checkout, not inside the container.
+                docker run --rm \
+                  -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
+                  -v "$(Build.SourcesDirectory)/.trivyignore.yaml:/work/.trivyignore.yaml:ro" \
+                  aquasec/trivy:0.65.0 image \
                   --severity HIGH,CRITICAL \
                   --ignore-unfixed \
                   --exit-code 1 \
                   --no-progress \
-                  --ignorefile "$(Build.SourcesDirectory)/.trivyignore.yaml" \
+                  --ignorefile /work/.trivyignore.yaml \
                   "$(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(Build.SourceVersion)"
