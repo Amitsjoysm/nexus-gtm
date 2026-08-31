@@ -278,7 +278,8 @@ stages:
     dependsOn: [Changes, Fast, Test]
     condition: |
       and(
-        succeeded(),
+        in(dependencies.Changes.result, 'Succeeded'),
+        in(dependencies.Fast.result, 'Succeeded'),
         in(dependencies.Test.result, 'Succeeded', 'Skipped'),
         ne(variables['Build.Reason'], 'PullRequest'),
         in(variables['Build.SourceBranch'], 'refs/heads/master', 'refs/heads/main')
