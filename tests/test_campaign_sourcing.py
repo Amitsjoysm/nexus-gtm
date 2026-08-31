@@ -9,7 +9,7 @@ from nexus.models.campaign import (
     Campaign,
 )
 from nexus.campaigns.schemas import CampaignIn, CampaignOut
-from tests.conftest import make_tenant, tenant_session
+from tests.conftest import make_tenant, tenant_session, seed_relevance_profile
 
 
 def test_new_skip_reason_constants():
@@ -56,6 +56,8 @@ from nexus.models.workflow import ListItem, ProspectList
 
 
 async def _list_with_account(ts, *, with_contact=False):
+    # Drafting refuses on a workspace with nothing to pitch (RelevanceContext.is_configured).
+    await seed_relevance_profile(ts)
     plist = ProspectList(tenant_id=ts.tenant_id, name="L")
     ts.add(plist)
     await ts.flush()

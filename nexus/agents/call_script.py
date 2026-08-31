@@ -60,6 +60,19 @@ class CallScriptAgent(BaseAgent):
         if ctx.account is None:
             return {"error": "call_script requires an account"}
 
+        # Same guard as the messaging agent, and it matters MORE here: a call script is SPOKEN,
+        # so a rep reads placeholder framing out loud to a person who can hear the hesitation.
+        # See RelevanceContext.is_configured for the production failure this prevents.
+        if not ctx.relevance_context.is_configured:
+            return {
+                "error": "relevance_profile_not_configured",
+                "detail": (
+                    "This workspace has no product context or value propositions, so there is "
+                    "nothing to pitch. Add them on the Relevance page — paste your website to "
+                    "draft them automatically — then try again."
+                ),
+            }
+
         contact = None
         cid = ctx.inputs.get("contact_id")
         if cid:

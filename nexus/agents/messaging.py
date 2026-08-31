@@ -20,6 +20,32 @@ class MessagingAgent(BaseAgent):
         if ctx.account is None:
             return {"error": "messaging requires an account"}
 
+        # REFUSE TO PITCH A PRODUCT WE HAVE NOT BEEN TOLD ABOUT.
+        #
+        # Without this the run continues with the placeholder value prop below ("our platform")
+        # and a prompt reading "PRODUCT CONTEXT: (none provided)". The output is fluent and looks
+        # finished, so nothing reads as broken — but it pitches whatever else is in context.
+        # Measured 2026-08-31: an account with a `hiring` signal produced a job application.
+        #
+        # Returning `error` rather than raising is deliberate and follows the convention the other
+        # five agents already use for "cannot run on this input". Per workers/durability.py, a
+        # returned `error` key is a NORMAL TERMINAL OUTCOME — it is not marked JOB_FAILED, so it
+        # is not retried and not dead-lettered. A raise here would turn every unconfigured
+        # workspace into a stream of dead letters for a state the operator must fix in the UI.
+        #
+        # This is the same bias as Settings._reject_synthetic_signals_in_production: silently
+        # producing content nobody can tell is wrong is worse than a clear refusal, because
+        # everything these agents generate is sent to a real buyer.
+        if not ctx.relevance_context.is_configured:
+            return {
+                "error": "relevance_profile_not_configured",
+                "detail": (
+                    "This workspace has no product context or value propositions, so there is "
+                    "nothing to pitch. Add them on the Relevance page — paste your website to "
+                    "draft them automatically — then try again."
+                ),
+            }
+
         # Choose a contact (explicit > first available).
         contact = None
         cid = ctx.inputs.get("contact_id")

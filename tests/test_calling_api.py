@@ -5,7 +5,7 @@ from nexus.core.security import decode_access_token
 from nexus.models.account import Account, Contact
 from nexus.models.intelligence import AccountScore
 from nexus.models.signal import SignalEvent
-from tests.conftest import auth, signup, tenant_session
+from tests.conftest import auth, seed_relevance_profile, signup, tenant_session
 
 
 async def _seed(client, slug):
@@ -19,6 +19,8 @@ async def _seed(client, slug):
                     title="VP Sales", phone="+15551234567")
         ts.add(c)
         await ts.flush()
+        # Script generation refuses without a configured profile.
+        await seed_relevance_profile(ts)
         return token, acc.id, c.id
 
 

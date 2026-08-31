@@ -12,7 +12,7 @@ from nexus.models.calling import (
     DISP_NO_ANSWER,
     CallActivity,
 )
-from tests.conftest import make_tenant, tenant_session
+from tests.conftest import make_tenant, seed_relevance_profile, tenant_session
 
 
 async def _account_with_contact(ts, tid):
@@ -23,6 +23,10 @@ async def _account_with_contact(ts, tid):
                 phone="+15551234567")
     ts.add(c)
     await ts.flush()
+    # call_script refuses on a workspace with nothing to pitch
+    # (RelevanceContext.is_configured) — a script is SPOKEN, so placeholder framing is
+    # read aloud to a real person.
+    await seed_relevance_profile(ts)
     return acc, c
 
 

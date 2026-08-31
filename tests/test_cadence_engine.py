@@ -7,7 +7,7 @@ import pytest
 import pytest_asyncio
 
 from nexus.core.config import get_settings
-from tests.conftest import make_tenant, tenant_session
+from tests.conftest import make_tenant, tenant_session, seed_relevance_profile
 
 
 def test_cadence_config_defaults():
@@ -176,6 +176,8 @@ async def ts():
 
 
 async def _enrollable(ts, now, *, steps, review_each_touch=False, email="lead@acme.com"):
+    # Drafting refuses on a workspace with nothing to pitch (RelevanceContext.is_configured).
+    await seed_relevance_profile(ts)
     """Build an account + contact, a cadence, a campaign wired to it, and one DRAFTED
     target; enroll the target. Returns (campaign, enrollment, account, contact). Pass a
     malformed ``email`` to drive the undeliverable path (the stub verifier rejects bad syntax)."""
@@ -460,6 +462,10 @@ def test_cadence_in_step_defaults():
 
 async def test_campaign_with_cadence_enrolls_on_approve(ts):
     from nexus.models.workflow import ListItem, ProspectList
+
+    # Builds its own account inline rather than via _enrollable, so it needs the profile too:
+    # run_draft_phase below refuses on a workspace with nothing to pitch.
+    await seed_relevance_profile(ts)
 
     camp_svc = get_campaign_service()
     cad_svc = get_cadence_service()

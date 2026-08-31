@@ -26,7 +26,7 @@ from nexus.models.workflow import ListItem, ProspectList
 from nexus.core.security import decode_access_token
 from nexus.orchestration.planner import available_goals, get_planner
 from nexus.verification import STATUS_INVALID
-from tests.conftest import auth, make_tenant, signup, tenant_session
+from tests.conftest import auth, make_tenant, signup, tenant_session, seed_relevance_profile
 
 
 @pytest_asyncio.fixture
@@ -47,6 +47,8 @@ async def other_ts():
 
 async def _make_list_with_accounts(ts, specs: list[dict]) -> str:
     """specs: [{"name", "email"|None}]. Returns the list_id."""
+    # Drafting refuses on a workspace with nothing to pitch (RelevanceContext.is_configured).
+    await seed_relevance_profile(ts)
     plist = ProspectList(tenant_id=ts.tenant_id, name="seg", filter={})
     ts.add(plist)
     await ts.flush()

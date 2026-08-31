@@ -41,6 +41,33 @@ class RelevanceContext:
     product_context: str
     account_fit: IcpFit | None = None
 
+    @property
+    def is_configured(self) -> bool:
+        """Whether this tenant has told us what it actually sells.
+
+        A new workspace gets an EMPTY profile from ``get_or_create_profile`` — ``icp={}``,
+        ``value_props=[]``, ``product_context=""`` — and nothing requires it to be filled before
+        the copy agents run. ``to_prompt`` then renders "PRODUCT CONTEXT: (none provided)" and
+        "VALUE PROPOSITIONS: (none defined)", and ``messaging``/``call_script`` fall back to the
+        placeholder value prop ``"our platform"``.
+
+        The model is therefore asked to pitch an unnamed product to a real buyer, with the only
+        concrete material in context being whatever signal triggered the run. Measured in
+        production 2026-08-31: a ``hiring`` signal produced a JOB APPLICATION — "opening found,
+        application for position" — rather than a sales email. The model was not malfunctioning;
+        it wrote the only thing the context supported.
+
+        ICP is deliberately NOT part of this test. The ICP is a filter (industries, headcount,
+        geography) that says who to talk to; it says nothing about what to say to them. A tenant
+        can have a complete ICP and still have nothing to pitch — which is exactly the state that
+        produced the job application.
+
+        OR rather than AND: ``product_context`` alone gives the model real material to pitch from
+        even with no structured value props, and a value prop alone carries a name and the pains
+        it removes. Either is enough to write honest copy; neither is not.
+        """
+        return bool((self.product_context or "").strip() or self.value_props)
+
     def to_prompt(self) -> str:
         vp_lines = "\n".join(
             f"  - {vp.get('name', 'Value prop')}: {vp.get('description', '')}"

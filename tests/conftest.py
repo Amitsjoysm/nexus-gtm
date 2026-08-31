@@ -190,3 +190,31 @@ def no_auth_rate_limit(monkeypatch):
     from nexus.core.config import get_settings
 
     monkeypatch.setattr(get_settings(), "auth_rate_limit_enabled", False)
+
+
+async def seed_relevance_profile(ts, **overrides):
+    """Give a test tenant something to sell.
+
+    The copy agents (`messaging`, `call_script`) REFUSE to run for a workspace with no
+    `product_context` and no `value_props` — see RelevanceContext.is_configured. Without that
+    guard they pitched an unnamed product and, given a `hiring` signal, generated a job
+    application; measured in production 2026-08-31.
+
+    So any test that exercises drafting or sending needs a configured profile, exactly as a real
+    workspace does. This is deliberately NOT folded into `make_tenant`: `RelevanceProfile.tenant_id`
+    is UNIQUE, and several suites (test_icp_auto_discovery, test_outcomes) add their own row, so a
+    profile created for all 399 `make_tenant` call sites would collide with them.
+    """
+    from nexus.models.relevance import RelevanceProfile
+
+    fields = {
+        "icp": {"industries": ["Software"], "employee_min": 50, "employee_max": 5000},
+        "value_props": [
+            {"name": "Faster GTM", "description": "Signal to action in one move.",
+             "pains_solved": ["slow pipeline generation"]}
+        ],
+        "product_context": "A GTM intelligence platform for B2B revenue teams.",
+    }
+    fields.update(overrides)
+    ts.add(RelevanceProfile(tenant_id=ts.tenant_id, **fields))
+    await ts.flush()
