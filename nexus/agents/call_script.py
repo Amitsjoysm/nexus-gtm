@@ -9,7 +9,14 @@ from __future__ import annotations
 import json
 import re
 
-from nexus.agents.copy import CALL_RULES, first_pain, format_pains
+from nexus.agents.copy import (
+    CALL_RULES,
+    account_facts,
+    first_pain,
+    format_pains,
+    select_value_prop,
+    signal_facts,
+)
 from nexus.agents.llm import LLMMessage
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 
@@ -84,7 +91,9 @@ class CallScriptAgent(BaseAgent):
         trigger = trigger_signal.title if trigger_signal else "your current priorities"
 
         vps = ctx.relevance_context.value_props
-        vp = vps[0] if vps else {"name": "our platform", "pains_solved": []}
+        # Matched to what triggered the call rather than always the first — same reasoning as
+        # messaging.py: pitching value_props[0] regardless of the trigger is the mail-merge failure.
+        vp = select_value_prop(vps, ctx.signals)
         # Nouns, formatted to sit inside a sentence — see nexus/agents/copy.py for the
         # garbled email this replaced.
         pains = format_pains(vp.get("pains_solved", []))
@@ -102,10 +111,19 @@ class CallScriptAgent(BaseAgent):
         )
         # Facts, then task, then rules, then the output contract — the same order as the email
         # agent, so "use only facts given above" has something above it to refer to.
+        # The firmographics and the signal BODIES. A talk track is spoken live, so the rep needs the
+        # specifics — the amount raised, the roles being hired — not a headline they then have to
+        # bluff around the moment the buyer asks a follow-up question.
+        facts = account_facts(ctx.account)
+        recent = signal_facts(ctx.signals)
+        signals_block = f"\nRECENT SIGNALS (strongest first):\n{recent}\n" if recent else ""
+
         content = (
             f"Write a cold-call talk track for an experienced SDR calling {contact_name} "
-            f"({contact.title if contact and contact.title else 'a buyer'}) at {ctx.account.name}.\n"
-            f"The trigger to open on: {hook}\n"
+            f"({contact.title if contact and contact.title else 'a buyer'}) at {ctx.account.name}.\n\n"
+            f"WHAT WE KNOW ABOUT THEM:\n{facts}\n"
+            f"{signals_block}"
+            f"\nThe trigger to open on: {hook}\n"
             f"The value proposition to land: {vp.get('name')}\n"
             f"The problems it removes: {pains}\n"
             f"{person_block}\n"

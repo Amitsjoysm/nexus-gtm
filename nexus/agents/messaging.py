@@ -1,7 +1,14 @@
 """Messaging Agent — personalized outreach grounded in value props and the triggering signal."""
 from __future__ import annotations
 
-from nexus.agents.copy import EMAIL_RULES, OUTPUT_CONTRACT, format_pains
+from nexus.agents.copy import (
+    EMAIL_RULES,
+    OUTPUT_CONTRACT,
+    account_facts,
+    format_pains,
+    select_value_prop,
+    signal_facts,
+)
 from nexus.agents.llm import LLMMessage
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 
@@ -58,7 +65,10 @@ class MessagingAgent(BaseAgent):
         trigger = trigger_signal.title if trigger_signal else "your current priorities"
 
         vps = ctx.relevance_context.value_props
-        vp = vps[0] if vps else {"name": "our platform", "pains_solved": []}
+        # MATCHED to what triggered the outreach, not always the first one. Pitching value_props[0]
+        # at every account regardless of the trigger is the mail-merge failure in its purest form:
+        # a hiring signal should pull the value prop about ramping new hires.
+        vp = select_value_prop(vps, ctx.signals)
         # Nouns, formatted to sit inside a sentence — see nexus/agents/copy.py for the
         # garbled email this replaced.
         pains = format_pains(vp.get("pains_solved", []))
@@ -76,10 +86,24 @@ class MessagingAgent(BaseAgent):
         # precede the rules or "use only facts given above" refers to nothing.
         who = contact.full_name if contact else "the buyer"
         role = (contact.title or "").strip() if contact else ""
+        # Everything we already know about the company. Until this existed the prompt carried
+        # `account.name` and nothing else, so the model could not tell a 40-person fintech from a
+        # 6,000-person manufacturer and wrote copy that fitted neither.
+        facts = account_facts(ctx.account)
+        # The signals WITH their bodies. Only `title` used to reach the model: we crawl "raised
+        # $40M led by Sequoia to expand European operations", store it, bill for it, and then sent
+        # the headline "Acme raises Series B". The specifics a rep opens on were being discarded.
+        recent = signal_facts(ctx.signals)
+
         content = (
             f"Write a cold email from an experienced SDR to {who}"
-            f"{f', {role},' if role else ''} at {ctx.account.name}.\n"
-            f"The trigger to open on: {hook}\n"
+            f"{f', {role},' if role else ''} at {ctx.account.name}.\n\n"
+            f"WHAT WE KNOW ABOUT THEM:\n{facts}\n"
+        )
+        if recent:
+            content += f"\nRECENT SIGNALS (strongest first):\n{recent}\n"
+        content += (
+            f"\nThe trigger to open on: {hook}\n"
             f"The value proposition to land: {vp.get('name')}\n"
             f"The problems it removes: {pains}\n"
         )

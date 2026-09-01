@@ -112,3 +112,185 @@ def _downcase_lead(text: str) -> str:
     if text[1].isupper():
         return text
     return text[0].lower() + text[1:]
+
+
+# ---------------------------------------------------------------------------------------------
+# Grounding the prompt in what we already know
+#
+# Audited 2026-09-01 after a user reported generic copy. The messaging prompt carried
+# `account.name` and NOTHING else about the company, plus exactly one signal's `title` -- never its
+# `body`. So the model did not know whether it was writing to a 40-person fintech or a 6,000-person
+# manufacturer, what stack they run, or what the signal actually said.
+#
+# We crawl a funding announcement, store "raised $40M led by Sequoia to expand European operations"
+# in `signal.body`, and hand the model the headline "Acme raises Series B". The substance was
+# fetched, stored, billed for, and dropped. That is the difference between a mail-merge and
+# personalisation.
+#
+# One rule runs through all three helpers: **an unknown fact is OMITTED, never rendered as
+# "unknown"**. A line reading "Employees: unknown" invites the model to write around a hole, and
+# writing around a hole is how invented detail gets in.
+
+# The stack is the single most useful "I noticed you run X" hook, but it is also the field most
+# likely to arrive with forty entries from an enrichment provider. Capped so it cannot crowd out
+# the signal, which is the more perishable fact and the better opener.
+MAX_TECH_IN_PROMPT = 8
+
+# How much of a signal body to carry. Enough for the specifics a rep would open on -- the amount,
+# the lead investor, the headcount -- without letting one press release dominate the budget.
+MAX_SIGNAL_BODY_CHARS = 320
+
+# Beyond three, the model starts writing a summary of the company's news rather than an email.
+MAX_SIGNALS_IN_PROMPT = 3
+
+
+def _employee_band(count: int | None) -> str:
+    """A band rather than the raw number.
+
+    "120 employees" invites the model to quote it back at the buyer, which reads as surveillance
+    and is often wrong by the time it lands. The band is what actually changes the email -- you
+    write differently to a 40-person company than to a 6,000-person one -- without handing over a
+    figure precise enough to be embarrassing.
+    """
+    if count is None:
+        return ""
+    if count < 50:
+        return "under 50 employees"
+    if count < 200:
+        return "50-200 employees"
+    if count < 1000:
+        return "200-1,000 employees"
+    if count < 5000:
+        return "1,000-5,000 employees"
+    return "5,000+ employees"
+
+
+def account_facts(account) -> str:
+    """What we know about the company, as prompt lines. Empty when we know nothing but the name."""
+    lines: list[str] = [f"Company: {getattr(account, 'name', '') or 'the company'}"]
+
+    industry = (getattr(account, "industry", "") or "").strip()
+    if industry:
+        lines.append(f"Industry: {industry}")
+
+    band = _employee_band(getattr(account, "employee_count", None))
+    if band:
+        lines.append(f"Size: {band}")
+
+    # Region before country: "California" tells a rep more than "United States", and both together
+    # read as a database dump.
+    where = (getattr(account, "region", "") or "").strip() or (
+        getattr(account, "country", "") or ""
+    ).strip()
+    if where:
+        lines.append(f"Location: {where}")
+
+    stack = [str(t).strip() for t in (getattr(account, "tech_stack", None) or []) if str(t).strip()]
+    if stack:
+        lines.append(f"Known tech: {', '.join(stack[:MAX_TECH_IN_PROMPT])}")
+
+    description = (getattr(account, "custom_fields", None) or {}).get("description")
+    if description:
+        lines.append(f"What they do: {str(description).strip()[:240]}")
+
+    return "\n".join(lines)
+
+
+def _age_phrase(occurred_at) -> str:
+    """How fresh the fact is.
+
+    A rep opening on a nine-month-old funding round sounds like they only just found it. The model
+    cannot phrase around staleness it was never told about.
+    """
+    if occurred_at is None:
+        return ""
+    from nexus.core.db import utcnow
+
+    try:
+        days = (utcnow() - occurred_at).days
+    except (TypeError, ValueError):
+        return ""
+    if days < 0:
+        return ""
+    if days <= 10:
+        return "in the last few days"
+    if days <= 45:
+        return "in the last month"
+    if days <= 120:
+        return "a few months ago"
+    return "over six months ago"
+
+
+def signal_facts(signals, *, limit: int = MAX_SIGNALS_IN_PROMPT) -> str:
+    """Render the strongest signals WITH their bodies. Empty string when there are none.
+
+    Strongest first, because the model leans on what it reads first and the lead signal is the one
+    the email should open on.
+    """
+    ranked = sorted(
+        [s for s in (signals or []) if getattr(s, "title", None)],
+        key=lambda s: getattr(s, "strength", 0.0) or 0.0,
+        reverse=True,
+    )[: max(1, limit)]
+    if not ranked:
+        return ""
+
+    lines: list[str] = []
+    for signal in ranked:
+        kind = (getattr(signal, "kind", "") or "signal").replace("_", " ")
+        age = _age_phrase(getattr(signal, "occurred_at", None))
+        head = f"- [{kind}{f', {age}' if age else ''}] {signal.title}"
+        body = (getattr(signal, "body", "") or "").strip()
+        if body:
+            trimmed = body[:MAX_SIGNAL_BODY_CHARS]
+            if len(body) > MAX_SIGNAL_BODY_CHARS:
+                trimmed = trimmed.rsplit(" ", 1)[0] + "..."
+            head += f"\n  {trimmed}"
+        lines.append(head)
+    return "\n".join(lines)
+
+
+def select_value_prop(value_props: list[dict] | None, signals) -> dict:
+    """Pick the value prop that best matches what actually triggered the outreach.
+
+    Pitching ``value_props[0]`` at every account regardless of the trigger IS the mail-merge
+    failure -- a hiring signal should pull the value prop about ramping new hires, not whichever
+    one happens to be first in the list.
+
+    Deterministic word overlap, not an LLM call: this runs on the copy path where an extra
+    completion is latency and cost, and a rep asking "why did it pitch this?" deserves an answer.
+    Ties and no-matches fall back to the first, so the behaviour is unchanged for a workspace with
+    a single value prop -- which is most of them.
+    """
+    props = [vp for vp in (value_props or []) if isinstance(vp, dict)]
+    if not props:
+        return {"name": "our platform", "pains_solved": []}
+    if len(props) == 1:
+        return props[0]
+
+    haystack = " ".join(
+        f"{getattr(s, 'title', '') or ''} {getattr(s, 'body', '') or ''}"
+        for s in (signals or [])
+    ).lower()
+    if not haystack.strip():
+        return props[0]
+
+    def score(vp: dict) -> int:
+        text = " ".join([
+            str(vp.get("name") or ""),
+            str(vp.get("description") or ""),
+            " ".join(str(p) for p in (vp.get("pains_solved") or [])),
+        ]).lower()
+        # Words shorter than five characters are almost all stopwords here ("the", "with", "for",
+        # "new"), and they match everything -- which would make the score meaningless.
+        # PREFIX match on a 5-character stem, not whole words. Measured while writing this: a
+        # hiring signal reading "hiring 12 engineers" scored ZERO against a value prop whose pain
+        # was "slow ramp for new engineering hires", because `engineers` != `engineering`. Exact
+        # matching fails on precisely the inflections GTM copy is written in, and the fallback then
+        # silently returns value_props[0] -- the mail-merge behaviour this function exists to end.
+        stems = {w.strip(".,;:()-")[:5] for w in text.split() if len(w.strip(".,;:()-")) > 4}
+        hay_stems = {w.strip(".,;:()-")[:5] for w in haystack.split() if len(w.strip(".,;:()-")) > 4}
+        return len(stems & hay_stems)
+
+    best = max(props, key=score)
+    return best if score(best) > 0 else props[0]
