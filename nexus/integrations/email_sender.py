@@ -119,18 +119,29 @@ def is_configured(settings: dict | None) -> bool:
     return any(account_is_configured(a) for a in list_accounts(settings))
 
 
-def _build_message(cfg: dict, to: str, subject: str, body: str) -> EmailMessage:
+def _build_message(
+    cfg: dict, to: str, subject: str, body: str, html: str | None = None
+) -> EmailMessage:
+    """Build the message. With ``html`` it becomes multipart/alternative.
+
+    The plain-text part is ALWAYS set first and is never optional: corporate mail gateways strip
+    HTML, some clients render text only, and screen readers do better with it. `add_alternative`
+    appends, so text-then-HTML is also the order the standard requires — a client picks the LAST
+    part it can render, and reversing them would show plain text to everyone.
+    """
     msg = EmailMessage()
     from_addr = cfg["from_email"]
     msg["From"] = f'{cfg["from_name"]} <{from_addr}>' if cfg["from_name"] else from_addr
     msg["To"] = to
     msg["Subject"] = subject
     msg.set_content(body or "")
+    if html:
+        msg.add_alternative(html, subtype="html")
     return msg
 
 
-def _send_blocking(cfg: dict, to: str, subject: str, body: str) -> None:
-    msg = _build_message(cfg, to, subject, body)
+def _send_blocking(cfg: dict, to: str, subject: str, body: str, html: str | None = None) -> None:
+    msg = _build_message(cfg, to, subject, body, html)
     if cfg["port"] == 465:  # implicit TLS
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context, timeout=30) as srv:
@@ -148,13 +159,15 @@ def _send_blocking(cfg: dict, to: str, subject: str, body: str) -> None:
         srv.send_message(msg)
 
 
-async def send_email(settings: dict | None, *, to: str, subject: str, body: str) -> SendResult:
+async def send_email(
+    settings: dict | None, *, to: str, subject: str, body: str, html: str | None = None
+) -> SendResult:
     """Send one email through the workspace's SMTP. Never raises — returns a SendResult."""
     cfg = resolve_smtp(settings)
     if not cfg["host"] or not cfg["from_email"] or not to:
         return SendResult(False, "smtp not configured")
     try:
-        await asyncio.to_thread(_send_blocking, cfg, to, subject, body)
+        await asyncio.to_thread(_send_blocking, cfg, to, subject, body, html)
         return SendResult(True, "sent")
     except Exception as exc:  # auth / connection / recipient — surface, don't crash the worker
         logger.warning("SMTP send to %s via %s failed: %r", to, cfg["host"], exc)

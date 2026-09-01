@@ -32,9 +32,76 @@ def _norm_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
+def build_reset_email(link: str) -> tuple[str, str, str]:
+    """``(subject, text, html)`` for the password-reset email.
+
+    A BUTTON rather than a bare URL. A raw reset URL is long, opaque and full of query parameters —
+    it reads exactly like the phishing attempt people are warned about, in the one message they are
+    most primed to distrust. A styled call to action is what a real product sends.
+
+    Both parts are built here, together, because they have to agree: the HTML shows the button, and
+    the TEXT carries the URL. That is not redundancy —
+
+    * corporate mail gateways strip HTML and some clients render text only, so an HTML-only reset
+      email is unopenable for those users, and this is the message that must not fail;
+    * if the button does not render or a client blocks it, the URL in the text part is the user's
+      only route back into their account.
+
+    The markup is table-based with inline styles because email clients are not browsers: Outlook
+    ignores `<style>` blocks and most modern layout CSS, so a `<div>` styled as a button collapses
+    to unstyled text there — which is the failure this change exists to remove. An anchor, not a
+    `<button>`: a `<button>` outside a form does nothing in a mail client.
+    """
+    minutes = max(1, get_settings().password_reset_ttl_s // 60)
+    subject = "Reset your InfoJoy GTM password"
+
+    text = (
+        "We received a request to reset your InfoJoy GTM password.\n\n"
+        f"Reset it here (the link expires in {minutes} minutes):\n{link}\n\n"
+        "If you didn't request this, you can safely ignore this email — your password is unchanged."
+    )
+
+    html = f"""<html><body style="margin:0;padding:0;background:#f5f6f8;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="background:#f5f6f8;padding:32px 12px;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="max-width:520px;background:#ffffff;border-radius:8px;padding:32px;
+                    font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+                    color:#14181f;">
+        <tr><td style="font-size:18px;font-weight:600;padding-bottom:12px;">
+          Reset your password
+        </td></tr>
+        <tr><td style="font-size:15px;line-height:1.6;color:#3f4854;padding-bottom:24px;">
+          We received a request to reset your InfoJoy GTM password.
+          This link expires in {minutes} minutes.
+        </td></tr>
+        <tr><td>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr><td align="center" bgcolor="#1d6e5a" style="border-radius:6px;">
+              <a href="{link}"
+                 style="display:inline-block;padding:13px 28px;font-size:15px;font-weight:600;
+                        color:#ffffff;text-decoration:none;border-radius:6px;
+                        font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                Reset password
+              </a>
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="font-size:13px;line-height:1.6;color:#6b7280;padding-top:28px;">
+          If you didn't request this, you can safely ignore this email &mdash; your password is
+          unchanged.
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+    return subject, text, html
+
+
 async def send_reset_email(to: str, link: str) -> bool:
-    """Email a password-reset link via the system SMTP mailbox. Module-level so tests can patch it."""
-    from nexus.integrations.email_sender import send_email
+    """Email the password-reset button via the system SMTP mailbox. Module-level so tests can patch it."""
+    from nexus.integrations import email_sender
 
     s = get_settings()
     cfg = {
@@ -44,13 +111,8 @@ async def send_reset_email(to: str, link: str) -> bool:
         "from_email": s.system_smtp_from or s.system_smtp_username,
         "from_name": s.system_smtp_from_name,
     }
-    minutes = max(1, s.password_reset_ttl_s // 60)
-    body = (
-        "We received a request to reset your InfoJoy GTM password.\n\n"
-        f"Reset it here (link expires in {minutes} minutes):\n{link}\n\n"
-        "If you didn't request this, you can safely ignore this email — your password is unchanged."
-    )
-    result = await send_email(cfg, to=to, subject="Reset your InfoJoy GTM password", body=body)
+    subject, body, html = build_reset_email(link)
+    result = await email_sender.send_email(cfg, to=to, subject=subject, body=body, html=html)
     if not result.ok:
         logger.warning("password-reset email to %s not sent: %s", to, result.detail)
     return result.ok
