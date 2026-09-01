@@ -223,3 +223,60 @@ passes quickly when run in a smaller batch or serially. **Recommendation:** cap 
 the core count (e.g. `-n 4` on a 4-core runner, or `-n auto` which pytest-xdist sizes to cores) and
 keep `pytest-timeout` (already configured, 120 s) as the backstop. Do not raise `-n` past the core
 count for this suite.
+
+---
+
+## ✅ Webhook invoice lookup — indexed match, and two defects found reviewing it (2026-08-28)
+
+Reviewed the in-flight change that promotes the provider reference out of `meta` into indexed
+columns (`nexus/billing/webhooks.py`, `collection.py`, `models/billing.py`, migration `0054`).
+The premise is right: matching one webhook selected **every** finalized-or-paid invoice
+platform-wide, hydrated them all as ORM objects, and compared `meta["psp_reference"]` in Python.
+Three defects in the change itself, two proven by tests that failed before the fix.
+
+- **The `meta` fallback could not find what it existed to find.** It took the newest 500 rows
+  where both psp columns are NULL and filtered them in Python. But both columns are NULL on
+  *every* invoice between finalization and collection, and on every zero-total invoice — ordinary
+  rows, newer than any legacy one, most numerous exactly at month end. Measured: **520 ordinary
+  finalized invoices hid a legacy invoice completely.** Now matched in SQL inside the JSON blob
+  (`meta["psp_reference"].as_string().in_(refs)`), which compiles on both dialects
+  (`JSON_EXTRACT` / `->>`) and has no window to overflow. Runs only on an indexed miss and
+  hydrates at most one row.
+- **A row found through the fallback never left it.** `_apply_invoice_event` learns the provider
+  invoice id from the event and wrote it only to `meta` — so the row stayed unmigrated for the
+  life of the invoice, and the docstring's own "written by a previous event in this family" match
+  path never became indexed. Both handlers now promote the references onto the columns,
+  **fill-only** (never overwriting what `collection.py` recorded). Same copy migration `0054`
+  performs, done when the row is touched, so the unmigrated set shrinks toward empty.
+- **The backfill rewrote the whole table.** `WHERE meta IS NOT NULL` is true for every row —
+  `meta` is `nullable=False` with a dict default — so under MVCC it produced a dead tuple per
+  invoice, most of them setting NULL to NULL. Narrowed to rows that actually carry a reference.
+
+Also: added a deterministic `ORDER BY` to the indexed lookup so that if a reference ever stops
+being unique, every retry of an event picks the *same* invoice rather than alternating — silent
+double-application on the money path. Removed four dead imports left by the extraction (ruff F401).
+
+- **Why safe:** additive columns, nullable, no rewrite. Cross-tenant scope is unchanged and still
+  correct — the event carries no tenant context and the reference is globally unique; the endpoint
+  already runs on `get_platform_sessionmaker()` (owner role), which is what makes the lookup
+  return rows at all. What changed is cost, not scope.
+- **Validated:** `tests/test_webhook_invoice_lookup.py` 7/7 (3 new, 2 of which failed before the
+  fix); **354 passed** across the billing/invoice/webhook/dunning/reconcile/checkout surface;
+  `test_migrations_replay.py` green; single alembic head; ruff clean on every changed file.
+- **Rollback:** revert the code; `0054` has a working `downgrade()`. The columns are additive and
+  the `meta` copy is still written, so reverting the code alone is safe and loses nothing.
+
+### Notes for whoever owns this next
+- **`test_migrations_replay.py` compares tables and columns, not indexes.** A model/migration
+  index divergence would not be caught. They match here; the guard does not cover it.
+- **Every pre-existing webhook lifecycle test seeds `meta["psp_reference"]` only**, never the
+  columns — so they exercise the fallback exclusively. The indexed path is covered *only* by
+  `test_webhook_invoice_lookup.py`. Tightening or removing the fallback later will break four
+  lifecycle tests for a reason unrelated to what they test.
+- **`handle_event`'s payment branch writes `invoice.status`/`meta` with no `apply_rls` call**,
+  unlike `_apply_invoice_event` which binds it. Pre-existing, and harmless while the session is
+  the owner-role platform sessionmaker — but it is an inconsistency, not a deliberate difference.
+- **`collect_invoice` stores the provider *invoice* id in `psp_reference`**, while
+  `handle_event`'s `payment_intent.*` branch looks up by PaymentIntent id. Nothing ever stores a
+  PaymentIntent id in either column, so that branch can only match legacy `meta` rows.
+  Pre-existing gap, unchanged by this work, and worth a separate look.

@@ -730,6 +730,30 @@ Expected: two `CanNotDelete` locks.
 az containerapp logs show -n "$PROD_APP" -g "$PROD_RG" --tail 100
 ```
 
+### 8.1 Set the public base URL
+
+This could not be set earlier — it needs the ingress hostname, which only exists after the apply.
+
+```bash
+source ~/gtm-env.sh
+echo "NEXUS_APP_BASE_URL=$PROD_URL" >> ~/nexus/deploy/.env
+for APPNAME in "$PROD_APP" "$PROD_WORKER"; do
+  az containerapp update -n "$APPNAME" -g "$PROD_RG" --output none \
+    --set-env-vars "NEXUS_APP_BASE_URL=$PROD_URL"
+done
+```
+
+**Skipping this is silent.** Every link in transactional email is built from it, and an empty value
+yields a *relative* path — a password-reset mail arrives reading `Reset it here:
+/reset-password?email=...&token=...`, which cannot be clicked. The mail sends, the endpoint returns
+202, nothing logs an error, and the only symptom is a customer who cannot reset their password.
+
+Both containers get it: the worker builds links in digests and alerts the same way.
+
+**Update it again when you bind a custom domain** ([Part 10](#part-10--bind-gtminfojoycom)), or
+every reset link keeps pointing at the raw `*.azurecontainerapps.io` hostname — which reads as a
+phishing link to whoever receives it.
+
 ---
 
 ## Part 9 — Create the first workspace and superadmin
@@ -898,6 +922,44 @@ Expected: `https://gtm.infojoy.com`. If it is wrong:
 az containerapp update -n "$PROD_APP" -g "$PROD_RG" \
   --set-env-vars "NEXUS_CORS_ORIGINS=https://gtm.infojoy.com" --output none
 ```
+
+### 10.6 Repoint everything that hardcoded the old hostname
+
+Three values were set to the ACA ingress FQDN before the domain existed. Binding the domain does
+**not** update them, and each fails quietly:
+
+```bash
+source ~/gtm-env.sh
+
+# 1. Transactional email links — otherwise every password-reset and OTP mail sends
+#    customers to a raw *.azurecontainerapps.io URL that reads as a phishing link.
+sed -i "s|^NEXUS_APP_BASE_URL=.*|NEXUS_APP_BASE_URL=https://$DOMAIN|" ~/nexus/deploy/.env
+for APPNAME in "$PROD_APP" "$PROD_WORKER"; do
+  az containerapp update -n "$APPNAME" -g "$PROD_RG" --output none \
+    --set-env-vars "NEXUS_APP_BASE_URL=https://$DOMAIN"
+done
+
+# 2. CORS, for completeness. The SPA is served same-origin by FastAPI so this is not
+#    load-bearing today, but it becomes so the moment anything calls the API cross-origin.
+az containerapp update -n "$PROD_APP" -g "$PROD_RG" --output none \
+  --set-env-vars "NEXUS_CORS_ORIGINS=https://$DOMAIN"
+
+grep -E '^(NEXUS_APP_BASE_URL|NEXUS_CORS_ORIGINS)=' ~/nexus/deploy/.env
+```
+
+**3. The pipeline's `APP_URL` variable** — in Azure DevOps, Library → `gtm-deploy` → set `APP_URL`
+to `https://gtm.infojoy.com`. Until you do, the release smoke test gates on a hostname customers
+never visit, so a broken custom-domain binding would pass CD.
+
+Verify a link is now absolute — note the 60-second per-account cooldown on reset emails:
+
+```bash
+curl -s -o /dev/null -w 'HTTP %{http_code}\n' -X POST "https://$DOMAIN/api/auth/forgot-password" \
+  -H 'Content-Type: application/json' -d '{"email":"you@infojoy.com"}'
+```
+
+Then read the inbox. The link must begin `https://gtm.infojoy.com/reset-password?...`. A 202 alone
+proves nothing — the mail path never raises, so failures are logged and swallowed.
 
 **Now open `https://gtm.infojoy.com` in a browser and log in.** This is the first end-to-end proof.
 
