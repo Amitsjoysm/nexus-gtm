@@ -138,11 +138,24 @@ async def suggest_buyer_titles(
         "employee_max": body.employee_max,
         "required_tech": body.required_tech,
         "buyer_titles": body.buyer_titles,
+        # Forwarded so the ranking can actually use them. `recommend_titles_for_icp` weights
+        # role templates against this text; dropping it here is why filling in the value
+        # proposition and product context changed nothing about the suggestions.
+        "value_props": body.value_props,
+        "product_context": body.product_context,
     }
     if not any([body.industries, body.employee_min, body.employee_max,
-                body.required_tech, body.buyer_titles]):
+                body.required_tech, body.buyer_titles, body.value_props,
+                body.product_context]):
         profile = await get_or_create_profile(ts)
-        icp = profile.icp or {}
+        # The SAVED profile carries value props and product context on its own columns, not
+        # inside `icp` — so an empty request must merge them in, or the fallback path stays as
+        # context-blind as the explicit one was.
+        icp = {
+            **(profile.icp or {}),
+            "value_props": profile.value_props or [],
+            "product_context": profile.product_context or "",
+        }
     recs = recommend_titles_for_icp(icp, limit=body.limit)
     return [TitleRecommendationOut(**vars(r)) for r in recs]
 

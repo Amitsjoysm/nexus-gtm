@@ -196,6 +196,13 @@ class SuggestTitlesIn(BaseModel):
     employee_max: int | None = None
     required_tech: list[str] = Field(default_factory=list)
     buyer_titles: list[str] = Field(default_factory=list)
+    # Campaign context. `recommend_titles_for_icp` has read these since it was written, but the
+    # schema did not accept them and the router did not forward them — so a tester who filled in
+    # the value proposition, the pain solved and the product context saw the identical generic
+    # list and reasonably concluded the AI added nothing. The ranking was never the problem;
+    # the context never reached it.
+    value_props: list[dict] = Field(default_factory=list)
+    product_context: str = ""
     limit: int = 10
 
 

@@ -264,15 +264,28 @@ _CONTEXT_STOPWORDS = frozenset({
 
 
 def _context_blob(icp: dict) -> str:
-    """Flatten every campaign-context field into one lowercase string."""
+    """Flatten every campaign-context field into one lowercase string.
+
+    A value prop is a DICT, and `str(dict)` renders its punctuation and its own key names —
+    ``{'name': ..., 'pains_solved': [...]}`` — so "name", "pains" and "solved" entered the text a
+    role's vocabulary was matched against. Harmless for scoring but it made the blob unreadable
+    when debugging, which is how the weak bonus below went unnoticed. Fields are pulled out by name
+    instead.
+    """
     parts: list[str] = []
     for key in _CONTEXT_KEYS:
         value = icp.get(key)
         if isinstance(value, (list, tuple)):
-            parts.extend(str(v) for v in value)
+            for item in value:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("name") or ""))
+                    parts.append(str(item.get("description") or ""))
+                    parts.extend(str(p) for p in (item.get("pains_solved") or []))
+                elif item is not None:
+                    parts.append(str(item))
         elif value:
             parts.append(str(value))
-    return " ".join(parts).lower()
+    return " ".join(p for p in parts if p).lower()
 
 
 def _context_bonus(title: str, rec, context_blob: str) -> int:
@@ -291,8 +304,26 @@ def _context_bonus(title: str, rec, context_blob: str) -> int:
     for alternative in getattr(rec, "alternatives", ()) or ():
         words.update(w for w in re.findall(r"[a-z]{4,}", str(alternative).lower()))
 
-    hits = sum(1 for w in words - _CONTEXT_STOPWORDS if w in context_blob)
-    return min(hits * 6, 18)
+    # STEM match, not whole words. Measured against the tester's own case: a facilities-management
+    # product scored "Head of Facilities" ONE hit, because the context said "facility energy costs"
+    # (singular) and the role says "facilities". "Plant Manager" scored zero against "building
+    # management" for the same reason — manager/management. Exact matching fails on precisely the
+    # inflections GTM copy is written in, which left context almost inert and reproduced the
+    # generic list being fixed.
+    blob_stems = {w[:5] for w in re.findall(r"[a-z]{4,}", context_blob)}
+    hits = sum(1 for w in words - _CONTEXT_STOPWORDS if w[:5] in blob_stems)
+
+    # Sized against the MEASURED spread, not guessed. For SaaS at 300 staff the base scores run
+    # 50-94 — a 44-point range whose top four are all sales roles, because `base_priority` encodes
+    # "who buys B2B software generally" and that answer is sales-shaped. A bonus of 8-18 cannot
+    # clear it, which is why a SOC 2 product still suggested Chief Revenue Officer and VP Sales
+    # first, and why the tester saw the same generic list however much context they added.
+    #
+    # 14 per hit lets ONE strong match lift a mid-pack role into contention (CISO 76 -> 90) and two
+    # matches win outright (Head of Facilities). The cap of 42 is just under the full spread, so
+    # context can reorder the list decisively but a keyword coincidence still cannot drag a role
+    # that is wrong for the size band or industry all the way from the bottom to the top.
+    return min(hits * 14, 42)
 
 
 def recommend_titles_for_icp(icp: dict, *, limit: int = 10) -> list[TitleRecommendation]:

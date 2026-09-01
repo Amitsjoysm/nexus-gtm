@@ -101,3 +101,36 @@ def test_the_catalogue_covers_operations_side_functions():
     blob = " ".join(f"{r.title} {r.department}" for r in ROLES).lower()
     for want in ("facilit", "workplace"):
         assert want in blob, f"no role covering {want!r} in the catalogue"
+
+
+def test_context_does_not_crash_on_odd_shapes():
+    """`value_props` is a JSON column an operator can populate through several paths; a string
+    where a list was expected must degrade, not raise, on a read-only suggestion endpoint."""
+    for odd in ({"value_props": "a string"}, {"value_props": [None, 3]},
+                {"product_context": None}, {"value_props": [{"no_name": 1}]}):
+        assert _titles({"industries": ["SaaS"], **odd}) is not None
+
+
+async def test_the_endpoint_forwards_the_context(client, fresh_db):
+    """The endpoint built its ICP dict from four keys and dropped the rest, so even a correct
+    ranking function would have received nothing to rank on."""
+    from tests.conftest import auth, signup
+
+    token = await signup(client, slug="tsug", email="a@tsug.com", company="TSug")
+    body = {
+        "industries": ["Manufacturing"],
+        "value_props": [{"name": "Facilities energy optimisation",
+                         "pains_solved": ["rising facility energy costs"]}],
+        "product_context": "building management and facilities operations",
+        "limit": 10,
+    }
+    r = await client.post("/api/relevance/suggest-titles", headers=auth(token), json=body)
+    assert r.status_code == 200, r.text
+    with_ctx = {row["title"].lower() for row in r.json()}
+
+    plain = await client.post("/api/relevance/suggest-titles", headers=auth(token),
+                              json={"industries": ["Manufacturing"], "limit": 10})
+    assert plain.status_code == 200, plain.text
+    assert with_ctx != {row["title"].lower() for row in plain.json()}, (
+        "the endpoint dropped value_props/product_context before ranking"
+    )
