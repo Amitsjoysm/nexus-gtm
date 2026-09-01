@@ -392,13 +392,25 @@ async def _apply_dependencies(
 
 
 async def _burn_for_overage(
-    ts: TenantSession, ent: "ResolvedEntitlement", over_units: float, key: str
+    ts: TenantSession, ent: "ResolvedEntitlement", over_units: float, key: str,
+    *, prior_over: float = 0.0,
 ) -> bool:
     """Spend credits for units beyond the plan's included quota.
 
     Returns True when the overage is paid for. Price precedence matches the invoice rating path
     (plan entitlement, else the global rate card), so what is spent in flight and what is billed
     at period close cannot disagree.
+
+    ``prior_over`` is how far past the quota the tenant already was before this call. It only
+    matters for a card carrying a VOLUME LADDER, where the price of a unit depends on how many
+    came before it: `rating.rate_period` prices the whole period's overage in one
+    `tiered_credits` call at close, so an in-flight burn has to charge the MARGINAL cost of these
+    units at their real position on the ladder rather than re-pricing them from the first tier.
+    Reading `credits_per_unit` flat — which is what this did — overcharges the moment a ladder
+    exists: 8 units against a 5-at-2-then-1 card cost 16 in flight and 13 on the invoice.
+
+    This is the same distinction as the caller's `over = min(quantity, ...)`: what THIS request
+    adds, not the running total.
 
     Never raises: a burn failure degrades to "not covered", and the caller decides. Losing the
     charge on one action beats breaking the product.
@@ -417,13 +429,23 @@ async def _burn_for_overage(
             return True
 
         price = ent.overage_price_credits
-        if price is None:
+        if price is not None:
+            # A negotiated per-unit rate on the plan. Flat by definition — it exists so a deal
+            # does not have to fork the catalog — and it outranks the card, ladder and all.
+            amount = float(over_units) * float(price)
+        else:
             card = await ts.session.get(BillingRateCard, ent.capability_id)
             if card is None or not card.active:
                 return False        # unpriced capability: nothing to charge against
-            price = float(card.credits_per_unit)
+            if card.tiers:
+                from nexus.billing.rating import tiered_credits
 
-        amount = float(over_units) * float(price)
+                before = tiered_credits(float(prior_over), card)
+                after = tiered_credits(float(prior_over) + float(over_units), card)
+                amount = after - before
+            else:
+                amount = float(over_units) * float(card.credits_per_unit)
+
         if amount <= 0:
             return False
         from nexus.billing.rollups import period_key as _period_key
@@ -510,7 +532,11 @@ async def check_and_meter(
                 # Past what the plan includes. Spend credits first — that is what they are for.
                 # An explicit overage price means "keep going and invoice it", not "stop", so it
                 # still passes when the balance cannot cover it. Otherwise this is the wall.
-                covered = await _burn_for_overage(ts, ent, over, key)
+                # `used - limit` is how far past the line the tenant already was, which is
+                # where this request's units sit on a volume ladder.
+                covered = await _burn_for_overage(
+                    ts, ent, over, key, prior_over=max(0.0, used - limit)
+                )
                 if not covered and ent.overage_price_credits is None:
                     blocked_reason = "quota_exhausted"
 
