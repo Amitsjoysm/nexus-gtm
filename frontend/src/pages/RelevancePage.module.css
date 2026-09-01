@@ -231,3 +231,52 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Job-level chips. A multi-select of six fixed options is a toggle row, not a dropdown: the whole
+   set is worth seeing at once when deciding who to target, and hiding five of six behind a click
+   is what makes people leave the field empty. */
+.levelRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.levelChip,
+.levelChipOn {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full, 999px);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.levelChip:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.levelChipOn {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-contrast, #fff);
+}
+
+.levelChip:disabled,
+.levelChipOn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.levelChip:focus-visible,
+.levelChipOn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .levelChip,
+  .levelChipOn { transition: none; }
+}

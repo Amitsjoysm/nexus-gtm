@@ -552,6 +552,10 @@ export class ApiClient {
       employee_max?: number | null;
       required_tech?: string[];
       buyer_titles?: string[];
+      // Campaign context. The server ranks role templates against this text; omitting it is why
+      // filling in the value proposition and product context changed nothing about the results.
+      value_props?: { name: string; description?: string; pains_solved?: string[] }[];
+      product_context?: string;
       limit?: number;
     },
     signal?: AbortSignal,

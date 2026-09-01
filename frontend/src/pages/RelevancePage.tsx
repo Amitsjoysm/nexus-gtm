@@ -17,6 +17,7 @@ import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
+import { JOB_LEVELS } from "@/lib/types";
 import type {
   IcpDefinition,
   LearnedWeights,
@@ -39,8 +40,15 @@ interface ValuePropDraft {
 interface Draft {
   industries: string;
   countries: string;
+  regions: string;
+  postal_codes: string;
+  revenue_min: string;
+  revenue_max: string;
   required_tech: string;
   buyer_titles: string;
+  job_levels: string[];
+  title_keywords: string;
+  exclude_title_keywords: string;
   employee_min: string;
   employee_max: string;
   product_context: string;
@@ -88,8 +96,15 @@ function toDraft(p: RelevanceProfile): Draft {
   return {
     industries: csv(p.icp.industries),
     countries: csv(p.icp.countries),
+    regions: csv(p.icp.regions),
+    postal_codes: csv(p.icp.postal_codes),
+    revenue_min: p.icp.revenue_min != null ? String(p.icp.revenue_min) : "",
+    revenue_max: p.icp.revenue_max != null ? String(p.icp.revenue_max) : "",
     required_tech: csv(p.icp.required_tech),
     buyer_titles: csv(p.icp.buyer_titles),
+    job_levels: p.icp.job_levels ?? [],
+    title_keywords: csv(p.icp.title_keywords),
+    exclude_title_keywords: csv(p.icp.exclude_title_keywords),
     employee_min: p.icp.employee_min != null ? String(p.icp.employee_min) : "",
     employee_max: p.icp.employee_max != null ? String(p.icp.employee_max) : "",
     product_context: p.product_context ?? "",
@@ -169,8 +184,17 @@ export function RelevancePage() {
         ...d,
         industries: icp.industries?.length ? csv(icp.industries) : d.industries,
         countries: icp.countries?.length ? csv(icp.countries) : d.countries,
+        regions: icp.regions?.length ? csv(icp.regions) : d.regions,
+        postal_codes: icp.postal_codes?.length ? csv(icp.postal_codes) : d.postal_codes,
+        revenue_min: icp.revenue_min != null ? String(icp.revenue_min) : d.revenue_min,
+        revenue_max: icp.revenue_max != null ? String(icp.revenue_max) : d.revenue_max,
         required_tech: icp.required_tech?.length ? csv(icp.required_tech) : d.required_tech,
         buyer_titles: icp.buyer_titles?.length ? csv(icp.buyer_titles) : d.buyer_titles,
+        job_levels: icp.job_levels?.length ? icp.job_levels : d.job_levels,
+        title_keywords: icp.title_keywords?.length ? csv(icp.title_keywords) : d.title_keywords,
+        exclude_title_keywords: icp.exclude_title_keywords?.length
+          ? csv(icp.exclude_title_keywords)
+          : d.exclude_title_keywords,
         employee_min: icp.employee_min != null ? String(icp.employee_min) : d.employee_min,
         employee_max: icp.employee_max != null ? String(icp.employee_max) : d.employee_max,
         product_context: p.product_context?.trim() ? p.product_context : d.product_context,
@@ -220,6 +244,16 @@ export function RelevancePage() {
           employee_max: numOrNull(draft.employee_max),
           required_tech: splitCsv(draft.required_tech),
           buyer_titles: splitCsv(draft.buyer_titles),
+          // The campaign context. Without these the server ranks on firmographics alone and
+          // returns the same generic committee however much the user fills in below.
+          value_props: draft.value_props
+            .filter((vp) => vp.name.trim())
+            .map((vp) => ({
+              name: vp.name.trim(),
+              description: vp.description.trim(),
+              pains_solved: splitCsv(vp.pains_solved),
+            })),
+          product_context: draft.product_context.trim(),
           limit: 10,
         }),
       );
@@ -255,8 +289,15 @@ export function RelevancePage() {
       const icp: IcpDefinition = {
         industries: splitCsv(draft.industries),
         countries: splitCsv(draft.countries),
+        regions: splitCsv(draft.regions),
+        postal_codes: splitCsv(draft.postal_codes),
+        revenue_min: numOrNull(draft.revenue_min),
+        revenue_max: numOrNull(draft.revenue_max),
         required_tech: splitCsv(draft.required_tech),
         buyer_titles: splitCsv(draft.buyer_titles),
+        job_levels: draft.job_levels,
+        title_keywords: splitCsv(draft.title_keywords),
+        exclude_title_keywords: splitCsv(draft.exclude_title_keywords),
         employee_min: numOrNull(draft.employee_min),
         employee_max: numOrNull(draft.employee_max),
         weights,
@@ -382,6 +423,50 @@ export function RelevancePage() {
                       disabled={!canEdit}
                     />
                   </Field>
+                  <Field
+                    label="States / provinces"
+                    hint="Comma-separated. Narrows within the countries above."
+                  >
+                    <Input
+                      value={draft.regions}
+                      onChange={(e) => setField("regions", e.target.value)}
+                      placeholder="California, Texas, Ontario"
+                      disabled={!canEdit}
+                    />
+                  </Field>
+                  <Field
+                    label="ZIP / postal codes"
+                    hint="Prefixes work — 941 matches every San Francisco code."
+                  >
+                    <Input
+                      value={draft.postal_codes}
+                      onChange={(e) => setField("postal_codes", e.target.value)}
+                      placeholder="941, 100, SW1"
+                      disabled={!canEdit}
+                    />
+                  </Field>
+                  <div className={styles.grid2}>
+                    <Field label="Min revenue" hint="Annual, in whole dollars.">
+                      <Input
+                        type="number"
+                        min={0}
+                        value={draft.revenue_min}
+                        onChange={(e) => setField("revenue_min", e.target.value)}
+                        placeholder="10000000"
+                        disabled={!canEdit}
+                      />
+                    </Field>
+                    <Field label="Max revenue">
+                      <Input
+                        type="number"
+                        min={0}
+                        value={draft.revenue_max}
+                        onChange={(e) => setField("revenue_max", e.target.value)}
+                        placeholder="500000000"
+                        disabled={!canEdit}
+                      />
+                    </Field>
+                  </div>
                   <div className={styles.grid2}>
                     <Field label="Min employees">
                       <Input
@@ -417,6 +502,63 @@ export function RelevancePage() {
                       value={draft.buyer_titles}
                       onChange={(e) => setField("buyer_titles", e.target.value)}
                       placeholder="VP Sales, Head of RevOps, CTO"
+                      disabled={!canEdit}
+                    />
+                  </Field>
+
+                  {/* Level + keyword matching. Exact titles miss the way people actually write
+                      them: asking for "Facilities Director" never finds "Director of Facilities"
+                      or "Head of Facilities". Levels and keywords catch every phrasing at once,
+                      and both are optional — leave them blank and matching behaves exactly as it
+                      did before they existed. */}
+                  <Field
+                    label="Job levels"
+                    hint="Optional. Combined with the keywords below — leave empty to match any level."
+                  >
+                    <div className={styles.levelRow}>
+                      {JOB_LEVELS.map((lvl) => {
+                        const on = draft.job_levels.includes(lvl.value);
+                        return (
+                          <button
+                            key={lvl.value}
+                            type="button"
+                            className={on ? styles.levelChipOn : styles.levelChip}
+                            aria-pressed={on}
+                            disabled={!canEdit}
+                            onClick={() =>
+                              setField(
+                                "job_levels",
+                                on
+                                  ? draft.job_levels.filter((v) => v !== lvl.value)
+                                  : [...draft.job_levels, lvl.value],
+                              )
+                            }
+                          >
+                            {lvl.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Field>
+                  <Field
+                    label="Title keywords"
+                    hint="Any of these in the title. Word order does not matter."
+                  >
+                    <Input
+                      value={draft.title_keywords}
+                      onChange={(e) => setField("title_keywords", e.target.value)}
+                      placeholder="facilities, workplace, real estate"
+                      disabled={!canEdit}
+                    />
+                  </Field>
+                  <Field
+                    label="Exclude title keywords"
+                    hint="Disqualifies a match — e.g. assistant, deputy, intern."
+                  >
+                    <Input
+                      value={draft.exclude_title_keywords}
+                      onChange={(e) => setField("exclude_title_keywords", e.target.value)}
+                      placeholder="assistant, deputy, intern"
                       disabled={!canEdit}
                     />
                   </Field>

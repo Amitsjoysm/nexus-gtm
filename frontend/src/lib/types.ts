@@ -451,12 +451,35 @@ export interface AnalyticsOverview {
 export interface IcpDefinition {
   industries?: string[];
   countries?: string[];
+  // Sub-country geography and revenue. The engine has scored these since 0051; until now there
+  // was no field to set them from, so a tester could filter on Country and nothing finer.
+  regions?: string[];
+  postal_codes?: string[];
+  revenue_min?: number | null;
+  revenue_max?: number | null;
   employee_min?: number | null;
   employee_max?: number | null;
   required_tech?: string[];
   buyer_titles?: string[];
+  // Title matching beyond an exact string. `buyer_titles` is an exact-ish match; these let a
+  // customer say "Director or Head, anything mentioning facilities, but not assistants" and catch
+  // "Head of Facilities", "Facilities Head" and "Director, Facilities" in one rule.
+  job_levels?: string[];
+  title_keywords?: string[];
+  exclude_title_keywords?: string[];
   weights?: Record<string, number>;
 }
+
+// Mirrors LEVELS in nexus/relevance/job_levels.py. Stable strings: renaming one silently drops
+// whatever a customer had selected, because the stored value stops matching.
+export const JOB_LEVELS: { value: string; label: string }[] = [
+  { value: "c_level", label: "C-Level" },
+  { value: "vp", label: "VP" },
+  { value: "head", label: "Head" },
+  { value: "director", label: "Director" },
+  { value: "manager", label: "Manager" },
+  { value: "ic", label: "Individual contributor" },
+];
 
 export interface ValueProp {
   name: string;
