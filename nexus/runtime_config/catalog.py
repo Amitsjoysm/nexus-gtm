@@ -200,6 +200,66 @@ _SPECS: tuple[SettingSpec, ...] = (
         risk="medium", requires_restart=True,
     ),
 
+    # ---- search cost -----------------------------------------------------------------------------
+    #
+    # Why these are per-task rather than one global switch. `search_provider` drives every plain
+    # `.search()` in the product, and those tasks have wildly different value per query. Measured on
+    # the live deployment: account enrichment alone was 123 of the billed search events across 56
+    # accounts, all on Exa.
+    #
+    # `find_similar` (lookalike accounts) and `search_companies` (ICP/company discovery) are the
+    # ONLY capabilities that genuinely need Exa -- every other provider returns [] for them, so
+    # those features go dark elsewhere. Everything else is a plain query that any index answers, so
+    # pointing the bulk work at a cheaper one costs nothing in capability.
+    #
+    # Empty means "use `search_provider`", so a deployment that sets none behaves exactly as before.
+    SettingSpec(
+        key="enrichment_search_provider", label="Enrichment search provider",
+        group="Search cost", kind="str",
+        effect="Which index answers account-firmographic lookups. This is the highest-volume "
+               "search in the product, so it is where a provider change shows up on the bill.",
+        warning="Leave empty to follow the global provider. Exa is not required here -- enrichment "
+                "issues a plain query, and paying Exa rates for it is the single largest avoidable "
+                "cost measured on this deployment.",
+        risk="low", options=("", "firecrawl", "brave", "serper", "exa", "duckduckgo"),
+    ),
+    SettingSpec(
+        key="contact_search_provider", label="Contact discovery search provider",
+        group="Search cost", kind="str",
+        effect="Which index is queried when finding real named people at an account.",
+        warning="Recall matters more here than cost: a missed contact is a rep with nobody to "
+                "call. Exa's semantic matching is genuinely better at people queries, which is why "
+                "this is worth keeping separate from enrichment rather than sharing one setting.",
+        risk="low", options=("", "exa", "firecrawl", "brave", "serper", "duckduckgo"),
+    ),
+    SettingSpec(
+        key="website_icp_search_provider", label="Website analysis search provider",
+        group="Search cost", kind="str",
+        effect="Which index gathers the pages used to draft an ICP from a company website.",
+        warning="Two queries per run, and it runs when a user asks rather than on a schedule -- so "
+                "this is a low-volume path where provider choice barely affects the bill.",
+        risk="low", options=("", "firecrawl", "brave", "serper", "exa", "duckduckgo"),
+    ),
+    SettingSpec(
+        key="discovery_search_provider", label="Discovery sweep search provider",
+        group="Search cost", kind="str",
+        effect="Which index answers the plain-query fallback in net-new account sweeps.",
+        warning="This does NOT cover `search_companies`, which only Exa implements -- ICP discovery "
+                "still uses Exa for that call whatever this is set to, and setting a non-Exa "
+                "provider here changes only the fallback path.",
+        risk="low", options=("", "firecrawl", "brave", "serper", "exa", "duckduckgo"),
+    ),
+    SettingSpec(
+        key="account_enrich_min_interval_days", label="Enrichment re-attempt interval (days)",
+        group="Search cost", kind="int", minimum=0, maximum=365,
+        effect="How long to wait before re-attempting enrichment on an account. A person pressing "
+               "Enrich is never throttled by this.",
+        warning="0 disables the backoff and restores the old behaviour: an account the web has no "
+                "firmographics for will then issue a search request and an LLM completion on every "
+                "refresh cycle, forever, buying nothing each time.",
+        risk="low",
+    ),
+
     # ---- access ---------------------------------------------------------------------------------
     SettingSpec(
         key="otp_registration_enabled", label="Two-step registration", group="Access", kind="bool",

@@ -180,3 +180,83 @@ def get_search_provider() -> SearchProvider:
 def set_search_provider(provider: SearchProvider | None) -> None:
     global _search
     _search = provider
+
+
+def provider_for_task(task: str):
+    """The search provider for ONE task, honouring its per-task override.
+
+    `search_provider` is global, but the tasks behind it have wildly different value per query.
+    Measured on the live deployment: account enrichment alone was 123 of the billed search events
+    across 56 accounts, all on Exa — while `find_similar` (lookalikes) and `search_companies`
+    (ICP/company discovery) are the ONLY capabilities that genuinely need Exa, because every other
+    provider returns `[]` for them. Everything else is a plain query any index answers, so pointing
+    the bulk work somewhere cheaper costs nothing in capability.
+
+    Mirrors how `signal_search_provider` already works, including the important part: this uses
+    ``build_search_provider`` rather than the global singleton, so selecting a provider for one task
+    must not replace the one the rest of the application resolved.
+
+    An empty or unknown setting falls back to the global provider, so a deployment that configures
+    none of these behaves exactly as it did before they existed.
+    """
+    from nexus.core.config import get_settings
+
+    choice = (getattr(get_settings(), f"{task}_search_provider", "") or "").strip()
+    return build_search_provider(choice) if choice else get_search_provider()
+
+
+class ChainedSearchProvider(SearchProvider):
+    """Try each provider in turn; the first with results wins.
+
+    Built for contact discovery, where recall matters more than cost: a missed contact is a rep with
+    nobody to call, and the two indexes genuinely disagree — Exa's semantic matching is better at
+    people queries, while an operator SERP catches pages Exa's index has not embedded.
+
+    Sequential and short-circuiting, NOT a fan-out. Querying every provider on every call would
+    double the bill for the (common) case where the first one already answered, and cost is the
+    reason this split exists at all. The second provider is only paid for when the first found
+    nothing.
+
+    ``query_dialect`` comes from the FIRST provider: the caller builds its query string before
+    calling, so it can only be shaped for one dialect, and the first is the one that usually serves.
+    Capability methods (`find_similar`, `search_companies`) deliberately are NOT chained — they are
+    Exa-only, and a chain that silently returned `[]` from a second provider would look like "no
+    lookalikes exist" rather than "this provider cannot do that".
+    """
+
+    name = "chain"
+
+    def __init__(self, providers: list[SearchProvider]):
+        self.providers = [p for p in providers if p is not None]
+        self.query_dialect = getattr(
+            self.providers[0], "query_dialect", "plain"
+        ) if self.providers else "plain"
+
+    async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]:
+        for provider in self.providers:
+            try:
+                hits = await provider.search(query, limit=limit)
+            except Exception:  # one dead provider must not sink the others
+                continue
+            if hits:
+                return hits
+        return []
+
+def provider_for_task_chain(task: str, *, browser=None) -> SearchProvider:
+    """Like :func:`provider_for_task`, but a comma-separated setting builds a fallback CHAIN.
+
+    ``contact_search_provider = "exa,firecrawl"`` means: ask Exa, and only pay Firecrawl when Exa
+    found nothing. One value behaves exactly like `provider_for_task`; empty falls back to the
+    global provider. So a deployment that configures nothing is unaffected.
+    """
+    from nexus.core.config import get_settings
+
+    raw = (getattr(get_settings(), f"{task}_search_provider", "") or "").strip()
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    if not names:
+        return get_search_provider()
+    if len(names) == 1:
+        return build_search_provider(names[0], browser=browser)
+    return ChainedSearchProvider(
+        [build_search_provider(n, browser=browser) for n in names]
+    )

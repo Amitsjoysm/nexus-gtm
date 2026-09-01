@@ -302,7 +302,26 @@ class BraveSearchProvider(SearchProvider):
         self.api_key = (api_key or "").strip()
         self.timeout = timeout
 
+    async def _refresh_keys(self) -> None:
+        """Re-read the managed pool so a key added in the Control plane reaches a RUNNING process.
+
+        Mirrors the Exa/Firecrawl refresh. Without it a key added in the admin panel was invisible
+        to this provider forever: it holds a single key captured at construction from the
+        environment, and the worker is a separate container that nothing the API does can
+        invalidate. Reported from the live deployment as "panel keys don't work, you have to use
+        .env". TTL-cached, so this is a dict read on all but one call in thirty seconds.
+        """
+        try:
+            from nexus.providers.resolver import managed_pool
+
+            pool = await managed_pool("brave")
+        except Exception:  # key management must never break the call it exists to serve
+            return
+        if pool and pool[0] != self.api_key:
+            self.api_key = pool[0]
+
     async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]:
+        await self._refresh_keys()
         if not self.api_key:
             return []
         try:
@@ -347,7 +366,26 @@ class SerperSearchProvider(SearchProvider):
         self.api_key = (api_key or "").strip()
         self.timeout = timeout
 
+    async def _refresh_keys(self) -> None:
+        """Re-read the managed pool so a key added in the Control plane reaches a RUNNING process.
+
+        Mirrors the Exa/Firecrawl refresh. Without it a key added in the admin panel was invisible
+        to this provider forever: it holds a single key captured at construction from the
+        environment, and the worker is a separate container that nothing the API does can
+        invalidate. Reported from the live deployment as "panel keys don't work, you have to use
+        .env". TTL-cached, so this is a dict read on all but one call in thirty seconds.
+        """
+        try:
+            from nexus.providers.resolver import managed_pool
+
+            pool = await managed_pool("serper")
+        except Exception:  # key management must never break the call it exists to serve
+            return
+        if pool and pool[0] != self.api_key:
+            self.api_key = pool[0]
+
     async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]:
+        await self._refresh_keys()
         if not self.api_key:
             return []
         try:
@@ -585,17 +623,33 @@ def build_engine(name: str, settings, *, browser=None) -> SearchProvider:
         return StubSearchProvider()
     provider_cls, attr = spec
     # Engines with a key-rotation pool (primary key + a comma-separated pool).
+    # AN EMPTY ENVIRONMENT IS NOT "NO KEY".
+    #
+    # These providers refresh from the managed pool on every call (`_refresh_keys`), which is what
+    # lets a key added in the Control plane reach a running worker without a restart. But that only
+    # happens if the provider gets CONSTRUCTED, and construction used to require an ENVIRONMENT
+    # key — so a deployment whose keys live only in the admin panel silently ran on DuckDuckGo
+    # while the operator watched a verified key sit in the UI doing nothing. Reported from the live
+    # deployment as "panel keys don't work, you have to add them to .env".
+    #
+    # The DuckDuckGo substitution is still right when there is genuinely no key ANYWHERE: a
+    # selected engine with nothing behind it should degrade to a keyless index rather than to a
+    # dark provider that silently returns nothing. So the managed pool is consulted too, and only
+    # the both-empty case falls back.
+    from nexus.providers.resolver import has_managed_keys_cached
+
+    managed = has_managed_keys_cached(key)
     if key in ("exa", "firecrawl"):
         keys = getattr(settings, f"{key}_api_key_list", None)
         if keys is None:
             single = (getattr(settings, attr, "") or "").strip()
             keys = [single] if single else []
-        if not keys:
+        if not keys and not managed:
             logger.warning("%s selected but no key is set; falling back to DuckDuckGo", key)
             return DuckDuckGoSearchProvider(browser=browser)
         return provider_cls(api_keys=keys)
     api_key = (getattr(settings, attr, "") or "").strip()
-    if not api_key:
+    if not api_key and not managed:
         logger.warning("%s selected but %s is unset; falling back to DuckDuckGo", key, attr)
         return DuckDuckGoSearchProvider(browser=browser)
     return provider_cls(api_key)

@@ -146,6 +146,34 @@ async def managed_pool(provider: str) -> list[str]:
     return await _CACHE.managed_pool(provider)
 
 
+def has_managed_keys_cached(provider: str) -> bool:
+    """Does the LAST refresh show operator-registered keys for this provider? Synchronous.
+
+    Exists for the handful of SYNC construction points — `build_engine`, `_build_llm_chain` — that
+    must decide whether a provider is worth building before any await is available. Reads only what
+    a previous async refresh already put in the cache: no IO, no event loop, and deliberately no
+    blocking call, because these run inside a running loop where one would deadlock.
+
+    A cold cache answers False, which is the safe direction: the caller keeps whatever fallback it
+    had (DuckDuckGo for search) rather than building a provider that may have no key at all. The
+    first async refresh warms it, and every caller here is re-invoked per request or per crawl, so
+    a key added in the Control plane starts being used within one TTL — without a restart, which is
+    the whole point of the managed pool.
+    """
+    cached = _CACHE._pools.get((provider or "").strip().lower())
+    if cached is None or (time.monotonic() - cached[0]) >= POOL_TTL_S:
+        return False
+    return bool(cached[1])
+
+
+async def warm(provider: str) -> None:
+    """Populate the cache so :func:`has_managed_keys_cached` can answer. Never raises."""
+    try:
+        await _CACHE.managed_pool((provider or "").strip().lower())
+    except Exception:  # key management must never break the call it exists to serve
+        return
+
+
 def invalidate(provider: str = "") -> None:
     _CACHE.invalidate(provider)
 

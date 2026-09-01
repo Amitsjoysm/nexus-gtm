@@ -276,9 +276,18 @@ class GroqLLMProvider(OpenAICompatProvider):
     ):
         keys = [api_keys] if isinstance(api_keys, str) else list(api_keys)
         keys = [k.strip() for k in keys if k and k.strip()]
-        if not keys:
-            raise ValueError("GroqLLMProvider needs at least one API key")
-        super().__init__(base_url=base_url, api_key=keys[0], model=model, transport=transport)
+        # An EMPTY key list is allowed, and that is the whole point of `_refresh_keys`: this
+        # provider is designed to pick up a key added in the Control plane while the process is
+        # running. Refusing to be constructed without an environment key made that impossible —
+        # `_build_llm_chain` could only add the provider when the env already had one, so a
+        # deployment configured purely through the admin panel silently ran on the stub and the
+        # operator was told to "add it to .env instead".
+        #
+        # Keys decide what this provider CAN DO, not whether it may exist. With none resolved it
+        # raises at call time, and the chain's stub tail answers — the same failover as before.
+        super().__init__(
+            base_url=base_url, api_key=keys[0] if keys else "", model=model, transport=transport
+        )
         self._keys = keys
         self._idx = 0  # sticky: start each call from the last key that worked
 
@@ -577,7 +586,23 @@ def _build_llm_chain(s) -> LLMProvider:
     chain: list[LLMProvider] = []
     if s.anthropic_api_key:
         chain.append(AnthropicLLMProvider(s.anthropic_api_key, s.anthropic_model))
-    if s.groq_api_key_list:
+    # Groq is included whenever the deployment might use it, NOT only when the environment already
+    # holds a key. It refreshes from the managed pool on every call (`_refresh_keys`), so this is
+    # the one provider that can pick up a Control-plane key without a restart — but it only got the
+    # chance if it was in the chain, and chain membership was gated on `s.groq_api_key_list`.
+    #
+    # That is why keys added in the admin panel "did nothing" and had to be written into .env: with
+    # an empty environment the provider was never constructed, the refresh never ran, and every
+    # completion fell through to the stub. Silently — stub output is fluent and looks finished.
+    #
+    # With no key from either source it raises at call time and the stub tail answers, which is
+    # exactly what happened before, so a deployment that genuinely has no Groq is unaffected.
+    # `getattr`, because callers legitimately pass a partial settings stand-in (tests build a
+    # SimpleNamespace with only the key fields). Defaulting to "" rather than "auto" keeps such a
+    # caller on the old env-only behaviour: an object that does not mention a provider has not
+    # selected one, and inventing a selection for it would build a Groq provider nobody asked for.
+    _selected = (getattr(s, "llm_provider", "") or "").lstrip("=").lower()
+    if s.groq_api_key_list or _selected in ("auto", "groq"):
         chain.append(GroqLLMProvider(s.groq_api_key_list, s.groq_model, s.groq_base_url))
     if s.llm_api_key:
         chain.append(OpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model))

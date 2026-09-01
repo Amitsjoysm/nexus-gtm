@@ -340,6 +340,20 @@ def build_registry_from_settings(browser=None) -> DataSourceRegistry:
 
     s = get_settings()
     search = build_search_provider(s.search_provider, browser=browser)
+
+    # Contact discovery gets its OWN provider (or chain). Recall matters more here than cost — a
+    # missed contact is a rep with nobody to call — whereas the bulk paths are plain queries any
+    # index answers. `contact_search_provider = "exa,firecrawl"` asks Exa first and only pays
+    # Firecrawl when Exa found nothing. Empty falls back to `search`, so this is a no-op until an
+    # operator sets it in the Control plane.
+    #
+    # `company_search` deliberately keeps the GLOBAL provider: it calls `search_companies`, which
+    # only Exa implements. Pointing it elsewhere would not make discovery cheaper, it would make it
+    # return nothing.
+    from nexus.integrations.search.provider import provider_for_task_chain
+
+    contact_search_provider = provider_for_task_chain("contact", browser=browser) or search
+
     return DataSourceRegistry(
         company_search=_build_company_search(
             s.company_search_source_list, search=search, browser=browser
@@ -347,7 +361,9 @@ def build_registry_from_settings(browser=None) -> DataSourceRegistry:
         search=search,
         research=build_research_provider(s.research_provider),
         email_verify=build_email_verifier(s.email_verify_provider),
-        contact_search=_build_contact_search(s.contact_search_source_list, search=search),
+        contact_search=_build_contact_search(
+            s.contact_search_source_list, search=contact_search_provider
+        ),
     )
 
 

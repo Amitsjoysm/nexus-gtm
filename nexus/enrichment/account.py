@@ -45,6 +45,65 @@ def _parse_obj(text: str | None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# How long to wait before re-attempting an account the web had nothing for. Firmographics change on
+# a scale of quarters; the refresh cycle runs in hours, so without this an account that can never be
+# fully enriched issues a search request and an LLM completion on EVERY cycle and buys nothing each
+# time. Measured live: 123 enrich.account events across 56 accounts, the largest single consumer of
+# search credits in the product.
+ENRICH_ATTEMPT_KEY = "enrich_attempted_at"
+
+
+def should_attempt(account, *, force: bool) -> bool:
+    """Is this account due a (paid) enrichment attempt?
+
+    ``force`` is a PERSON pressing "Enrich" and is never throttled: the interval exists to stop a
+    background sweep re-buying the same empty answer, not to tell a user who explicitly asked that
+    nothing happened -- which reads as a broken button.
+
+    Fails OPEN on anything unparseable. `custom_fields` is a free-form JSON column several paths
+    write, and refusing to enrich because a timestamp is corrupt would be a silent, permanent
+    outage for that one account.
+    """
+    if force:
+        return True
+    raw = (getattr(account, "custom_fields", None) or {}).get(ENRICH_ATTEMPT_KEY)
+    if not isinstance(raw, str) or not raw.strip():
+        return True
+    try:
+        from datetime import datetime
+
+        last = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return True
+    if last.tzinfo is None:
+        from datetime import timezone
+
+        last = last.replace(tzinfo=timezone.utc)
+    from nexus.core.config import get_settings
+    from nexus.core.db import utcnow
+
+    days = int(getattr(get_settings(), "account_enrich_min_interval_days", 30) or 0)
+    if days <= 0:  # 0 disables the backoff entirely -- the pre-existing behaviour
+        return True
+    from datetime import timedelta
+
+    return (utcnow() - last) >= timedelta(days=days)
+
+
+def mark_attempted(account) -> None:
+    """Record that we spent a request on this account, whatever it returned.
+
+    Written on ATTEMPT, not on success: the expensive case is the account the web has nothing for,
+    and recording only successes would leave exactly those accounts retrying forever.
+    """
+    from nexus.core.db import utcnow
+
+    account.custom_fields = {
+        **(getattr(account, "custom_fields", None) or {}),
+        ENRICH_ATTEMPT_KEY: utcnow().isoformat(),
+    }
+
+
 class SearchBackedAccountEnricher:
     """Find and apply firmographics for an account from web search + LLM extraction."""
 
@@ -182,7 +241,7 @@ class SearchBackedAccountEnricher:
 
     async def enrich(
         self, ts, account: Account, *, user_id: str | None = None,
-        raise_on_block: bool = False, meter: bool = True,
+        raise_on_block: bool = False, meter: bool = True, force: bool = False,
     ) -> list[str]:
         """Fill blank firmographics. Source databases first, then the web. Returns fields filled.
 
@@ -203,6 +262,10 @@ class SearchBackedAccountEnricher:
         candidate sweeps in ``discovery/auto.py`` and ``lookalike/service.py`` are exactly that
         shape. Both callers are pinned by tests that assert the batch is charged once.
         """
+        # Spacing between PAID attempts. Checked before the free source-database lookup so that
+        # still runs -- it costs nothing and may fill the blanks on its own.
+        due = should_attempt(account, force=force)
+
         filled, hit = await self.from_source_db(account)
 
         # The paid path runs only if the basics are still missing — the same gate `pipeline.py`
@@ -221,12 +284,18 @@ class SearchBackedAccountEnricher:
                                 source_name=getattr(hit, "source_name", ""))
             return filled
 
+        if not due:
+            # Attempted recently and the web had nothing to add. Skipping is the saving: this is
+            # the account that would otherwise re-buy the same empty answer every refresh cycle.
+            return filled
+
         if not (account.name or account.domain or "").strip():
             # `fetch` would return {} without issuing a request. Nothing was bought, so nothing is
             # charged — the same rule that keeps an unconfigured phone lookup off the bill.
             return filled
 
         if not meter:
+            mark_attempted(account)
             data = await self.fetch(account)
             return filled + self.apply(account, data) if data else filled
 
@@ -240,6 +309,10 @@ class SearchBackedAccountEnricher:
                 ts, ACCOUNT_CAPABILITY, user_id=user_id, source="enrichment",
                 attrs={"provider": "web", "cached": False},
             ):
+                # Recorded on ATTEMPT, not on success. The expensive case is the account the web
+                # has nothing for: marking only successes would leave exactly those accounts
+                # retrying on every refresh cycle forever, which is the spend this exists to stop.
+                mark_attempted(account)
                 data = await self.fetch(account)
                 if not data:
                     return filled
@@ -306,9 +379,14 @@ def get_account_enricher() -> SearchBackedAccountEnricher:
     global _enricher
     if _enricher is None:
         from nexus.agents.llm import get_llm_provider
-        from nexus.integrations.search.provider import get_search_provider
+        from nexus.integrations.search.provider import provider_for_task
 
-        _enricher = SearchBackedAccountEnricher(get_search_provider(), get_llm_provider())
+        # The per-task provider, not the global one. Enrichment is the highest-volume search in
+        # the product (measured: 123 of the billed search events across 56 accounts), and it issues
+        # a plain query that any index answers — so it is the one task where paying Exa rates buys
+        # nothing. Empty setting falls back to the global provider, so this is a no-op until an
+        # operator picks one in the Control plane.
+        _enricher = SearchBackedAccountEnricher(provider_for_task("enrichment"), get_llm_provider())
     return _enricher
 
 

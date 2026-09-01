@@ -169,6 +169,13 @@ class Settings(BaseSettings):
     # raising. Measured live on 2026-08-27: website analysis, Suggest Titles, contact extraction
     # and personalization were all silently dead, reported as four separate bugs.
     # Pinned by tests/test_llm_model_default.py.
+    # Days to wait before re-attempting enrichment on an account. Firmographics change on a scale
+    # of quarters while the refresh cycle runs in hours, so without a floor an account the web has
+    # no data for issues a search request and an LLM completion every cycle and buys nothing.
+    # 0 disables the backoff (the behaviour before it existed). A person pressing "Enrich" is never
+    # throttled by it.
+    account_enrich_min_interval_days: int = 30
+
     llm_model: str = "openai/gpt-oss-120b"
     # Blended $/1k tokens used to attribute real COGS to a metered action. Config, never a
     # constant: providers reprice, and margin reporting must follow without a redeploy.
@@ -280,6 +287,22 @@ class Settings(BaseSettings):
     # would silently strip those: `find_similar` falls back to the base class and returns [], and
     # lookalikes degrade to "no results" with nothing in the logs to explain it. This slot keeps
     # the two decisions independent.
+    # PER-TASK search providers. Empty means "use `search_provider`", so a deployment that sets
+    # none behaves exactly as it did before these existed.
+    #
+    # They exist because `search_provider` is global and the tasks behind it have wildly different
+    # value-per-query. Measured on the live deployment: account enrichment alone was 123 of the
+    # billed search events across 56 accounts, all on Exa — while `find_similar` and
+    # `search_companies` are the ONLY things that genuinely need Exa, because every other provider
+    # returns [] for them. Pointing the bulk work at a cheaper index costs nothing in capability.
+    #
+    # Editable from the Control plane (see nexus/runtime_config/catalog.py) so the split can be
+    # tuned against a real bill without a redeploy.
+    enrichment_search_provider: str = ""      # account firmographics — the volume driver
+    contact_search_provider: str = ""         # finding real people at an account
+    website_icp_search_provider: str = ""     # drafting an ICP from a website
+    discovery_search_provider: str = ""       # net-new account sweeps
+
     signal_search_provider: str = ""
     # Web-search backend: duckduckgo|exa|brave|serper|firecrawl. Keyless DuckDuckGo is the
     # default; it 403s after ~10 rapid queries, so any real crawl volume needs a keyed engine.

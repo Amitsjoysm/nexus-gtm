@@ -57,6 +57,22 @@ async def lifespan(app: FastAPI):
 
     register_crm_sync_subscribers()
 
+    # Warm the managed-key cache so the SYNC construction points can see Control-plane keys from
+    # the first request. `build_engine` and `_build_llm_chain` decide whether a provider is worth
+    # building before any await is available, and they read the cache; cold, it answers "no managed
+    # keys" and a deployment configured purely through the admin panel would serve its first
+    # searches from DuckDuckGo before self-correcting. Cheap (one query per provider), and failure
+    # is ignored — this is an optimisation, never a startup dependency.
+    try:
+        import asyncio
+
+        from nexus.providers.catalog import PROVIDERS
+        from nexus.providers.resolver import warm
+
+        await asyncio.gather(*(warm(p) for p in PROVIDERS), return_exceptions=True)
+    except Exception:  # never let key warming take the process down
+        pass
+
     # Resolve the telephony provider once, at boot, so a name with no implementation behind it is
     # a startup error rather than a permanent silence.
     #

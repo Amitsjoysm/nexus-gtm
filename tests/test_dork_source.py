@@ -318,7 +318,18 @@ async def test_exa_sends_a_real_published_date_floor(monkeypatch):
     monkeypatch.setattr(exa, "_post", fake_post)
     await exa.search_recent("acme funding", limit=3, days=30)
     assert "startPublishedDate" in captured
-    assert captured["startPublishedDate"] < "2026-07-30"
+    # Relative to TODAY, not a literal date. This asserted `< "2026-07-30"`, which was true when it
+    # was written and became false the moment the calendar passed the floor it hard-coded — the
+    # test then failed on a clean tree for a reason that had nothing to do with the code. A date
+    # floor is inherently relative, so the assertion has to be too.
+    from datetime import timedelta
+
+    from nexus.core.db import utcnow
+
+    expected = (utcnow() - timedelta(days=30)).date().isoformat()
+    assert captured["startPublishedDate"][:10] == expected, (
+        f"expected a floor 30 days back ({expected}), got {captured['startPublishedDate']!r}"
+    )
 
 
 async def test_a_keyless_exa_does_not_touch_the_network():

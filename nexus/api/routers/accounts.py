@@ -498,7 +498,11 @@ async def enrich_account(
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
     filled = await get_account_enricher().enrich(
-        ts, account, user_id=principal.user_id, raise_on_block=True
+        # `force=True`: a PERSON pressed Enrich. The attempt interval exists to stop a background
+        # sweep re-buying the same empty answer every refresh cycle, never to tell a user who asked
+        # explicitly that nothing happened — which reads as a broken button, not as a saving.
+        # Same distinction `raise_on_block=True` already draws on the line above.
+        ts, account, user_id=principal.user_id, raise_on_block=True, force=True,
     )
     await ts.flush()
     response.headers["X-Enriched-Fields"] = ",".join(filled)
