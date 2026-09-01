@@ -230,7 +230,15 @@ _SPECS: tuple[SettingSpec, ...] = (
         warning="Recall matters more here than cost: a missed contact is a rep with nobody to "
                 "call. Exa's semantic matching is genuinely better at people queries, which is why "
                 "this is worth keeping separate from enrichment rather than sharing one setting.",
-        risk="low", options=("", "exa", "firecrawl", "brave", "serper", "duckduckgo"),
+        # A comma-separated value is a FALLBACK CHAIN: ask the first, and pay the second only when
+        # the first found nothing. The useful combinations are listed explicitly rather than by
+        # relaxing validation to accept any comma string — a picker that offers them makes the
+        # feature discoverable, and a typo'd provider name in a free-text field would silently
+        # degrade contact discovery to whatever the fallback is.
+        risk="low", options=(
+            "", "exa", "exa,firecrawl", "exa,brave", "firecrawl,exa",
+            "firecrawl", "brave", "serper", "duckduckgo",
+        ),
     ),
     SettingSpec(
         key="website_icp_search_provider", label="Website analysis search provider",
