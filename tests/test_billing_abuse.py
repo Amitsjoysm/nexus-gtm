@@ -177,7 +177,7 @@ async def test_a_workspace_owner_cannot_grant_themselves_credits(client):
         f"/api/admin/billing/tenants/{tid}/credits", headers=auth(token),
         json={"amount": 1_000_000, "reason": "free money", "idempotency_key": "k"},
     )
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_a_workspace_owner_cannot_reprice_their_own_plan(client):
@@ -186,7 +186,7 @@ async def test_a_workspace_owner_cannot_reprice_their_own_plan(client):
         "/api/admin/billing/plans/growth", headers=auth(token),
         json={"base_price_cents": 0, "included_credits": 999999},
     )
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_a_workspace_owner_cannot_move_themselves_to_a_better_plan(client):
@@ -203,7 +203,7 @@ async def test_a_workspace_owner_cannot_move_themselves_to_a_better_plan(client)
         f"/api/admin/billing/tenants/{tid}/subscription", headers=auth(token),
         json={"plan_id": "legacy-unlimited"},
     )
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 # ---- collection abuse -----------------------------------------------------------------------

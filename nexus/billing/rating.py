@@ -16,6 +16,7 @@ from sqlalchemy import select
 from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.models.billing import (
+    BillingCapability,
     BillingInvoice,
     BillingInvoiceLine,
     BillingPlan,
@@ -165,7 +166,29 @@ async def rate_period(ts: TenantSession, *, period_key: str) -> BillingInvoice:
             BillingUsageRollup.period_kind == "period",
             BillingUsageRollup.period_key == period_key,
         )
+        # Which capabilities measure a LEVEL rather than an action. Only these can appear on a
+        # usage invoice now — see the loop below.
+        gauges = {
+            c.id for c in (await ts.session.scalars(select(BillingCapability))).all()
+            if c.meter_kind == "gauge"
+        }
+
         for r in sorted(rollups, key=lambda x: x.capability_id):
+            # CREDIT-PAID USAGE IS NOT INVOICED AGAIN.
+            #
+            # Under credits-only billing the in-flight burn IS the charge: every metered request
+            # deducts `credits_per_unit x quantity` from a balance the subscription already bought.
+            # This loop was written for the previous model, where credits were burned only PAST the
+            # quota and the remainder was invoiced — so leaving it alone became a double charge the
+            # moment quotas stopped gating non-gauge capabilities: usage routinely exceeds the
+            # quota number while every one of those units has already been paid for in credits.
+            #
+            # Gauges are the exception on the other side. `seat.member` and `platform.storage` are
+            # never charged in credits (there is no request to price — they resolve to a live
+            # count), so exceeding one is the only thing left that a usage invoice can legitimately
+            # bill for. Skipping them too would make going over a seat cap free.
+            if r.capability_id not in gauges:
+                continue
             ent = ents.get(r.capability_id)
             quota = ent.quota if ent is not None else None
             if quota is None:

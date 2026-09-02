@@ -92,6 +92,9 @@ async def test_support_cannot_reprice_a_plan(client, monkeypatch):
         "/api/admin/billing/plans/growth", headers=auth(support),
         json={"base_price_cents": 1},
     )
+    # 403, not 404: this caller IS a platform admin, just not one with this permission. They have
+    # proven who they are, so telling them it is an authorisation problem is right — the 404 is
+    # for strangers who must not learn the surface exists.
     assert r.status_code == 403
 
 
@@ -124,6 +127,9 @@ async def test_support_cannot_replay_dead_letter_jobs(client, monkeypatch):
     boss = await _bootstrap_admin(client, monkeypatch, "rb4")
     support = await _make_role(client, boss, "help4@nexus.com", "support", "rb4s")
     r = await client.get("/api/admin/jobs/dead-letters", headers=auth(support))
+    # 403, not 404: this caller IS a platform admin, just not one with this permission. They have
+    # proven who they are, so telling them it is an authorisation problem is right — the 404 is
+    # for strangers who must not learn the surface exists.
     assert r.status_code == 403
 
 
@@ -163,6 +169,9 @@ async def test_support_cannot_exceed_the_cap(client, monkeypatch):
         f"/api/admin/billing/tenants/{tid}/credits", headers=auth(support),
         json={"amount": 1_000_000, "reason": "oops", "idempotency_key": "rb6-1"},
     )
+    # 403, not 404: this caller IS a platform admin, just not one with this permission. They have
+    # proven who they are, so telling them it is an authorisation problem is right — the 404 is
+    # for strangers who must not learn the surface exists.
     assert r.status_code == 403
     # Specific, not generic: they hold a real grant permission and need to know an escalation
     # is required rather than thinking they have no access at all.
@@ -233,7 +242,7 @@ async def test_a_tenant_owner_still_reaches_nothing(client):
         ("get", "/api/admin/jobs/dead-letters"),
     ):
         r = await getattr(client, method)(path, headers=auth(token))
-        assert r.status_code in (401, 403)
+        assert r.status_code in (401, 404)
 
 
 async def test_the_legacy_gate_is_no_longer_flat(client, monkeypatch):

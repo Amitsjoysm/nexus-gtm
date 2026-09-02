@@ -433,12 +433,12 @@ async def test_dead_letters_reject_a_tenant_owner(client):
 
     token = await signup(client, slug="dlq1", email="o@dlq1.com", company="DLQ1")
     r = await client.get("/api/admin/jobs/dead-letters", headers=auth(token))
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_dead_letters_reject_anonymous(client):
     r = await client.get("/api/admin/jobs/dead-letters")
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_replay_rejects_a_tenant_owner(client):
@@ -446,7 +446,7 @@ async def test_replay_rejects_a_tenant_owner(client):
 
     token = await signup(client, slug="dlq2", email="o@dlq2.com", company="DLQ2")
     r = await client.post("/api/admin/jobs/dead-letters/whatever/replay", headers=auth(token))
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_platform_admin_lists_dead_letters(client, monkeypatch, instant_retries):

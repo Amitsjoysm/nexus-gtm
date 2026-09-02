@@ -66,11 +66,11 @@ async def test_a_workspace_owner_cannot_read_it(client):
     """One person's behaviour is not something a tenant role should reach."""
     token = await signup(client, slug="ua1", email="o@ua1.com", company="UA1")
     r = await client.get("/api/admin/users/o@ua1.com/activity", headers=auth(token))
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_it_requires_authentication(client):
-    assert (await client.get("/api/admin/users/x@y.com/activity")).status_code in (401, 403)
+    assert (await client.get("/api/admin/users/x@y.com/activity")).status_code in (401, 404)
 
 
 async def test_an_unknown_user_is_404_not_an_empty_report(client, monkeypatch):

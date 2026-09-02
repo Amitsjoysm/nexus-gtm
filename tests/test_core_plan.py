@@ -34,9 +34,12 @@ async def _tenant_on_plan(client, slug: str, plan_id: str) -> str:
     await sync_catalog()
     await sync_plans()
     token = await signup(client, slug=slug, email=f"o@{slug}.com", company=slug.upper())
-    async with tenant_session(principal_from_token(token).tenant_id) as ts:
-        ts.add(BillingSubscription(plan_id=plan_id, status="active"))
-        await ts.flush()
+    # SWITCH the subscription signup created, do not add a second one. A new workspace now starts
+    # on `free`, and two live rows make entitlement resolution ambiguous — which is the whole
+    # reason `change_plan` switches in place.
+    from tests.conftest import put_on_plan
+
+    await put_on_plan(principal_from_token(token).tenant_id, plan_id)
     return token
 
 

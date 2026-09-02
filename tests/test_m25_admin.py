@@ -34,6 +34,8 @@ async def test_a_suspended_user_cannot_log_in(client, monkeypatch):
 
     r = await client.post("/api/auth/login",
                           json={"email": "rep@m25a.com", "password": "password123"})
+    # /auth/login is not a staff route — the suspended user must be TOLD why, or they will keep
+    # retrying a password that is not the problem.
     assert r.status_code == 403
     assert "suspended" in r.json()["detail"].lower()
 
@@ -78,7 +80,7 @@ async def test_a_wrong_password_on_a_suspended_account_still_says_invalid_creden
 async def test_a_tenant_owner_cannot_suspend_anyone(client):
     token = await signup(client, slug="m25e", email="o@m25e.com", company="M25E")
     r = await client.post("/api/admin/users/someone@x.com/suspend", headers=auth(token), json={})
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 # ---- merge -------------------------------------------------------------------------------------

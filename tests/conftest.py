@@ -256,3 +256,24 @@ def assert_staff_surface_hidden(response) -> None:
         f"expected the staff surface to be hidden, got {response.status_code}: "
         f"a 403 confirms the route exists and lets it be enumerated"
     )
+
+
+async def put_on_plan(tenant_id: str, plan_id: str, *, status: str = "active"):
+    """Move a tenant onto ``plan_id``, SWITCHING its subscription rather than adding one.
+
+    Tests used to do `ts.add(BillingSubscription(plan_id=...))` after signing up. That worked only
+    while signup created no subscription; now that a new workspace starts on `free`, adding a
+    second row leaves TWO live subscriptions — and "one subscription per tenant" is what makes
+    rating and entitlement resolution unambiguous in the first place. `change_plan` exists to
+    switch in place for exactly this reason, and the admin endpoints already use it.
+    """
+    from nexus.billing.subscriptions import change_plan, ensure_subscription
+    from nexus.workers.tasks import tenant_session
+
+    async with tenant_session(tenant_id) as ts:
+        created = await ensure_subscription(ts, plan_id=plan_id, status=status)
+        sub = created if created is not None else await change_plan(ts, plan_id, actor="test")
+        if status != "active":
+            sub.status = status
+        await ts.flush()
+        return sub

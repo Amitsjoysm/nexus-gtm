@@ -41,6 +41,9 @@ async def test_whoami_says_yes_for_a_platform_admin(client, monkeypatch):
 
 async def test_whoami_requires_authentication(client):
     r = await client.get("/api/admin/billing/whoami")
+    # 401/403 both fine, and this route is deliberately NOT hidden: it answers "am I an admin?"
+    # with false for ordinary users, which is how the SPA decides whether to show admin navigation
+    # at all. A 404 here would break that, and its existence is not the secret -- what it guards is.
     assert r.status_code in (401, 403)
 
 
@@ -77,7 +80,7 @@ async def test_a_workspace_owner_cannot_make_themselves_an_admin(client):
     token = await signup(client, slug="pa3", email="o@pa3.com", company="PA3")
     r = await client.post("/api/admin/billing/admins", headers=auth(token),
                           json={"email": "o@pa3.com", "platform_role": "superadmin"})
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_granting_rejects_bad_input(client, monkeypatch):

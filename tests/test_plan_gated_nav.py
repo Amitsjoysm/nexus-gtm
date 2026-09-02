@@ -131,6 +131,23 @@ async def test_a_workspace_with_no_subscription_keeps_its_product_modules(client
     `module.api` is the deliberate exception: it is catalogued `enterprise`, so it is "talk to
     us" for everyone until a plan says otherwise, subscription or not."""
     token = await _seeded(client, "ent7")
+    # Genuinely REMOVE the subscription. Signup now attaches `free`, which explicitly disables
+    # these modules — so signing up no longer produces the state this test is about, and asserting
+    # against it would silently be testing the free plan instead of the unknown-means-allow bias.
+    from sqlalchemy import delete
+
+    from nexus.models.billing import BillingSubscription
+    from nexus.workers.tasks import tenant_session
+    from tests.conftest import principal_from_token
+
+    async with tenant_session(principal_from_token(token).tenant_id) as ts:
+        await ts.session.execute(
+            delete(BillingSubscription).where(
+                BillingSubscription.tenant_id == ts.tenant_id
+            )
+        )
+        await ts.flush()
+
     r = await client.get("/api/billing/entitlements", headers=auth(token))
     body = r.json()
     assert body["gating_active"] is False
@@ -158,9 +175,11 @@ async def _tenant_on_plan(client, slug: str, plan_id: str) -> str:
     await sync_catalog()
     await sync_plans()
     token = await signup(client, slug=slug, email=f"o@{slug}.com", company=slug.upper())
-    async with tenant_session(principal_from_token(token).tenant_id) as ts:
-        ts.add(BillingSubscription(plan_id=plan_id, status="active"))
-        await ts.flush()
+        # SWITCH the subscription signup created rather than adding a second: a new workspace
+        # starts on `free`, and two live rows make entitlement resolution ambiguous.
+    from tests.conftest import put_on_plan
+
+    await put_on_plan(principal_from_token(token).tenant_id, plan_id)
     return token
 
 

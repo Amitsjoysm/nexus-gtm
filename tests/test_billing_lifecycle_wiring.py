@@ -393,7 +393,7 @@ async def test_pause_refuses_a_tenant_owner(client):
     token = await signup(client, slug="ap2", email="o@ap2.com", company="AP2")
     r = await client.post("/api/admin/billing/tenants/whatever/pause",
                           headers=auth(token), json={})
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_pause_is_audited(client, monkeypatch):

@@ -83,7 +83,7 @@ async def test_a_request_body_cannot_set_status_or_active(client, monkeypatch):
 async def test_a_tenant_owner_cannot_reach_it(client):
     token = await signup(client, slug="pc5", email="o@pc5.com", company="PC5")
     assert (await client.get("/api/admin/payment-credentials",
-                             headers=auth(token))).status_code == 403
+                             headers=auth(token))).status_code == 404
 
 
 async def test_verification_records_which_account_answered(client, monkeypatch):

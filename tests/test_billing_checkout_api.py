@@ -43,9 +43,11 @@ async def _seeded_tenant(client, *, slug: str, plan_id: str = "launch"):
     await sync_rates()
     token = await signup(client, slug=slug, email=f"o@{slug}.com", company=slug.upper())
     tid = decode_access_token(token)["tid"]
-    async with tenant_session(tid) as ts:
-        ts.add(BillingSubscription(plan_id=plan_id, status="active"))
-        await ts.flush()
+        # SWITCH the subscription signup created rather than adding a second: a new workspace
+        # starts on `free`, and two live rows make entitlement resolution ambiguous.
+    from tests.conftest import put_on_plan
+
+    await put_on_plan(tid, plan_id)
     return token, tid
 
 

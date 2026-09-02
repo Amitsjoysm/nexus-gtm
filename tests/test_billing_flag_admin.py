@@ -30,12 +30,12 @@ async def _admin(client, monkeypatch, *, slug: str, email: str) -> str:
 async def test_a_tenant_owner_cannot_touch_flags(client):
     token = await signup(client, slug="ff0", email="o@ff0.com", company="FF0")
     assert (await client.get("/api/admin/billing/flags", headers=auth(token))).status_code in (
-        401, 403,
+        401, 404,
     )
     r = await client.put(
         "/api/admin/billing/flags/beta_x", headers=auth(token), json={"enabled": False},
     )
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_creating_and_listing_a_flag(client, monkeypatch):

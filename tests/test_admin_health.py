@@ -32,11 +32,11 @@ async def test_a_workspace_owner_cannot_see_it(client):
     """Platform admin is a separate authorization system; no tenant role grants it."""
     token = await signup(client, slug="ah1", email="o@ah1.com", company="AH1")
     r = await client.get(ENDPOINT, headers=auth(token))
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_it_requires_authentication(client):
-    assert (await client.get(ENDPOINT)).status_code in (401, 403)
+    assert (await client.get(ENDPOINT)).status_code in (401, 404)
 
 
 def test_support_can_read_health_but_not_reprice():

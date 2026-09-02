@@ -541,6 +541,13 @@ async def grant_tenant_credits(
     from nexus.core.config import get_settings
 
     held = await platform_permissions(principal)
+    if not held:
+        # NOT STAFF AT ALL -> 404, matching `require_platform_permission`. This endpoint checks in
+        # the body because the permission it needs depends on the AMOUNT, so it never passes
+        # through that dependency — which left it answering 403 and confirming its own existence
+        # to anyone who probed it. The whole /admin surface has to be uniformly invisible or
+        # enumeration just finds the one route that answers differently.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
     cap = get_settings().billing_support_credit_cap
     if CREDITS_GRANT not in held:
         if CREDITS_GRANT_CAPPED not in held:

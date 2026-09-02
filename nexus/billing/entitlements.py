@@ -82,7 +82,29 @@ DEFAULT_BURST_LIMITS: dict[str, int] = {
 
 
 async def _active_subscription(ts: TenantSession) -> BillingSubscription | None:
-    rows = await ts.list(BillingSubscription, limit=5)
+    """The subscription every entitlement decision resolves against. NEWEST FIRST.
+
+    "One subscription per tenant" is what makes rating unambiguous, and `change_plan` switches the
+    existing row rather than opening a second one precisely to keep it true. But nothing enforces
+    it at the database level, and this function — which decides what EVERY request is entitled to —
+    used to take `live[0]` from an unordered `ts.list`. With two live rows it would resolve against
+    whichever the database happened to return first, so a tenant could be billed and gated against
+    a plan they had left.
+
+    Ordering by `created_at` descending matches `subscriptions._active`, so the two modules cannot
+    disagree about which subscription is current. It does not make two rows correct; it makes the
+    consequence deterministic and puts both readers on the same answer.
+    """
+    from sqlalchemy import select as _select
+
+    rows = list(
+        await ts.session.scalars(
+            _select(BillingSubscription)
+            .where(BillingSubscription.tenant_id == ts.tenant_id)
+            .order_by(BillingSubscription.created_at.desc(), BillingSubscription.id.desc())
+            .limit(5)
+        )
+    )
     live = [s for s in rows if s.status in _LIVE_STATUSES]
     return live[0] if live else (rows[0] if rows else None)
 
@@ -391,6 +413,76 @@ async def _apply_dependencies(
     return ent
 
 
+async def _is_gauge(ts: TenantSession, capability_id: str) -> bool:
+    """Does this capability measure a LEVEL rather than an action?
+
+    Gauges (`seat.member`, `platform.storage`, `network.persons`) resolve to a live count — members
+    held, GB stored — so there is no "request" to price. Summing events for one would only ever
+    climb, which is why a customer could never get back under a seat limit before this distinction
+    existed. They keep hard caps and stay outside the credit system.
+
+    Defaults to False on any failure: treating an action as a gauge would make it free, and a
+    capability silently costing nothing is the failure mode this whole change exists to remove.
+    """
+    try:
+        cap = await ts.session.get(BillingCapability, capability_id)
+        return bool(cap is not None and cap.meter_kind == "gauge")
+    except Exception:
+        return False
+
+
+async def _burn_for_usage(
+    ts: TenantSession, ent: "ResolvedEntitlement", quantity: float, key: str
+) -> bool | None:
+    """Charge the rate card for a whole request. ``None`` when there was nothing to charge.
+
+    The three outcomes are distinct and the caller depends on it:
+      * ``True``  — credits were spent (or an identical charge already existed on a retry);
+      * ``False`` — there is a price and the balance cannot cover it, so the call must stop;
+      * ``None``  — no live rate card. Nothing to charge means nothing to run out of, and an
+        unpriced capability must not become a block.
+
+    Idempotency-keyed on the decision, so a retried request re-derives the same charge and pays
+    once. Never raises: a burn failure degrades to "nothing charged" and the caller decides.
+    """
+    from nexus.billing.credits import burn_credits
+    from nexus.models.billing import BillingCreditLedger, BillingRateCard
+
+    burn_key = f"{key}:burn"
+    try:
+        already = await ts.first(
+            BillingCreditLedger, BillingCreditLedger.idempotency_key == burn_key
+        )
+        if already is not None:
+            return True
+
+        card = await ts.session.get(BillingRateCard, ent.capability_id)
+        if card is None or not card.active:
+            return None
+
+        if card.tiers:
+            # A volume ladder prices a unit by how many came before it. `rating.rate_period` prices
+            # the whole period in one `tiered_credits` call at close, so an in-flight burn has to
+            # charge the MARGINAL cost of these units at their real position — reading
+            # `credits_per_unit` flat overcharges the moment a ladder exists.
+            from nexus.billing.rating import tiered_credits
+
+            prior = await current_usage(ts, ent.capability_id)
+            amount = tiered_credits(prior + quantity, card) - tiered_credits(prior, card)
+        else:
+            amount = quantity * float(card.credits_per_unit or 0)
+
+        if amount <= 0:
+            return None
+
+        return await burn_credits(
+            ts, amount, reason=f"{ent.capability_id} usage", idempotency_key=burn_key,
+        )
+    except Exception:  # a charge must not break the call it is charging for
+        logger.warning("usage burn failed for %s", ent.capability_id, exc_info=True)
+        return None
+
+
 async def _burn_for_overage(
     ts: TenantSession, ent: "ResolvedEntitlement", over_units: float, key: str,
     *, prior_over: float = 0.0,
@@ -561,52 +653,41 @@ async def check_and_meter(
         used = 0.0
         if ent.mode == "disabled":
             blocked_reason = "disabled" if ent.source != "dependency" else "dependency"
-        elif ent.mode in ("shadow", "enabled", "unlimited"):
-            blocked_reason = None            # never quota-limited
-        elif ent.quota is not None:
-            # Serialize before reading the counter: check-then-record is only safe if no other
-            # request can slip between the two.
-            await _lock_capability(ts, capability_id)
-            used = await current_usage(ts, capability_id)
-            limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
-            # The part of THIS call that falls beyond the line — not the running total by which
-            # the tenant is over it. `used + quantity - limit` is the second thing, and it grows
-            # by one on every subsequent call, so the Nth overage unit was charged N times its
-            # price: 20 units past a quota cost 210 units' worth of credits instead of 20. Every
-            # pre-existing test fired exactly one call past the quota, where the two expressions
-            # coincide. Clamped to `quantity` so a call that starts inside the quota pays only
-            # for the part that crosses.
-            over = min(float(quantity), used + quantity - limit)
-            if over > 0:
-                # Past what the plan includes. Spend credits first — that is what they are for.
-                # An explicit overage price means "keep going and invoice it", not "stop", so it
-                # still passes when the balance cannot cover it. Otherwise this is the wall.
-                # `used - limit` is how far past the line the tenant already was, which is
-                # where this request's units sit on a volume ladder.
-                covered = await _burn_for_overage(
-                    ts, ent, over, key, prior_over=max(0.0, used - limit)
-                )
-                if not covered and ent.overage_price_credits is None:
+        elif ent.mode in ("shadow", "unlimited"):
+            blocked_reason = None            # observe-only, or a plan class that exists not to gate
+        elif await _is_gauge(ts, capability_id):
+            # GAUGES KEEP HARD CAPS AND ARE NEVER CHARGED.
+            #
+            # `seat.member`, `platform.storage` and `network.persons` resolve to a live count —
+            # members held, GB stored — not to an action somebody performed. Charging them per
+            # request is meaningless (the same seat would be billed on every call that reads it),
+            # and running them on credits would silently lock people out of a workspace they are
+            # paying for the moment the balance ran dry. So they stay outside the credit system and
+            # keep the plan limit they have always had.
+            if ent.quota is not None:
+                await _lock_capability(ts, capability_id)
+                used = await current_usage(ts, capability_id)
+                limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
+                if used + quantity > limit:
                     blocked_reason = "quota_exhausted"
-
-        # THE CREDIT FLOOR. A plan funded by credits stops when they run out.
-        #
-        # Per-capability quota alone does not achieve that, and the gap was total: the `free` plan
-        # lists 9 capabilities, and `resolve_entitlement` falls back to permissive catalog defaults
-        # for the other 61 — where `default_quota` is None for EVERY capability in the seed. So the
-        # branch above is skipped (`ent.quota is not None` is False), `enabled` capabilities are
-        # explicitly "never quota-limited", and a free tenant could run unlimited enrichment,
-        # search and research while its 200 credits sat untouched. The credits were decorative for
-        # 61 of 70 capabilities.
-        #
-        # Scoped tightly, because this is the money path and a false block is an outage:
-        #   * only plans that ARE credit-funded (`included_credits > 0`) — legacy-unlimited,
-        #     enterprise and custom deals are invoiced differently and must be untouched;
-        #   * only capabilities that actually cost credits (a live rate card). A `module.*` gate
-        #     prices nothing, and blocking one would revoke a feature the customer still has;
-        #   * never in shadow mode — `enforced` below decides that, exactly as for quota.
-        if blocked_reason is None and ent.mode not in ("disabled", "shadow"):
-            if await _credits_exhausted(ts, ent):
+        else:
+            # CREDITS ONLY. One price per request, taken from the rate card, paid in credits.
+            #
+            # Two prices used to exist for the same action — the rate card and
+            # `overage_price_credits` — and they disagreed on 11 plan/capability pairs in BOTH
+            # directions: `verify.email` cost 0.25 in plan and 1.00 past the allowance (4x more for
+            # crossing a line the customer cannot see), while `enrich.contact` on `core` cost 4.0
+            # in plan and 2.00 past it, so overflowing your own quota was the rational move.
+            #
+            # Worse, credits were burned ONLY for the portion beyond the quota, so an in-plan
+            # request cost nothing and the balance a customer was sold barely moved. "You have
+            # 2,000 credits" was not the truth about anything.
+            #
+            # Now every metered request burns `credits_per_unit x quantity` whatever side of any
+            # line it falls on, and a balance that cannot cover it stops the call. An unpriced
+            # capability charges nothing and is allowed — no rate card means nothing to run out of.
+            covered = await _burn_for_usage(ts, ent, float(quantity), key)
+            if covered is False:
                 blocked_reason = "credits_exhausted"
 
         # Burst is a separate axis from quota: a tenant well inside its monthly allowance can

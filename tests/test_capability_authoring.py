@@ -164,4 +164,4 @@ async def test_a_tenant_owner_cannot_create_a_capability(client):
     token = await signup(client, slug="ca8", email="o@ca8.com", company="CA8")
     assert (await client.post("/api/admin/billing/capabilities", headers=auth(token), json={
         "id": "ai.x", "name": "X", "category": "ai", "unit": "action",
-    })).status_code == 403
+    })).status_code == 404

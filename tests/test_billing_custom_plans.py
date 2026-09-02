@@ -116,7 +116,7 @@ async def test_custom_plan_rejects_a_tenant_owner(client):
         "/api/admin/billing/tenants/whatever/custom-plan", headers=auth(token),
         json={"base_plan_id": "growth", "base_price_cents": 0},
     )
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_custom_plan_rejects_bad_input(client, monkeypatch):
