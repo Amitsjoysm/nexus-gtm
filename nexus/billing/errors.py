@@ -30,19 +30,25 @@ class QuotaExceeded(BillingError):
 
     def to_payload(self) -> dict:
         payload = {
+            # The envelope discriminator, kept stable. `reason` is the field that has always
+            # carried the specific cause (`quota_exhausted` | `credits_exhausted` | `disabled` |
+            # `dependency` | `feature_switch`), so a client that needs the distinction already has
+            # it; renaming `error` would break every consumer matching on it for nothing new.
             "error": "quota_exceeded",
             "capability": self.capability_id,
             "reason": self.reason,
             "used": self.used,
             "quota": self.quota,
             "plan": self.plan_id,
-            "upgrade_url": "/settings/billing",
         }
-        if self.switch_state is not None:
-            # A PLATFORM SWITCH IS NOT AN UPSELL. Without these two keys the client renders the
-            # generic "your plan does not include this — upgrade" for a feature we have taken down
-            # ourselves, so the customer is invited to pay to fix our maintenance window. The
-            # client drops `upgrade_url` when `switch_state` is present.
+        if self.switch_state is None:
+            # Only when the customer could actually buy their way in. A PLATFORM SWITCH IS NOT AN
+            # UPSELL — no plan re-enables it — so offering a checkout link invites them to pay to
+            # fix our own maintenance window. Omitted here rather than filtered in the client,
+            # because our own UI is not the only consumer: a customer's integration reading
+            # `upgrade_url` would make exactly that mistake, and a comment is not a guarantee.
+            payload["upgrade_url"] = "/settings/billing"
+        else:
             payload["switch_state"] = self.switch_state
             payload["switch_message"] = self.switch_message
         return payload

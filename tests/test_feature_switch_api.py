@@ -132,6 +132,11 @@ async def test_a_switched_off_endpoint_refuses_with_the_message(client, monkeypa
     assert body["reason"] == "feature_switch"
     assert body["switch_state"] == "maintenance"
     assert body["switch_message"] == "Upgrading the agent runtime"
+    # A SWITCH IS NOT AN UPSELL, and the payload must not offer one. No plan re-enables a
+    # switched-off module, so a checkout link here invites the customer to pay to fix our
+    # maintenance window. Omitted server-side rather than filtered in our UI, because a customer's
+    # own integration reads this too.
+    assert "upgrade_url" not in body, "the 402 offered a checkout link for a feature we took down"
 
 
 # ---- who may flip it ---------------------------------------------------------------------------
@@ -294,3 +299,13 @@ def test_every_switch_state_has_customer_facing_copy():
     src = _read("components/FeatureUnavailable.tsx")
     for state in ("coming_soon", "maintenance", "disabled"):
         assert f"{state}:" in src, f"no copy for the `{state}` state"
+
+
+async def test_a_plan_gate_still_offers_the_upgrade_link(client, monkeypatch):
+    """The other half. A capability the PLAN excludes is a real upsell and must keep its link —
+    removing it for everyone would turn a working sales path into a dead end."""
+    from nexus.billing.errors import QuotaExceeded
+
+    payload = QuotaExceeded("ai.email_draft", reason="quota_exhausted", plan_id="free").to_payload()
+    assert payload["upgrade_url"] == "/settings/billing"
+    assert "switch_state" not in payload
