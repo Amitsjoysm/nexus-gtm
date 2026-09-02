@@ -318,11 +318,28 @@ whole ladder sits inside the 100 credits-per-dollar design ceiling (survival lim
 
 | Plan | Price | Credits | cr/$ |
 |---|---|---|---|
-| Free | $0 | 1,000 | — |
-| Launch | $99/mo | 2,500 | 25.3 |
-| Launch (annual) | $950/yr | 30,000 | 31.6 |
+| Free | $0 | 200 | — |
+| Launch | $99/mo | 2,000 | 20.2 |
+| Launch (annual) | $950/yr | 24,000 | 25.3 |
 | Accelerate | $199/mo | 8,000 | 40.2 |
 | Accelerate (annual) | $1,910/yr | 96,000 | 50.3 |
+
+**`plans.py` is authoritative and this table drifted from it.** It read 1,000 / 2,500 / 30,000 —
+the sizing before the ladder was resized on 2026-08-27 — while the code had already moved. A stale
+number here is worse than none: it is what somebody checks instead of reading the seed.
+
+**Free is 200 on purpose: a trial of the whole product, not a usable tier.** At the worst-case
+$0.004/credit that caps a free workspace at $0.80 of COGS, which is what makes an open signup funnel
+safe at any volume. It buys roughly 25 enriched accounts or 66 research briefs — enough to see the
+product work on the buyer's own data, not enough to run a territory on.
+
+**A new workspace starts on `free`, attached by `start_subscription` in the same transaction that
+creates the tenant** (`/auth/signup`, `/auth/workspaces`, and the OTP verify path). Before that
+existed, tenant creation attached no plan at all, the engine's "no subscription → allow" default
+granted everything, and the startup backfill then grandfathered the tenant onto `legacy-unlimited`
+permanently — observed in production on every workspace of a deployment, including ones created days
+after billing shipped. `backfill_subscriptions` is now bounded to tenants older than the earliest
+`billing_plans` row, so it can only ever claim the pre-billing tenants it was written for.
 
 **Superseded tiers are RETIRED, never deleted, and the distinction is not cosmetic.**
 `billing_subscriptions.plan_id` is a foreign key, and entitlements resolve from the plan ROW rather

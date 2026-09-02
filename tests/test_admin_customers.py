@@ -25,9 +25,9 @@ async def test_a_tenant_owner_cannot_read_the_directory(client):
     """It exposes every workspace on the platform. No tenant role reaches it, however senior."""
     token = await signup(client, slug="cd0", email="o@cd0.com", company="CD0")
     assert (await client.get("/api/admin/billing/customers",
-                             headers=auth(token))).status_code == 403
+                             headers=auth(token))).status_code == 404
     assert (await client.get("/api/admin/billing/customers/whatever/usage",
-                             headers=auth(token))).status_code == 403
+                             headers=auth(token))).status_code == 404
 
 
 async def test_searching_by_a_member_email_finds_their_workspace(client, monkeypatch):

@@ -90,7 +90,7 @@ async def test_a_tenant_owner_cannot_reach_it(client):
     """Several of these toggles decide whether the platform spends money unattended."""
     token = await signup(client, slug="rc3", email="o@rc3.com", company="RC3")
     assert (await client.get("/api/admin/runtime/settings",
-                             headers=auth(token))).status_code == 403
+                             headers=auth(token))).status_code == 404
 
 
 async def test_a_string_false_does_not_switch_something_on(client, monkeypatch):
@@ -273,7 +273,7 @@ async def test_the_webhook_test_says_so_when_no_secret_is_configured(client, mon
 async def test_a_tenant_owner_cannot_probe_the_webhook(client):
     token = await signup(client, slug="rc14", email="o@rc14.com", company="RC14")
     assert (await client.get("/api/admin/runtime/webhook",
-                             headers=auth(token))).status_code == 403
+                             headers=auth(token))).status_code == 404
 
 
 # ---- the wiring ------------------------------------------------------------------------------------

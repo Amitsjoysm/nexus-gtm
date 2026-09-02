@@ -92,13 +92,30 @@ def offline_services():
     reset_agent_runtime()
 
 
-async def make_tenant(slug: str = "t1", name: str = "Tenant One") -> str:
-    """Create a tenant via a raw session and return its id."""
-    from nexus.core.db import get_sessionmaker
+async def make_tenant(
+    slug: str = "t1", name: str = "Tenant One", *, pre_billing: bool = False
+) -> str:
+    """Create a tenant via a raw session and return its id.
+
+    ``pre_billing=True`` backdates it to before the earliest ``billing_plans`` row, which is what
+    `backfill_subscriptions` uses to tell a genuine legacy tenant from one created under billing.
+    Tests that exercise the BACKFILL need this: a tenant made after the plans were seeded is, quite
+    correctly, no longer claimed by it.
+    """
+    from datetime import timedelta
+
+    from nexus.core.db import get_sessionmaker, utcnow
     from nexus.models.identity import Tenant
 
     async with get_sessionmaker()() as s:
         t = Tenant(name=name, slug=slug)
+        if pre_billing:
+            from sqlalchemy import select
+
+            from nexus.models.billing import BillingPlan
+
+            earliest = (await s.scalars(select(BillingPlan.created_at))).first()
+            t.created_at = (earliest or utcnow()) - timedelta(days=365)
         s.add(t)
         await s.commit()
         return t.id
@@ -218,3 +235,24 @@ async def seed_relevance_profile(ts, **overrides):
     fields.update(overrides)
     ts.add(RelevanceProfile(tenant_id=ts.tenant_id, **fields))
     await ts.flush()
+
+
+def assert_staff_surface_hidden(response) -> None:
+    """A non-staff caller must not be able to tell an admin route from a missing one.
+
+    The status is 404, not 403, and that is the point: a 403 answers the attacker's question.
+    Enumerating `/api/admin/...` against a deployment that returns 403 for real paths and 404 for
+    invented ones yields a complete map of the staff surface — provider keys, payment credentials,
+    the runtime panel — with no valid credential at all.
+
+    401 is accepted for an anonymous caller: "authenticate" is a statement about the CALLER, not
+    about which routes exist, so it leaks nothing an attacker could enumerate with.
+
+    A platform admin who merely lacks one permission still gets 403 — they have proven who they
+    are, already know the surface exists, and a 404 would turn an authorisation problem into a hunt
+    for a missing deployment.
+    """
+    assert response.status_code in (401, 404), (
+        f"expected the staff surface to be hidden, got {response.status_code}: "
+        f"a 403 confirms the route exists and lets it be enumerated"
+    )

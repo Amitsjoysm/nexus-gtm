@@ -8,12 +8,12 @@ async def test_admin_billing_requires_platform_admin(client):
     """A normal tenant owner is NOT a platform admin: tenant RBAC must never grant staff access."""
     token = await signup(client, slug="acme", email="owner@acme.com", company="Acme")
     r = await client.get("/api/admin/billing/capabilities", headers=auth(token))
-    assert r.status_code == 403
+    assert r.status_code == 404
 
 
 async def test_admin_billing_unauthenticated_is_rejected(client):
     r = await client.get("/api/admin/billing/capabilities")
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_platform_admin_can_read_catalog_and_plans(client, monkeypatch):

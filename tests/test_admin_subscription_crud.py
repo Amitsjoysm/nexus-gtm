@@ -184,6 +184,6 @@ async def test_a_tenant_owner_cannot_cancel_or_patch(client):
     directly would leave them with the product and no subscription."""
     token = await signup(client, slug="sc11", email="o@sc11.com", company="SC11")
     assert (await client.post("/api/admin/billing/tenants/x/subscription/cancel",
-                              headers=auth(token))).status_code == 403
+                              headers=auth(token))).status_code == 404
     assert (await client.patch("/api/admin/billing/tenants/x/subscription",
-                               headers=auth(token), json={"status": "active"})).status_code == 403
+                               headers=auth(token), json={"status": "active"})).status_code == 404

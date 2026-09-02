@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from nexus.core.db import get_sessionmaker, utcnow
 from nexus.core.tenancy import TenantSession, apply_rls
@@ -61,6 +61,60 @@ async def ensure_subscription(
     return sub
 
 
+async def start_subscription(ts: TenantSession, *, plan_id: str | None = None) -> None:
+    """Put a NEWLY CREATED tenant on its starting plan, and grant that plan's credits.
+
+    Called from the signup paths, inside the transaction that creates the tenant, because the two
+    facts have to land together. Before this existed, tenant creation attached no subscription at
+    all, and the entitlement engine's documented "no subscription -> allow" default then granted
+    that workspace everything. The startup backfill would later sweep it onto `legacy-unlimited`
+    with ``grandfathered=True`` — permanently, and indistinguishably from a tenant that genuinely
+    predates billing. Observed in production 2026-09-01: every workspace on the deployment was
+    grandfathered onto unlimited, including ones created days after billing shipped.
+
+    Latent while ``NEXUS_BILLING_ENFORCEMENT`` is ``shadow`` (free and legacy-unlimited behave
+    identically there), and straight revenue leakage the moment it is switched on: a grandfathered
+    tenant can never hit a paywall or an upgrade prompt.
+
+    NEVER RAISES. A workspace that cannot be given a plan must still be created — signup failing
+    because billing had a bad moment is a far worse outcome than a tenant the backfill can pick up
+    later, which is exactly what the backfill is still for.
+    """
+    from nexus.billing.plans import DEFAULT_SIGNUP_PLAN_ID
+
+    plan_id = plan_id or DEFAULT_SIGNUP_PLAN_ID
+    try:
+        plan = await ts.session.get(BillingPlan, plan_id)
+        if plan is None:
+            # Seeds have not run yet (a fresh database mid-startup). Leaving the tenant without a
+            # subscription is the pre-existing behaviour and the backfill still covers it.
+            logger.warning("signup plan %r missing; tenant starts without a subscription", plan_id)
+            return
+        sub = await ensure_subscription(ts, plan_id=plan_id, status="active", grandfathered=False)
+        if sub is not None:
+            await grant_plan_credits(ts, plan)
+    except Exception:  # signup must not fail because billing did
+        logger.warning("could not start a subscription for tenant %s", ts.tenant_id, exc_info=True)
+
+
+async def start_subscription_for(session, tenant_id: str, *, plan_id: str | None = None) -> None:
+    """:func:`start_subscription` for a caller holding a raw session, as the signup paths do.
+
+    Binds the tenant GUC first. The API runs as the least-privilege ``nexus_app`` role with RLS
+    enforced, so an unbound INSERT is rejected by Postgres — and SQLite has no RLS, which is why
+    that failure only ever appears against the real database and never in the offline suite. The
+    backfill learned this the same way; this is the same two lines for the same reason.
+
+    Never raises, for the reason given on :func:`start_subscription`: a workspace must still be
+    created even if billing cannot be given to it.
+    """
+    try:
+        await apply_rls(session, tenant_id)
+        await start_subscription(TenantSession(session, tenant_id), plan_id=plan_id)
+    except Exception:  # signup must not fail because billing did
+        logger.warning("could not start a subscription for tenant %s", tenant_id, exc_info=True)
+
+
 async def backfill_subscriptions() -> dict:
     """Put every tenant that has no subscription onto the legacy unlimited plan.
 
@@ -74,7 +128,23 @@ async def backfill_subscriptions() -> dict:
         if await session.get(BillingPlan, LEGACY_PLAN_ID) is None:
             logger.warning("legacy plan missing; skipping subscription backfill")
             return {"created": 0, "skipped": "no_legacy_plan"}
-        tenant_ids = list((await session.scalars(select(Tenant.id))).all())
+
+        # BOUNDED BY WHEN BILLING SHIPPED. This runs on every app start, and it used to select
+        # every tenant with no subscription — so a workspace created five minutes ago was
+        # indistinguishable from one predating billing, and got grandfathered onto unlimited
+        # permanently. That is what put every tenant on this deployment on `legacy-unlimited`.
+        #
+        # The earliest `billing_plans` row is the moment billing existed here. A tenant older than
+        # that genuinely predates it and is what this migration is for; a tenant newer than it was
+        # created under billing and must go through signup, which now attaches `free`. If signup's
+        # attach failed (it never raises), the tenant simply has no subscription — and the engine's
+        # "no subscription -> allow" default is the same permissive state it was already in, rather
+        # than a permanent grandfathered upgrade nobody chose.
+        billing_since = await session.scalar(select(func.min(BillingPlan.created_at)))
+        stmt = select(Tenant.id)
+        if billing_since is not None:
+            stmt = stmt.where(Tenant.created_at < billing_since)
+        tenant_ids = list((await session.scalars(stmt)).all())
 
     created = 0
     for tid in tenant_ids:
@@ -384,12 +454,35 @@ async def roll_period(ts: TenantSession) -> bool:
     await ts.flush()
 
     plan = await ts.session.get(BillingPlan, sub.plan_id)
-    if plan is not None and plan.included_credits:
-        new_key = period_key(now, "period")
-        await grant_credits(
-            ts, plan.included_credits, kind="grant",
-            reason=f"{plan.name} included credits",
-            # Keyed by period, so a retried job grants once and only once.
-            idempotency_key=f"plan_grant:{new_key}", period_key=new_key,
-        )
+    await grant_plan_credits(ts, plan, at=now)
+    return True
+
+
+async def grant_plan_credits(ts: TenantSession, plan, *, at=None) -> bool:
+    """Grant one period's included credits for ``plan``. Idempotent per period.
+
+    Extracted from :func:`roll_period` so that starting a subscription and rolling one use the
+    SAME grant, rather than two implementations that can disagree about the amount, the reason
+    string or the idempotency key. The key is what makes it safe to call from either place: keyed
+    by period, so a signup followed by the first roll cannot double-grant, and a retried job grants
+    once.
+
+    Returns whether anything was granted — a plan with no included credits (enterprise, custom,
+    anything invoiced on usage alone) is a normal case, not a failure.
+    """
+    if plan is None or not plan.included_credits:
+        return False
+    # Imported here, not at module scope: `rollups` imports back from this module, and a top-level
+    # import would be circular. `roll_period` does the same for the same reason.
+    from nexus.billing.credits import grant_credits
+    from nexus.billing.rollups import period_key
+
+    at = at or utcnow()
+    key = period_key(at, "period")
+    await grant_credits(
+        ts, plan.included_credits, kind="grant",
+        reason=f"{plan.name} included credits",
+        # Keyed by period, so a retried job grants once and only once.
+        idempotency_key=f"plan_grant:{key}", period_key=key,
+    )
     return True

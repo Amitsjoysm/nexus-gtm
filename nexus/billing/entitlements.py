@@ -463,6 +463,55 @@ async def _burn_for_overage(
         return False
 
 
+async def _credits_exhausted(ts, ent) -> bool:
+    """Is this tenant out of credits, on a plan that is funded by them?
+
+    False for every case that is not unambiguously "credit-funded plan, nothing left, and this call
+    would cost something". The money path punishes false positives far more than false negatives: a
+    wrong block is an outage for a paying customer, while a missed one costs a few credits somebody
+    has already been granted.
+
+    Never raises. A balance lookup that fails must not take down the call it was guarding — the
+    same posture the rest of this module takes.
+    """
+    try:
+        plan_id = getattr(ent, "plan_id", None)
+        if not plan_id:
+            return False                     # no subscription resolved: engine default is allow
+
+        # `module.*` gates price nothing. Blocking one revokes a feature the customer still has,
+        # and it is the difference between "you are out of credits" and "you lost Campaigns".
+        capability_id = getattr(ent, "capability_id", "") or ""
+        if capability_id.startswith("module."):
+            return False
+
+        plan = await ts.session.get(BillingPlan, plan_id)
+        if plan is None or not plan.included_credits:
+            # Not credit-funded. legacy-unlimited, enterprise and custom deals are invoiced on
+            # other terms and must never be stopped by a balance they were never given.
+            return False
+
+        # An explicit overage price means "keep going and invoice it", which is the same rule the
+        # quota branch above applies. Stopping such a tenant would contradict their own plan.
+        if getattr(ent, "overage_price_credits", None) is not None:
+            return False
+
+        # Nothing to charge means nothing to run out of.
+        from nexus.models.billing import BillingRateCard
+
+        card = await ts.session.get(BillingRateCard, capability_id)
+        if card is None or not card.active or not float(card.credits_per_unit or 0):
+            return False
+
+        from nexus.billing.credits import balance
+
+        return await balance(ts) <= 0
+    except Exception:  # a guard must not break the call it guards
+        logger.warning("credit-floor check failed for %s", getattr(ent, "capability_id", "?"),
+                       exc_info=True)
+        return False
+
+
 async def check_and_meter(
     ts: TenantSession,
     *,
@@ -539,6 +588,26 @@ async def check_and_meter(
                 )
                 if not covered and ent.overage_price_credits is None:
                     blocked_reason = "quota_exhausted"
+
+        # THE CREDIT FLOOR. A plan funded by credits stops when they run out.
+        #
+        # Per-capability quota alone does not achieve that, and the gap was total: the `free` plan
+        # lists 9 capabilities, and `resolve_entitlement` falls back to permissive catalog defaults
+        # for the other 61 — where `default_quota` is None for EVERY capability in the seed. So the
+        # branch above is skipped (`ent.quota is not None` is False), `enabled` capabilities are
+        # explicitly "never quota-limited", and a free tenant could run unlimited enrichment,
+        # search and research while its 200 credits sat untouched. The credits were decorative for
+        # 61 of 70 capabilities.
+        #
+        # Scoped tightly, because this is the money path and a false block is an outage:
+        #   * only plans that ARE credit-funded (`included_credits > 0`) — legacy-unlimited,
+        #     enterprise and custom deals are invoiced differently and must be untouched;
+        #   * only capabilities that actually cost credits (a live rate card). A `module.*` gate
+        #     prices nothing, and blocking one would revoke a feature the customer still has;
+        #   * never in shadow mode — `enforced` below decides that, exactly as for quota.
+        if blocked_reason is None and ent.mode not in ("disabled", "shadow"):
+            if await _credits_exhausted(ts, ent):
+                blocked_reason = "credits_exhausted"
 
         # Burst is a separate axis from quota: a tenant well inside its monthly allowance can
         # still hammer an endpoint. Only queried for capabilities that set a limit, so it costs

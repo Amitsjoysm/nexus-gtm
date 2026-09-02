@@ -36,7 +36,7 @@ async def test_a_tenant_owner_cannot_reach_it(client):
     """No tenant role grants platform power, however senior."""
     token = await signup(client, slug="pk2", email="o@pk2.com", company="PK2")
     r = await client.get("/api/admin/provider-keys", headers=auth(token))
-    assert r.status_code == 403
+    assert r.status_code == 404
 
 
 async def test_a_request_body_cannot_set_status(client, monkeypatch):
@@ -228,7 +228,7 @@ async def test_the_overview_reports_users_and_requests(client, monkeypatch):
 async def test_a_tenant_owner_cannot_read_the_overview(client):
     token = await signup(client, slug="ov2", email="o@ov2.com", company="OV2")
     assert (await client.get("/api/admin/billing/overview",
-                             headers=auth(token))).status_code == 403
+                             headers=auth(token))).status_code == 404
 
 
 async def test_the_overview_counts_usage_across_every_tenant(client, monkeypatch):

@@ -20,8 +20,8 @@ async def test_backfill_gives_every_tenant_the_legacy_plan():
     from nexus.models.billing import BillingSubscription
 
     await _seed()
-    t1 = await make_tenant(slug="bf1", name="BF One")
-    t2 = await make_tenant(slug="bf2", name="BF Two")
+    t1 = await make_tenant(slug="bf1", name="BF One", pre_billing=True)
+    t2 = await make_tenant(slug="bf2", name="BF Two", pre_billing=True)
 
     assert (await backfill_subscriptions())["created"] == 2
     for tid in (t1, t2):
@@ -37,7 +37,7 @@ async def test_backfill_is_idempotent():
     from nexus.billing.subscriptions import backfill_subscriptions
 
     await _seed()
-    await make_tenant(slug="bf3", name="BF Three")
+    await make_tenant(slug="bf3", name="BF Three", pre_billing=True)
     assert (await backfill_subscriptions())["created"] == 1
     assert (await backfill_subscriptions())["created"] == 0     # a redeploy changes nothing
 
@@ -48,7 +48,7 @@ async def test_backfill_never_overwrites_a_paying_tenant():
     from nexus.models.billing import BillingSubscription
 
     await _seed()
-    tid = await make_tenant(slug="bf4", name="BF Four")
+    tid = await make_tenant(slug="bf4", name="BF Four", pre_billing=True)
     async with tenant_session(tid) as ts:
         ts.add(BillingSubscription(plan_id="growth", status="active"))
         await ts.flush()
@@ -64,7 +64,7 @@ async def test_backfill_sets_a_billing_period():
     from nexus.models.billing import BillingSubscription
 
     await _seed()
-    tid = await make_tenant(slug="bf5", name="BF Five")
+    tid = await make_tenant(slug="bf5", name="BF Five", pre_billing=True)
     await backfill_subscriptions()
     async with tenant_session(tid) as ts:
         sub = (await ts.list(BillingSubscription))[0]

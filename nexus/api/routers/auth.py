@@ -58,6 +58,7 @@ from nexus.core.security import (
     hash_password,
     verify_password,
 )
+from nexus.billing.subscriptions import start_subscription_for
 from nexus.models.identity import Membership, Tenant, User, Workspace
 
 logger = logging.getLogger("nexus.api.auth")
@@ -170,6 +171,11 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db_session))
             tenant_id=tenant.id, user_id=user.id, workspace_id=workspace.id, role="owner"
         )
         db.add(membership)
+        # Start the workspace on the free plan, in the SAME transaction that creates it.
+        # Without this a tenant exists with no subscription at all, the entitlement engine's
+        # "no subscription -> allow" default grants it everything, and the startup backfill later
+        # grandfathers it onto legacy-unlimited permanently. Never raises — see start_subscription.
+        await start_subscription_for(db, tenant.id)
         await db.commit()
     except IntegrityError:
         await db.rollback()
@@ -542,6 +548,11 @@ async def create_workspace(
             role="owner",
         )
         db.add(membership)
+        # Start the workspace on the free plan, in the SAME transaction that creates it.
+        # Without this a tenant exists with no subscription at all, the entitlement engine's
+        # "no subscription -> allow" default grants it everything, and the startup backfill later
+        # grandfathers it onto legacy-unlimited permanently. Never raises — see start_subscription.
+        await start_subscription_for(db, tenant.id)
         await db.commit()
     except IntegrityError:
         await db.rollback()

@@ -221,7 +221,7 @@ async def test_a_tenant_user_cannot_impersonate(client):
         "/api/admin/users/rep@imp5.com/impersonate",
         headers=auth(token), json={"reason": "trying to escalate privileges"},
     )
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_the_ttl_is_capped(client, monkeypatch):

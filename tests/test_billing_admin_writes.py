@@ -10,12 +10,12 @@ async def test_admin_writes_reject_a_tenant_owner(client):
     token = await signup(client, slug="aw1", email="o@aw1.com", company="AW1")
     r = await client.patch("/api/admin/billing/plans/growth",
                            headers=auth(token), json={"base_price_cents": 1})
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_admin_writes_reject_anonymous(client):
     r = await client.patch("/api/admin/billing/plans/growth", json={"base_price_cents": 1})
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_platform_admin_can_reprice_a_plan(client, monkeypatch):
@@ -82,13 +82,18 @@ async def test_credit_grant_is_idempotent(client, monkeypatch):
                               headers=auth(token), json=body)
     assert first.status_code == 200, first.text
     assert first.json()["applied"] is True
-    assert first.json()["balance"] == 500
+    # The DELTA, not an absolute. A new workspace now starts on `free` and is granted that plan's
+    # 200 included credits at signup, so an absolute assertion here was really asserting "nothing
+    # else in the product ever grants credits" — which was never the property this test is about.
+    # What it means is: the second click adds nothing.
+    granted = first.json()["balance"]
+    assert granted >= 500, f"the 500-credit grant did not land: balance {granted}"
 
     second = await client.post(f"/api/admin/billing/tenants/{tid}/credits",
                                headers=auth(token), json=body)
     assert second.status_code == 200, second.text
     assert second.json()["applied"] is False        # same key -> no new credits
-    assert second.json()["balance"] == 500
+    assert second.json()["balance"] == granted, "a repeated key minted credits a second time"
 
 
 async def test_admin_can_move_a_tenant_between_plans(client, monkeypatch):
@@ -363,4 +368,4 @@ async def test_a_tenant_owner_cannot_change_costs(client):
     """Cost feeds the margin floor. Editing it is repricing power by another route."""
     token = await signup(client, slug="cr8", email="o@cr8.com", company="CR8")
     assert (await client.put("/api/admin/billing/costs/ai.email_draft", headers=auth(token),
-                             json={"unit_cost_usd": 0.01})).status_code == 403
+                             json={"unit_cost_usd": 0.01})).status_code == 404

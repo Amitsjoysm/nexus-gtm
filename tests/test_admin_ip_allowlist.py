@@ -109,6 +109,10 @@ async def test_an_origin_outside_the_allowlist_is_refused(client, monkeypatch):
     token = await _admin(client, monkeypatch, slug="ip2", email="boss@ip2.com")
     deps_ip.set_allowlist("203.0.113.5")
     r = await client.get("/api/admin/billing/rates", headers=auth(token))
+    # 403, NOT the 404 a non-admin gets. This caller has already proven they are staff, so hiding
+    # the route from them buys nothing and costs everything: they need to see the address we
+    # observed or they cannot fix their own lockout, and the only place to fix a bad allowlist is
+    # the panel it just closed.
     assert r.status_code == 403
     # Says WHY, and names the address as we saw it. Behind a proxy that is frequently not the one
     # the operator expects, and without it they cannot fix their own lockout.

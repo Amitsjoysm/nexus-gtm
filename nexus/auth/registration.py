@@ -217,6 +217,14 @@ async def verify_and_create(db: AsyncSession, *, email: str, code: str) -> tuple
         db.add(workspace)
         await db.flush()
         db.add(Membership(tenant_id=tenant.id, user_id=user.id, workspace_id=workspace.id, role="owner"))
+        # Start the workspace on the free plan, in the SAME transaction that creates it. The OTP
+        # path creates tenants exactly like /auth/signup does, so it needs this for the same
+        # reason: without it the tenant has no subscription, the engine's "no subscription ->
+        # allow" default grants everything, and the startup backfill grandfathers it onto
+        # legacy-unlimited permanently. Never raises — see start_subscription.
+        from nexus.billing.subscriptions import start_subscription_for
+
+        await start_subscription_for(db, tenant.id)
         await db.delete(pending)
         await db.commit()
     except IntegrityError:

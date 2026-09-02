@@ -21,6 +21,13 @@ logger = logging.getLogger("nexus.billing.plans")
 
 LEGACY_PLAN_ID = "legacy-unlimited"
 
+# What a brand-new workspace starts on. NOT `LEGACY_PLAN_ID`: that plan exists solely to
+# grandfather tenants that predate billing, and putting a new signup on it hands them unlimited
+# entitlements they can never be moved off by hitting a limit — no paywall, no upgrade prompt,
+# no revenue. Observed in production 2026-09-01: every tenant on the deployment was grandfathered
+# onto unlimited, including workspaces created days after billing shipped.
+DEFAULT_SIGNUP_PLAN_ID = "free"
+
 # Per-plan capability policy. Only capabilities that differ from "allow" need a row; the
 # entitlement engine falls back to the catalog default for anything unlisted.
 #   (capability_id, mode, quota, overage_price_credits)

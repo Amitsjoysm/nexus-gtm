@@ -81,7 +81,7 @@ async def test_a_workspace_owner_cannot_reset_anyone_else_mfa(client):
     """Removing a factor from another account is a platform power, not a tenant one."""
     owner = await signup(client, slug="amr3", email="o@amr3.com", company="AMR3")
     r = await client.delete("/api/admin/users/o@amr3.com/mfa", headers=auth(owner))
-    assert r.status_code in (401, 403)
+    assert r.status_code in (401, 404)
 
 
 async def test_reset_is_a_noop_when_no_mfa_is_enrolled(client, monkeypatch):
