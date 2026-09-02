@@ -563,9 +563,17 @@ async def grant_tenant_credits(
     async with get_sessionmaker()() as session:
         await apply_rls(session, tenant_id)          # cross-tenant admin write; see above
         ts = TenantSession(session, tenant_id)
+        # Stamp the period. Without it the row lands with `period_key = NULL`, and while the
+        # customer's report now attributes such a row by its date, a grant that carries its own
+        # period is what makes it reconcilable against the rollup for that period rather than
+        # inferred. The report's tolerance is the safety net, not the mechanism.
+        from nexus.billing.rollups import period_key as _period_key
+        from nexus.core.db import utcnow as _utcnow
+
         applied = await grant_credits(
             ts, body.amount, kind="adjustment", reason=body.reason,
             idempotency_key=body.idempotency_key, actor=principal.user_id,
+            period_key=_period_key(_utcnow(), "period"),
         )
         await record_admin_action(
             session, actor=principal.user_id, action="credits.grant",

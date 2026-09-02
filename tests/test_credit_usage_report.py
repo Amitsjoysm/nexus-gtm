@@ -173,3 +173,74 @@ async def test_an_empty_workspace_reports_zeroes_not_an_error(workspace):
     assert report["spent"] == 0
     assert report["by_capability"] == []
     assert report["by_user"] == []
+
+
+# ---- grants the report must not lose --------------------------------------------------------
+
+async def test_a_support_grant_appears_in_the_report(workspace):
+    """Found by seeding a real workspace and reading the numbers back.
+
+    `POST /admin/billing/tenants/{id}/credits` — the goodwill grant, support's single most common
+    action — calls `grant_credits` WITHOUT a `period_key`, so the row lands with NULL. The report
+    filtered the ledger on `period_key == period`, so those credits raised the balance and appeared
+    nowhere: the screen would read "granted 2,000, spent 293" beside a balance 500 higher than
+    those two numbers can explain.
+
+    That is precisely the reconciliation failure this report exists to prevent, and the worst
+    version of it — support has just told the customer the credits are there.
+
+    Note the report was already internally inconsistent about this: the per-capability ACTION loop
+    accepts `period_key in (None, period)` while the ledger query did not.
+    """
+    from nexus.billing.credits import balance, grant_credits
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+
+    await _spend(workspace, "enrich.account", n=2)
+
+    async with get_sessionmaker()() as s:
+        ts = TenantSession(s, workspace)
+        # Exactly how the admin endpoint calls it: no period_key.
+        await grant_credits(ts, 500, kind="adjustment", reason="goodwill",
+                            idempotency_key="support-1")
+        await s.commit()
+
+    report = await _report(workspace)
+    async with get_sessionmaker()() as s:
+        live = await balance(TenantSession(s, workspace))
+
+    assert report["balance"] == pytest.approx(live)
+    assert report["granted"] >= 500, (
+        f"a support grant of 500 is missing from the report (granted={report['granted']}); "
+        "the customer's balance moved and the screen cannot explain why"
+    )
+
+
+async def test_a_grant_from_an_earlier_period_is_not_counted_as_this_one(workspace):
+    """The fix must not go the other way. An unkeyed row is attributed by its OWN date, not swept
+    into whatever period happens to be open — otherwise last quarter's grant inflates this
+    month's figure and the report is wrong in a new direction."""
+    from datetime import timedelta
+
+    from nexus.billing.credits import grant_credits
+    from nexus.core.db import get_sessionmaker, utcnow
+    from nexus.core.tenancy import TenantSession
+    from nexus.models.billing import BillingCreditLedger
+
+    before = (await _report(workspace))["granted"]
+
+    async with get_sessionmaker()() as s:
+        ts = TenantSession(s, workspace)
+        await grant_credits(ts, 777, kind="adjustment", reason="old goodwill",
+                            idempotency_key="support-old")
+        await s.flush()
+        row = await ts.first(
+            BillingCreditLedger, BillingCreditLedger.idempotency_key == "support-old"
+        )
+        row.created_at = utcnow() - timedelta(days=70)
+        await s.commit()
+
+    after = (await _report(workspace))["granted"]
+    assert after == pytest.approx(before), (
+        f"a grant from ~70 days ago moved this period's total from {before} to {after}"
+    )

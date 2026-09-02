@@ -58,16 +58,37 @@ async def _build(ts: TenantSession, period_key: str | None) -> dict:
 
     period = period_key or make_period_key(utcnow(), "period")
 
-    rows = list(
-        await ts.session.scalars(
+    # A NULL `period_key` is INCLUDED, then attributed by its own `created_at`.
+    #
+    # `grant_credits` takes `period_key` as an optional argument, and the admin goodwill grant —
+    # support's most common action — does not pass it. Filtering strictly on the column therefore
+    # dropped those rows from the report while they still raised the balance: the screen read
+    # "granted 2,000, spent 293" beside a balance 500 higher than either number could explain,
+    # right after support told the customer the credits were there. That is the exact
+    # reconciliation failure this report exists to prevent.
+    #
+    # Attributed by date rather than swept into whatever period is open, or last quarter's
+    # adjustment would inflate this month and the report would be wrong in a new direction. The
+    # per-capability ACTION loop below already accepted `period_key in (None, period)`; this makes
+    # the ledger read agree with it.
+    from sqlalchemy import or_
+
+    rows = [
+        r
+        for r in await ts.session.scalars(
             select(BillingCreditLedger)
             .where(
                 BillingCreditLedger.tenant_id == ts.tenant_id,
-                BillingCreditLedger.period_key == period,
+                or_(
+                    BillingCreditLedger.period_key == period,
+                    BillingCreditLedger.period_key.is_(None),
+                ),
             )
             .order_by(BillingCreditLedger.created_at.asc())
         )
-    )
+        if r.period_key == period
+        or (r.created_at is not None and make_period_key(r.created_at, "period") == period)
+    ]
 
     # `delta` is signed: grants are positive, burns negative. Reported as positive magnitudes,
     # because "spent 120" reads correctly and "spent -120" invites a double negative in the UI.
