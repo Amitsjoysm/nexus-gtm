@@ -2,7 +2,7 @@ import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { NAV_ITEMS, canSee, navState } from "@/app/nav";
 import { usePlatformIdentity } from "@/app/RequirePlatformAdmin";
-import { useEntitlements, isLocked } from "@/app/EntitlementsContext";
+import { useEntitlements, isLocked, switchNotice } from "@/app/EntitlementsContext";
 import { useAuth } from "@/app/AuthContext";
 import { Icons } from "@/components/ui";
 import styles from "./Sidebar.module.css";
@@ -56,8 +56,41 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
 
       <nav className={styles.nav} aria-label="Main navigation">
         {NAV_ITEMS.filter((item) => canSee(item, role, isPlatformAdmin)).map((item) => {
-          const state = navState(role, isLocked(entitlements, item.capability));
+          const notice = switchNotice(entitlements, item.capability);
+          const state = navState(role, isLocked(entitlements, item.capability), notice !== null);
           if (state === "hidden") return null;
+
+          if (state === "unavailable" && notice) {
+            // Routed to the FEATURE, not to billing. The route renders `FeatureUnavailable` with
+            // the operator's own message, and keeping the real URL means a refresh once the switch
+            // is flipped back lands the user where they were going. Sending them to a checkout
+            // page instead would invite them to pay to fix our maintenance window.
+            const label = notice.state === "coming_soon" ? "coming soon" : "unavailable";
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                onClick={onNavigate}
+                title={`${item.label} is ${label}`}
+                className={cn(styles.link, styles.unavailable)}
+                aria-describedby={`nav-off-${item.to.replace(/\W/g, "")}`}
+              >
+                <span className={styles.icon} aria-hidden="true">
+                  {item.icon}
+                </span>
+                <span className={styles.linkLabel}>{item.label}</span>
+                {/* A text badge, not the padlock: a padlock means "buy this", and repeating it
+                    here would put the reader back on the upsell reading the switch exists to
+                    avoid. */}
+                <span className={styles.offBadge} aria-hidden="true">
+                  {notice.state === "coming_soon" ? "Soon" : "Off"}
+                </span>
+                <span id={`nav-off-${item.to.replace(/\W/g, "")}`} className={styles.srOnly}>
+                  {label}
+                </span>
+              </NavLink>
+            );
+          }
 
           if (state === "locked") {
             // Routed to Billing rather than to the feature: the item is an upsell, and sending

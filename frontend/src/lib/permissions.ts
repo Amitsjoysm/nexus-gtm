@@ -20,6 +20,12 @@ export const USERS_MANAGE = "users.manage";
 // *becoming* them are different powers.
 export const USERS_IMPERSONATE = "users.impersonate";
 export const SOURCES_MANAGE = "sources.manage";
+/**
+ * Take a product feature offline for every customer at once. Superadmin only, mirroring the
+ * server: the blast radius is the whole platform, and unlike a price change it is immediately
+ * visible to every user.
+ */
+export const FEATURES_MANAGE = "features.manage";
 export const SYSTEM_READ = "system.read";
 
 /** Human labels for the permission chips shown against each admin. */
@@ -36,6 +42,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   [USERS_MANAGE]: "Manage users",
   [USERS_IMPERSONATE]: "Impersonate users",
   [SOURCES_MANAGE]: "Manage data sources",
+  [FEATURES_MANAGE]: "Switch features on and off",
   [SYSTEM_READ]: "Read system health",
 };
 

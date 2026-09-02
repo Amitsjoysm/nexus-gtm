@@ -1248,6 +1248,53 @@ export interface BillingCredits {
   entries: CreditEntry[];
 }
 
+/** One capability's share of this period's credit spend (`GET /billing/usage/credits`). */
+export interface CreditSpendRow {
+  capability_id: string;
+  name: string;
+  credits: number;
+  /** How many times it ran. Deliberately separate from `credits`: 40 enrichments is 120 credits,
+   *  and reporting only the count was the gap this whole report closes. */
+  actions: number;
+}
+
+export interface CreditDay {
+  /** `YYYY-MM-DD`. */
+  date: string;
+  credits: number;
+}
+
+export interface CreditUserRow {
+  user_id: string;
+  email: string;
+  credits: number;
+}
+
+/**
+ * Where this period's credits went.
+ *
+ * Built from the credit LEDGER rather than the usage stream, so the numbers reconcile against the
+ * balance the customer can see. `granted` and `spent` are period figures; `balance` is live and
+ * may include credits carried over, so `granted - spent === balance` does NOT hold in general.
+ */
+export interface CreditUsageReport {
+  period: string;
+  granted: number;
+  spent: number;
+  balance: number;
+  by_capability: CreditSpendRow[];
+  by_day: CreditDay[];
+  by_user: CreditUserRow[];
+  /**
+   * Spend with no user behind it: refresh sweeps, crawls, plays.
+   *
+   * ATTRIBUTION IS PARTIAL BY CONSTRUCTION, so `by_user` cannot sum to `spent`. Reported as its own
+   * line rather than dropped, because a screen whose rows do not add up to the balance is one
+   * people stop believing.
+   */
+  unattributed_credits: number;
+}
+
 export interface InvoiceLine {
   kind: string;
   capability_id: string | null;
@@ -1596,6 +1643,40 @@ export interface ModuleEntitlement {
   /** Whether the plan includes it at all. NOT the same as "the server will let you through". */
   included: boolean;
   source: string;
+  /**
+   * Whether the client should actually gate this. Computed by the SERVER, so the nav and the route
+   * guard cannot derive it differently. Folds in both rules: a plan gate locks only under
+   * enforcement, a platform switch locks always.
+   */
+  locked: boolean;
+  /**
+   * Set only when a platform switch is what disabled this, never by a plan.
+   * `disabled | coming_soon | maintenance` — three sentences sharing one entitlement.
+   */
+  switch_state: FeatureSwitchState | null;
+  switch_message: string;
+}
+
+export type FeatureSwitchState = "enabled" | "disabled" | "coming_soon" | "maintenance";
+
+/** One switchable module in the superadmin console (`GET /admin/features`). */
+export interface FeatureSwitchRow {
+  capability_id: string;
+  name: string;
+  state: FeatureSwitchState;
+  message: string;
+  updated_by: string;
+  /**
+   * Capability ids this module gates through `depends_on`. Switching it off stops these too, so
+   * an operator sees the reach BEFORE flipping rather than from the support queue.
+   */
+  gates: string[];
+}
+
+export interface FeatureSwitchList {
+  features: FeatureSwitchRow[];
+  /** The states the server accepts. Drives the picker, so client and server cannot disagree. */
+  states: FeatureSwitchState[];
 }
 
 export interface Entitlements {

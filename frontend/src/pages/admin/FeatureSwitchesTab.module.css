@@ -1,0 +1,223 @@
+/* One module switched off is a platform-wide event, so it is stated in words at the top rather
+   than left for the operator to spot by scanning badges down a list of twenty rows. */
+.summary {
+  margin: 0 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-radius: var(--radius);
+  background: var(--warning-quiet);
+  font-size: var(--text-sm);
+  color: var(--text-default);
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.row {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* A full tinted panel, never a left stripe. The colour is a second signal behind the badge, which
+   carries the meaning on its own. */
+.rowOff {
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  background: var(--warning-quiet);
+}
+
+.rowMain {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.rowIdent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.rowName {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+/* The capability id is the thing an operator greps for in a log or quotes in a ticket, so it is
+   rendered as an identifier rather than prose. */
+.rowId {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.rowStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+}
+
+.rowMessage {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-default);
+}
+
+.rowGates {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.rowGateList {
+  font-family: var(--font-mono);
+}
+
+/* ---- edit panel --------------------------------------------------------------------------
+   Inline, not a modal. The operator needs the row's own reach ("also stops 4 capabilities")
+   visible while they choose, and a modal would cover the one fact that should change their mind. */
+.panel {
+  margin-block-start: var(--space-4);
+  padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.states {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-2);
+}
+
+.legend {
+  padding: 0;
+  margin-block-end: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+}
+
+/* Radios rather than a select: four options whose differences are the entire decision, and a
+   select hides three of them plus every hint behind a click. */
+.state {
+  display: grid;
+  grid-template-areas: "radio label" ". hint";
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  align-items: start;
+  padding: var(--space-3);
+  min-block-size: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.state:hover {
+  border-color: var(--border-strong);
+}
+
+.stateActive {
+  border-color: var(--accent);
+  background: var(--accent-quiet);
+}
+
+.state:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.radio {
+  grid-area: radio;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.stateLabel {
+  grid-area: label;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+.stateHint {
+  grid-area: hint;
+  font-size: var(--text-xs);
+  line-height: var(--leading);
+  color: var(--text-muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+.textarea {
+  inline-size: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-default);
+  font: inherit;
+  font-size: var(--text-base);
+  resize: vertical;
+}
+
+.textarea:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading);
+  color: var(--text-muted);
+  max-inline-size: 70ch;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .rowStatus {
+    inline-size: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state {
+    transition: none;
+  }
+}

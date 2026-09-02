@@ -127,8 +127,8 @@ export function canSee(item: NavItem, role: Role | undefined, isPlatformAdmin = 
   return ROLE_RANK[role] >= ROLE_RANK[item.minRole];
 }
 
-/** How a nav item should render given the plan. */
-export type NavState = "visible" | "locked" | "hidden";
+/** How a nav item should render given the plan and any platform switch. */
+export type NavState = "visible" | "locked" | "unavailable" | "hidden";
 
 /** Roles that can actually do something about a locked module (i.e. change the plan). */
 const CAN_UPGRADE: Role[] = ["admin", "owner"];
@@ -155,7 +155,18 @@ const CAN_UPGRADE: Role[] = ["admin", "owner"];
  * To make it uniform instead, change this one function: `return "locked"` for the upsell
  * everywhere, or `return "hidden"` to always hide. Nothing else needs to move.
  */
-export function navState(role: Role | undefined, locked: boolean): NavState {
+export function navState(
+  role: Role | undefined,
+  locked: boolean,
+  switchedOff = false,
+): NavState {
+  // A PLATFORM SWITCH IS SHOWN TO EVERYONE, and the agency argument above is exactly why it has to
+  // be. That argument hides an upsell from people who cannot buy — a padlock they can do nothing
+  // about is clutter forever. A switch is not an upsell and is not forever: it is a status
+  // message, and the person who most needs it is the rep whose daily driver has gone quiet.
+  // Hiding it from them turns "Calls is down until 14:00" into "the app lost my Calls tab", which
+  // is a support ticket instead of an answer.
+  if (switchedOff) return "unavailable";
   if (!locked) return "visible";
   return role && CAN_UPGRADE.includes(role) ? "locked" : "hidden";
 }

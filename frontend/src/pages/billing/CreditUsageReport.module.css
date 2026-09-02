@@ -1,0 +1,266 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ---- period totals ----------------------------------------------------------------------
+   Three plain figures, not the big-number hero strip. They are facts the customer checks
+   against their own expectation, and `granted - spent` deliberately does NOT equal `balance`
+   (those are period figures; a balance can carry over), so presenting them as one arithmetic
+   run would imply a sum that is wrong. */
+.totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  margin: 0;
+  padding-block-end: var(--space-5);
+  border-block-end: 1px solid var(--border);
+}
+
+.total {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.totalLabel {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.totalValue {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-default);
+}
+
+.totalSpend {
+  /* The one figure the customer came here about. Weight rather than colour: a red total for
+     normal, expected consumption reads as an error state. */
+  font-size: var(--text-xl);
+}
+
+.totalBadge {
+  margin-inline-start: var(--space-2);
+  vertical-align: middle;
+}
+
+/* ---- sections ---------------------------------------------------------------------------- */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+}
+
+/* ---- proportional rows (capabilities, people) --------------------------------------------
+   The same track/fill vocabulary as the plan meters on BillingPage, so the billing surface
+   speaks one bar language instead of two. */
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.rowHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.rowName {
+  font-size: var(--text-base);
+  color: var(--text-default);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowFigures {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.rowCredits {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-default);
+}
+
+.rowUnit {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.rowMeta {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.rowDot {
+  margin-inline: var(--space-2);
+}
+
+.track {
+  block-size: 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.fill {
+  block-size: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: inline-size var(--dur) var(--ease-out);
+}
+
+/* Automated work is not a person, and colouring it like one invites the reader to look for the
+   name. A quieter neutral says "this row is a different kind of thing" without implying a
+   problem, which a warning colour would. */
+.fillSystem {
+  background: var(--text-subtle);
+}
+
+.rowSystem {
+  padding-block-start: var(--space-4);
+  border-block-start: 1px dashed var(--border);
+}
+
+.more {
+  align-self: flex-start;
+  margin-block-start: var(--space-3);
+  padding: var(--space-2) 0;
+  min-block-size: 44px;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.more:hover {
+  text-decoration: underline;
+}
+
+.more:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ---- daily timeline -----------------------------------------------------------------------
+   Columns rather than a line: spend is a set of discrete daily totals, and a line between them
+   would draw values for hours nothing happened. Built from divs because the dependency list is
+   react, react-dom, react-router-dom and framer-motion; a charting library for one bar row is
+   not worth the bundle or the second visual language. */
+.chart {
+  display: block;
+}
+
+.bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  block-size: 132px;
+}
+
+.barCol {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  block-size: 100%;
+}
+
+.barTrack {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.bar {
+  inline-size: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: block-size var(--dur) var(--ease-out);
+}
+
+.barLabel {
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Thinned, not rotated. Rotated axis labels are the first thing to become unreadable at this
+   column width, and every bar keeps its full figure in the table below regardless. */
+.barLabelHidden {
+  visibility: hidden;
+}
+
+/* The bars carry no text, so the real figures live in a table that is available to assistive
+   technology and to anyone who tabs to it, rather than being lost in unlabelled divs. */
+.srTable {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 640px) {
+  .totals {
+    gap: var(--space-5);
+  }
+
+  .bars {
+    block-size: 100px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill,
+  .bar {
+    transition: none;
+  }
+}

@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
-import type { Entitlements } from "@/lib/types";
+import type { Entitlements, FeatureSwitchState } from "@/lib/types";
 
 /**
  * The workspace's module gates, fetched once per session and shared.
@@ -34,10 +34,36 @@ export function useEntitlements(): Entitlements | null {
  * one that briefly offers a link.
  */
 export function isLocked(entitlements: Entitlements | null, capabilityId?: string): boolean {
-  if (!capabilityId || !entitlements || !entitlements.gating_active) return false;
+  if (!capabilityId || !entitlements) return false;
   const module = entitlements.modules.find((m) => m.capability_id === capabilityId);
   if (!module) return false;
-  return !module.included;
+  // `locked` is computed by the server, which already folds in both rules: a PLAN gate locks only
+  // when `gating_active`, a PLATFORM SWITCH locks always. Deriving that here would put the same
+  // three-way condition in the client, where this function and `RequireCapability` are two
+  // readers of it — exactly the shape two callers get subtly different.
+  //
+  // `?? !module.included` covers a server that predates the field during a rolling deploy. Kept
+  // guarded by `gating_active` so the old behaviour is reproduced exactly, rather than a mixed
+  // version of the two.
+  return module.locked ?? (entitlements.gating_active && !module.included);
+}
+
+/**
+ * The platform switch on a capability, if a switch is what took it away.
+ *
+ * `null` when the module is available, or when it is locked by the PLAN rather than by a switch —
+ * those two cases need opposite screens. A plan gate is an upsell and routes to billing; a switch
+ * is our decision, and offering to sell someone a feature we have turned off ourselves is the
+ * failure this distinction exists to prevent.
+ */
+export function switchNotice(
+  entitlements: Entitlements | null,
+  capabilityId?: string,
+): { state: FeatureSwitchState; message: string } | null {
+  if (!capabilityId || !entitlements) return null;
+  const module = entitlements.modules.find((m) => m.capability_id === capabilityId);
+  if (!module?.switch_state || module.switch_state === "enabled") return null;
+  return { state: module.switch_state, message: module.switch_message };
 }
 
 export function EntitlementsProvider({ children }: { children: ReactNode }) {

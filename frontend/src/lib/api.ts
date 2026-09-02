@@ -24,6 +24,10 @@ import type {
   CostRateResult,
   AdminSubscription,
   BillingCredits,
+  CreditUsageReport,
+  FeatureSwitchList,
+  FeatureSwitchRow,
+  FeatureSwitchState,
   BillingUsage,
   Entitlements,
   ProrationPreview,
@@ -843,6 +847,23 @@ export class ApiClient {
   }
   billingCredits(signal?: AbortSignal) {
     return this.request<BillingCredits>("/billing/credits", { signal });
+  }
+  /** Where this period's credits went: by capability, by day, by user. */
+  billingCreditUsage(signal?: AbortSignal) {
+    return this.request<CreditUsageReport>("/billing/usage/credits", { signal });
+  }
+
+  // ---- platform feature switches (superadmin) ----
+  /** Every switchable module and its current state. */
+  adminFeatures(signal?: AbortSignal) {
+    return this.request<FeatureSwitchList>("/admin/features", { signal });
+  }
+  /** Set one module's state. Idempotent. */
+  adminSetFeature(capabilityId: string, body: { state: FeatureSwitchState; message: string; note?: string }) {
+    return this.request<FeatureSwitchRow>(`/admin/features/${encodeURIComponent(capabilityId)}`, {
+      method: "PUT",
+      body,
+    });
   }
   /** Module gates for the current workspace. Drives navigation; see `EntitlementsContext`. */
   billingEntitlements(signal?: AbortSignal) {

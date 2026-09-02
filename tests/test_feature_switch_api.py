@@ -233,3 +233,64 @@ async def test_flipping_a_switch_is_audited(client, monkeypatch):
             select(BillingAuditLog).where(BillingAuditLog.action.like("feature%"))
         )).all()
     assert rows, "flipping a feature switch wrote no audit row"
+
+
+# ---- the client surface ------------------------------------------------------------------------
+#
+# There is no frontend test runner, so these read the source, exactly like
+# `test_plan_gated_nav.py`. They pin the three decisions that are invisible at runtime until a
+# customer hits them.
+
+import pathlib
+
+FRONTEND = pathlib.Path(__file__).resolve().parents[1] / "frontend" / "src"
+
+
+def _read(rel: str) -> str:
+    return (FRONTEND / rel).read_text(encoding="utf-8")
+
+
+def test_the_client_gates_on_the_servers_locked_flag():
+    """`isLocked` must not re-derive the rule from `gating_active` and `included`.
+
+    The server folds both rules into `locked` — a plan gate locks only under enforcement, a
+    platform switch locks always — precisely because the client has TWO readers of it (the sidebar
+    and `RequireCapability`) and a hand-rolled condition in each is how they drift.
+    """
+    src = _read("app/EntitlementsContext.tsx")
+    assert "module.locked" in src, "isLocked no longer reads the server's `locked`"
+
+
+def test_a_switched_off_route_does_not_redirect_to_billing():
+    """A plan gate is an upsell and billing is a real destination. A switch is OUR decision, no
+    plan re-enables it, and sending someone to a checkout page to fix our maintenance window is
+    the confusion the separate `switch_state` exists to prevent."""
+    src = _read("App.tsx")
+    assert "switchNotice" in src, "RequireCapability does not distinguish a switch from a plan gate"
+    assert "FeatureUnavailable" in src, "no in-place notice for a switched-off route"
+    # The plan-gate redirect must survive: removing it would strand a customer who genuinely
+    # could buy their way in.
+    assert '/settings/billing' in src
+
+
+def test_a_switched_off_nav_item_is_shown_to_everyone():
+    """`navState` hides a plan-locked item from anyone who cannot change the plan, because a
+    padlock they can do nothing about is permanent clutter. A switch is the opposite: it is a
+    status message, and the person who most needs it is the rep whose daily driver went quiet.
+    Hiding it turns "Calls is down until 14:00" into "the app lost my Calls tab"."""
+    src = _read("app/nav.tsx")
+    assert "unavailable" in src, "navState has no state for a platform switch"
+    idx_switch = src.index("if (switchedOff) return \"unavailable\";")
+    idx_hidden = src.index("CAN_UPGRADE.includes(role)")
+    assert idx_switch < idx_hidden, (
+        "the switch check runs after the hide-from-reps rule, so a rep would not see the notice"
+    )
+
+
+def test_every_switch_state_has_customer_facing_copy():
+    """Three blocking states exist BECAUSE they are three different sentences. A state with no
+    wording of its own would render as whichever one came first, which is worse than having one
+    state — it looks specific and is wrong."""
+    src = _read("components/FeatureUnavailable.tsx")
+    for state in ("coming_soon", "maintenance", "disabled"):
+        assert f"{state}:" in src, f"no copy for the `{state}` state"

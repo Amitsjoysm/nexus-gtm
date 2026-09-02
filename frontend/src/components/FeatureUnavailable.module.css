@@ -1,0 +1,12 @@
+.body {
+  display: block;
+}
+
+/* The generic explanation drops below the operator's own sentence when both are shown. Quieter,
+   because the specific one is what the reader needs and the general one is context. */
+.sub {
+  display: block;
+  margin-block-start: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}

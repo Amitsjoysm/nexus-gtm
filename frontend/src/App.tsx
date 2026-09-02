@@ -4,7 +4,8 @@ import type { ComponentType, ReactNode } from "react";
 import { ThemeProvider } from "@/app/ThemeContext";
 import { SignalWindowProvider } from "@/app/SignalWindowContext";
 import { AuthProvider, useAuth } from "@/app/AuthContext";
-import { isLocked, useEntitlements } from "@/app/EntitlementsContext";
+import { isLocked, switchNotice, useEntitlements } from "@/app/EntitlementsContext";
+import { FeatureUnavailable } from "@/components/FeatureUnavailable";
 import { RequirePlatformAdmin } from "@/app/RequirePlatformAdmin";
 import { ToastProvider } from "@/components/ui";
 import { AppShell } from "@/components/layout/AppShell";
@@ -112,13 +113,38 @@ function RequireRole({ minRole, children }: { minRole: Role; children: ReactNode
  * The server is still the authority; every one of these routes calls endpoints that meter and 402
  * on their own.
  */
-function RequireCapability({ capability, children }: { capability: string; children: ReactNode }) {
+function RequireCapability({
+  capability,
+  name,
+  children,
+}: {
+  capability: string;
+  /** What to call this page when it is unavailable. */
+  name: string;
+  children: ReactNode;
+}) {
   const entitlements = useEntitlements();
-  return isLocked(entitlements, capability) ? (
-    <Navigate to="/settings/billing" replace />
-  ) : (
-    <>{children}</>
-  );
+  if (!isLocked(entitlements, capability)) return <>{children}</>;
+
+  // A PLATFORM SWITCH AND A PLAN GATE NEED OPPOSITE SCREENS, and telling them apart is the whole
+  // reason the server reports `switch_state` separately from `included`.
+  //
+  // A plan gate is an upsell: the customer can buy their way in, so billing is a real destination.
+  // A switch is our decision — no plan re-enables it — so redirecting there would send someone to
+  // a checkout page to fix our own maintenance window. It renders in place instead, which also
+  // keeps the URL they were sent, so a refresh once the switch is flipped back lands them where
+  // they were going.
+  const notice = switchNotice(entitlements, capability);
+  if (notice) {
+    return (
+      <FeatureUnavailable
+        name={name}
+        state={notice.state as Exclude<typeof notice.state, "enabled">}
+        message={notice.message}
+      />
+    );
+  }
+  return <Navigate to="/settings/billing" replace />;
 }
 
 export function App() {
@@ -154,7 +180,7 @@ export function App() {
                 <Route
                   path="/inbox"
                   element={
-                    <RequireCapability capability="module.signals">
+                    <RequireCapability capability="module.signals" name="Inbox">
                       <InboxPage />
                     </RequireCapability>
                   }
@@ -165,7 +191,7 @@ export function App() {
                 <Route
                   path="/network"
                   element={
-                    <RequireCapability capability="module.network">
+                    <RequireCapability capability="module.network" name="Network">
                       <NetworkPage />
                     </RequireCapability>
                   }
@@ -173,7 +199,7 @@ export function App() {
                 <Route
                   path="/calls"
                   element={
-                    <RequireCapability capability="module.calling">
+                    <RequireCapability capability="module.calling" name="Calls">
                       <CallsPage />
                     </RequireCapability>
                   }
@@ -181,7 +207,7 @@ export function App() {
                 <Route
                   path="/lists"
                   element={
-                    <RequireCapability capability="module.lists">
+                    <RequireCapability capability="module.lists" name="Lists">
                       <ListsPage />
                     </RequireCapability>
                   }
@@ -190,7 +216,7 @@ export function App() {
                   path="/orchestrator"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents">
+                      <RequireCapability capability="module.agents" name="Orchestrator">
                         <ChatPage />
                       </RequireCapability>
                     </RequireRole>
@@ -200,7 +226,7 @@ export function App() {
                   path="/orchestrator/:sessionId"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents">
+                      <RequireCapability capability="module.agents" name="Orchestrator">
                         <ChatPage />
                       </RequireCapability>
                     </RequireRole>
@@ -209,7 +235,7 @@ export function App() {
                 <Route
                   path="/signals"
                   element={
-                    <RequireCapability capability="module.signals">
+                    <RequireCapability capability="module.signals" name="Signals">
                       <SignalsPage />
                     </RequireCapability>
                   }
@@ -217,7 +243,7 @@ export function App() {
                 <Route
                   path="/alerts"
                   element={
-                    <RequireCapability capability="module.signals">
+                    <RequireCapability capability="module.signals" name="Alerts">
                       <AlertsPage />
                     </RequireCapability>
                   }
@@ -226,7 +252,7 @@ export function App() {
                   path="/runs"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents">
+                      <RequireCapability capability="module.agents" name="AI Runs">
                         <RunsPage />
                       </RequireCapability>
                     </RequireRole>
@@ -236,7 +262,7 @@ export function App() {
                   path="/runs/:id"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents">
+                      <RequireCapability capability="module.agents" name="AI Runs">
                         <RunDetailPage />
                       </RequireCapability>
                     </RequireRole>
@@ -246,7 +272,7 @@ export function App() {
                   path="/approvals"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents">
+                      <RequireCapability capability="module.agents" name="Approvals">
                         <ApprovalsPage />
                       </RequireCapability>
                     </RequireRole>
@@ -256,7 +282,7 @@ export function App() {
                   path="/campaigns"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.outreach">
+                      <RequireCapability capability="module.outreach" name="Campaigns">
                         <CampaignsPage />
                       </RequireCapability>
                     </RequireRole>
@@ -266,7 +292,7 @@ export function App() {
                   path="/cadences"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.outreach">
+                      <RequireCapability capability="module.outreach" name="Campaigns">
                         <CadencesPage />
                       </RequireCapability>
                     </RequireRole>
@@ -276,7 +302,7 @@ export function App() {
                   path="/plays"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.plays">
+                      <RequireCapability capability="module.plays" name="Plays">
                         <PlaysPage />
                       </RequireCapability>
                     </RequireRole>
@@ -286,7 +312,7 @@ export function App() {
                   path="/relevance"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.relevance">
+                      <RequireCapability capability="module.relevance" name="Relevance">
                         <RelevancePage />
                       </RequireCapability>
                     </RequireRole>
@@ -296,7 +322,7 @@ export function App() {
                   path="/integrations"
                   element={
                     <RequireRole minRole="admin">
-                      <RequireCapability capability="module.integrations">
+                      <RequireCapability capability="module.integrations" name="Integrations">
                         <IntegrationsPage />
                       </RequireCapability>
                     </RequireRole>

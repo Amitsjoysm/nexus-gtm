@@ -229,6 +229,41 @@
   display: none;
 }
 
+/* ---- switched off by the platform --------------------------------------------------------
+   Reads as a status, not as a lock. A padlock means "buy this"; a switched-off module cannot be
+   bought back, and putting one here would send the reader to the upsell the switch exists to
+   avoid. The item stays fully legible — dimming it to the point of looking disabled would make
+   the very message it carries the hardest thing on the page to notice. */
+.unavailable {
+  color: var(--text-muted);
+}
+
+.unavailable:hover {
+  background: var(--surface-2);
+  color: var(--text-default);
+}
+
+.offBadge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  flex: none;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  /* Two words, at most four characters. Long enough to read at a glance, short enough that it
+     never pushes the label into an ellipsis at the narrowest sidebar width. */
+}
+
+.collapsed .offBadge {
+  display: none;
+}
+
 /* Visually hidden but announced. The lock reason belongs to the accessibility tree, not to the
    visible label — a screen reader should hear "Network, not included in your plan", while the
    sighted user gets the padlock and the tooltip. */

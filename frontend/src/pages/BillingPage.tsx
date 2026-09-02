@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Badge, Card, CardHeader, EmptyState, Icons, Skeleton } from "@/components/ui";
+import { Badge, Card, CardHeader, EmptyState, Skeleton } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { PlanPicker } from "./billing/PlanPicker";
+import { CreditUsageReport } from "./billing/CreditUsageReport";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { cn } from "@/lib/cn";
@@ -172,6 +173,15 @@ function UsageMeter({ row }: { row: CapabilityUsage }) {
   );
 }
 
+/**
+ * Capabilities that measure a LEVEL rather than an action, and so keep a hard quota.
+ *
+ * Mirrors `meter_kind == "gauge"` in the billing catalog. Held here as a small literal rather than
+ * derived from the response because `CapabilityUsage` does not carry the meter kind, and widening
+ * that payload to render one card is a worse trade than a three-item list that a test pins.
+ */
+const GAUGES = new Set(["seat.member", "platform.storage", "network.persons"]);
+
 export function BillingPage() {
   const api = useApiClient();
   const usage = useApi<BillingUsage>((signal) => api.billingUsage(signal), []);
@@ -179,8 +189,16 @@ export function BillingPage() {
   const invoices = useApi<Invoice[]>((signal) => api.billingInvoices(signal), []);
   const [openInvoice, setOpenInvoice] = useState<string | null>(null);
 
-  const metered = useMemo(
-    () => (usage.data?.capabilities ?? []).filter((c) => c.quota != null || c.used > 0),
+  // GAUGES ONLY. This card used to list every capability with usage, drawing a "40 of 500" bar
+  // against the plan quota. Under credits-only billing that quota is no longer what gates a priced
+  // action — the balance is — so a workspace with an empty balance saw four green meters beside a
+  // product that had stopped working, and the meters were the more prominent of the two.
+  //
+  // A quota is still the literal truth for gauges: seats and stored gigabytes are LEVELS, they
+  // never draw on credits, and going over one is enforced as a hard cap. Everything else moved to
+  // `CreditUsageReport`, which reports what is actually being spent.
+  const limits = useMemo(
+    () => (usage.data?.capabilities ?? []).filter((c) => GAUGES.has(c.capability_id)),
     [usage.data],
   );
 
@@ -302,10 +320,14 @@ export function BillingPage() {
             change plan, not to read a meter. */}
         <PlanPicker usage={usage.data ?? null} />
 
+        {/* The answer to "where did my credits go?", above the plan limits: under credits-only
+            billing the balance is what stops a call, so it is what the customer came to read. */}
+        <CreditUsageReport />
+
         <Card padding="lg">
           <CardHeader
-            title="Usage this period"
-            subtitle="Counts update as your workspace works. Limits reset when the period rolls over."
+            title="Plan limits"
+            subtitle="Seats and storage are capped by your plan rather than charged in credits."
           />
           <DataState
             state={usage}
@@ -317,18 +339,17 @@ export function BillingPage() {
                 ))}
               </div>
             }
-            isEmpty={() => metered.length === 0}
+            isEmpty={() => limits.length === 0}
             empty={
               <EmptyState
-                icon={<Icons.BoltIcon />}
-                title="Nothing used yet"
-                description="Run an agent, draft a message, or verify a contact and usage will appear here."
+                title="No capped resources"
+                description="Your plan does not cap seats or storage."
               />
             }
           >
             {() => (
               <ul className={styles.meters}>
-                {metered.map((row) => (
+                {limits.map((row) => (
                   <UsageMeter key={row.capability_id} row={row} />
                 ))}
               </ul>
