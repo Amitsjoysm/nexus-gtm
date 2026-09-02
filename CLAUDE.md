@@ -189,7 +189,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0050_runtime_settings`. The chain is
+Alembic under `migrations/versions/`. Head: `0055_feature_switches`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -197,7 +197,9 @@ Alembic under `migrations/versions/`. Head: `0050_runtime_settings`. The chain i
 `companies`, proration, shared `people`, `crawl_verdict`, user suspension, digest delivery) →
 `0041` (`source_databases`) → `0042` (`accounts.next_refresh_at`) → `0043` (`signal_events.subtype`) →
 `0044`–`0046` (`provider_keys`, `provider_settings`, `payment_credentials`) → `0047`–`0049`
-(`crm_connections`, `audit_log`, `integration_connections`) -> `0050` (`runtime_settings`). Every tenant-scoped table gets RLS via
+(`crm_connections`, `audit_log`, `integration_connections`) -> `0050` (`runtime_settings`) ->
+`0051`-`0054` (account geo/revenue, signal preferences, `users.token_version`, indexed invoice
+PSP references) -> `0055` (`feature_switches`). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -274,11 +276,20 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   (`credits.grant.capped` up to `NEXUS_BILLING_SUPPORT_CREDIT_CAP`), so they are checked in the
   body rather than a `Depends`. Every admin mutation is captured in `billing_audit_log` with
   before/after snapshots.
-- **Money flows through one seam.** `metered()` → quota → credits → overage price → block.
-  Credits are pre-paid, so rating deducts what a period's burns already covered — otherwise the
-  customer pays twice for one overage. Collection is keyed by invoice id at the provider, so a
-  retry can never double-charge. Dunning (`nexus/billing/dunning.py`) retries on a config
-  schedule and escalates to `past_due`; it never silently voids a debt.
+- **Money flows through one seam, at ONE price.** `metered()` → burn the rate card → block when
+  the balance cannot cover it. The four-step ladder this used to be (included quota, then credits,
+  then an explicit overage price, then the wall) gave the same action up to three prices depending
+  on where in the period it landed, so "what does this cost?" could not be answered without knowing
+  your own running total — and the last two steps charged the same overage twice, once to the
+  ledger at the moment of use and once to the invoice at close. That double charge was observed
+  against Stripe. `rate_period` now invoices **gauges only**: seats and stored bytes are levels
+  rather than requests, they never draw on credits, and they are the only thing left with a period
+  figure an invoice can legitimately price. `_burn_for_overage` and the two agreement test files
+  that checked the ledger and the invoice charged the same amount are gone — there is no second
+  charge left to agree with, which is a stronger property than the agreement was. Collection is
+  keyed by invoice id at the provider, so a retry can never double-charge. Dunning
+  (`nexus/billing/dunning.py`) retries on a config schedule and escalates to `past_due`; it never
+  silently voids a debt.
 - **Payments are a provider seam** (`payments.py`): `noop` by default so the whole lifecycle runs
   offline; `stripe` is inert until keyed and raises rather than faking success. Webhooks verify
   an HMAC over the **raw** body, enforce a freshness window, and dedupe on the provider event id
@@ -1068,6 +1079,87 @@ shipping every step's `output` blob to render one "3/5" label is not worth it �
 `steps: []` and the UI computed "0/0 steps" for runs that had completed. When steps *are* supplied
 the counts derive from them, so list and detail cannot disagree.
 
+## Feature switches (`nexus/features/switches.py`) — superadmin, platform-wide
+
+A superadmin takes a feature offline for **every** workspace, with a message, without a deploy.
+Four states: `enabled | disabled | coming_soon | maintenance`. Gated on `features.manage`,
+superadmin preset only — the blast radius is the whole platform and, unlike a price change, it is
+immediately visible to every user. Not folded into `pricing.write`: what a feature costs and
+whether it runs at all are different decisions, and only the second shows up as an outage.
+
+**Keyed on the existing `module.*` capability ids, not a new page registry.** Those ids already
+drive all three enforcement points — the nav item (`nav.tsx` carries `capability`), the route
+(`RequireCapability`) and the endpoints behind them (`depends_on`) — so a switch reaches all three
+without any of them changing, and a page shipped later is covered the moment it is given a
+capability, which it needs anyway to be sellable. A registry would be a fourth source of truth, and
+the first thing to drift would be which pages it covers.
+
+**The absence of a row means enabled**, which is what makes `feature_switches` (migration `0055`,
+no `tenant_id`) additive. Everything fails open: an unreadable table, an unknown state, a lookup
+that raises all resolve to `enabled`. A switch is a restriction, so failing to read one applies
+none. 30s TTL, because the worker is a separate container and would otherwise need a redeploy —
+the thing this removes. The writing process drops its own cache so the console does not feel broken.
+
+Four placement decisions, each load-bearing:
+
+- **The check is FIRST in `resolve_entitlement`**, before the catalog lookup and before every early
+  return. Two of those returns would otherwise be escapes: an `unlimited` plan class bypasses module
+  gates by definition — and that is `legacy-unlimited`, every pre-billing tenant — and "no
+  subscription → allow".
+- **A switch beats the plan escape in `_apply_dependencies`.** That escape says "this customer
+  bought this specific action, so a blanket module gate should not take it away", a claim about
+  entitlement. A switch says "this does not work right now, for anyone". Left alone, taking Outreach
+  offline still ran Free's 20 email drafts against the broken subsystem.
+- **It is enforced whatever `NEXUS_BILLING_ENFORCEMENT` says, `off` excepted.** Shadow is a
+  statement about billing rollout and production defaults to it, so riding on it would have made the
+  control inert exactly where it matters: flip the switch, the panel reports disabled, every
+  customer keeps using the feature. `off` still wins because it is documented as a full kill switch.
+- **A switched-off call is not metered.** It did no work, and billing for it charges the customer
+  for our outage.
+
+**`switch_state` and `switch_message` ride on `ResolvedEntitlement` and on the 402**, because
+"coming soon", "we broke it" and "your plan lacks this" are one `mode="disabled"` and three
+completely different sentences. Without them the client renders the generic upsell for a feature we
+took down ourselves.
+
+**A new permission reaches nobody who has a stored `permissions` list.** Those store the EXPANDED
+set on purpose, so redefining "support" tomorrow cannot re-grant power to people provisioned today.
+Migration `0055` therefore backfills, testing the PERMISSIONS rather than the role: a row holding
+every permission that existed before this one meant "everything" and gets it; a narrowed superadmin
+— which `POST /admin/billing/admins` can create — stays narrowed.
+
+**Client-side, a switch and a plan gate need opposite screens** (`FeatureUnavailable`,
+`navState`). A plan gate is an upsell and `/settings/billing` is a real destination; a switch is our
+decision that no plan reverses, so the route renders in place instead — which also keeps the URL, so
+a refresh after the switch is flipped back lands the user where they were going. The nav item is
+shown to **everyone**, inverting the agency rule right above it: that rule hides a plan lock from
+anyone who cannot upgrade, but a switch is a status message and the person who most needs it is the
+rep whose daily driver went quiet. `included` + `gating_active` + `switch_state` is folded into a
+server-computed `locked`, because the sidebar and `RequireCapability` are two readers of one
+three-way rule.
+
+**`/api/orchestration/runs` had no billing seam at all** — found by testing the endpoint half.
+`workflow.orchestration_run` is catalogued, priced and carried by `module.agents`, and was metered
+only in `routers/agents.py` on the account-pipeline endpoint, so the screen the capability is named
+for ran free and the module gate reached the nav item and the route guard but not the API. Now
+metered around create *and* execute, since the run is driven inline.
+
+## Where the credits went (`nexus/billing/usage_report.py`)
+
+`GET /billing/usage/credits`: period granted/spent/balance, then by capability, by day and by user.
+Built from the credit **ledger** rather than the usage stream, so the numbers reconcile against the
+balance the customer can check. `granted - spent == balance` deliberately does **not** hold — those
+are period figures and a balance can carry over.
+
+**Attribution is partial by construction.** Only usage events carry a user id and a refresh sweep
+has nobody to attribute to, so `by_user` cannot sum to `spent`. The remainder is reported as its own
+row; dropping it leaves the customer to find the gap themselves against a number they will check.
+
+The old `/billing/usage` meters drew "40 of 500" against the plan quota. Under credits-only billing
+the quota is not what gates a priced action — the balance is — so a workspace with an empty balance
+saw green meters beside a product that had stopped working. `BillingPage` keeps them as **Plan
+limits**, scoped to gauges, where a quota is still the literal truth.
+
 ## Plan-gated navigation (`frontend/src/app/EntitlementsContext.tsx`)
 
 The sidebar was blind to entitlements, so a `free` workspace saw Network and Campaigns and found
@@ -1123,8 +1215,8 @@ only *changed* rows are sent, so a module added to the base plan next quarter st
 customer. Custom and enterprise plans are refused by `/billing/checkout` and `/billing/portal` with
 a **409** (`_reject_if_admin_managed`) and are billed by `collect_invoice`. A repeatable public tier
 is instead a standard plan edited through `PlanEntitlementsDialog`, which reaches self-serve
-Checkout. There is **no endpoint to create a new sellable plan** — a ninth public tier still needs a
-`plans.py` change and a deploy.
+Checkout. A ninth public tier no longer needs a `plans.py` change and a deploy: `POST
+/admin/billing/plans` builds one (see *Authoring a sellable plan* above).
 
 **`core` ($19, sort 18) is the worked example of a restricted tier**: eight modules off, leaving the
 ungateable floor plus Lists and Relevance. `ai.scoring` is deliberately **not** tied to

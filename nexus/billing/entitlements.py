@@ -179,6 +179,32 @@ async def resolve_entitlement(
             burst_limit=DEFAULT_BURST_LIMITS.get(capability_id),
         )
 
+        # A SWITCH ON A MODULE THIS CAPABILITY DEPENDS ON, checked HERE rather than left to
+        # `_apply_dependencies` at the bottom — because three of the paths below return before
+        # `_apply_dependencies` ever runs, and each was an escape:
+        #
+        #   * an `unlimited` plan class, which is `legacy-unlimited`, i.e. EVERY pre-billing
+        #     tenant. Measured on the deployment: `module.agents` switched to maintenance, the
+        #     entitlements endpoint correctly reported it locked, the sidebar hid the page, and
+        #     `POST /orchestration/runs` returned 201 ten times out of ten and billed each one;
+        #   * "no subscription -> allow", a regression guard that must not become a way to keep
+        #     using a feature the platform has taken down;
+        #   * a suspended subscription, which blocks anyway but reported `source="suspended"` —
+        #     telling the customer their workspace is paused when the truth is that we took the
+        #     feature offline for everyone.
+        #
+        # The direct check above only covers a switch on the capability ITSELF. This is what makes
+        # a switch on `module.agents` actually stop the orchestration endpoints, which is the
+        # difference between disabling a feature and hiding its menu item.
+        dep_sw = await _switched_off_dependency(base.depends_on, capability_id)
+        if dep_sw is not None:
+            base.mode = "disabled"
+            base.quota = 0
+            base.source = "feature_switch"
+            base.switch_state = dep_sw.state
+            base.switch_message = dep_sw.message
+            return base
+
         sub = await _active_subscription(ts)
         if sub is None:
             return await _apply_dependencies(ts, base, _depth)
@@ -428,6 +454,34 @@ async def _over_burst(ts: TenantSession, capability_id: str, burst_limit: int) -
 
 
 _MAX_DEPENDENCY_DEPTH = 4
+
+
+async def _switched_off_dependency(
+    depends_on: tuple[str, ...], capability_id: str
+):
+    """The first blocking platform switch among this capability's dependencies, else ``None``.
+
+    Reads switches ONLY — it deliberately does not resolve the dependency's full entitlement. A
+    plan-driven module gate still belongs to `_apply_dependencies`, where the plan escape ("Free
+    disables module.outreach yet still sells 20 email drafts") correctly applies. A switch is a
+    different claim: it says the feature does not work for anyone, so it outranks that escape and
+    every plan class.
+
+    One level deep, matching the seed's flat capability -> module shape, and cheap: `switch_for`
+    reads a process-local dict behind a 30s TTL, so this adds no query on the metering hot path.
+
+    Never raises. A switch is a restriction, so failing to read one applies none.
+    """
+    try:
+        for dep in depends_on:
+            if dep == capability_id:
+                continue
+            sw = await switch_for(dep)
+            if sw.blocks:
+                return sw
+    except Exception:
+        logger.warning("dependency switch lookup failed for %s", capability_id, exc_info=True)
+    return None
 
 
 async def _apply_dependencies(

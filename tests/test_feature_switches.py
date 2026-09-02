@@ -367,3 +367,73 @@ async def test_a_switched_off_call_is_not_metered(fresh_db, monkeypatch):
         await check_and_meter(ts, capability_id="ai.chat_turn", idempotency_key="a")
         await s.commit()
         assert await balance(ts) == 1000
+
+
+async def test_a_switched_off_module_stops_its_dependents_on_an_unlimited_plan(fresh_db):
+    """The escape the first version shipped with, found by running it against the deployment.
+
+    `resolve_entitlement` returns early for `unlimited`/`internal`/`partner` plan classes, and that
+    return is BEFORE `_apply_dependencies`. So a switch on `module.agents` disabled the module
+    itself — the direct check at the top catches that — while every capability that merely
+    DEPENDS on it resolved `mode=unlimited, source=plan_class` and ran normally.
+
+    Measured on the local deployment: `module.agents` switched to maintenance, the entitlements
+    endpoint correctly reported `locked=true`, the sidebar hid the page, and
+    `POST /api/orchestration/runs` returned 201 ten times out of ten and billed for every one.
+
+    `legacy-unlimited` is that plan class, and it is EVERY pre-billing tenant — so the population
+    this escaped for is exactly the one a platform switch most needs to reach.
+
+    `test_a_switch_beats_an_unlimited_plan` did not catch it because it asserts on the switched
+    capability itself, which the direct check handles. This one asserts on a dependent.
+    """
+    from nexus.features.switches import invalidate
+
+    invalidate()
+    tid = await _seed_workspace("legacy-unlimited")
+    assert (await _resolve(tid, "ai.chat_turn")).mode == "unlimited", "expected the bypass"
+
+    await _set_switch("module.agents", "maintenance", "Upgrading the agent runtime")
+    ent = await _resolve(tid, "ai.chat_turn")
+    assert ent.mode == "disabled", (
+        f"an unlimited plan escaped a switch on its module: mode={ent.mode} source={ent.source}"
+    )
+    assert ent.source == "feature_switch"
+    assert ent.switch_message == "Upgrading the agent runtime"
+
+
+async def test_a_switched_off_module_stops_its_dependents_with_no_subscription(fresh_db):
+    """The other early return, for the same reason. "No subscription -> allow" is a deliberate
+    regression guard and must not become a way to keep using a feature the platform took down."""
+    from nexus.billing.catalog import sync_catalog
+    from nexus.features.switches import invalidate
+    from tests.conftest import make_tenant
+
+    await sync_catalog()
+    invalidate()
+    tid = await make_tenant()
+    await _set_switch("module.agents", "disabled")
+    assert (await _resolve(tid, "ai.chat_turn")).mode == "disabled"
+
+
+async def test_a_suspended_workspace_still_sees_the_switch_reason(fresh_db):
+    """A suspended subscription also returns early. It resolves to disabled either way, so nothing
+    is unlocked — but the customer is told the wrong thing: "your workspace is paused" when the
+    truth is that we took the feature down for everyone."""
+    from nexus.features.switches import invalidate
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+    from nexus.models.billing import BillingSubscription
+
+    invalidate()
+    tid = await _seed_workspace()
+    async with get_sessionmaker()() as s:
+        ts = TenantSession(s, tid)
+        sub = (await ts.list(BillingSubscription, limit=1))[0]
+        sub.status = "suspended"
+        await s.commit()
+
+    await _set_switch("module.agents", "maintenance", "Upgrading the agent runtime")
+    ent = await _resolve(tid, "ai.chat_turn")
+    assert ent.mode == "disabled"
+    assert ent.source == "feature_switch", f"reported as {ent.source}, not as the switch"
