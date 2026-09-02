@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func, select
 
 from nexus.api.deps import Principal, get_principal, get_tenant_session, require
+from nexus.billing.meter import metered
 from nexus.core.rbac import Permission, has_permission
 from nexus.core.tenancy import TenantSession
 from nexus.orchestration.engine import OrchestrationError, get_orchestration_engine
@@ -56,16 +57,32 @@ async def create_run(
 ) -> RunOut:
     engine = get_orchestration_engine()
     try:
-        run = await engine.create_run(
-            ts,
-            body.goal,
-            body.input,
-            created_by=principal.user_id,
-            idempotency_key=body.idempotency_key,
-            account_id=body.account_id,
-        )
-        # Drive inline to the first stopping point (completion or approval gate).
-        await engine.execute_run(ts, run)
+        # THE ORCHESTRATOR HAD NO BILLING SEAM AT ALL. `workflow.orchestration_run` is catalogued,
+        # priced, and carried by `module.agents` via `depends_on` — and it was metered only in
+        # `routers/agents.py`, on the account-pipeline endpoint. So the screen this capability is
+        # named for ran free, and the module gate that is supposed to sell it reached the nav item
+        # and the route guard but not the API behind them.
+        #
+        # That is the failure CLAUDE.md states directly: hiding a link is presentation,
+        # `RequireCapability` is access control, and the SERVER is the real boundary. Without this
+        # block a workspace whose plan excludes Agents — or one whose platform switch has taken
+        # Agents offline for maintenance — could still POST here from a bookmark or a shared URL
+        # and drive a full multi-agent run.
+        #
+        # Wraps create AND execute, not just create: the run is driven inline to its first stopping
+        # point, so the work being paid for happens inside this block.
+        async with metered(ts, "workflow.orchestration_run", user_id=principal.user_id,
+                           attrs={"goal": body.goal}):
+            run = await engine.create_run(
+                ts,
+                body.goal,
+                body.input,
+                created_by=principal.user_id,
+                idempotency_key=body.idempotency_key,
+                account_id=body.account_id,
+            )
+            # Drive inline to the first stopping point (completion or approval gate).
+            await engine.execute_run(ts, run)
     except PlanError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     steps = await _load_steps(ts, run.id)

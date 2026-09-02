@@ -46,6 +46,60 @@ def upgrade() -> None:
     # release writes a state the old one does not know — into a write failure instead of a value
     # the old release safely ignores.
 
+    _grant_features_manage_to_full_superadmins()
+
+
+def _grant_features_manage_to_full_superadmins() -> None:
+    """Give `features.manage` to stored admins who already held every other permission.
+
+    `platform_admins.permissions` stores the EXPANDED set rather than the role name, deliberately:
+    redefining "support" tomorrow must not silently re-grant power to people provisioned today. The
+    cost of that rule is that a NEW permission reaches nobody who has a stored list — so the
+    superadmin who deploys this release cannot open the console it adds, and on a deployment where
+    they are the only admin that is a lockout with no in-product fix.
+
+    Widening every `platform_role == "superadmin"` row would be the easy answer and is wrong: the
+    grant endpoint accepts an explicit `permissions` list alongside the role, so a deliberately
+    NARROWED superadmin can exist, and this would silently re-grant it — the exact thing the
+    expanded-set rule was written to prevent.
+
+    So the test is on the permissions, not the role: a row that held every permission that existed
+    before this one meant "everything" at the time it was written, and a permission added later
+    belongs to it. A row missing even one stays exactly as it is.
+
+    Rows with an EMPTY list are untouched and need nothing — `effective_permissions` falls back to
+    the role preset for those, which now contains the new permission. The env allowlist is
+    unaffected for the same reason it always was: it carries full power by construction.
+    """
+    import json
+
+    from nexus.billing.permissions import (
+        FEATURES_MANAGE,
+        PERMISSIONS_BEFORE_FEATURES_MANAGE,
+    )
+
+    bind = op.get_bind()
+    try:
+        rows = bind.execute(
+            sa.text("SELECT id, permissions FROM platform_admins")
+        ).fetchall()
+    except Exception:
+        return  # table absent on a partial chain; nothing to backfill
+
+    had_everything = set(PERMISSIONS_BEFORE_FEATURES_MANAGE)
+    for row_id, raw in rows:
+        if not raw:
+            continue                       # empty -> resolves through the role preset
+        held = raw if isinstance(raw, list) else json.loads(raw)
+        if not isinstance(held, list) or FEATURES_MANAGE in held:
+            continue
+        if not had_everything.issubset(set(held)):
+            continue                       # a narrowed admin stays narrowed
+        bind.execute(
+            sa.text("UPDATE platform_admins SET permissions = :p WHERE id = :i"),
+            {"p": json.dumps(sorted(set(held) | {FEATURES_MANAGE})), "i": row_id},
+        )
+
 
 def downgrade() -> None:
     op.drop_table("feature_switches")

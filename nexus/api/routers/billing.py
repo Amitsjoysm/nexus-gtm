@@ -632,8 +632,22 @@ class EntitlementOut(BaseModel):
     # through right now" — see `gating_active`.
     included: bool
     # Where the answer came from (plan_class | plan | catalog | feature_flag | dependency |
-    # suspended | unknown), so a support conversation can start from a fact.
+    # suspended | unknown | feature_switch), so a support conversation can start from a fact.
     source: str
+    # Whether the client should actually gate this item. COMPUTED HERE, not left to the client to
+    # derive from `gating_active` + `included` + `switch_state`: that derivation has two readers
+    # (the nav in `nav.tsx` and the route guard in `App.tsx`) and is exactly the sort of thing two
+    # callers get subtly different. The rules it folds in:
+    #   * a PLAN gate locks only when `gating_active` — otherwise shadow mode, whose whole promise
+    #     is "changes nothing", starts hiding features the server still serves;
+    #   * a PLATFORM SWITCH locks always, because it is not about billing and production runs
+    #     shadow by default. Riding it on `gating_active` would make the control inert.
+    locked: bool = False
+    # `null` unless a platform switch is what disabled this. `disabled | coming_soon | maintenance`
+    # — three sentences sharing one entitlement, and telling them apart is the difference between
+    # "we are fixing this" and an upgrade prompt for a feature no plan sells.
+    switch_state: str | None = None
+    switch_message: str = ""
 
 
 class EntitlementsOut(BaseModel):
@@ -673,6 +687,9 @@ async def get_entitlements(
         )
     ).all()
 
+    settings = get_settings()
+    gating_active = settings.billing_enforcement == "on"
+
     modules: list[EntitlementOut] = []
     for cap in sorted(rows, key=lambda c: c.id):
         ent = await resolve_entitlement(ts, cap.id)
@@ -685,16 +702,22 @@ async def get_entitlements(
                 # self-serve plan does not advertise a module it cannot actually turn on.
                 included=ent.mode not in ("disabled", "enterprise"),
                 source=ent.source,
+                locked=(
+                    ent.source == "feature_switch"
+                    or (gating_active and ent.mode in ("disabled", "enterprise"))
+                ),
+                switch_state=ent.switch_state,
+                switch_message=ent.switch_message,
             )
         )
 
-    enforcement = get_settings().billing_enforcement
+    enforcement = settings.billing_enforcement
     return EntitlementsOut(
         plan=sub.plan_id if sub else None,
         plan_name=plan.name if plan else None,
         status=sub.status if sub else None,
         enforcement=enforcement,
-        gating_active=enforcement == "on",
+        gating_active=gating_active,
         modules=modules,
     )
 

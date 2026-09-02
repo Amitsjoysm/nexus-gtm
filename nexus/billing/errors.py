@@ -16,16 +16,20 @@ class QuotaExceeded(BillingError):
     def __init__(
         self, capability_id: str, *, reason: str, used: float = 0,
         quota: int | None = None, plan_id: str | None = None,
+        switch_state: str | None = None, switch_message: str = "",
     ):
         self.capability_id = capability_id
-        self.reason = reason          # quota_exhausted | disabled | dependency
+        # quota_exhausted | credits_exhausted | disabled | dependency | feature_switch
+        self.reason = reason
         self.used = used
         self.quota = quota
         self.plan_id = plan_id
+        self.switch_state = switch_state
+        self.switch_message = switch_message
         super().__init__(f"{capability_id}: {reason}")
 
     def to_payload(self) -> dict:
-        return {
+        payload = {
             "error": "quota_exceeded",
             "capability": self.capability_id,
             "reason": self.reason,
@@ -34,6 +38,14 @@ class QuotaExceeded(BillingError):
             "plan": self.plan_id,
             "upgrade_url": "/settings/billing",
         }
+        if self.switch_state is not None:
+            # A PLATFORM SWITCH IS NOT AN UPSELL. Without these two keys the client renders the
+            # generic "your plan does not include this — upgrade" for a feature we have taken down
+            # ourselves, so the customer is invited to pay to fix our maintenance window. The
+            # client drops `upgrade_url` when `switch_state` is present.
+            payload["switch_state"] = self.switch_state
+            payload["switch_message"] = self.switch_message
+        return payload
 
 
 class BillingThrottled(BillingError):

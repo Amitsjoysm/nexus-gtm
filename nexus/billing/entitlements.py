@@ -277,6 +277,11 @@ class MeterResult:
             used=self.used,
             quota=self.quota,
             plan_id=ent.plan_id if ent else None,
+            # Carried so the client can say WHY, rather than falling back to the generic upsell.
+            # A platform switch is our decision, not a limit the customer hit, and inviting them to
+            # upgrade out of our own maintenance window is the wrong instruction.
+            switch_state=ent.switch_state if ent else None,
+            switch_message=ent.switch_message if ent else "",
         )
 
 

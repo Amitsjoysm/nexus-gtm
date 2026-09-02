@@ -47,11 +47,24 @@ SYSTEM_READ = "system.read"              # live endpoint + dependency health
 # only the superadmin preset carries it.
 PROVIDERS_MANAGE = "providers.manage"    # add/test/pin platform provider API keys
 
+# Take a product capability offline for EVERY customer at once, or mark it coming-soon. Superadmin
+# only, for the same reason as `providers.manage` and `sources.manage`: the blast radius is the
+# whole platform, and unlike a price change it is immediately visible to every user. Deliberately
+# not folded into `pricing.write` — deciding what a feature costs and deciding whether it runs at
+# all are different acts, and the second is the one that shows up as an outage.
+FEATURES_MANAGE = "features.manage"
+
 ALL_PERMISSIONS = (
     BILLING_READ, PRICING_WRITE, SUBSCRIPTIONS_WRITE, CREDITS_GRANT,
     CREDITS_GRANT_CAPPED, INVOICES_COLLECT, JOBS_MANAGE, ADMINS_MANAGE, USERS_MANAGE,
-    USERS_IMPERSONATE, SOURCES_MANAGE, SYSTEM_READ, PROVIDERS_MANAGE,
+    USERS_IMPERSONATE, SOURCES_MANAGE, SYSTEM_READ, PROVIDERS_MANAGE, FEATURES_MANAGE,
 )
+
+# Every permission that existed BEFORE `features.manage` was added. Migration 0055 uses it to
+# recognise a stored superadmin row that held everything at the time it was written, and grants the
+# new permission to exactly those. See the migration for why that cannot simply be inferred from
+# the role name.
+PERMISSIONS_BEFORE_FEATURES_MANAGE = tuple(p for p in ALL_PERMISSIONS if p != FEATURES_MANAGE)
 
 # Role presets. `superadmin` is everything; the other two are deliberately narrower.
 #
