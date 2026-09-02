@@ -2,7 +2,13 @@
 """The entitlement engine: resolve policy, decide, and meter — the ONE billing seam.
 
 Resolution order (docs/billing/02-Entitlement-Engine.md §2):
-    plan class 'unlimited'  ->  plan entitlement  ->  catalog default  ->  unknown (allow)
+    platform switch  ->  plan class 'unlimited'  ->  plan entitlement  ->  catalog default
+    ->  unknown (allow)
+
+The platform switch is FIRST because it is the only step that means "off for everyone". Every other
+step answers "what did this customer buy?", and two of them short-circuit — an `unlimited` plan
+class and a tenant with no subscription both return early — so a switch checked later would not
+apply to `legacy-unlimited`, which is every pre-billing tenant.
 
 Everything about this module is biased toward NOT breaking the product: unknown capabilities,
 missing subscriptions, and internal errors all resolve to "allow".
@@ -18,6 +24,7 @@ from sqlalchemy import select
 
 from nexus.core import metrics
 from nexus.core.tenancy import TenantSession
+from nexus.features.switches import switch_for
 from nexus.models.billing import (
     BillingCapability,
     BillingPlan,
@@ -50,7 +57,14 @@ class ResolvedEntitlement:
     depends_on: tuple[str, ...] = ()
     unit: str = "action"
     plan_id: str | None = None
-    source: str = "catalog"         # plan_class | plan | catalog | unknown
+    source: str = "catalog"         # plan_class | plan | catalog | unknown | feature_switch
+    # Set only when `source == "feature_switch"`. Carried on the entitlement rather than looked up
+    # again by the API, because the state and the message are the ONLY things that distinguish
+    # "not built yet" from "temporarily broken" from "your plan lacks this" — three sentences that
+    # share one `mode="disabled"`. A UI that cannot tell them apart offers an upgrade for a feature
+    # no plan sells.
+    switch_state: str | None = None
+    switch_message: str = ""
 
 
 # Platform-wide per-minute ceilings for capabilities a person triggers ONE AT A TIME.
@@ -119,6 +133,34 @@ async def resolve_entitlement(
     in the catalog.
     """
     try:
+        # PLATFORM SWITCH FIRST — before the catalog lookup, before the plan, before every early
+        # return below. A switch says "this feature is off for everyone", so anything that can
+        # return before it is a way to keep using a feature the platform has taken down. The two
+        # that would: an `unlimited` plan class bypasses module gates by definition (and that is
+        # `legacy-unlimited`, i.e. every pre-billing tenant), and "no subscription -> allow".
+        #
+        # It is a `module.*` id by convention, but nothing here enforces that — a switch on a
+        # narrower capability is a legitimate way to take one expensive action offline without
+        # removing the page around it.
+        try:
+            sw = await switch_for(capability_id)
+        except Exception:  # a switch is a restriction; failing to read one applies none
+            logger.warning("feature switch lookup failed for %s", capability_id, exc_info=True)
+            sw = None
+        if sw is not None and sw.blocks:
+            return ResolvedEntitlement(
+                capability_id,
+                mode="disabled",
+                quota=0,
+                source="feature_switch",
+                # `switch_state` and `switch_message` ride along so the API can tell the customer
+                # WHICH kind of off this is. "Coming soon" and "we broke it" are the same
+                # entitlement and completely different sentences, and a UI that cannot distinguish
+                # them shows an upgrade prompt for a feature no plan sells yet.
+                switch_state=sw.state,
+                switch_message=sw.message,
+            )
+
         cap = await ts.session.get(BillingCapability, capability_id)
         if cap is None:
             # Unregistered capability: allow and record. This is what makes shipping the engine
@@ -394,22 +436,42 @@ async def _apply_dependencies(
     """
     if not ent.depends_on or depth >= _MAX_DEPENDENCY_DEPTH:
         return ent
-    if ent.source == "plan":
-        # The plan named this capability explicitly, with its own mode and quota. That is a
-        # deliberate commercial decision and outranks a blanket module gate — Free disables
-        # module.outreach yet still sells 20 ai.email_drafts, and it means the 20. Module gates
-        # are the default for capabilities a plan does NOT mention.
-        return ent
+
     for dep in ent.depends_on:
         if dep == ent.capability_id:
             continue
         resolved = await resolve_entitlement(ts, dep, _depth=depth + 1)
         # An unknown dependency resolves to "shadow" and is deliberately not a block: unknown
         # always means allow, or cataloging a capability late could break a shipped feature.
-        if resolved.mode == "disabled":
+        if resolved.mode != "disabled":
+            continue
+
+        if resolved.source == "feature_switch":
+            # A PLATFORM SWITCH BEATS THE PLAN ESCAPE BELOW. Those are different kinds of claim:
+            # the plan escape says "this customer bought this specific action, so a blanket module
+            # gate should not take it away", which is a statement about entitlement. A switch says
+            # "this does not work right now, for anyone". Letting a plan out of it would mean
+            # taking Outreach offline still left Free's 20 email drafts running against the broken
+            # subsystem — the exact case the escape was written for, now pointed the wrong way.
             ent.mode = "disabled"
-            ent.source = "dependency"
+            ent.source = "feature_switch"
+            # Carry the state and the wording down to the dependent, or an endpoint behind a
+            # switched-off module 402s with a bare "not included" and the customer is told to
+            # upgrade to fix our maintenance window.
+            ent.switch_state = resolved.switch_state
+            ent.switch_message = resolved.switch_message
             return ent
+
+        if ent.source == "plan":
+            # The plan named this capability explicitly, with its own mode and quota. That is a
+            # deliberate commercial decision and outranks a blanket module gate — Free disables
+            # module.outreach yet still sells 20 ai.email_drafts, and it means the 20. Module gates
+            # are the default for capabilities a plan does NOT mention.
+            return ent
+
+        ent.mode = "disabled"
+        ent.source = "dependency"
+        return ent
     return ent
 
 
@@ -590,7 +652,12 @@ async def check_and_meter(
         blocked_reason: str | None = None
         used = 0.0
         if ent.mode == "disabled":
-            blocked_reason = "disabled" if ent.source != "dependency" else "dependency"
+            if ent.source == "feature_switch":
+                blocked_reason = "feature_switch"
+            elif ent.source == "dependency":
+                blocked_reason = "dependency"
+            else:
+                blocked_reason = "disabled"
         elif ent.mode in ("shadow", "unlimited"):
             blocked_reason = None            # observe-only, or a plan class that exists not to gate
         elif await _is_gauge(ts, capability_id):
@@ -661,7 +728,20 @@ async def check_and_meter(
             if await _over_burst(ts, capability_id, ent.burst_limit):
                 blocked_reason = "throttled"
 
-        enforced = mode == "on"
+        # A PLATFORM SWITCH IS ENFORCED WHATEVER THE BILLING MODE — the `off` kill switch above is
+        # the single exception, and it returned long before this point.
+        #
+        # `shadow` is a statement about BILLING rollout: "we are not yet refusing anyone over
+        # money." A feature switch is not about money. "Calling is broken, take it offline" and "we
+        # have not started enforcing quotas" are unrelated decisions, and production runs `shadow`
+        # by default — so riding on it would have made the whole control inert exactly where it
+        # matters. The superadmin flips it, the panel reports disabled, every customer keeps using
+        # the feature: the "configured and doing nothing" failure this codebase keeps diagnosing.
+        #
+        # `off` still wins because it is documented as a FULL kill switch for the engine. If this
+        # engine misbehaves in production, "turn it all off" has to be a complete answer rather
+        # than one that strands some blocks for an operator to hunt down under load.
+        enforced = mode == "on" or blocked_reason == "feature_switch"
         allowed = True if not enforced else blocked_reason is None
 
         # The one number that decides whether enforcement can be switched on. In shadow mode the

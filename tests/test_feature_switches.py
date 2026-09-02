@@ -137,3 +137,233 @@ async def test_the_cache_is_reused_within_the_ttl(fresh_db, monkeypatch):
     await switches.all_switches()
     await switches.all_switches()
     assert calls["n"] == 1, "the second lookup hit the database inside the TTL"
+
+
+# ---- the engine hook ---------------------------------------------------------------------------
+#
+# The switch is applied inside `resolve_entitlement`, which is the ONE place all three enforcement
+# points already agree on: the nav reads it through `GET /billing/entitlements`, the route guard
+# reads the same response, and every endpoint reads it through `check_and_meter`. Hooking anywhere
+# else would mean hooking three times and keeping them in agreement.
+
+async def _seed_workspace(plan_id: str = "launch"):
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from nexus.billing.rates import sync_rates
+    from tests.conftest import make_tenant, put_on_plan
+
+    await sync_catalog()
+    await sync_plans()
+    await sync_rates()
+    tid = await make_tenant()
+    await put_on_plan(tid, plan_id)
+    return tid
+
+
+async def _set_switch(capability_id: str, state: str, message: str = ""):
+    from nexus.core.db import get_sessionmaker
+    from nexus.features.switches import invalidate
+    from nexus.models.feature_switch import FeatureSwitch
+
+    async with get_sessionmaker()() as s:
+        s.add(FeatureSwitch(capability_id=capability_id, state=state, message=message))
+        await s.commit()
+    invalidate()
+
+
+async def _resolve(tenant_id: str, capability_id: str):
+    from nexus.billing.entitlements import resolve_entitlement
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+
+    async with get_sessionmaker()() as s:
+        return await resolve_entitlement(TenantSession(s, tenant_id), capability_id)
+
+
+async def test_a_switch_disables_the_capability(fresh_db):
+    from nexus.features.switches import invalidate
+
+    invalidate()
+    tid = await _seed_workspace()
+    assert (await _resolve(tid, "module.calling")).mode != "disabled"
+
+    await _set_switch("module.calling", "maintenance", "Back at 14:00 UTC")
+    ent = await _resolve(tid, "module.calling")
+    assert ent.mode == "disabled"
+    assert ent.source == "feature_switch"
+
+
+async def test_a_switch_beats_an_unlimited_plan(fresh_db):
+    """THE placement requirement, and the reason the hook sits where it does.
+
+    `resolve_entitlement` returns early for `unlimited`/`internal`/`partner` plan classes — those
+    bypass module gates by definition. A switch checked after that short-circuit would silently not
+    apply to `legacy-unlimited`, which is EVERY pre-billing tenant. Taking a broken feature offline
+    has to mean everybody, or it has not been taken offline.
+    """
+    from nexus.features.switches import invalidate
+
+    invalidate()
+    tid = await _seed_workspace("legacy-unlimited")
+    assert (await _resolve(tid, "module.calling")).mode == "unlimited", "expected the bypass"
+
+    await _set_switch("module.calling", "disabled")
+    ent = await _resolve(tid, "module.calling")
+    assert ent.mode == "disabled", "an unlimited plan escaped the switch"
+    assert ent.source == "feature_switch"
+
+
+async def test_a_switch_applies_to_a_tenant_with_no_subscription(fresh_db):
+    """The other early return. "No subscription -> allow" is a deliberate regression guard, but it
+    must not become a way to keep using a feature the platform has taken down."""
+    from nexus.billing.catalog import sync_catalog
+    from nexus.features.switches import invalidate
+    from tests.conftest import make_tenant
+
+    await sync_catalog()
+    invalidate()
+    tid = await make_tenant()
+    await _set_switch("module.calling", "coming_soon")
+    assert (await _resolve(tid, "module.calling")).mode == "disabled"
+
+
+async def test_an_enabled_switch_changes_nothing(fresh_db):
+    """A row saying `enabled` must be indistinguishable from no row — otherwise re-enabling a
+    feature would leave it in a subtly different state from never having switched it off."""
+    from nexus.features.switches import invalidate
+
+    invalidate()
+    tid = await _seed_workspace()
+    before = await _resolve(tid, "module.calling")
+    await _set_switch("module.calling", "enabled")
+    after = await _resolve(tid, "module.calling")
+    assert (after.mode, after.source) == (before.mode, before.source)
+
+
+async def test_a_switch_on_one_capability_does_not_touch_another(fresh_db):
+    from nexus.features.switches import invalidate
+
+    invalidate()
+    tid = await _seed_workspace()
+    await _set_switch("module.calling", "disabled")
+    assert (await _resolve(tid, "module.campaigns")).mode != "disabled"
+
+
+async def test_a_switched_off_module_takes_its_dependents_with_it(fresh_db):
+    """Endpoint coverage comes free from `depends_on`, and this is the assertion that says so.
+
+    Disabling `module.agents` has to stop the orchestration endpoints, not merely hide the menu
+    item — otherwise "disable the feature" means "hide the link", and the API stays wide open to
+    anyone with the URL.
+    """
+    from nexus.features.switches import invalidate
+
+    invalidate()
+    tid = await _seed_workspace()
+    assert (await _resolve(tid, "ai.chat_turn")).mode != "disabled"
+
+    await _set_switch("module.agents", "maintenance", "Upgrading the agent runtime")
+    ent = await _resolve(tid, "ai.chat_turn")
+    assert ent.mode == "disabled", "an endpoint behind a switched-off module was still allowed"
+
+
+async def test_a_switch_never_raises_into_the_engine(fresh_db, monkeypatch):
+    """The engine's contract is that it never breaks a call. A switch lookup is inside it now."""
+    from nexus.billing import entitlements as ent_mod
+    from nexus.features import switches
+
+    async def boom(*a, **k):
+        raise RuntimeError("switch table gone")
+
+    tid = await _seed_workspace()
+    monkeypatch.setattr(ent_mod, "switch_for", boom, raising=False)
+    switches.invalidate()
+    assert (await _resolve(tid, "module.calling")).mode != "disabled"
+
+
+# ---- enforcement is independent of billing enforcement -----------------------------------------
+
+async def test_a_switch_blocks_even_in_shadow_mode(fresh_db, monkeypatch):
+    """THE production requirement, and the one that decides whether this feature works at all.
+
+    `NEXUS_BILLING_ENFORCEMENT` defaults to `shadow`, which resolves every entitlement and then
+    ALLOWS anyway. Shadow is a statement about BILLING rollout — "we are not yet refusing people
+    over money" — and a feature switch is not about money. "Calling is broken, take it offline" and
+    "we have not started enforcing quotas" are unrelated decisions.
+
+    Had the switch ridden on `billing_enforcement`, the control would have done nothing on the
+    default deployment: the superadmin flips it, the panel says disabled, and every customer keeps
+    using the feature. That is the exact "configured and doing nothing" failure this codebase has
+    diagnosed repeatedly — the inert telephony provider, the personalization provider that always
+    returned the stub, the monitoring rules pointed at a service that did not exist.
+    """
+    from nexus.billing.entitlements import check_and_meter
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+    from nexus.features.switches import invalidate
+
+    invalidate()
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "shadow")
+    tid = await _seed_workspace()
+
+    async with get_sessionmaker()() as s:
+        ts = TenantSession(s, tid)
+        assert (await check_and_meter(ts, capability_id="ai.chat_turn",
+                                      idempotency_key="a")).allowed is True
+
+    await _set_switch("module.agents", "maintenance", "Upgrading the agent runtime")
+
+    async with get_sessionmaker()() as s:
+        res = await check_and_meter(TenantSession(s, tid), capability_id="ai.chat_turn",
+                                    idempotency_key="b")
+    assert res.allowed is False, "a switched-off feature stayed usable in shadow mode"
+    assert res.reason == "feature_switch"
+
+
+async def test_the_kill_switch_still_disables_a_switch(fresh_db, monkeypatch):
+    """`NEXUS_BILLING_ENFORCEMENT=off` is documented as a FULL kill switch for the billing engine.
+    It has to stay one: if the engine is misbehaving in production, "turn it all off" must be a
+    complete answer, not one that leaves some blocks in place for an operator to hunt down.
+    """
+    from nexus.billing.entitlements import check_and_meter
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+    from nexus.features.switches import invalidate
+
+    invalidate()
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "off")
+    tid = await _seed_workspace()
+    await _set_switch("module.agents", "disabled")
+
+    async with get_sessionmaker()() as s:
+        res = await check_and_meter(TenantSession(s, tid), capability_id="ai.chat_turn",
+                                    idempotency_key="a")
+    assert res.allowed is True
+
+
+async def test_a_switched_off_call_is_not_metered(fresh_db, monkeypatch):
+    """A refused call did no work, so charging for it would bill a customer for our own outage."""
+    from nexus.billing.credits import balance, grant_credits
+    from nexus.billing.entitlements import check_and_meter
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+    from nexus.features.switches import invalidate
+
+    invalidate()
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "on")
+    tid = await _seed_workspace()
+    async with get_sessionmaker()() as s:
+        ts = TenantSession(s, tid)
+        await grant_credits(ts, 1000, reason="x", idempotency_key="g")
+        await s.commit()
+
+    await _set_switch("module.agents", "maintenance")
+
+    async with get_sessionmaker()() as s:
+        ts = TenantSession(s, tid)
+        await check_and_meter(ts, capability_id="ai.chat_turn", idempotency_key="a")
+        await s.commit()
+        assert await balance(ts) == 1000
