@@ -382,10 +382,15 @@ async def test_the_console_never_returns_the_connection_string(client, monkeypat
 
 
 async def test_a_workspace_owner_cannot_reach_the_source_console(client):
-    """Platform admin is a separate authorization system; no tenant role grants it."""
+    """Platform admin is a separate authorization system; no tenant role grants it.
+
+    **404, not 403.** A 403 confirms the route is real, so an authenticated tenant user could map
+    the whole admin surface by noting which paths answer 403 and which answer 404. Holding no
+    platform permission, the console must look exactly like a URL we do not serve.
+    """
     token = await signup(client, slug="sdb2", email="owner@sdb2.com", company="SDB2")
     r = await client.get("/api/admin/sources", headers=auth(token))
-    assert r.status_code in (401, 403)
+    assert r.status_code == 404
 
 
 async def test_registering_a_private_dsn_is_refused_by_default(client, monkeypatch):

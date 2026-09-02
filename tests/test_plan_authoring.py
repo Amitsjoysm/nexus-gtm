@@ -170,10 +170,18 @@ async def test_an_unknown_base_plan_is_refused(client, monkeypatch):
 
 
 async def test_a_tenant_owner_cannot_create_a_plan(client):
-    """Setting a price customers pay is platform power."""
+    """Setting a price customers pay is platform power.
+
+    **404, not 403.** A 403 confirms the route exists, which turns any authenticated tenant user
+    into a scanner that can map the entire admin surface by watching which paths answer 403 and
+    which answer 404. To someone holding no platform permission the console must be indistinguishable
+    from a URL we do not serve. A real platform admin missing ONE permission still gets 403, because
+    for them the route's existence is not a secret and "you lack this permission" is the actionable
+    answer.
+    """
     token = await signup(client, slug="pa11", email="o@pa11.com", company="PA11")
     assert (await client.post("/api/admin/billing/plans", headers=auth(token),
-                              json=_plan())).status_code == 403
+                              json=_plan())).status_code == 404
 
 
 async def test_a_non_standard_plan_cannot_be_published_to_the_price_list(client, monkeypatch):

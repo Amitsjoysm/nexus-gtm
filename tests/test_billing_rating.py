@@ -52,46 +52,58 @@ async def test_rate_period_charges_base_fee_only_when_no_overage():
         assert inv.total_cents == 7900                      # Growth base fee only
 
 
-async def test_rate_period_charges_overage_beyond_quota():
-    from nexus.billing.rating import rate_period
-    from nexus.billing.rollups import period_key, rebuild_rollups
-    from nexus.core.db import utcnow
+async def test_a_credit_priced_action_produces_no_invoice_line():
+    """The customer already paid for it, in credits, at the moment of use.
 
-    tid = await _setup("free")     # Free: ai.email_draft quota 20
-    key = period_key(utcnow(), "period")
-    async with tenant_session(tid) as ts:
-        await _use(ts, "ai.email_draft", 30, key="d1")     # 10 over
-        await rebuild_rollups(ts)
-        inv = await rate_period(ts, period_key=key)
-        over = [ln for ln in await _lines(ts, inv) if ln.kind == "overage"]
-        assert len(over) == 1
-        assert float(over[0].quantity) == 10
-        # 10 units x 2 credits/unit x CREDIT_CENTS. Overage is priced ABOVE the dearest in-plan
-        # rate on purpose — at 1c it was cheaper to overflow than to upgrade.
-        assert over[0].amount_cents == 10 * 2 * CREDIT_CENTS
-
-
-async def test_plan_overage_price_overrides_the_rate_card():
-    """Growth prices verify.email overage at 1 credit/unit; the global card says 0.25.
-
-    The plan entitlement must win, otherwise a negotiated rate would silently bill at list.
+    `rate_period` used to charge everything past the plan's included quota as an `overage` line.
+    With one price per request paid from the balance, doing that as well bills the same action
+    twice — which is exactly the Stripe-observed double-charge that motivated moving to a single
+    price. So rating now invoices GAUGES ONLY: seats and stored bytes are levels rather than
+    requests, they never draw on the balance, and they are the only thing left with a period figure
+    an invoice can price.
     """
     from nexus.billing.rating import rate_period
     from nexus.billing.rollups import period_key, rebuild_rollups
     from nexus.core.db import utcnow
 
-    tid = await _setup("growth")     # verify.email quota 5000, overage_price_credits 1
+    tid = await _setup("free")
     key = period_key(utcnow(), "period")
     async with tenant_session(tid) as ts:
-        await _use(ts, "verify.email", 5100, key="v1")     # 100 over
+        await _use(ts, "ai.email_draft", 30, key="d1")
         await rebuild_rollups(ts)
         inv = await rate_period(ts, period_key=key)
         over = [ln for ln in await _lines(ts, inv) if ln.kind == "overage"]
-        assert len(over) == 1
-        assert float(over[0].unit_credits) == 1
-        # 100 units x 1 credit (the plan's override, NOT the card's 0.25) x CREDIT_CENTS.
-        assert over[0].amount_cents == 100 * 1 * CREDIT_CENTS
-        assert inv.total_cents == 7900 + 100 * 1 * CREDIT_CENTS
+    assert over == [], (
+        "a request-priced capability reached the invoice; the balance was already debited for it"
+    )
+
+
+async def test_a_gauge_beyond_its_quota_is_still_invoiced():
+    """The other half, and the reason rating did not simply become a no-op.
+
+    Stored gigabytes are a LEVEL, not a request. Nothing burns credits for them — there is no
+    "storage request" to price at the seam — so a workspace holding more than its plan allows has a
+    real charge that only the invoice can carry. Had the previous test been implemented by deleting
+    the overage line outright, going over a storage or seat cap would have become free.
+
+    `platform.storage` rather than `seat.member` because seats are deliberately UNPRICED in credits
+    (`rates.UNPRICED_BY_DESIGN` — they carry a seat price instead, and pricing them twice would
+    double-charge). Storage is the gauge that actually carries both a quota and a rate card.
+    """
+    from nexus.billing.rating import rate_period
+    from nexus.billing.rollups import period_key, rebuild_rollups
+    from nexus.core.db import utcnow
+
+    tid = await _setup("free")          # platform.storage quota 1 GB, card 25 credits/GB
+    key = period_key(utcnow(), "period")
+    async with tenant_session(tid) as ts:
+        await _use(ts, "platform.storage", 4, key="s1")     # 3 GB over
+        await rebuild_rollups(ts)
+        inv = await rate_period(ts, period_key=key)
+        over = [ln for ln in await _lines(ts, inv) if ln.kind == "overage"]
+    assert len(over) == 1, "a gauge past its quota must still reach the invoice"
+    assert float(over[0].quantity) == 3
+    assert over[0].amount_cents > 0
 
 
 async def test_rating_is_deterministic_and_replayable():
