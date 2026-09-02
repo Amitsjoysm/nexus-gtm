@@ -697,3 +697,54 @@ async def get_entitlements(
         gating_active=enforcement == "on",
         modules=modules,
     )
+
+
+class CreditSpendRowOut(BaseModel):
+    capability_id: str
+    name: str
+    credits: float
+    actions: float
+
+
+class CreditDayOut(BaseModel):
+    date: str
+    credits: float
+
+
+class CreditUserRowOut(BaseModel):
+    user_id: str
+    credits: float
+
+
+class CreditUsageReportOut(BaseModel):
+    period: str
+    granted: float
+    spent: float
+    balance: float
+    by_capability: list[CreditSpendRowOut]
+    by_day: list[CreditDayOut]
+    by_user: list[CreditUserRowOut]
+    # Spend that belongs to no user. Reported rather than hidden: background work — refresh sweeps,
+    # crawls, plays — has nobody to attribute to, so `by_user` cannot sum to `spent`, and a screen
+    # whose parts do not add up quietly lies about a figure the customer will check.
+    unattributed_credits: float
+
+
+@router.get("/usage/credits", response_model=CreditUsageReportOut)
+async def get_credit_usage_report(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> CreditUsageReportOut:
+    """Where this workspace's credits went, three ways.
+
+    `/billing/usage` reports per-capability ACTION COUNTS and says nothing about credits — 40
+    enrichments is really 120 credits at 3 apiece, and nothing on that screen said so. On a
+    credit-funded plan "where did my 2,000 go?" is the question the customer is guaranteed to ask,
+    and until now the product had no answer.
+
+    Rep-level like the rest of the read surface: the person who hits a limit is exactly the person
+    who needs to see what spent it.
+    """
+    from nexus.billing.usage_report import credit_usage_report
+
+    return CreditUsageReportOut(**await credit_usage_report(ts))

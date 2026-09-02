@@ -475,8 +475,18 @@ async def _burn_for_usage(
         if amount <= 0:
             return None
 
+        # `capability_id` is what makes the spend attributable. Without it every burn lands in the
+        # ledger as an anonymous deduction and "where did my 2,000 credits go?" has no answer —
+        # which is the whole point of charging per capability rather than per period.
+        # `period_key` as well as `capability_id`. The grant carries one, so a burn without one
+        # cannot be reconciled against it — the usage report would show credits granted this period
+        # and no spend, which is precisely the "where did they go?" question it exists to answer.
+        from nexus.billing.rollups import period_key as _period_key
+        from nexus.core.db import utcnow
+
         return await burn_credits(
             ts, amount, reason=f"{ent.capability_id} usage", idempotency_key=burn_key,
+            capability_id=ent.capability_id, period_key=_period_key(utcnow(), "period"),
         )
     except Exception:  # a charge must not break the call it is charging for
         logger.warning("usage burn failed for %s", ent.capability_id, exc_info=True)
@@ -686,9 +696,35 @@ async def check_and_meter(
             # Now every metered request burns `credits_per_unit x quantity` whatever side of any
             # line it falls on, and a balance that cannot cover it stops the call. An unpriced
             # capability charges nothing and is allowed — no rate card means nothing to run out of.
-            covered = await _burn_for_usage(ts, ent, float(quantity), key)
-            if covered is False:
-                blocked_reason = "credits_exhausted"
+            if ent.plan_id is None:
+                # NO SUBSCRIPTION -> allow, and charge nothing. The engine's documented bias, and
+                # the safety net under `start_subscription`, which never raises: a workspace whose
+                # plan attach failed has no balance to spend, so charging it would block every
+                # request and leave the customer with an account that does nothing. Same direction
+                # as unknown-capability and resolve-failure — unknown means allow.
+                blocked_reason = None
+            else:
+                covered = await _burn_for_usage(ts, ent, float(quantity), key)
+                if covered is False:
+                    blocked_reason = "credits_exhausted"
+                elif covered is None and ent.quota is not None:
+                    # NO RATE CARD, BUT A QUOTA. Fall back to enforcing the quota.
+                    #
+                    # Without this a capability nobody has priced becomes completely ungated:
+                    # `_burn_for_usage` returns None (nothing to charge), so credits cannot limit
+                    # it, and the quota branch no longer runs. The old model at least held the line
+                    # at the quota. Found by two existing tests that seed plans WITHOUT rate cards
+                    # and expect 999 email drafts against a quota of 20 to be refused — they were
+                    # sailing through, which is exactly how an unpriced capability shipped free
+                    # once before (`ai.scoring`, 4,090 runs).
+                    #
+                    # So: priced capabilities are limited by credits, unpriced ones by their quota,
+                    # and something is always holding the line.
+                    await _lock_capability(ts, capability_id)
+                    used = await current_usage(ts, capability_id)
+                    limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
+                    if used + quantity > limit:
+                        blocked_reason = "quota_exhausted"
 
         # Burst is a separate axis from quota: a tenant well inside its monthly allowance can
         # still hammer an endpoint. Only queried for capabilities that set a limit, so it costs
