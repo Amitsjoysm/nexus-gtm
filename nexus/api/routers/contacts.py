@@ -2,6 +2,8 @@
 and a free-text filter. (Per-account contacts live under /accounts/{id}/contacts.)"""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, or_, select
 
@@ -11,6 +13,8 @@ from nexus.billing.meter import metered
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Account, Contact
+
+logger = logging.getLogger("nexus.api.routers.contacts")
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -260,12 +264,15 @@ async def export_contacts(
     )
     # Per export, not per row — see the accounts export for why.
     if rows:
-        from nexus.billing.usage import record_usage
+        # `metered`, not `record_usage`: the latter records the action without charging for it.
+        from nexus.billing.meter import metered
 
-        await record_usage(
-            ts, capability_id="data.export", quantity=1,
-            user_id=principal.user_id, source="api", attrs={"kind": "contacts"},
-        )
+        try:
+            async with metered(ts, "data.export", quantity=1,
+                               user_id=principal.user_id, attrs={"kind": "contacts"}):
+                pass
+        except Exception:
+            logger.warning("metering failed for data.export", exc_info=True)
     return csv_response(
         "contacts.csv",
         ["full_name", "title", "seniority", "email", "email_status", "phone",

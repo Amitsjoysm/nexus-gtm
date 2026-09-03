@@ -1,5 +1,15 @@
 # tests/test_billing_new_call_sites.py
-"""The call sites added to close the outreach and data gaps actually record usage."""
+"""The call sites added to close the outreach and data gaps actually CHARGE.
+
+Recording usage and charging for it are different operations, and the first shipped without the
+second. `record_usage` appends a usage event — it resolves no entitlement, checks no quota and
+burns no credit; `check_and_meter` (which `metered` wraps) does all three. Every one of these
+call sites originally used `record_usage`, so the action was recorded and the balance never
+moved. Verified live on the redeployed stack: a CSV export wrote its usage row and left the
+customer's balance at 68.0.
+
+So these assert the BALANCE, not the event. An event is what the broken version produced.
+"""
 from __future__ import annotations
 
 from tests.conftest import make_tenant, tenant_session
@@ -124,3 +134,82 @@ async def test_the_meter_reads_the_keys_the_importer_actually_returns():
     for key in ("created", "updated"):
         assert f'"{key}"' in meter_src, f"_meter_import no longer reads {key!r}"
     assert '"imported"' not in meter_src, "reading a key the importer does not return"
+
+
+async def _balance(ts) -> float:
+    from nexus.billing.credits import balance
+
+    return await balance(ts)
+
+
+async def _seed_paid_tenant():
+    """A tenant on a real plan with credits — `unlimited` classes never burn, so a test against
+    one would pass whatever the call site did."""
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.credits import grant_credits
+    from nexus.billing.plans import sync_plans
+    from nexus.billing.rates import sync_rates
+    from nexus.models.billing import BillingSubscription
+
+    await sync_catalog()
+    await sync_plans()
+    await sync_rates()
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        ts.add(BillingSubscription(plan_id="launch", status="active"))
+        await ts.flush()
+        await grant_credits(ts, 1000, reason="test", idempotency_key="g")
+    return tid
+
+
+async def test_an_export_actually_moves_the_balance():
+    """The regression that shipped: a usage row was written and nothing was charged."""
+    from nexus.api.routers.accounts import _meter
+
+    class P:
+        user_id = "u1"
+
+    tid = await _seed_paid_tenant()
+    async with tenant_session(tid) as ts:
+        before = await _balance(ts)
+        await _meter(ts, "data.export", 1, P)
+        after = await _balance(ts)
+    assert after < before, (
+        "the export recorded usage but burned no credits — record_usage does not charge"
+    )
+
+
+async def test_an_import_charges_per_row_that_landed():
+    from nexus.api.routers.imports import _meter_import
+
+    tid = await _seed_paid_tenant()
+    async with tenant_session(tid) as ts:
+        before = await _balance(ts)
+        await _meter_import(ts, {"created": 10, "updated": 0}, user_id="u1", kind="accounts")
+        spent = before - await _balance(ts)
+    # data.import_csv is 2 credits/unit on the seeded card.
+    assert spent == 20, f"expected 10 rows x 2 credits, charged {spent}"
+
+
+async def test_a_send_charges_one_unit():
+    from nexus.orchestration.tools import _meter_send
+
+    tid = await _seed_paid_tenant()
+    async with tenant_session(tid) as ts:
+        before = await _balance(ts)
+        await _meter_send(ts)
+        spent = before - await _balance(ts)
+    assert spent == 1, f"outreach.email_send is 1 credit; charged {spent}"
+
+
+async def test_nothing_delivered_is_never_charged():
+    from nexus.api.routers.accounts import _meter
+
+    class P:
+        user_id = "u1"
+
+    tid = await _seed_paid_tenant()
+    async with tenant_session(tid) as ts:
+        before = await _balance(ts)
+        await _meter(ts, "discovery.lookalike_company", 0, P)
+        assert await _balance(ts) == before

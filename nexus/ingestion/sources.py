@@ -442,6 +442,55 @@ class RssSignalSource(SignalSource):
         return []
 
 
+# Hosts whose pages are STATIC PROFILES, never events. A PitchBook or ZoomInfo page exists for
+# every company, always, and reports nothing that happened — so it is not a signal at any strength.
+#
+# Measured live: 29 of 164 `web_news` signals were pages like these, and 15 of them were classified
+# `funding` because the page title literally contains the word ("Catalis 2026 Company Profile:
+# Valuation, Funding & Investors"). `funding` is the strongest class in the system, so each one
+# created an Inbox task and could trigger a play, and the rep clicked through to a paywall.
+#
+# DELIBERATELY NOT `_NON_COMPANY_HOSTS` from `integrations/company_search.py`. That list also
+# excludes techcrunch.com, forbes.com and businessinsider.com, which is correct when the question
+# is "is this search hit a company?" and badly wrong here, where trade press is the primary source
+# of real funding news. Two questions, two lists.
+#
+# Matched as a host SUFFIX so subdomains are covered — but note `news.crunchbase.com` is real
+# editorial, so `crunchbase.com` is matched on its `/organization/` path instead, below.
+_PROFILE_HOSTS: tuple[str, ...] = (
+    "pitchbook.com", "zoominfo.com", "owler.com", "tracxn.com", "growjo.com",
+    "rocketreach.co", "dnb.com", "apollo.io", "leadiq.com", "datanyze.com",
+    "cbinsights.com", "g2.com", "capterra.com", "getapp.com", "softwareadvice.com",
+    "glassdoor.com", "indeed.com", "ziprecruiter.com", "ambitionbox.com",
+    "zaubacorp.com", "tofler.in", "f6s.com", "clutch.co", "wellfound.com",
+    "angel.co", "signalhire.com", "lusha.com", "6sense.com", "similarweb.com",
+)
+
+# Directory pages that live on a host we otherwise want. Crunchbase is the case that matters:
+# `news.crunchbase.com` publishes real funding journalism, while `crunchbase.com/organization/...`
+# is the static profile. A blanket host block would lose the first to stop the second.
+_PROFILE_PATHS: tuple[str, ...] = (
+    "crunchbase.com/organization", "bloomberg.com/profile", "linkedin.com/company",
+    "wikipedia.org/wiki",
+)
+
+
+def is_profile_page(url: str) -> bool:
+    """True when a URL is a company directory/profile page rather than something that happened."""
+    low = (url or "").strip().lower()
+    if not low:
+        return False
+    if any(p in low for p in _PROFILE_PATHS):
+        return True
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(low).netloc or "").split(":")[0].lstrip("www.")
+    except Exception:
+        return False
+    return any(host == h or host.endswith("." + h) for h in _PROFILE_HOSTS)
+
+
 class WebNewsSource(SignalSource):
     """Live source: searches the web for recent news about the account."""
 
@@ -474,14 +523,28 @@ class WebNewsSource(SignalSource):
             title = (h.get("title") or "").strip()
             snippet = (h.get("snippet") or "").strip()
             url = h.get("url") or ""
-            hay = f"{title} {snippet}".lower()
-            # The result must actually NAME this account, else it's a generic news-site index
-            # ("Banking News and Analysis | Banking Dive") — the exact junk that polluted the inbox.
-            if not any(k in hay for k in keys):
-                continue
             if not title:
                 continue
-            kind, strength = _classify_news(f"{title} {snippet}")
+            # A DIRECTORY PROFILE IS NOT AN EVENT. Checked before anything else, because these
+            # pages pass every other test: they name the account, they are recent, and their titles
+            # contain the very words the classifier looks for.
+            if is_profile_page(url):
+                continue
+            # THE ACCOUNT MUST BE NAMED IN THE HEADLINE, not merely somewhere on the page.
+            #
+            # This matched `title + snippet` against any single token from `_account_keys`, so an
+            # article that merely MENTIONS the company in its body was filed as an event about it.
+            # Live: an Arcesium story on The D. E. Shaw Group, a Netsmart private-equity page on
+            # Allscripts, an HR-software round-up on QualStaff Resources. `names_account` is the
+            # same strict matcher the dork path already uses — full-phrase, domain root, or a
+            # genuinely single-token name — rather than "shares one word with".
+            if not names_account(title, account):
+                continue
+            # CLASSIFIED FROM THE HEADLINE ALONE. A headline states what happened; a snippet
+            # recalls everything the company has ever done, so a product page whose body mentioned
+            # an old round was stored as a funding event. The snippet is still read below for
+            # display, just not for deciding what kind of event this is.
+            kind, strength = _classify_news(title)
             dedupe_key = event_dedupe_key(kind, anchor, strength, now)
             if dedupe_key in seen:
                 continue

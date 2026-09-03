@@ -334,20 +334,36 @@ async def list_contacts(
 
 
 async def _meter(ts, capability_id: str, quantity: int, principal) -> None:
-    """Record usage for an action whose size is only known after it ran. Never raises.
+    """Charge for an action whose size is only known after it ran. Never raises.
 
-    Quantity is the number of results DELIVERED. An action that produced nothing spent nothing
-    the customer received, and billing it would charge for our own empty answer — the same
-    "nothing bought, nothing charged" rule the enrichment seam follows.
+    `metered`, NOT `record_usage`. The latter appends a usage event and stops — it resolves no
+    entitlement, checks no quota and burns no credit — so a call site using it records the action
+    and charges nothing. Verified live: a CSV export wrote its usage row and left the balance
+    untouched.
+
+    Quantity is the number of results DELIVERED. An action that produced nothing spent nothing the
+    customer received, and billing it would charge for our own empty answer — the same "nothing
+    bought, nothing charged" rule the enrichment seam follows.
+
+    An empty block after the fact, matching the bulk verifier in `routers/contacts.py`: the size
+    is not knowable up front, so gating beforehand would have to guess. Enforcement therefore
+    applies to the NEXT call, which is the honest behaviour for work whose cost is discovered by
+    doing it.
     """
-    from nexus.billing.usage import record_usage
+    from nexus.billing.meter import metered
 
     if quantity <= 0:
         return
-    await record_usage(
-        ts, capability_id=capability_id, quantity=quantity,
-        user_id=getattr(principal, "user_id", None), source="api",
-    )
+    try:
+        async with metered(
+            ts, capability_id, quantity=quantity,
+            user_id=getattr(principal, "user_id", None), source="api",
+        ):
+            pass
+    except Exception:
+        # Billing must never be why a completed action fails to return. The work is already done
+        # and the customer is holding the result.
+        logger.warning("metering failed for %s", capability_id, exc_info=True)
 
 
 @router.post("/{account_id}/lookalikes", response_model=LookalikeResponse)

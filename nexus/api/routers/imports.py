@@ -13,6 +13,8 @@ Two rules the endpoints exist to enforce:
 """
 from __future__ import annotations
 
+import logging
+
 import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -36,6 +38,8 @@ from nexus.imports.csv_ingest import (
 )
 
 router = APIRouter(prefix="/imports", tags=["imports"])
+
+logger = logging.getLogger("nexus.api.routers.imports")
 
 # 20 MB. A 50,000-row CSV of accounts is roughly 5 MB, so this is generous for the real case while
 # still refusing an upload that would sit in memory.
@@ -122,7 +126,7 @@ async def _meter_import(ts, result: dict, *, user_id: str, kind: str) -> None:
     enforcement therefore applies to the NEXT import, which is the honest behaviour for a bulk
     job whose size is discovered by doing it.
     """
-    from nexus.billing.usage import record_usage
+    from nexus.billing.meter import metered
 
     # `created`/`updated`, which is what `csv_ingest` returns — NOT `imported`, which it has
     # never returned. Reading the wrong key made this bill zero on every upload: the meter was
@@ -130,10 +134,15 @@ async def _meter_import(ts, result: dict, *, user_id: str, kind: str) -> None:
     rows = int(result.get("created", 0) or 0) + int(result.get("updated", 0) or 0)
     if rows <= 0:
         return
-    await record_usage(
-        ts, capability_id="data.import_csv", quantity=rows, user_id=user_id,
-        source="api", attrs={"kind": kind},
-    )
+    # `metered`, NOT `record_usage`. The latter appends a usage event and stops — it resolves no
+    # entitlement, checks no quota and burns no credit — so a call site using it records the
+    # import and charges nothing. Same trap, one layer down.
+    try:
+        async with metered(ts, "data.import_csv", quantity=rows, user_id=user_id,
+                           attrs={"kind": kind}):
+            pass
+    except Exception:
+        logger.warning("metering failed for data.import_csv", exc_info=True)
 
 
 @router.post("/accounts/csv", response_model=ImportResult)

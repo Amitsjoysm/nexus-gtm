@@ -11,6 +11,8 @@ tests/CI, so the whole orchestration is exercisable without network or API keys.
 """
 from __future__ import annotations
 
+import logging
+
 import abc
 from dataclasses import dataclass
 
@@ -28,6 +30,8 @@ from nexus.models.account import Contact
 from nexus.models.identity import Tenant
 from nexus.models.orchestration import OrchestrationRun
 from nexus.verification import STATUS_INVALID
+
+logger = logging.getLogger("nexus.orchestration.tools")
 
 
 class ToolError(Exception):
@@ -169,9 +173,14 @@ async def _meter_send(ts) -> None:
     Deliberately not wrapped around the send: metering must never be the reason an outbound
     message fails, and a send that already left cannot be un-sent by a billing error.
     """
-    from nexus.billing.usage import record_usage
+    from nexus.billing.meter import metered
 
-    await record_usage(ts, capability_id="outreach.email_send", quantity=1, source="api")
+    # `metered`, not `record_usage`: the latter records the send without charging for it.
+    try:
+        async with metered(ts, "outreach.email_send", quantity=1, source="api"):
+            pass
+    except Exception:
+        logger.warning("metering failed for outreach.email_send", exc_info=True)
 
 
 class SendMessageTool(Tool):
