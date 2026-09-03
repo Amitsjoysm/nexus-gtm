@@ -61,6 +61,26 @@ async def _enrich_candidates(
     )
 
 
+async def _entitled_to_discover(ts: TenantSession) -> bool:
+    """Does this tenant's plan include ICP discovery?
+
+    Resolves the entitlement WITHOUT metering — nothing has been delivered yet, so there is
+    nothing to charge for. Only a hard `disabled` stops the sweep; every other outcome runs it,
+    matching the engine's own bias that anything unresolvable means allow.
+
+    Failing open on an error is deliberate and matches the rest of the billing seam: an
+    entitlement lookup that breaks must not silently switch off a customer's daily account feed.
+    """
+    try:
+        from nexus.billing.entitlements import resolve_entitlement
+
+        ent = await resolve_entitlement(ts, "discovery.account_added")
+        return ent.mode != "disabled"
+    except Exception:
+        logger.warning("discovery entitlement check failed; running the sweep", exc_info=True)
+        return True
+
+
 async def _meter_discovered(ts: TenantSession, added: int) -> None:
     """Charge `discovery.account_added` for the accounts this sweep actually delivered.
 
@@ -166,6 +186,18 @@ async def auto_discover_for_tenant(
     profile = await get_profile(ts)
     if profile is None or not profile.icp:
         return {"discovered": 0, "screened": 0, "account_ids": [], "skipped": "no_icp"}
+
+    if not await _entitled_to_discover(ts):
+        # The plan does not include discovery. Checked BEFORE the search, not after: a sweep costs
+        # real search and enrichment spend, and running it for a tenant we cannot invoice means
+        # paying to deliver a feature they did not buy.
+        #
+        # This was invisible until the charge moved to `discovery.account_added`. While the sweep
+        # billed `enrich.account` — which `free` DOES include — the work was paid for through the
+        # wrong door and the entitlement was never consulted. Measured live: a `free` workspace
+        # ran a sweep, took 5 accounts, and was charged nothing.
+        logger.info("icp discovery skipped for %s: plan does not include it", ts.tenant_id)
+        return {"discovered": 0, "screened": 0, "account_ids": [], "skipped": "not_entitled"}
 
     if search is None:
         from nexus.integrations.registry import build_registry_from_settings

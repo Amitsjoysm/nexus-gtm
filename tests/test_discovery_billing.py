@@ -140,3 +140,53 @@ async def test_billing_never_breaks_the_sweep():
             await _meter_discovered(ts, 5)   # must not raise
     finally:
         meter_mod.metered = original
+
+
+async def test_a_plan_without_discovery_does_not_get_a_free_sweep():
+    """Routing the charge to the right capability exposed a tenant getting the feature free.
+
+    `free` disables `module.discovery`, and `discovery.account_added` depends on it — so the
+    charge is refused. Before this change the sweep billed `enrich.account`, which free DOES
+    include, so the work was paid for through the wrong door and nobody noticed the entitlement
+    was being ignored. Measured live: a `free` workspace ran a sweep, took 5 accounts, and was
+    charged nothing.
+
+    The answer is not to bill it anyway — the plan says they do not have this. It is to not do
+    the work. Checked BEFORE the search, so an excluded tenant costs us nothing rather than
+    costing us a full sweep we then fail to invoice.
+    """
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from nexus.billing.rates import sync_rates
+    from nexus.discovery.auto import auto_discover_for_tenant
+    from nexus.core.config import get_settings
+    from nexus.models.billing import BillingSubscription
+    from nexus.relevance.engine import get_or_create_profile
+
+    await sync_catalog()
+    await sync_plans()
+    await sync_rates()
+    tid = await make_tenant()
+    async with tenant_session(tid) as ts:
+        ts.add(BillingSubscription(plan_id="free", status="active"))
+        await ts.flush()
+        profile = await get_or_create_profile(ts)
+        profile.icp = {"industries": ["SaaS"], "countries": ["United States"],
+                       "employee_min": 10, "employee_max": 5000}
+        await ts.flush()
+
+    settings = get_settings()
+    previous = settings.billing_enforcement
+    settings.billing_enforcement = "on"
+    try:
+        async with tenant_session(tid) as ts:
+            res = await auto_discover_for_tenant(
+                ts, target_count=5, min_fit=60, pool_limit=10
+            )
+    finally:
+        settings.billing_enforcement = previous
+
+    assert res.get("skipped") == "not_entitled", (
+        f"a plan without module.discovery still ran a sweep: {res}"
+    )
+    assert res.get("discovered", 0) == 0

@@ -132,9 +132,10 @@ async def test_enriches_candidates_before_scoring(monkeypatch):
             account.tech_stack = ["aws"]
             return ["employee_count", "tech_stack"]
 
-        async def enrich_batch(self, ts, accounts, *, concurrency, user_id=None):
-            # Discovery enriches candidates through the batch entry point, which charges
-            # `enrich.account` once for the whole set rather than metering inside its own gather.
+        async def enrich_batch(self, ts, accounts, *, concurrency, user_id=None, meter=True):
+            # Discovery enriches candidates through the batch entry point and passes
+            # `meter=False`: the candidates are weighed, most are discarded, and the sweep bills
+            # `discovery.account_added` for the ones it actually delivers instead.
             for account in accounts:
                 await self.enrich(ts, account)
 
