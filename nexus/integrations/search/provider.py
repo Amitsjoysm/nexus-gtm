@@ -55,6 +55,16 @@ class SearchProvider(abc.ABC):
     #: only some precision.
     query_dialect: str = "plain"
 
+    #: Why the LAST search could not run, empty when it could.
+    #:
+    #: A provider that has condemned its whole key pool still returns ``[]``, which every caller
+    #: reads as "no results" — so a dead credential looks exactly like a quiet market, and the
+    #: crawl history records `empty` forever with the real reason living only in a log line.
+    #: Callers that care read this after a search; callers that do not are unaffected, which is
+    #: why it is an attribute rather than an exception: provider isolation is the rule here, and a
+    #: search backend must never raise across the boundary into the crawl that called it.
+    last_failure: str = ""
+
     @abc.abstractmethod
     async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]: ...
 

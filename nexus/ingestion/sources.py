@@ -546,7 +546,26 @@ class DorkedSearchSource(SignalSource):
         # sleeps between them; the shared 8s default assumes a single request, so it would kill
         # this source mid-run on every account — and a killed source reports nothing, which looks
         # exactly like "this account has no signals".
-        self.timeout_s = max(12.0, (max_queries * 4.0) + (max(0, max_queries - 1) * pace_s))
+        #
+        # THE ALLOWANCE HAS TO SIT IN THE TAIL, NOT AT THE MEDIAN. It was 4.0s per query, and
+        # measured on the live deployment between 2026-08-29 and 2026-09-03 that produced:
+        #
+        #     outcome   runs   avg duration   max duration
+        #     ok           8       13,198ms       15,328ms
+        #     timeout    399       16,370ms       20,579ms
+        #
+        # Four queries at 4.0s is a 16.0s ceiling, and the two populations are separated by that
+        # ceiling and nothing else: every run that finished did so at 13-15s, every run that died
+        # hit 16s. 399 timeouts against 8 successes is not a slow provider, it is a budget set at
+        # the middle of the distribution it exists to bound. A network call's cost is a
+        # distribution; a point estimate for it kills half the runs by construction.
+        #
+        # 8.0s covers the 20.6s a real four-query run has actually taken, with room for a slow one.
+        # The 20s floor keeps a single-query configuration from collapsing to something one slow
+        # request can exceed. Sources run CONCURRENTLY, so the per-account crawl is bounded by the
+        # slowest of them — this lands at 32s against siblings already declaring 25-30s, so it
+        # costs the crawl a couple of seconds in the worst case rather than setting a new ceiling.
+        self.timeout_s = max(20.0, (max_queries * 8.0) + (max(0, max_queries - 1) * pace_s))
         # Read by IngestionService after each fetch and stored on the crawl-history row.
         self.last_provenance: dict = {}
 
@@ -649,6 +668,17 @@ class DorkedSearchSource(SignalSource):
                 self.last_provenance["queries"][-1]["failed"] = True
                 # The provider failed, not the query. Stop: the rest of the batch would fail too,
                 # and on a rate-limited backend each extra request extends the block.
+                break
+            # A CONDEMNED KEY POOL RETURNS `[]`, NOT `None`, so the check above never fired for it
+            # and the run was recorded as `empty` — the same thing an account with no news records.
+            # Observed live: three Firecrawl keys at 402, every dork run "empty" for days, the
+            # reason only in a log line. Recorded here because the crawl-history row is the
+            # operator's surface for this, and stop for the same reason as above: the remaining
+            # queries are billed calls against a pool already known to be dead.
+            failure = str(getattr(provider, "last_failure", "") or "")
+            if failure:
+                self.last_provenance["provider_failure"] = failure
+                self.last_provenance["queries"][-1]["failed"] = True
                 break
             for hit in hits:
                 signal = self._to_signal(dork, hit, account=account, anchor=anchor, now=now,

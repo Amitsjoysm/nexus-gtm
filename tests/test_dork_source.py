@@ -6,6 +6,8 @@ one becomes an Inbox task a rep has to dismiss.
 """
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timezone
 
 from nexus.ingestion.dorks import DORKS, DORKS_BY_SLUG, select_dorks
@@ -430,3 +432,195 @@ def test_the_domain_root_is_the_strongest_evidence():
 
     acct = Account(tenant_id="t", name="The Big Company Group", domain="bigco.com")
     assert names_account("bigco.com ships a new API", acct)
+
+
+# ---- the budget has to cover the tail, not the median -------------------------------------------
+
+def test_the_query_budget_has_headroom_over_a_real_query():
+    """Measured on the live deployment, 2026-08-29 to 2026-09-03:
+
+        outcome   runs   avg duration   max duration
+        ok           8       13,198ms       15,328ms
+        timeout    399       16,370ms       20,579ms
+
+    The budget was `max_queries * 4.0` = 16.0s for four queries, and the two populations are
+    separated by that ceiling and nothing else — every run that finished did so at 13-15s, every
+    run that died hit 16s. 399 timeouts against 8 successes is not a slow provider, it is a budget
+    set at the median of a distribution it was supposed to bound.
+
+    4.0s per query is a point estimate for a network call whose cost is a distribution. The
+    allowance has to sit in the tail: a source killed mid-run reports nothing, and "nothing" is
+    indistinguishable from "this account has no signals", which is exactly how this stayed
+    invisible for five days while every dork run failed.
+    """
+    from nexus.ingestion.sources import DorkedSearchSource
+
+    src = DorkedSearchSource(max_queries=4)
+    per_query = src.timeout_s / 4
+    assert per_query >= 7.0, (
+        f"{per_query:.1f}s per query leaves no room above the measured ~3.8s median; "
+        "the observed max for a completed run was 15.3s and killed runs reached 20.6s"
+    )
+    assert src.timeout_s >= 20.0, (
+        f"budget {src.timeout_s}s does not cover the 20.6s a real four-query run has taken"
+    )
+
+
+def test_pacing_is_added_on_top_of_the_query_budget():
+    """The keyless backend sleeps between queries to stay under DuckDuckGo's anti-bot heuristics.
+    That sleep is dead time inside the same budget, so it has to be added, not absorbed —
+    otherwise turning pacing on silently converts a working source into a timing-out one."""
+    from nexus.ingestion.sources import DorkedSearchSource
+
+    unpaced = DorkedSearchSource(max_queries=4, pace_s=0.0)
+    paced = DorkedSearchSource(max_queries=4, pace_s=1.5)
+    # Three gaps between four queries.
+    assert paced.timeout_s == pytest.approx(unpaced.timeout_s + 4.5)
+
+
+def test_a_single_query_source_still_gets_a_sane_floor():
+    """`NEXUS_SIGNAL_DORK_MAX_QUERIES=1` must not produce a budget so tight that one slow request
+    kills it. The floor is what stops the formula collapsing at small values."""
+    from nexus.ingestion.sources import DorkedSearchSource
+
+    assert DorkedSearchSource(max_queries=1).timeout_s >= 20.0
+
+
+def test_the_budget_stays_in_line_with_its_sibling_sources():
+    """Sources run CONCURRENTLY, so an account's crawl is bounded by the slowest one. A dork budget
+    far above the others would raise the floor on every account refresh for one source's benefit."""
+    from nexus.ingestion.sources import (
+        AtsSignalSource,
+        DorkedSearchSource,
+        PublicApiSignalSource,
+        WebsiteWatchSignalSource,
+    )
+
+    siblings = max(
+        AtsSignalSource.timeout_s,
+        PublicApiSignalSource.timeout_s,
+        WebsiteWatchSignalSource.timeout_s,
+    )
+    assert DorkedSearchSource(max_queries=4).timeout_s <= siblings + 5.0, (
+        "the dork budget now sets the per-account crawl ceiling on its own"
+    )
+
+
+# ---- a dead key pool must not read as a quiet market --------------------------------------------
+
+async def test_a_condemned_key_pool_is_recorded_not_reported_as_empty():
+    """Observed live: all three Firecrawl keys returned 402 (credits exhausted), so every dork run
+    found nothing and `signal_source_runs` recorded `empty`.
+
+    `empty` is deliberately not `ok` in this codebase precisely so a broken source stays visible —
+    but recording a CREDENTIALS failure as `empty` hides it one level deeper, because `empty` is
+    also the honest answer for an account with no news. The distinction only existed in a log line.
+
+    The runtime write-back that would normally catch this (`_record_rejection` marking the key row
+    red) does not apply here: these keys come from the environment pool, so there is no row to
+    mark. The crawl-history row is the only surface left, and it was saying the wrong thing.
+
+    A provider that has condemned its whole pool returns `[]`, which is why the existing
+    `failed` flag never fired — that only triggers on `None`. So the provider now states the
+    failure, and the source records it and stops rather than spending three more billed calls on
+    a pool it already knows is dead.
+    """
+    from nexus.ingestion.sources import DorkedSearchSource
+    from nexus.models.account import Account
+
+    class _DeadPool:
+        name = "firecrawl"
+        query_dialect = "operator"
+        last_failure = "every key in the 3-key pool was rejected (#0:402, #1:402, #2:402)"
+
+        async def search(self, query, *, limit=5):
+            return []
+
+        async def search_recent(self, query, *, limit=5, days=90, include_domains=None,
+                                exclude_domains=None):
+            return []
+
+    src = DorkedSearchSource(search=_DeadPool(), max_queries=4)
+    out = await src.fetch(Account(name="Vanta", domain="vanta.com"))
+
+    assert out == []
+    assert "402" in str(src.last_provenance.get("provider_failure", "")), (
+        f"the dead pool is invisible in the crawl history: {src.last_provenance}"
+    )
+    assert len(src.last_provenance["queries"]) == 1, (
+        "kept spending billed queries against a pool it already knew was condemned"
+    )
+
+
+async def test_a_genuinely_quiet_account_is_still_just_empty():
+    """The other half: no results from a HEALTHY provider stays a plain empty run, with no
+    failure recorded. Otherwise every quiet account would look like an outage."""
+    from nexus.ingestion.sources import DorkedSearchSource
+    from nexus.models.account import Account
+
+    class _Healthy:
+        name = "firecrawl"
+        query_dialect = "operator"
+        last_failure = ""
+
+        async def search(self, query, *, limit=5):
+            return []
+
+        async def search_recent(self, query, *, limit=5, days=90, include_domains=None,
+                                exclude_domains=None):
+            return []
+
+    src = DorkedSearchSource(search=_Healthy(), max_queries=4)
+    assert await src.fetch(Account(name="Vanta", domain="vanta.com")) == []
+    assert not src.last_provenance.get("provider_failure")
+    assert len(src.last_provenance["queries"]) == 4, "a healthy provider should get the full batch"
+
+
+async def test_a_recovered_pool_stops_reporting_a_failure():
+    """A sticky failure flag is worse than none.
+
+    Once set, it would mark every later run as a provider failure — so topping up the credits
+    would fix the searches while the crawl history kept saying they were broken, and the operator
+    would be chasing a problem that no longer exists. It has to describe the LAST attempt, not the
+    worst one ever seen.
+    """
+    from nexus.ingestion.sources import DorkedSearchSource
+    from nexus.models.account import Account
+
+    class _Recovering:
+        name = "firecrawl"
+        query_dialect = "operator"
+
+        def __init__(self):
+            self.last_failure = "every key in the 3-key pool was rejected (#0:402)"
+
+        async def search(self, query, *, limit=5):
+            self.last_failure = ""      # the pool works again
+            return []
+
+        async def search_recent(self, query, *, limit=5, days=90, include_domains=None,
+                                exclude_domains=None):
+            return await self.search(query, limit=limit)
+
+    src = DorkedSearchSource(search=_Recovering(), max_queries=4)
+    await src.fetch(Account(name="Vanta", domain="vanta.com"))
+    assert not src.last_provenance.get("provider_failure"), (
+        "a recovered provider is still reported as failing"
+    )
+
+
+def test_every_engine_clears_the_failure_before_searching():
+    """Structural: the flag is reset at the top of each search, not left to each error path to
+    remember. An error path that forgets to clear is exactly how a flag goes sticky."""
+    import inspect
+
+    from nexus.integrations.search import engines
+
+    for cls_name in ("ExaSearchProvider", "FirecrawlSearchProvider"):
+        cls = getattr(engines, cls_name, None)
+        if cls is None:
+            continue
+        src = inspect.getsource(cls)
+        assert 'self.last_failure = ""' in src, (
+            f"{cls_name} never clears last_failure, so one bad minute is reported forever"
+        )

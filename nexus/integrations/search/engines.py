@@ -225,6 +225,10 @@ class ExaSearchProvider(SearchProvider):
         # Budget: one shot per key (rotate to ride out a single key's 429) + transient backoffs.
         # Rotation is sticky — once a key works we stay on it until it too rate-limits.
         backoff_used = 0
+        # Cleared at the TOP of every attempt, not in each error path. A flag that describes the
+        # worst thing ever seen rather than the last attempt goes sticky: top the credits up and
+        # the searches work again while the crawl history keeps reporting them broken.
+        self.last_failure = ""
         rejected: dict[int, int] = {}          # key index -> status that condemned it
         for attempt in range(len(keys) + len(_RETRY_BACKOFFS)):
             headers = {"x-api-key": keys[self._key_idx], "Content-Type": "application/json"}
@@ -240,11 +244,24 @@ class ExaSearchProvider(SearchProvider):
                                    self._key_idx, resp.status_code)
                     await _record_rejection("exa", keys[self._key_idx], resp)
                     if len(rejected) >= len(keys):
+                        detail = ", ".join(f"#{i}:{s}" for i, s in sorted(rejected.items()))
                         logger.error(
                             "Exa: every key in the %d-key pool was rejected (%s). This is a "
                             "credentials problem, not a rate limit — results will be empty until "
                             "it is fixed.",
-                            len(keys), ", ".join(f"#{i}:{s}" for i, s in sorted(rejected.items())),
+                            len(keys), detail,
+                        )
+                        # STATED, not just logged. An exhausted pool returns `[]`, which every
+                        # caller reads as "no results" — so a dead credential is indistinguishable
+                        # from a quiet market, and the crawl history records `empty` forever. The
+                        # runtime write-back that would normally turn a key row red does not help
+                        # here: an environment-supplied pool has no row to mark.
+                        #
+                        # An attribute rather than an exception, because provider isolation is the
+                        # rule in this codebase — a search backend must never raise across the
+                        # boundary and take down the crawl that called it.
+                        self.last_failure = (
+                            f"every key in the {len(keys)}-key pool was rejected ({detail})"
                         )
                         return []
                     self._key_idx = (self._key_idx + 1) % len(keys)
@@ -511,6 +528,10 @@ class FirecrawlSearchProvider(SearchProvider):
             payload["tbs"] = tbs
 
         backoff_used = 0
+        # Cleared at the TOP of every attempt, not in each error path. A flag that describes the
+        # worst thing ever seen rather than the last attempt goes sticky: top the credits up and
+        # the searches work again while the crawl history keeps reporting them broken.
+        self.last_failure = ""
         rejected: dict[int, int] = {}          # key index -> status that condemned it
         for attempt in range(len(keys) + len(_RETRY_BACKOFFS)):
             headers = {
@@ -527,11 +548,24 @@ class FirecrawlSearchProvider(SearchProvider):
                                    self._key_idx, resp.status_code)
                     await _record_rejection("firecrawl", keys[self._key_idx], resp)
                     if len(rejected) >= len(keys):
+                        detail = ", ".join(f"#{i}:{s}" for i, s in sorted(rejected.items()))
                         logger.error(
                             "Firecrawl: every key in the %d-key pool was rejected (%s). This is a "
                             "credentials problem, not a rate limit — results will be empty until "
                             "it is fixed.",
-                            len(keys), ", ".join(f"#{i}:{s}" for i, s in sorted(rejected.items())),
+                            len(keys), detail,
+                        )
+                        # STATED, not just logged. An exhausted pool returns `[]`, which every
+                        # caller reads as "no results" — so a dead credential is indistinguishable
+                        # from a quiet market, and the crawl history records `empty` forever. The
+                        # runtime write-back that would normally turn a key row red does not help
+                        # here: an environment-supplied pool has no row to mark.
+                        #
+                        # An attribute rather than an exception, because provider isolation is the
+                        # rule in this codebase — a search backend must never raise across the
+                        # boundary and take down the crawl that called it.
+                        self.last_failure = (
+                            f"every key in the {len(keys)}-key pool was rejected ({detail})"
                         )
                         return []
                     self._key_idx = (self._key_idx + 1) % len(keys)
