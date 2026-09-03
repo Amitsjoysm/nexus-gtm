@@ -32,6 +32,22 @@ class LLMMessage:
 class LLMResponse:
     text: str
     tokens: int = 0
+    # Which provider actually served this. Unset for a direct call; stamped by
+    # FallbackLLMProvider, which is the only place the answer's origin is in doubt.
+    #
+    # Without it, stub output is indistinguishable from a real model answer — and the stub is
+    # what a rate-limited or dead key pool silently degrades to. Measured 2026-09-03: Groq 429'd
+    # mid-enrichment, the stub extracted no firmographics, and the customer was billed for the
+    # empty result. Nothing anywhere reported a problem.
+    provider: str = ""
+
+    @property
+    def is_stub(self) -> bool:
+        """True when this text came from the offline stub rather than a real model.
+
+        Callers use it to avoid billing for, or persisting, an answer that is really an outage.
+        """
+        return self.provider == "StubLLMProvider"
 
 
 class LLMProvider(abc.ABC):
@@ -538,15 +554,39 @@ class FallbackLLMProvider(LLMProvider):
     async def complete(self, messages, *, temperature=0.2, max_tokens=800,
                        purpose=None, variables=None) -> LLMResponse:
         last_exc: Exception | None = None
+        failed_from = ""
         for i, provider in enumerate(self.providers):
+            name = type(provider).__name__
             try:
-                return await provider.complete(
+                result = await provider.complete(
                     messages, temperature=temperature, max_tokens=max_tokens,
                     purpose=purpose, variables=variables,
                 )
             except Exception as exc:  # noqa: BLE001 — fall through to the next provider
                 last_exc = exc
-                logger.warning("LLM provider %s failed (%r); falling back", type(provider).__name__, exc)
+                failed_from = name
+                logger.warning("LLM provider %s failed (%r); falling back", name, exc)
+                continue
+            # Stamp who served it. A warning in a log nobody reads is what let a rate-limited key
+            # pool degrade every agent to stub output for a whole deployment without a single
+            # dashboard moving; this makes the degradation a value the caller can act on and a
+            # counter an alert can fire on.
+            if getattr(result, "provider", ""):
+                return result
+            try:
+                result.provider = name
+            except Exception:      # a provider returning something exotic must still work
+                return result
+            if i > 0:
+                from nexus.core import metrics
+
+                try:
+                    metrics.record_llm_fallback(
+                        **{"from": failed_from, "to": name, "purpose": purpose or ""}
+                    )
+                except Exception:
+                    logger.debug("llm fallback metric failed", exc_info=True)
+            return result
         raise last_exc  # only reached if every provider raised (i.e. no stub at the tail)
 
 

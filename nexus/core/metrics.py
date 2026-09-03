@@ -138,6 +138,36 @@ def observe_entitlement_resolve(seconds: float) -> None:
     )
 
 
+def record_llm_fallback(**labels) -> None:
+    """One model call that did not get the provider it asked for.
+
+    The single most useful signal this system does not otherwise emit. A key pool that is
+    rate-limited or revoked degrades to the offline stub, and the stub answers *plausibly* — an
+    empty extraction, a generic email — so every downstream consumer treats it as real. Measured
+    2026-09-03: Groq 429'd during account enrichment, the stub returned no firmographics, the
+    account was stored with no country, and the customer was billed. Latency, error rate and
+    queue depth all stayed flat.
+
+    Labelled by purpose so "the enricher is degraded" and "one chat turn fell back" are separable;
+    a rate on `to="StubLLMProvider"` above zero for anything but a test deployment is an incident.
+
+    Keyword-only because `from` is a reserved word and cannot be a parameter name.
+    """
+    _observe(
+        _counter(
+            "nexus_llm_fallback_total",
+            "Model calls served by a provider other than the first choice.",
+            ("from_provider", "to_provider", "purpose"),
+        ),
+        {
+            "from_provider": str(labels.get("from") or "unknown"),
+            "to_provider": str(labels.get("to") or "unknown"),
+            "purpose": str(labels.get("purpose") or "unspecified"),
+        },
+        inc=1.0,
+    )
+
+
 def record_credit_burn(capability_id: str, credits: float) -> None:
     """Credits actually consumed. Rate of this against the plan's included credits is what says
     a tenant is about to hit an overage — before the invoice tells them."""

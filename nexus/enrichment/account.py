@@ -166,6 +166,21 @@ def country_contradicts_city(country: str, city: str, region: str = "") -> bool:
     return bool(claimed) and claimed != known
 
 
+async def _refund_stub_served(ts, user_id: str | None) -> None:
+    """Reverse an `enrich.account` charge whose answer came from the stub.
+
+    Charged for the answer, not for our infrastructure — and a stub answer is not an answer, it
+    is a degraded model chain wearing one. A real model reporting "nothing found" is different
+    and stays billed: the customer bought a lookup and got its true result.
+    """
+    from nexus.billing.usage import record_usage
+
+    await record_usage(
+        ts, capability_id=ACCOUNT_CAPABILITY, quantity=-1, user_id=user_id,
+        source="enrichment", attrs={"reason": "stub_served", "refund": True},
+    )
+
+
 class SearchBackedAccountEnricher:
     """Find and apply firmographics for an account from web search + LLM extraction."""
 
@@ -227,6 +242,17 @@ class SearchBackedAccountEnricher:
         except Exception as exc:
             logger.warning("account enrich LLM failed for %r: %r", label, exc)
             return {}
+        if getattr(resp, "is_stub", False):
+            # The real model was unavailable and the chain fell through to the offline stub, which
+            # extracts nothing. Returning {} here would be indistinguishable from "the web had
+            # nothing to say about this company" — and the caller would bill for it. Say which it
+            # was instead; `enrich` reads this and refunds.
+            logger.warning(
+                "account enrich for %r was served by the stub — the model chain is degraded", label
+            )
+            self.last_served_by_stub = True
+            return {}
+        self.last_served_by_stub = False
         return _parse_obj(resp.text)
 
     def apply(self, account: Account, data: dict) -> list[str]:
@@ -401,6 +427,12 @@ class SearchBackedAccountEnricher:
                 mark_attempted(account)
                 data = await self.fetch(account)
                 if not data:
+                    if getattr(self, "last_served_by_stub", False):
+                        # Our provider outage, not the customer's lookup. `metered` charges on
+                        # entry, so the charge is already recorded; a compensating row is how this
+                        # package reverses one — never a delete, because a disputed charge has to
+                        # be explainable rather than merely absent.
+                        await _refund_stub_served(ts, user_id)
                     return filled
                 # `apply` is blank-only, so fields the source already filled are left alone and
                 # only the genuinely new ones are reported.
