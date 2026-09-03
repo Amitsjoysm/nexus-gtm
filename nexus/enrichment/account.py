@@ -448,8 +448,16 @@ class SearchBackedAccountEnricher:
 
     async def enrich_batch(
         self, ts, accounts: list[Account], *, concurrency: int, user_id: str | None = None,
+        meter: bool = True,
     ) -> None:
         """Enrich candidates concurrently, charging the batch once. Never raises.
+
+        ``meter=False`` is for a caller that bills the OUTCOME rather than the attempt. The ICP
+        discovery sweep is the case: it enriches up to 40 candidates so it can rank them, keeps
+        the handful that clear the ICP gate, and discards the rest — so billing the batch charges
+        the customer for work they never receive. `discovery.account_added` covers it instead,
+        priced with the COGS line "exa pool + enrich amortized", which is exactly this cost
+        spread over the accounts that did survive.
 
         The single gate up front is not a shortcut, it is the only safe shape: ``metered`` reads
         and writes ``ts``, and running it inside the ``gather`` would put N coroutines on one
@@ -476,6 +484,12 @@ class SearchBackedAccountEnricher:
                     await self.enrich(ts, acc, user_id=user_id, meter=False)
                 except Exception:  # enrich already swallows its own errors; belt and braces
                     pass
+
+        if not meter:
+            # The caller bills the outcome. Still bounded by the semaphore and still best-effort;
+            # only the charge is somebody else's job.
+            await asyncio.gather(*(_one(a) for a in accounts))
+            return
 
         try:
             async with metered(

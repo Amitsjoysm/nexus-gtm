@@ -46,13 +46,45 @@ async def _enrich_candidates(
     """Crawl the web to fill each candidate's blank firmographics (industry/headcount/geo/tech) so
     scoring can differentiate them. Concurrent, bounded, best-effort.
 
-    Billing lives in ``enrich_batch``: one ``enrich.account`` charge for the whole batch, taken
-    before the concurrency starts, because metering N candidates inside the gather would put N
-    coroutines on one AsyncSession. A blocked tenant gets an unenriched candidate set — a worse
-    ranking — rather than a discovery run that dies partway."""
+    NOT billed. These are candidates the sweep enriches in order to RANK them; most fail the ICP
+    gate and are discarded, so charging `enrich.account` for the batch bills the customer for work
+    they never receive. Measured on a 200-credit free plan: 40 candidates at 3 credits took 120
+    credits — 60% of the monthly balance — and delivered 20 accounts.
+
+    `discovery.account_added` is the line that covers this, priced at 5 credits with the COGS note
+    "exa pool + enrich amortized" — the cost of the candidates that did not make it, spread over
+    the ones that did. It is charged in ``auto_discover_for_tenant`` once the survivors are known."""
     from nexus.enrichment.account import get_account_enricher
 
-    await get_account_enricher().enrich_batch(ts, accounts, concurrency=concurrency)
+    await get_account_enricher().enrich_batch(
+        ts, accounts, concurrency=concurrency, meter=False
+    )
+
+
+async def _meter_discovered(ts: TenantSession, added: int) -> None:
+    """Charge `discovery.account_added` for the accounts this sweep actually delivered.
+
+    After the sweep, not before: how many candidates clear the ICP gate is not knowable until they
+    have been enriched and scored. That is the same shape as the bulk verifier in
+    `routers/contacts.py` — enforcement applies to the NEXT run rather than guessing at this one.
+
+    A sweep that added nothing is not billed; it sold nothing.
+
+    Never raises. This runs in the automation heartbeat, the accounts are already persisted, and a
+    billing failure must not take down a background job or roll back work the customer can see.
+    """
+    if added <= 0:
+        return
+    try:
+        from nexus.billing.meter import metered
+
+        async with metered(
+            ts, "discovery.account_added", quantity=added, source="worker",
+            attrs={"sweep": True},
+        ):
+            pass
+    except Exception:
+        logger.warning("discovery billing failed for %s accounts", added, exc_info=True)
 
 
 def _profile_to_search_icp(profile) -> dict:
@@ -235,4 +267,5 @@ async def auto_discover_for_tenant(
         await ts.flush()
         account_ids.append(account.id)
 
+    await _meter_discovered(ts, len(account_ids))
     return {"discovered": len(account_ids), "screened": screened, "account_ids": account_ids}
