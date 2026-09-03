@@ -1,5 +1,15 @@
 .body {
   display: block;
+  /* The operator's own line breaks, kept. A `coming_soon` notice is a short pitch — a lead line
+     and an explanation underneath — and collapsing it into one run-on paragraph loses the only
+     structure it has. `pre-line` (not `pre`) so wrapping still works at every width.
+
+     Deliberately NOT `dangerouslySetInnerHTML`: the string is admin-authored and renders on a
+     customer's page, so painting it as markup would buy one paragraph of formatting at the cost
+     of an injection surface. React's escaping stays intact. */
+  white-space: pre-line;
+  max-inline-size: 62ch;
+  margin-inline: auto;
 }
 
 /* The generic explanation drops below the operator's own sentence when both are shown. Quieter,

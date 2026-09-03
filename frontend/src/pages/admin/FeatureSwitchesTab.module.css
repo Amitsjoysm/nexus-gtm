@@ -221,3 +221,24 @@
     transition: none;
   }
 }
+
+/* Hint on the left, counter on the right, baseline-aligned so the counter does not drift as the
+   hint wraps to a second line. */
+.fieldFoot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.counter {
+  flex: none;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.counterFull {
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
+}

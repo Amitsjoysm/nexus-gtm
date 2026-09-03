@@ -36,6 +36,49 @@ const STATE_COPY: Record<FeatureSwitchState, { label: string; hint: string }> = 
   },
 };
 
+/** Ceiling, mirrored from `MESSAGE_MAX_CHARS` in `api/routers/admin_features.py`. */
+const MESSAGE_MAX = 600;
+
+/**
+ * What to write, per state. The three blocking states need genuinely different messages, and a
+ * single "Message to customers" label with one placeholder got one kind: a status line.
+ *
+ * `coming_soon` is the odd one out and the reason this exists. It is not an outage notice — it is
+ * the only place in the product where we get to tell a rep what is arriving and why they should
+ * care. "Relationship graph lands in October" is a date; what a rep can act on is the job it does
+ * for them. So the prompt asks for that explicitly.
+ */
+const MESSAGE_COPY: Record<
+  Exclude<FeatureSwitchState, "enabled">,
+  { label: string; placeholder: string; hint: string }
+> = {
+  coming_soon: {
+    label: "What is coming, and why it matters",
+    placeholder: [
+      "Warm intro paths, landing in October.",
+      "",
+      "See which of your colleagues already knows someone at an account before you call it, so " +
+        "you can open with a referral instead of a cold touch.",
+    ].join("\n"),
+    hint:
+      "Say what it does and what it saves the rep. This is the only place we get to sell a " +
+      "feature that has not shipped, so a date on its own is a wasted banner. Line breaks are " +
+      "kept, so lead with one line and explain underneath.",
+  },
+  maintenance: {
+    label: "What to tell customers while it is down",
+    placeholder: "Back at 14:00 UTC. Your data is untouched.",
+    hint:
+      "A time and a reassurance. This is the sentence a rep will repeat to a prospect who asks " +
+      "why the call did not go through.",
+  },
+  disabled: {
+    label: "Why this is off",
+    placeholder: "Retired in favour of the new Sequences builder. Contact support if you relied on it.",
+    hint: "No timeline implied. Say what replaced it, or who to talk to.",
+  },
+};
+
 const TONE: Record<FeatureSwitchState, "success" | "warning" | "info" | "neutral"> = {
   enabled: "success",
   coming_soon: "info",
@@ -151,22 +194,38 @@ function FeatureRow({
           {state !== "enabled" && (
             <div className={styles.field}>
               <label htmlFor={`${fieldId}-msg`} className={styles.label}>
-                Message to customers
+                {MESSAGE_COPY[state].label}
               </label>
               <textarea
                 id={`${fieldId}-msg`}
                 className={styles.textarea}
-                rows={2}
+                // `coming_soon` is the one state you write a pitch in rather than a status line,
+                // so it opens with room for one. A two-row box is an instruction to be terse.
+                rows={state === "coming_soon" ? 6 : 3}
                 value={message}
-                maxLength={200}
+                maxLength={MESSAGE_MAX}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Back at 14:00 UTC"
+                placeholder={MESSAGE_COPY[state].placeholder}
                 aria-describedby={`${fieldId}-hint`}
               />
-              <p id={`${fieldId}-hint`} className={styles.hint}>
-                Shown on the page and returned by the API. Leave blank for the standard wording for
-                this state. This is the sentence a rep will repeat to a prospect.
-              </p>
+              <div className={styles.fieldFoot}>
+                <p id={`${fieldId}-hint`} className={styles.hint}>
+                  {MESSAGE_COPY[state].hint}
+                </p>
+                {/* Only once it matters. A counter sitting at 0/600 from the first keystroke is
+                    noise; near the ceiling it is the one thing you need to see. */}
+                {message.length > MESSAGE_MAX * 0.75 && (
+                  <span
+                    className={cn(
+                      styles.counter,
+                      message.length >= MESSAGE_MAX && styles.counterFull,
+                    )}
+                    aria-live="polite"
+                  >
+                    {message.length} / {MESSAGE_MAX}
+                  </span>
+                )}
+              </div>
             </div>
           )}
 

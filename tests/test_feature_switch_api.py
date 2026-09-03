@@ -309,3 +309,59 @@ async def test_a_plan_gate_still_offers_the_upgrade_link(client, monkeypatch):
     payload = QuotaExceeded("ai.email_draft", reason="quota_exhausted", plan_id="free").to_payload()
     assert payload["upgrade_url"] == "/settings/billing"
     assert "switch_state" not in payload
+
+
+# ---- the message has to be long enough to be worth reading -------------------------------------
+
+async def test_a_coming_soon_message_can_explain_the_feature(client, monkeypatch):
+    """200 characters is two short sentences — enough for "back at 14:00 UTC" and not enough for
+    the other thing this field is for.
+
+    A `coming_soon` notice is the only place we get to tell a rep what is arriving and why they
+    should care. "Relationship graph lands in October" says nothing a rep can act on; naming the
+    job it does for them is the difference between a dead banner and a reason to come back.
+    """
+    admin = await _superadmin(client, monkeypatch, slug="fsm1", email="b@fsm1.com")
+    pitch = (
+        "Warm intro paths, landing in October.\n\n"
+        "See which of your colleagues already knows someone at an account before you cold call it, "
+        "so an SDR can open with a referral instead of a cold touch. Built from your team's own "
+        "contacts and calendar, deduped per person, and private to your workspace by default."
+    )
+    assert len(pitch) > 200, "the fixture must exceed the old cap to be a real test"
+
+    r = await client.put("/api/admin/features/module.network", headers=auth(admin),
+                         json={"state": "coming_soon", "message": pitch})
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == pitch, "the message was truncated or altered"
+
+
+async def test_line_breaks_survive_the_round_trip(client, monkeypatch):
+    """A pitch is a short paragraph, not one run-on line. If newlines are stripped on the way in,
+    no amount of CSS on the way out can put them back."""
+    admin = await _superadmin(client, monkeypatch, slug="fsm2", email="b@fsm2.com")
+    r = await client.put("/api/admin/features/module.network", headers=auth(admin),
+                         json={"state": "coming_soon", "message": "Line one.\nLine two."})
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "Line one.\nLine two."
+
+
+async def test_an_absurdly_long_message_is_refused(client, monkeypatch):
+    """Bounded, because it renders verbatim on a customer's page and is returned in every 402.
+    Refused at the edge with a 422 rather than silently truncated: an operator who wrote a pitch
+    and got back a sentence and a half would not know which half the customer sees.
+    """
+    admin = await _superadmin(client, monkeypatch, slug="fsm3", email="b@fsm3.com")
+    r = await client.put("/api/admin/features/module.network", headers=auth(admin),
+                         json={"state": "coming_soon", "message": "x" * 5000})
+    assert r.status_code == 422, r.text
+
+
+def test_the_notice_preserves_the_operators_line_breaks():
+    """Rendered with `pre-line`, not `dangerouslySetInnerHTML`. An admin-authored string painted as
+    markup is an injection surface for one paragraph of formatting; `pre-line` gives paragraphs
+    with React's escaping intact."""
+    css = (FRONTEND / "components" / "FeatureUnavailable.module.css").read_text(encoding="utf-8")
+    assert "pre-line" in css, "operator line breaks collapse into one run-on paragraph"
+    tsx = _read("components/FeatureUnavailable.tsx")
+    assert "dangerouslySetInnerHTML" not in tsx

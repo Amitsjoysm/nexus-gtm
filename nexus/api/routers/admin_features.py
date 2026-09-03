@@ -25,6 +25,11 @@ from nexus.models.feature_switch import SWITCH_STATES, FeatureSwitch
 
 router = APIRouter(prefix="/admin/features", tags=["admin-features"])
 
+#: Ceiling for a customer-facing switch message. Roughly a short paragraph — enough to say what a
+#: feature does and who it helps, not enough to become a page nobody reads. Mirrored in the admin
+#: UI's `maxLength` so the counter and the server agree.
+MESSAGE_MAX_CHARS = 600
+
 
 class FeatureOut(BaseModel):
     capability_id: str
@@ -52,7 +57,13 @@ class FeatureIn(BaseModel):
     # Shown to the customer verbatim, in place of the generic upsell. Optional — the UI has
     # per-state default wording — but a specific sentence is what turns "unavailable" into
     # something a rep can repeat to a prospect.
-    message: str = ""
+    #
+    # Long enough for a real `coming_soon` pitch: what the feature does and what job it does for
+    # the rep, which is the only thing that makes a "coming soon" banner worth reading twice.
+    # Bounded because it renders verbatim on a customer's page and rides in every 402 payload.
+    # Refused rather than truncated — an operator who wrote a paragraph and got back a sentence
+    # and a half would have no way to know which half the customer sees.
+    message: str = Field(default="", max_length=MESSAGE_MAX_CHARS)
     note: str = ""
 
 
