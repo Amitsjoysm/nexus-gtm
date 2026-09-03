@@ -117,6 +117,26 @@ class ReacherEmailVerifier(EmailVerificationProvider):
             email=email, status=STATUS_UNKNOWN, confidence=0.0, source=self.name
         )
 
+    # Why an address graded `risky`, in the order that decides how usable it is. Measured against
+    # the live instance on 2026-09-02: `safe` never appeared once across real B2B addresses —
+    # catch-all domains and role accounts both force `risky`, and prospecting addresses are
+    # overwhelmingly one or the other. Flattening all of them to one amber label at 0.40 is what
+    # makes verification look broken, because two of these are addresses the receiving server
+    # explicitly ACCEPTED and one is a throwaway.
+    #
+    # (signal, reason, confidence) — first match wins.
+    _RISKY_GRADES: tuple[tuple[str, str, float], ...] = (
+        # A throwaway domain. Deliverable and worthless; the worst kind of risky.
+        ("is_disposable", "disposable", 0.15),
+        # Accepted, but the mailbox is full — mail may bounce today and land tomorrow.
+        ("has_full_inbox", "full_inbox", 0.25),
+        # The server accepts every recipient, so acceptance proves nothing about this mailbox.
+        # Still the best of the risky outcomes when the server did accept it.
+        ("is_catch_all", "catch_all", 0.55),
+        # A shared inbox (info@, support@). Real, reachable, rarely the person you want.
+        ("is_role_account", "role_account", 0.35),
+    )
+
     def _map(self, email: str, data: dict) -> EmailVerification:
         reachable = str(data.get("is_reachable", "unknown")).lower()
         status, confidence = _VERDICT.get(reachable, (STATUS_UNKNOWN, 0.20))
@@ -124,12 +144,39 @@ class ReacherEmailVerifier(EmailVerificationProvider):
         misc = data.get("misc") or {}
         smtp = data.get("smtp") or {}
         provider_type = _classify_provider(mx.get("records"), misc)
+        deliverable = bool(smtp.get("is_deliverable"))
         signals = {
             "is_catch_all": bool(smtp.get("is_catch_all")),
             "is_role_account": bool(misc.get("is_role_account")),
             "is_disposable": bool(misc.get("is_disposable")),
             "has_full_inbox": bool(smtp.get("has_full_inbox")),
+            # The receiving server's own answer, previously dropped. It is the single most useful
+            # fact behind a `risky` grade: "the server accepted this recipient" is a different
+            # situation from "it did not", and the screen could not tell them apart.
+            "is_deliverable": deliverable,
         }
+
+        if status == "risky":
+            # THE STATUS IS NOT PROMOTED. Reacher declined to certify the mailbox, and turning that
+            # into `valid` would invent a certainty it explicitly withheld — which is how a
+            # campaign bounces. Only the confidence and the stated reason change, so the UI can say
+            # "accepted, catch-all domain" rather than an unexplained amber label.
+            for key, reason, graded in self._RISKY_GRADES:
+                if signals.get(key):
+                    signals["risky_reason"] = reason
+                    confidence = graded
+                    break
+            else:
+                signals["risky_reason"] = "unspecified"
+            # The server accepting the recipient is corroboration; not accepting it is not proof of
+            # absence on a catch-all, so this only ever adds.
+            #
+            # Never for a disposable address: "the throwaway domain accepts mail" is not
+            # reassurance, it is the thing that makes it useless. Corroborating deliverability
+            # there would rank a burner above a real shared inbox.
+            if deliverable and signals.get("risky_reason") != "disposable":
+                confidence = min(0.75, confidence + 0.10)
+
         return EmailVerification(
             email=email, status=status, confidence=confidence, source=self.name,
             provider_type=provider_type, signals=signals,

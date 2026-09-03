@@ -104,6 +104,68 @@ def mark_attempted(account) -> None:
     }
 
 
+# Cities whose country is not in genuine dispute, used ONLY to reject a self-contradictory record.
+#
+# This is deliberately not a geocoder and not a lookup: it never SETS a country, it only refuses one
+# that the same LLM response already contradicted. So its coverage bounds how many bad records it
+# catches, never how many good ones it corrupts — an unlisted city leaves the country untouched.
+#
+# Weighted toward the outsourcing and offshore-services hubs, because that is where the failure
+# concentrates: a company in Jaipur or Manila whose entire web presence describes serving US
+# healthcare clients is exactly the record an LLM resolves toward the market. A San Francisco
+# company is rarely described as being somewhere else.
+_CITY_COUNTRY: dict[str, str] = {
+    # India
+    "jaipur": "india", "mumbai": "india", "bengaluru": "india", "bangalore": "india",
+    "hyderabad": "india", "chennai": "india", "pune": "india", "noida": "india",
+    "gurugram": "india", "gurgaon": "india", "ahmedabad": "india", "kolkata": "india",
+    "indore": "india", "coimbatore": "india", "chandigarh": "india", "new delhi": "india",
+    "delhi": "india", "kochi": "india", "thiruvananthapuram": "india", "nagpur": "india",
+    # Philippines
+    "manila": "philippines", "makati": "philippines", "cebu": "philippines",
+    "quezon city": "philippines", "taguig": "philippines", "davao": "philippines",
+    # Other common offshore hubs
+    "karachi": "pakistan", "lahore": "pakistan", "islamabad": "pakistan",
+    "dhaka": "bangladesh", "colombo": "sri lanka", "kathmandu": "nepal",
+    "ho chi minh city": "vietnam", "hanoi": "vietnam", "jakarta": "indonesia",
+    "kuala lumpur": "malaysia", "bangkok": "thailand", "cairo": "egypt",
+    "nairobi": "kenya", "lagos": "nigeria", "buenos aires": "argentina",
+    "bogota": "colombia", "bogotá": "colombia", "mexico city": "mexico",
+    "sao paulo": "brazil", "são paulo": "brazil", "warsaw": "poland", "krakow": "poland",
+    "kraków": "poland", "bucharest": "romania", "kyiv": "ukraine", "kiev": "ukraine",
+    "belgrade": "serbia", "sofia": "bulgaria",
+}
+
+# Names that mean the same country. Only what is needed to compare, not a general alias table.
+_COUNTRY_ALIASES: dict[str, str] = {
+    "usa": "united states", "us": "united states", "u.s.": "united states",
+    "u.s.a.": "united states", "united states of america": "united states",
+    "america": "united states", "uk": "united kingdom", "u.k.": "united kingdom",
+    "great britain": "united kingdom", "england": "united kingdom",
+    "uae": "united arab emirates", "republic of india": "india", "bharat": "india",
+}
+
+
+def _norm_country(value: str) -> str:
+    v = (value or "").strip().lower().rstrip(".")
+    return _COUNTRY_ALIASES.get(v, v)
+
+
+def country_contradicts_city(country: str, city: str, region: str = "") -> bool:
+    """True when a record says a country its own city rules out.
+
+    Returns False whenever the pair cannot be settled — an unknown city, a blank field, an alias we
+    do not carry. Being unsure must cost nothing; only a proven contradiction is acted on.
+    """
+    known = _CITY_COUNTRY.get((city or "").strip().lower())
+    if not known:
+        known = _CITY_COUNTRY.get((region or "").strip().lower())
+    if not known:
+        return False
+    claimed = _norm_country(country)
+    return bool(claimed) and claimed != known
+
+
 class SearchBackedAccountEnricher:
     """Find and apply firmographics for an account from web search + LLM extraction."""
 
@@ -133,14 +195,24 @@ class SearchBackedAccountEnricher:
             resp = await self.llm.complete(
                 [
                     LLMMessage("system", "You extract company firmographics from web snippets. "
-                               "Use only facts present in the snippets; never invent."),
+                               "Use only facts present in the snippets; never invent. "
+                               # Naming the failure, because "never invent" did not prevent it —
+                               # nothing was invented. A Jaipur BPO whose snippets are full of
+                               # "medical billing for US clients" was recorded as country="United
+                               # States" while city/region correctly said Jaipur, Rajasthan, and it
+                               # then scored a perfect geo match against a USA-only ICP.
+                               "Location fields describe where the company IS, never the market it "
+                               "sells into. A company headquartered in India that serves US "
+                               "customers is in India."),
                     LLMMessage("user", f"Company: {label} ({account.domain or 'unknown domain'}).\n"
                                f"Snippets:\n{blob}\n\n"
                                'Return JSON with keys: "industry" (string), "sub_industry" (a more '
                                'specific niche/sub-category, string), "employee_count" '
                                '(integer or null), "revenue" (annual revenue as a short string like '
-                               '"$10M-$50M" or "", best estimate), "country" (string), "region" '
-                               '(state/province/region, string), "city" (string), "description" (one '
+                               '"$10M-$50M" or "", best estimate), "country" (the country where '
+                               'the company is HEADQUARTERED, not where its customers are), '
+                               '"region" (state/province/region of the headquarters, string), '
+                               '"city" (city of the headquarters, string), "description" (one '
                                'sentence), "tech_stack" (array of strings), "keywords" (array of 3-8 '
                                'short focus/SEO keywords describing what they do), "linkedin_url" '
                                "(the company's LinkedIn page URL if present, else \"\"). Use "
@@ -171,6 +243,20 @@ class SearchBackedAccountEnricher:
             account.employee_count = ec
             filled.append("employee_count")
         country = (data.get("country") or "").strip()
+        # DROP A COUNTRY THE SAME RESPONSE CONTRADICTS. `city="Jaipur"` with
+        # `country="United States"` is not a low-confidence answer, it is an impossible one, and it
+        # is worse than no answer: a blank country scores geo NEUTRAL in `relevance/engine.py`,
+        # while a wrong one scores a perfect 1.0 against an ICP the account does not belong to.
+        # Dropping it leaves the account honestly unscored on geo and keeps the city we do trust.
+        if country and country_contradicts_city(
+            country, str(data.get("city") or ""), str(data.get("region") or "")
+        ):
+            logger.info(
+                "dropping contradictory country %r for %r (city=%r region=%r)",
+                country, account.name or account.domain,
+                data.get("city"), data.get("region"),
+            )
+            country = ""
         if country and not account.country:
             account.country = country[:80]
             filled.append("country")

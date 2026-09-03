@@ -1,6 +1,14 @@
 .shell {
   display: flex;
+  /* `100dvh`, not `100vh`. On any browser with a retracting toolbar (mobile Safari and Chrome, and
+     desktop Chrome on some platforms) `100vh` is the LARGEST viewport height, not the visible one —
+     so the shell is taller than the screen and scrolling reveals empty space below it. That is the
+     classic "large blank space at the bottom" report, and it is invisible on a desktop window with
+     static chrome, which is why it survives review.
+     `100vh` first as the fallback: a browser that does not know `dvh` ignores the second
+     declaration and keeps today's behaviour exactly. */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 

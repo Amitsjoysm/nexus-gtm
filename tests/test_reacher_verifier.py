@@ -105,13 +105,27 @@ async def test_invalid_maps_to_invalid_hard():
 
 
 async def test_risky_catchall_office365_carries_signals():
+    """`risky` is graded by REASON now, not a flat 0.40.
+
+    Measured against the live Reacher instance on 2026-09-02: `safe` never appeared once across
+    real B2B addresses, because catch-all domains and role accounts each force `risky` and
+    prospecting addresses are overwhelmingly one or the other. A catch-all the server ACCEPTED and
+    an address it did not both scored 0.40 with no reason attached, which is what made the whole
+    feature read as broken.
+
+    The status is deliberately unchanged — promoting a catch-all to `valid` would invent the
+    certainty Reacher withheld. Only the confidence and the stated reason move.
+    """
     v = _verifier(lambda req: _resp(RISKY_CATCHALL_O365))
     out = await v.verify_one("guess@acme.com")
     assert out.status == "risky"
-    assert out.confidence == 0.40
     assert out.provider_type == "office365"
     assert out.signals["is_catch_all"] is True
     assert out.signals["is_role_account"] is True
+    assert out.signals["risky_reason"] == "catch_all"
+    assert out.confidence > 0.40, (
+        "a catch-all the server accepted still scores like an unverifiable address"
+    )
 
 
 async def test_unknown_custom_low_confidence():

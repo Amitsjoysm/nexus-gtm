@@ -78,3 +78,90 @@ async def test_enrich_ignores_bool_employee_count():
     out = await SearchBackedAccountEnricher(_FakeSearch([_Hit("Acme")]), llm).enrich(None, acc, meter=False)
     assert acc.employee_count is None and "employee_count" not in out
     assert acc.industry == "SaaS"
+
+
+# ---- whose country is it? ----------------------------------------------------------------------
+
+def test_the_prompt_says_country_means_where_the_company_is():
+    """Observed in production: "Isys Softech Pvt Ltd", a healthcare BPO headquartered in Jaipur,
+    was stored with country="United States" while city/region correctly read "Jaipur, Rajasthan".
+    It then scored geo 1.0 against a USA-only ICP and reached a rep's list.
+
+    The two fields come from the SAME LLM call on the SAME snippets, so the model was not confused
+    about the location — it answered a different question. The prompt asked for `"country"` with no
+    anchor, and this company's snippets are saturated with the market it serves: "medical billing
+    for US clients", "us healthcare outsourcing". Asked for "country" against that text, "United
+    States" is a defensible reading.
+
+    `region` and `city` were unaffected because they are anchored by their own descriptions
+    ("state/province/region"), which have no market-shaped alternative reading.
+
+    A structural test on the prompt, because there is no offline way to assert what a model returns
+    — the stub LLM does not reason. What IS checkable is that the instruction is unambiguous.
+    """
+    import inspect
+
+    from nexus.enrichment.account import SearchBackedAccountEnricher
+
+    src = inspect.getsource(SearchBackedAccountEnricher.fetch)
+    lowered = src.lower()
+    assert "headquarter" in lowered, (
+        "the country field is not anchored to where the company is headquartered"
+    )
+    # The failure mode named explicitly. "Don't invent" was already there and did not help: the
+    # model invented nothing, it answered the wrong question.
+    assert "serve" in lowered or "customer" in lowered or "market" in lowered, (
+        "the prompt does not rule out answering with the market the company SELLS INTO, which is "
+        "the exact mistake that shipped"
+    )
+
+
+def test_a_country_that_contradicts_the_city_is_not_stored():
+    """Defence in depth behind the prompt.
+
+    `city="Jaipur"` with `country="United States"` is not a low-confidence answer, it is an
+    impossible one, and it is worse than no answer: a blank country scores geo neutral, while a
+    wrong country scores a perfect 1.0 against an ICP the account does not belong to. Dropping the
+    contradiction leaves the record honest and the account correctly unscored on geo.
+
+    Only checks the pairs it can actually settle. A city it does not recognise is left alone —
+    guessing would trade this bug for a worse one.
+    """
+    from nexus.enrichment.account import SearchBackedAccountEnricher
+    from nexus.models.account import Account
+
+    enricher = SearchBackedAccountEnricher(search=None, llm=None)
+
+    a = Account(name="Isys Softech", domain="eliteoffshoreresources.com")
+    filled = enricher.apply(a, {
+        "city": "Jaipur", "region": "Rajasthan", "country": "United States",
+    })
+    assert a.country in (None, ""), (
+        f"stored a country that contradicts the city: country={a.country!r} city=Jaipur"
+    )
+    assert "country" not in filled
+    # The location we DO trust is kept — the record still says where the company is.
+    assert (a.custom_fields or {}).get("city") == "Jaipur"
+
+
+def test_a_consistent_country_is_still_stored():
+    """The guard must not cost the common case."""
+    from nexus.enrichment.account import SearchBackedAccountEnricher
+    from nexus.models.account import Account
+
+    enricher = SearchBackedAccountEnricher(search=None, llm=None)
+    a = Account(name="Ramp", domain="ramp.com")
+    filled = enricher.apply(a, {"city": "New York", "region": "NY", "country": "United States"})
+    assert a.country == "United States"
+    assert "country" in filled
+
+
+def test_an_unrecognised_city_does_not_block_the_country():
+    """The guard settles only what it can. An unknown city must not suppress a good country."""
+    from nexus.enrichment.account import SearchBackedAccountEnricher
+    from nexus.models.account import Account
+
+    enricher = SearchBackedAccountEnricher(search=None, llm=None)
+    a = Account(name="Somewhere Ltd", domain="example.org")
+    enricher.apply(a, {"city": "Nowheresville", "country": "United States"})
+    assert a.country == "United States"

@@ -68,6 +68,18 @@ class EmailVerification:
 class EmailVerificationProvider(abc.ABC):
     name: str
 
+    #: Whether this adapter actually asks the receiving server about the MAILBOX.
+    #:
+    #: A domain-level checker (DNS/MX) and a mailbox prober (Reacher) can both say "risky" and mean
+    #: entirely different things: the first means "this domain can receive mail, I did not look at
+    #: the mailbox", the second means "the server answered and something about this address is
+    #: doubtful". The composite below needs to tell them apart, and a name check would be a second
+    #: source of truth that drifts the moment a provider is renamed.
+    #:
+    #: Defaults to True, so a new adapter that forgets to declare it is treated as authoritative
+    #: rather than silently demoted to a fallback that never gets to answer.
+    probes_mailbox: bool = True
+
     @abc.abstractmethod
     async def verify_one(self, email: str) -> EmailVerification: ...
 
@@ -92,24 +104,48 @@ class StubEmailVerificationProvider(EmailVerificationProvider):
 class CompositeEmailVerifier(EmailVerificationProvider):
     """Fallback chain over several verifiers.
 
-    Returns the first *decisive* verdict (``valid``/``invalid``/``risky``); an ``unknown`` from one
-    provider falls through to the next. This lets a real SMTP verifier (Reacher) lead while a free
-    DNS/MX check backs it up — so a verifier outage still yields a domain-level verdict instead of a
-    blanket "unknown". Never raises (each member is fail-safe on its own).
+    Returns the first *decisive* verdict; an inconclusive one falls through to the next provider and
+    is kept as a fallback. This lets a real SMTP verifier (Reacher) lead while a free DNS/MX check
+    backs it up — so a verifier outage still yields a domain-level verdict instead of a blanket
+    "unknown". Never raises (each member is fail-safe on its own).
+
+    **A NON-PROBING PROVIDER'S ``risky`` IS NOT DECISIVE**, and that distinction is the whole reason
+    this class needs `probes_mailbox`. `DnsMxEmailVerifier` cannot return `valid` — it reads MX
+    records and never contacts a mailbox, so every domain that has MX records, which is essentially
+    every real business domain, grades `risky`. Treating that as decisive made
+    `NEXUS_EMAIL_VERIFY_PROVIDER=dns,reacher` a configuration in which DNS answered every request
+    and Reacher, configured and reachable, was never called once. Every address came back risky
+    forever and nothing reported a problem.
+
+    ``invalid`` from a non-probing provider IS still decisive: "this domain has no MX and no A
+    record" is a complete statement about deliverability, and spending an SMTP probe on it would
+    buy nothing.
     """
 
     def __init__(self, providers: list[EmailVerificationProvider]) -> None:
         self._providers = [p for p in providers if p is not None]
         self.name = "+".join(p.name for p in self._providers) or "stub"
 
+    @staticmethod
+    def _is_decisive(provider: EmailVerificationProvider, verdict: EmailVerification) -> bool:
+        if not verdict or not verdict.status or verdict.status == STATUS_UNKNOWN:
+            return False
+        if getattr(provider, "probes_mailbox", True):
+            return True
+        # Domain-level: only a hard negative settles the question.
+        return verdict.status == STATUS_INVALID
+
     async def verify_one(self, email: str) -> EmailVerification:
-        last: EmailVerification | None = None
+        best: EmailVerification | None = None
         for provider in self._providers:
             verdict = await provider.verify_one(email)
-            if verdict and verdict.status and verdict.status != STATUS_UNKNOWN:
+            if self._is_decisive(provider, verdict):
                 return verdict
-            last = verdict or last
-        return last or EmailVerification(
+            # Keep the most informative inconclusive answer, so a chain that never reaches a
+            # decisive verdict still returns the domain-level finding rather than a bare "unknown".
+            if verdict and (best is None or verdict.confidence > best.confidence):
+                best = verdict
+        return best or EmailVerification(
             email=email, status=STATUS_UNKNOWN, confidence=0.0, source=self.name
         )
 

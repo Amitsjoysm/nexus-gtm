@@ -39,6 +39,11 @@ class DnsMxEmailVerifier(EmailVerificationProvider):
     """Deliverability by DNS records. Domain verdicts are cached per-process (TTL) so a workspace
     re-verify doesn't re-query the same domain for every contact."""
 
+    #: Reads MX/A records; never contacts a mailbox. So this verifier can say "this domain cannot
+    #: receive mail" but never "this address exists", and its `risky` is a floor rather than a
+    #: verdict. `CompositeEmailVerifier` relies on this to stop it pre-empting an SMTP probe.
+    probes_mailbox = False
+
     name = "dns"
 
     def __init__(self, *, timeout_s: float = 5.0, cache_ttl_s: float = 3600.0) -> None:

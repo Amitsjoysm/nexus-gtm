@@ -17,7 +17,10 @@ html {
 }
 
 body {
+  /* Paired with `.shell`'s dvh: leaving these at `100vh` re-creates the same overflow one level
+     up, since the body would insist on being taller than the shell it contains. */
   min-height: 100vh;
+  min-height: 100dvh;
   font-family: var(--font-sans);
   font-size: var(--text-base);
   line-height: var(--leading);
@@ -29,6 +32,7 @@ body {
 
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
   isolation: isolate;
 }
 
