@@ -200,7 +200,9 @@ def test_contact_sourcing_settings_defaults():
 
     s = Settings()
     assert s.email_verify_provider == "stub"
-    assert s.email_verify_url == "http://158.69.113.127:8080/v0/check_email"
+    # .104 is the host that answers; .127 was the default for a long time and does not
+    # respond, which presented as every address grading "unknown" rather than as an outage.
+    assert s.email_verify_url == "http://158.69.113.104:8080/v0/check_email"
     assert s.email_verify_auth_header == ""  # no auth header unless configured
     assert s.email_verify_timeout_s == 20.0
     assert s.email_finder_max_candidates == 12

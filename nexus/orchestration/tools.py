@@ -163,6 +163,17 @@ class ComposeMessageTool(_AgentTool):
         return out
 
 
+async def _meter_send(ts) -> None:
+    """Charge one `outreach.email_send`. Never raises.
+
+    Deliberately not wrapped around the send: metering must never be the reason an outbound
+    message fails, and a send that already left cannot be un-sent by a billing error.
+    """
+    from nexus.billing.usage import record_usage
+
+    await record_usage(ts, capability_id="outreach.email_send", quantity=1, source="api")
+
+
 class SendMessageTool(Tool):
     """Outbound: enroll the drafted message into a sequence. Requires approval.
 
@@ -261,6 +272,16 @@ class SendMessageTool(Tool):
                 delivered = send_res.ok
                 if not send_res.ok:
                     raise ToolError(f"smtp send failed: {send_res.detail}")
+                # Billed HERE and nowhere else. Both the cadence engine and the campaign runner
+                # replay their drafts through this tool, so metering at this single seam charges
+                # a send once however it was triggered — the same reasoning that puts enrichment
+                # billing on the enricher rather than on its five call sites.
+                #
+                # After the send, not around it: a delivery that raised is not a send, and
+                # charging for it would bill the customer for our failure to reach their SMTP.
+                # `metered` would refund on the raise anyway, but not charging is simpler to
+                # explain than charging and crediting.
+                await _meter_send(tc.ts)
 
         return {"ok": res.ok, "platform": res.platform, "sequence": sequence,
                 "email": email, "email_status": email_status, "delivered": delivered,

@@ -246,7 +246,7 @@ async def export_contacts(
     account_id: str | None = None,
     include_deleted: bool = False,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> Response:
     """Export the contact book as CSV, honouring the same filters as the list view.
 
@@ -258,6 +258,14 @@ async def export_contacts(
     rows = await _query_contacts(
         ts, q=q, account_id=account_id, include_deleted=include_deleted, limit=0, offset=0
     )
+    # Per export, not per row — see the accounts export for why.
+    if rows:
+        from nexus.billing.usage import record_usage
+
+        await record_usage(
+            ts, capability_id="data.export", quantity=1,
+            user_id=principal.user_id, source="api", attrs={"kind": "contacts"},
+        )
     return csv_response(
         "contacts.csv",
         ["full_name", "title", "seniority", "email", "email_status", "phone",

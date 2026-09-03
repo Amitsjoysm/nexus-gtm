@@ -316,7 +316,12 @@ class Settings(BaseSettings):
     # Reacher verifier endpoint. In production point this at an HTTPS URL fronted by your
     # reverse proxy (the container can reach :443 but not Reacher's raw :8080), e.g.
     # https://verify.example.com/v0/check_email. The default is the local-only HTTP port.
-    email_verify_url: str = "http://158.69.113.127:8080/v0/check_email"
+    # 158.69.113.104 is the host that answers. .127 was the default for a long time and does
+    # not respond at all — and because the Reacher client is (correctly) fail-safe, that
+    # presented as every address grading "unknown" forever rather than as an outage. A dead
+    # default is worse than no default: the second fails loudly once, the first fails
+    # silently on every address.
+    email_verify_url: str = "http://158.69.113.104:8080/v0/check_email"
     email_verify_timeout_s: float = 20.0
     # Optional value sent as the HTTP ``Authorization`` header on every verify request, so a
     # publicly-exposed HTTPS verifier endpoint isn't an open relay. Blank = no header (offline

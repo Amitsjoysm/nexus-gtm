@@ -110,16 +110,40 @@ async def importable_fields(
     )
 
 
+async def _meter_import(ts, result: dict, *, user_id: str, kind: str) -> None:
+    """Charge `data.import_csv` for the rows that actually landed.
+
+    Quantity is rows IMPORTED, not rows in the file: a customer who uploads 5,000 rows of which
+    80 are new has bought 80 records, and billing the file size would charge them for their own
+    duplicates. A run that imported nothing is not billed at all — the same "nothing bought,
+    nothing charged" rule the enrichment seam follows.
+
+    Metered after the parse rather than around it, because the count is not knowable up front;
+    enforcement therefore applies to the NEXT import, which is the honest behaviour for a bulk
+    job whose size is discovered by doing it.
+    """
+    from nexus.billing.usage import record_usage
+
+    rows = int(result.get("imported", 0) or 0) + int(result.get("updated", 0) or 0)
+    if rows <= 0:
+        return
+    await record_usage(
+        ts, capability_id="data.import_csv", quantity=rows, user_id=user_id,
+        source="api", attrs={"kind": kind},
+    )
+
+
 @router.post("/accounts/csv", response_model=ImportResult)
 async def upload_accounts_csv(
     mapping: str = Form(...),
     file: UploadFile = File(...),
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ImportResult:
     result = await import_accounts_csv(
         ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, ACCOUNT_FIELDS)
     )
+    await _meter_import(ts, result, user_id=principal.user_id, kind="accounts")
     await ts.commit()
     return ImportResult(**result)
 
@@ -129,11 +153,12 @@ async def upload_contacts_csv(
     mapping: str = Form(...),
     file: UploadFile = File(...),
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ImportResult:
     result = await import_contacts_csv(
         ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, CONTACT_FIELDS)
     )
+    await _meter_import(ts, result, user_id=principal.user_id, kind="contacts")
     await ts.commit()
     return ImportResult(**result)
 
@@ -154,7 +179,7 @@ async def _connector_or_400(ts: TenantSession):
 async def pull_accounts_from_crm(
     limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ImportResult:
     result = await import_accounts_from_crm(ts, await _connector_or_400(ts), limit=clamp_limit(limit))
     await ts.commit()
@@ -165,7 +190,7 @@ async def pull_accounts_from_crm(
 async def pull_contacts_from_crm(
     limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ImportResult:
     result = await import_contacts_from_crm(ts, await _connector_or_400(ts), limit=clamp_limit(limit))
     await ts.commit()

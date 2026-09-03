@@ -333,11 +333,28 @@ async def list_contacts(
     return [_contact_out(c) for c in contacts]
 
 
+async def _meter(ts, capability_id: str, quantity: int, principal) -> None:
+    """Record usage for an action whose size is only known after it ran. Never raises.
+
+    Quantity is the number of results DELIVERED. An action that produced nothing spent nothing
+    the customer received, and billing it would charge for our own empty answer — the same
+    "nothing bought, nothing charged" rule the enrichment seam follows.
+    """
+    from nexus.billing.usage import record_usage
+
+    if quantity <= 0:
+        return
+    await record_usage(
+        ts, capability_id=capability_id, quantity=quantity,
+        user_id=getattr(principal, "user_id", None), source="api",
+    )
+
+
 @router.post("/{account_id}/lookalikes", response_model=LookalikeResponse)
 async def find_lookalikes(
     account_id: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
     limit: int = 10,
 ) -> LookalikeResponse:
     """Find companies similar to this account, scored against the tenant's ICP.
@@ -349,6 +366,11 @@ async def find_lookalikes(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
     limit = max(1, min(limit, 50))
     found = await get_lookalike_service().find(ts, account, limit=limit)
+    # Charged on the RESULT, not the request. This is an Exa `find_similar` call — the priciest
+    # unit on the discovery card — and a seed with no usable domain returns nothing without
+    # spending anything, so billing the click would charge for a lookup that never happened.
+    if found:
+        await _meter(ts, "discovery.lookalike_company", len(found), principal)
     return LookalikeResponse(
         seed_account_id=account.id,
         seed_domain=domain_from_url(account.domain),
@@ -538,7 +560,7 @@ async def delete_account(
 async def export_accounts(
     include_archived: bool = False,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> Response:
     """Export accounts as CSV.
 
@@ -554,6 +576,11 @@ async def export_accounts(
     if not include_archived:
         stmt = stmt.where(Account.archived_at.is_(None))
     rows = (await ts.session.scalars(stmt.order_by(Account.created_at.desc()))).all()
+    # One export = one billable act, whatever its size. The card prices `data.export` per export,
+    # not per row: the work is assembling and serving the file, and charging per row would make
+    # the same button cost a hundred times more for the customer with the most data — who is
+    # exactly the customer least able to be surprised by their bill.
+    await _meter(ts, "data.export", 1 if rows else 0, principal)
 
     return csv_response(
         "accounts.csv",
