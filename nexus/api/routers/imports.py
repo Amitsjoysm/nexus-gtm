@@ -124,7 +124,10 @@ async def _meter_import(ts, result: dict, *, user_id: str, kind: str) -> None:
     """
     from nexus.billing.usage import record_usage
 
-    rows = int(result.get("imported", 0) or 0) + int(result.get("updated", 0) or 0)
+    # `created`/`updated`, which is what `csv_ingest` returns — NOT `imported`, which it has
+    # never returned. Reading the wrong key made this bill zero on every upload: the meter was
+    # wired and silently inert, the exact state this audit keeps finding.
+    rows = int(result.get("created", 0) or 0) + int(result.get("updated", 0) or 0)
     if rows <= 0:
         return
     await record_usage(

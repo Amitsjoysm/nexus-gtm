@@ -31,11 +31,12 @@ async def test_a_csv_import_bills_the_rows_that_landed_not_the_file_size():
         user_id = "u1"
 
     async with tenant_session(tid) as ts:
-        await _meter_import(ts, {"imported": 80, "skipped": 4920}, user_id=P.user_id,
+        await _meter_import(ts, {"created": 78, "updated": 2, "skipped": 4920}, user_id=P.user_id,
                             kind="accounts")
         rows = await _events(ts, "data.import_csv")
         assert len(rows) == 1
         assert float(rows[0].quantity) == 80, "billed the file, not the records bought"
+        # 78 created + 2 updated; the 4,920 duplicates the customer already had are not sold twice.
 
 
 async def test_an_import_that_landed_nothing_is_not_billed():
@@ -43,7 +44,8 @@ async def test_an_import_that_landed_nothing_is_not_billed():
 
     tid = await make_tenant()
     async with tenant_session(tid) as ts:
-        await _meter_import(ts, {"imported": 0, "skipped": 500}, user_id="u1", kind="accounts")
+        await _meter_import(ts, {"created": 0, "updated": 0, "skipped": 500}, user_id="u1",
+                            kind="accounts")
         assert await _events(ts, "data.import_csv") == []
 
 
@@ -98,3 +100,27 @@ async def test_metering_never_raises_into_the_caller():
         # A capability that does not exist still must not raise.
         await _meter(ts, "does.not.exist", 3, Broken)
         await _meter_send(ts)
+
+
+async def test_the_meter_reads_the_keys_the_importer_actually_returns():
+    """The contract between csv_ingest and the meter, pinned.
+
+    `_meter_import` originally read `result["imported"]`, a key `import_accounts_csv` has never
+    returned — so the meter was wired and billed zero on every upload. Verified live: a 3-row
+    import created 3 accounts and produced no usage event at all. A meter that is present and
+    inert is worse than an absent one, because the code reads as though the action is billed.
+    """
+    import inspect
+
+    from nexus.api.routers.imports import _meter_import
+    from nexus.imports import csv_ingest
+
+    source = inspect.getsource(csv_ingest)
+    # The literal dict csv_ingest builds for its callers.
+    assert '"created": created, "updated": updated' in source, (
+        "csv_ingest's return shape changed; _meter_import reads it by key"
+    )
+    meter_src = inspect.getsource(_meter_import)
+    for key in ("created", "updated"):
+        assert f'"{key}"' in meter_src, f"_meter_import no longer reads {key!r}"
+    assert '"imported"' not in meter_src, "reading a key the importer does not return"
