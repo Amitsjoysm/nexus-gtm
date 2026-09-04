@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { AlertDelivery } from "./settings/AlertDelivery";
 import {
   Badge,
   Button,
@@ -64,6 +65,10 @@ export function SettingsPage() {
       />
 
       <div className={styles.stack}>
+        {/* First: it is the only thing on this page a REP can change for themselves, and the
+            page is otherwise workspace administration. */}
+        <AlertDelivery />
+
         <Card padding="lg">
           <CardHeader
             title="Continuous automation"

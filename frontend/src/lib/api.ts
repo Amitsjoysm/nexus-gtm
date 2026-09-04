@@ -23,7 +23,10 @@ import type {
   AdminRateCard,
   CostRateResult,
   AdminSubscription,
+  AlertMode,
   BillingCredits,
+  NotificationPreference,
+  NotificationPreferences,
   CreditUsageReport,
   FeatureSwitchList,
   FeatureSwitchRow,
@@ -859,6 +862,32 @@ export class ApiClient {
   }
 
   // ---- billing (tenant surface) ----
+  // ---- alert delivery preferences ----
+  /** This user's own alert routing, plus the vocabulary the server accepts. */
+  notificationPreferences(signal?: AbortSignal) {
+    return this.request<NotificationPreferences>("/notifications", { signal });
+  }
+  /** Upsert one category/channel preference. */
+  setNotificationPreference(body: {
+    category: string;
+    channel: string;
+    mode: AlertMode;
+    quiet_from_min?: number | null;
+    quiet_to_min?: number | null;
+    utc_offset_min?: number;
+    quiet_hours_allow_critical?: boolean;
+  }) {
+    return this.request<NotificationPreference>("/notifications", { method: "PUT", body });
+  }
+  /** Remove a preference, returning this category to the workspace default. NOT the same as
+   *  setting mode "off", which means "never send me this". */
+  clearNotificationPreference(category: string, channel: string) {
+    return this.request<void>(
+      `/notifications/${encodeURIComponent(category)}/${encodeURIComponent(channel)}`,
+      { method: "DELETE" },
+    );
+  }
+
   billingUsage(signal?: AbortSignal) {
     return this.request<BillingUsage>("/billing/usage", { signal });
   }

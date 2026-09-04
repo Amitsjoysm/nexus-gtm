@@ -140,6 +140,72 @@ def _alert_action_lines(alert: Alert) -> str:
     return ("\n" + "\n".join(lines)) if lines else ""
 
 
+class TeamsChannel(_PostingChannel):
+    """Microsoft Teams Incoming Webhook — an Adaptive Card, not raw JSON.
+
+    Teams accepts any JSON on a webhook URL, so the generic `WebhookChannel` "works" today and
+    delivers an unreadable blob. An alert exists to be acted on: the account, the reason and the
+    next step have to be legible in the channel, or the rep opens the app to find out what happened
+    and the alert has bought nothing.
+
+    An **Adaptive Card**, not the older MessageCard. Microsoft is retiring Office 365 connectors in
+    favour of Workflows, and Workflows accepts Adaptive Cards; MessageCard is the format on the way
+    out. Both are posted to a URL the customer pastes, so the change is invisible here.
+
+    `_alert_action_lines` is shared with the text channels rather than reformatted, so a Teams alert
+    and an email alert cannot disagree about what the next best action is.
+    """
+
+    name = "teams"
+
+    # Teams renders these as a coloured bar down the card. `attention` is its strongest.
+    _COLOR = {"info": "default", "warning": "warning", "critical": "attention"}
+
+    def _payload(self, alert: Alert) -> dict:
+        body_text = (alert.body or "") + _alert_action_lines(alert)
+        blocks: list[dict] = [
+            {
+                "type": "TextBlock",
+                "text": alert.title,
+                "weight": "Bolder",
+                "size": "Medium",
+                "wrap": True,
+                "color": self._COLOR.get(alert.severity, "default"),
+            }
+        ]
+        if body_text.strip():
+            blocks.append({"type": "TextBlock", "text": body_text.strip(), "wrap": True})
+        blocks.append({
+            "type": "TextBlock",
+            "text": f"severity **{alert.severity}** · source {alert.source}",
+            "isSubtle": True,
+            "spacing": "Small",
+            "wrap": True,
+        })
+
+        card: dict = {
+            "type": "AdaptiveCard",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.4",
+            "body": blocks,
+        }
+        # A link the rep can click straight from the channel, when the alert carries one.
+        url = (alert.meta or {}).get("source_url")
+        if url:
+            card["actions"] = [{"type": "Action.OpenUrl", "title": "Open source", "url": url}]
+
+        return {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "contentUrl": None,
+                    "content": card,
+                }
+            ],
+        }
+
+
 class EmailChannel(AlertChannel):
     """Email delivery. Sends via SMTP when a host is configured; otherwise falls back to the
     deterministic offline stub (unchanged default behaviour). The blocking SMTP send runs in a
@@ -257,6 +323,7 @@ def build_alert_channels_from_settings() -> AlertChannelRegistry:
             InAppChannel(),
             WebhookChannel(s.alert_webhook_url),
             SlackChannel(s.alert_slack_webhook_url),
+            TeamsChannel(s.alert_teams_webhook_url),
             EmailChannel(
                 s.alert_email_sender,
                 host=s.alert_smtp_host,

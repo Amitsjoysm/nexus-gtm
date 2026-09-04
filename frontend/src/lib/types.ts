@@ -1841,3 +1841,28 @@ export interface SignalPreference {
   kind: string;
   enabled: boolean;
 }
+
+
+// ---- alert delivery preferences ----
+export type AlertMode = "immediate" | "digest" | "off";
+
+export interface NotificationPreference {
+  category: string;
+  channel: string;
+  mode: AlertMode;
+  /** Minutes from LOCAL midnight. Stored this way so the overnight wrap (22:00 -> 07:00) is
+   *  arithmetic rather than a special case. `null` disables quiet hours. */
+  quiet_from_min: number | null;
+  quiet_to_min: number | null;
+  utc_offset_min: number;
+  quiet_hours_allow_critical: boolean;
+}
+
+export interface NotificationPreferences {
+  /** Only what the user has actually chosen. Empty means every category still follows the
+   *  workspace default — an absent row is "no preference", not "the default was chosen". */
+  preferences: NotificationPreference[];
+  categories: string[];
+  channels: string[];
+  modes: AlertMode[];
+}

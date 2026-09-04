@@ -108,6 +108,10 @@ class Settings(BaseSettings):
     # the (everifier-validated, in prod) From address the email channel sends as.
     alert_webhook_url: str = ""
     alert_slack_webhook_url: str = ""
+    # A Microsoft Teams Incoming Webhook (or a Workflows "post to a channel" URL). Teams
+    # accepts any JSON, so the generic webhook channel would "work" and deliver an
+    # unreadable blob; TeamsChannel posts an Adaptive Card instead.
+    alert_teams_webhook_url: str = ""
     alert_email_sender: str = ""
     # Email via SMTP (optional). With no host set, the email channel stays the offline stub, so
     # default behaviour is unchanged; set host + to-address to actually send.
