@@ -26,11 +26,17 @@ from nexus.models.account import Account, Contact
 class _Registry:
     """Stands in for `integrations.registry`. Records what was asked for."""
 
-    def __init__(self, similar=None, contacts=None):
+    def __init__(self, similar=None, contacts=None, results=None):
         self._similar = similar or []
         self._contacts = contacts or []
+        self._results = results or []
         self.find_similar_calls: list[str] = []
+        self.search_calls: list[str] = []
         self.contact_search_calls: int = 0
+
+    async def search(self, query, *, limit=5):
+        self.search_calls.append(query)
+        return list(self._results)
 
     async def find_similar(self, url, *, limit=10):
         self.find_similar_calls.append(url)
@@ -73,36 +79,79 @@ async def _source(monkeypatch, seed: Contact, registry, account=None):
 
 # ---- Exa is the primary searcher -----------------------------------------------------------------
 
-async def test_exa_find_similar_is_tried_first_on_the_seeds_profile(monkeypatch):
-    """The seed is a PERSON, so the strongest available query is that person's own profile URL.
-    `find_similar` is Exa's neural neighbour search and needs no query construction at all — no
-    guessing at title synonyms, no ICP round-trip."""
-    reg = _Registry(similar=[
-        _hit("Dana Reed - VP Revenue Operations - Ramp | LinkedIn",
-             "https://www.linkedin.com/in/dana-reed-99"),
+async def test_the_role_search_leads_not_find_similar(monkeypatch):
+    """Both paths are Exa; the difference is what "similar" means for a PERSON.
+
+    Measured live against Brian Biggs' profile: `find_similar` returned TWO OTHER BRIAN BIGGSES in
+    its top five, because a profile page's dominant text is the name — so page similarity resolves
+    to name similarity. Searching the same seed's ROLE ("Vice President of Sales" plus the account's
+    industry) returned eight distinct peers, no namesakes, one with `healthcaresales` in the slug.
+
+    So the role search leads whenever the seed has a title, and `find_similar` becomes the fallback
+    for a seed that has none.
+    """
+    reg = _Registry(results=[
+        _hit("Dana Reed", "https://www.linkedin.com/in/dana-reed-99",
+             "# Dana Reed\n\nVP Revenue Operations at Ramp\n\nNew York, United States (US)"),
     ])
-    seed = Contact(id="c1", full_name="Alex Kim", title="VP Sales",
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim", title="VP Sales",
                    linkedin_url="https://www.linkedin.com/in/alex-kim")
 
-    out = await _source(monkeypatch, seed, reg)
+    out = await _source(monkeypatch, seed, reg,
+                        account=Account(id="a1", name="Acme", domain="acme.com"))
 
-    assert reg.find_similar_calls == ["https://www.linkedin.com/in/alex-kim"]
-    assert reg.contact_search_calls == 0, "fell through to the fallback while Exa was answering"
+    assert reg.search_calls, "the role search never ran"
+    assert "VP Sales" in reg.search_calls[0]
+    assert reg.find_similar_calls == [], "fell back while the role search was answering"
     assert [p.full_name for p in out] == ["Dana Reed"]
+    # The page title is just the name; the ROLE comes from the snippet or nowhere.
     assert out[0].title == "VP Revenue Operations"
+    assert out[0].company == "Ramp"
     assert out[0].is_new is True
     assert out[0].contact_id == "", "a person not in the workspace must not claim a contact id"
+
+
+async def test_a_namesake_is_never_a_peer(monkeypatch):
+    """The measured failure, pinned. A rep asking for people like their champion does not want
+    three more people with their champion's name."""
+    reg = _Registry(results=[
+        _hit("Brian Biggs", "https://www.linkedin.com/in/brianbiggsnz",
+             "# Brian Biggs\n\nRegional Manager at Other Co\n\nAuckland (NZ)"),
+        _hit("Dana Reed", "https://www.linkedin.com/in/dana-reed-99",
+             "# Dana Reed\n\nVP Sales at Ramp\n\nNew York, United States (US)"),
+    ])
+    seed = Contact(id="c1", account_id="a1", full_name="Brian Biggs", title="VP Sales",
+                   linkedin_url="https://www.linkedin.com/in/briancbiggs")
+
+    out = await _source(monkeypatch, seed, reg,
+                        account=Account(id="a1", name="Acme", domain="acme.com"))
+    assert [p.full_name for p in out] == ["Dana Reed"]
+
+
+async def test_a_result_with_no_role_is_dropped(monkeypatch):
+    """A suggestion with no title is one the rep cannot judge without opening it. Exa's page title
+    for a profile is usually just the name, so a missing snippet headline means no role at all."""
+    reg = _Registry(results=[
+        _hit("Chris Jones", "https://www.linkedin.com/in/chris-jones",
+             "# Chris Jones\n\nAtlanta Metropolitan Area (US)\n\n500 connections"),
+    ])
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim", title="VP Sales")
+
+    out = await _source(monkeypatch, seed, reg,
+                        account=Account(id="a1", name="Acme", domain="acme.com"))
+    assert out == []
 
 
 async def test_a_seed_with_no_profile_falls_back_to_contact_search(monkeypatch):
     """`find_similar` needs a seed URL. Without one there is nothing to be similar TO, so the
     fallback searches by the seed's role instead of sending Exa an empty string."""
     reg = _Registry(contacts=[])
-    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim", title="VP Sales",
-                   linkedin_url=None)
+    # No title -> nothing to search a role with; no URL -> nothing to be similar to.
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim", title=None, linkedin_url=None)
 
     await _source(monkeypatch, seed, reg, account=Account(id="a1", name="Acme", domain="acme.com"))
 
+    assert reg.search_calls == []
     assert reg.find_similar_calls == []
     assert reg.contact_search_calls == 1
 
@@ -110,14 +159,15 @@ async def test_a_seed_with_no_profile_falls_back_to_contact_search(monkeypatch):
 async def test_the_fallback_also_runs_when_exa_returns_nothing(monkeypatch):
     """An unkeyed or rate-limited Exa returns `[]`, and returning nothing to the rep at that point
     would look identical to "no similar people exist"."""
-    reg = _Registry(similar=[], contacts=[])
+    reg = _Registry(results=[], similar=[], contacts=[])
     seed = Contact(id="c1", account_id="a1", full_name="Alex Kim", title="VP Sales",
                    linkedin_url="https://www.linkedin.com/in/alex-kim")
 
     await _source(monkeypatch, seed, reg, account=Account(id="a1", name="Acme", domain="acme.com"))
 
-    assert reg.find_similar_calls, "Exa was skipped"
-    assert reg.contact_search_calls == 1, "no fallback when the primary found nothing"
+    assert reg.search_calls, "the role search was skipped"
+    assert reg.find_similar_calls, "find_similar not tried after the role search came back empty"
+    assert reg.contact_search_calls == 1, "no final fallback when both Exa paths found nothing"
 
 
 # ---- only people, and only strangers -------------------------------------------------------------
@@ -132,7 +182,7 @@ async def test_non_profile_results_are_discarded(monkeypatch, url):
     one as a person is the wrong-attribution failure this codebase has shipped repeatedly — here it
     would put a company's name in a rep's call list as a human being."""
     reg = _Registry(similar=[_hit("Ramp | LinkedIn", url)])
-    seed = Contact(id="c1", full_name="Alex Kim",
+    seed = Contact(id="c1", full_name="Alex Kim", title=None,
                    linkedin_url="https://www.linkedin.com/in/alex-kim")
 
     assert await _source(monkeypatch, seed, reg) == []
@@ -145,7 +195,7 @@ async def test_the_seed_itself_is_never_returned(monkeypatch):
         _hit("Alex Kim - VP Sales - Acme | LinkedIn", "https://www.linkedin.com/in/alex-kim"),
         _hit("Dana Reed - VP RevOps - Ramp | LinkedIn", "https://www.linkedin.com/in/dana-reed-99"),
     ])
-    seed = Contact(id="c1", full_name="Alex Kim",
+    seed = Contact(id="c1", full_name="Alex Kim", title=None,
                    linkedin_url="https://www.linkedin.com/in/alex-kim")
 
     out = await _source(monkeypatch, seed, reg)
@@ -156,7 +206,7 @@ async def test_a_profile_title_that_parses_to_nothing_is_dropped(monkeypatch):
     """LinkedIn titles are "Name - Title - Company | LinkedIn", but not always. A result we cannot
     turn into a NAME is not a person we can put in front of a rep."""
     reg = _Registry(similar=[_hit("LinkedIn", "https://www.linkedin.com/in/xyz")])
-    seed = Contact(id="c1", full_name="Alex Kim",
+    seed = Contact(id="c1", full_name="Alex Kim", title=None,
                    linkedin_url="https://www.linkedin.com/in/alex-kim")
 
     assert await _source(monkeypatch, seed, reg) == []
@@ -165,13 +215,16 @@ async def test_a_profile_title_that_parses_to_nothing_is_dropped(monkeypatch):
 async def test_sourcing_never_raises(monkeypatch):
     """Same posture as every other provider seam here: a search backend must not break the page."""
     class _Broken:
+        async def search(self, query, *, limit=5):
+            raise RuntimeError("exa down")
+
         async def find_similar(self, url, *, limit=10):
             raise RuntimeError("exa down")
 
         async def contact_search(self, account, icp, *, limit=10):
             raise RuntimeError("also down")
 
-    seed = Contact(id="c1", full_name="Alex Kim",
+    seed = Contact(id="c1", full_name="Alex Kim", title=None,
                    linkedin_url="https://www.linkedin.com/in/alex-kim")
     assert await _source(monkeypatch, seed, _Broken()) == []
 
@@ -253,3 +306,30 @@ def test_no_screen_escalates_to_the_paid_mode_on_its_own():
         assert "setSimilarMode(null)" in src or "mode: null" in src, (
             f"{page} does not start on the choice step"
         )
+
+
+# ---- reading a profile headline ------------------------------------------------------------------
+
+@pytest.mark.parametrize("headline,want", [
+    # A comma, "at" and "@" genuinely introduce an employer.
+    ("Vice President of Sales, NextGen Healthcare", ("Vice President of Sales", "NextGen Healthcare")),
+    ("Vice President of Sales at SetPoint Medical", ("Vice President of Sales", "SetPoint Medical")),
+    ("VP of Sales @ Arrow | GTM Execution | Dad", ("VP of Sales", "Arrow")),
+    # A DASH usually introduces a territory or self-branding, not a company. Measured: reading it
+    # as one put "Central" in the company column for six of six live results, and a wrong company
+    # is worse than a blank — a blank says we do not know, a wrong one says we do.
+    ("Vice President of Sales - Central", ("Vice President of Sales", "")),
+    ("VP Sales - US Central", ("VP Sales", "")),
+])
+def test_the_employer_is_read_only_from_an_employer_separator(headline, want):
+    from nexus.lookalike.contacts import _parse_headline
+
+    assert _parse_headline(f"# Someone\n\n{headline}\n\nCity, State (US)") == want
+
+
+def test_a_location_line_is_not_a_role():
+    """Some profiles have no headline at all, so line two is the location. "Atlanta Metropolitan
+    Area" is not a job title, and a person with no role is dropped rather than shown roleless."""
+    from nexus.lookalike.contacts import _parse_headline
+
+    assert _parse_headline("# Chris Jones\n\nAtlanta Metropolitan Area (US)\n\n500 connections") == ("", "")

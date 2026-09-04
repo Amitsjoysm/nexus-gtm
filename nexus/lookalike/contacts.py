@@ -36,6 +36,71 @@ _MAX_POOL = 1000
 _PROFILE_TITLE_SPLIT = re.compile(r"\s+[-–—|]\s+")
 
 
+# Exa returns a LinkedIn profile as markdown whose first lines are the name and the headline:
+#
+#     # Jordan Adams
+#
+#     Vice President of Sales, NextGen Healthcare
+#
+#     Boerne, Texas, United States (US)
+#
+# The page TITLE is usually just the name ("Jordan Adams"), so the role — the only thing that makes
+# a suggestion judgeable — lives in the snippet or nowhere. Measured against the live Exa index.
+#
+# Punctuation separators need no space BEFORE them — "Vice President of Sales, NextGen Healthcare"
+# has the comma flush against the role — while the word "at" does, or it would split "Data at Rest".
+_HEADLINE_SPLIT = re.compile(r"\s*[,|@–-]\s+|\s+at\s+")
+
+# Which separators actually introduce an EMPLOYER. Measured on live results: a comma, "at" and "@"
+# do ("Vice President of Sales, NextGen Healthcare"), while a dash or a pipe usually introduce a
+# territory or self-branding ("Vice President of Sales - Central", "VP of Sales | GTM | Dad").
+# Taking the dash case as a company put "Central" in the company column for six of six results.
+_EMPLOYER_SEP = re.compile(r"\s*[,@]\s+|\s+at\s+")
+
+
+def _parse_headline(snippet: str) -> tuple[str, str]:
+    """``(title, company)`` from a profile snippet. Both may be empty."""
+    lines = [ln.strip().lstrip("#").strip() for ln in (snippet or "").splitlines()]
+    lines = [ln for ln in lines if ln]
+    if len(lines) < 2:
+        return "", ""
+    headline = lines[1]
+    # A headline is "VP of Sales at Acme", "VP of Sales, Acme" or "VP of Sales @ Acme | GTM | Dad".
+    # Everything past the first separator is the employer; anything past a second is self-branding.
+    parts = [p.strip() for p in _HEADLINE_SPLIT.split(headline) if p.strip()]
+    if not parts:
+        return "", ""
+    title = parts[0][:120]
+    # The company is read only from an EMPLOYER separator. A dash or pipe is just as likely to
+    # introduce a territory, and "Central" sitting in the company column is worse than a blank one:
+    # a blank says we do not know, a wrong one says we do.
+    emp = [p.strip() for p in _EMPLOYER_SEP.split(headline) if p.strip()]
+    company = emp[1][:120] if len(emp) > 1 else ""
+    # Whatever followed an employer separator may itself carry trailing branding.
+    if company:
+        company = [c.strip() for c in _HEADLINE_SPLIT.split(company) if c.strip()][0][:120]
+    # A "headline" that is really a location line ("Atlanta Metropolitan Area (US)") is not a role.
+    if title.lower().endswith(("(us)", "area", "states")):
+        return "", ""
+    return title, company
+
+
+def _same_person(a: str, b: str) -> bool:
+    """Whether two display names are the same human, for excluding NAMESAKES.
+
+    Measured live: `find_similar` on Brian Biggs' profile returned two other Brian Biggses in the
+    top five, because a profile page's dominant text is the name — so "similar page" means "similar
+    name". A rep asking for people like their champion does not want their champion's namesakes.
+    """
+    def norm(v: str) -> str:
+        # Whitespace collapsed, not just stripped: "brian  biggs" and "Brian Biggs" are one person,
+        # and a doubled space from a scraped page must not read as a different human.
+        return " ".join(re.sub(r"[^a-z ]", " ", (v or "").lower()).split())
+
+    na, nb = norm(a), norm(b)
+    return bool(na) and na == nb
+
+
 def _profile_url(url: str) -> bool:
     """A LinkedIn PERSON profile, not a company page or a job post.
 
@@ -191,15 +256,37 @@ class ContactLookalikeService:
         """
         out: list[ContactLookalike] = []
         seed_url = (contact.linkedin_url or "").strip()
+        seed_name = contact.full_name or ""
         seen: set[str] = {_canonical_profile(seed_url)} if seed_url else set()
 
         registry = get_registry()
+        account = await ts.get(Account, contact.account_id) if contact.account_id else None
 
+        # ROLE SEARCH FIRST, not `find_similar`. Both are Exa; the difference is what "similar"
+        # means for a PERSON. Measured live against Brian Biggs' profile, `find_similar` returned
+        # two other Brian Biggses in its top five — a profile page's dominant text is the name, so
+        # page similarity resolves to name similarity. The same seed's ROLE ("Vice President of
+        # Sales" + the account's industry) returned eight distinct peers, none of them namesakes,
+        # one with `healthcaresales` in the profile slug.
+        #
+        # `find_similar` is kept as the fallback for a seed with no title, where there is nothing
+        # to search a role with and a weak answer beats none.
         hits = []
-        if seed_url:
+        title_q = (contact.title or "").strip()
+        if title_q:
+            industry = ((account.industry if account else "") or "").strip()
+            query = " ".join(
+                p for p in (title_q, "at a", industry, "company LinkedIn profile") if p
+            )
+            try:
+                hits = list(await registry.search(query, limit=max(limit * 3, 12)) or [])
+            except Exception:  # a search backend must never break the page
+                logger.warning("role search failed for contact %s", contact.id, exc_info=True)
+                hits = []
+        if not hits and seed_url:
             try:
                 hits = list(await registry.find_similar(seed_url, limit=max(limit * 2, 10)) or [])
-            except Exception:  # a search backend must never break the page
+            except Exception:
                 logger.warning("find_similar failed for contact %s", contact.id, exc_info=True)
                 hits = []
 
@@ -213,11 +300,25 @@ class ContactLookalikeService:
             name, title, company = _parse_profile(str(getattr(hit, "title", "") or ""))
             if not name:
                 continue
+            # NAMESAKES ARE NOT PEERS. Excluded whichever path found them: a rep asking for people
+            # like their champion does not want three more people with their champion's name.
+            if _same_person(name, seed_name):
+                continue
+            # The page title is usually just the name, so the ROLE comes from the snippet or not at
+            # all — and a suggestion with no role is one a rep cannot judge without opening it.
+            snip_title, snip_company = _parse_headline(str(getattr(hit, "snippet", "") or ""))
+            title = title or snip_title
+            company = company or snip_company
+            if not title:
+                continue
             seen.add(key)
             out.append(ContactLookalike(
                 contact_id="", full_name=name, account_id="", title=title or None,
                 linkedin_url=url, company=company, is_new=True, score=70,
-                reasons=[f"Similar profile to {contact.full_name or 'the seed contact'}"],
+                reasons=[
+                    f"{title} — similar role to {contact.title or seed_name}"
+                    if contact.title else f"Similar profile to {seed_name}"
+                ],
             ))
             if len(out) >= limit:
                 return out
@@ -229,7 +330,6 @@ class ContactLookalikeService:
         # finds the same job at the same company rather than the same kind of person anywhere — but
         # it is an answer, and it is what exists when there is no profile to seed with.
         try:
-            account = await ts.get(Account, contact.account_id) if contact.account_id else None
             if account is None:
                 return out
             from nexus.relevance.engine import get_profile
