@@ -303,6 +303,24 @@ async def _resolve_subscription(session, obj: dict, event: VerifiedEvent):
     return None, tenant_id
 
 
+async def _grant_plan_credits(session, sub, plan) -> None:
+    """Deliver a newly-bought plan's included credits. Never raises.
+
+    A webhook that failed here would be retried by Stripe and the customer would see a payment
+    that went through against a subscription that did not — so bookkeeping trouble is logged and
+    swallowed, exactly as the rest of this handler treats anything that is not the money state.
+
+    Runs on the platform session the handler already holds, bound to the subscription's tenant.
+    """
+    from nexus.core.tenancy import TenantSession
+    from nexus.billing.subscriptions import apply_plan_change_credits
+
+    try:
+        await apply_plan_change_credits(TenantSession(session, sub.tenant_id), plan)
+    except Exception:
+        logger.warning("could not grant %s credits to %s", plan.id, sub.tenant_id, exc_info=True)
+
+
 async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, outcome: dict) -> dict:
     """Mirror a Checkout completion or a subscription lifecycle change into our own row.
 
@@ -355,10 +373,17 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
         if psp_cus_id:
             sub.psp_customer_id = psp_cus_id
         plan_id = str(meta_in.get("plan_id") or "")
-        if plan_id and await session.get(BillingPlan, plan_id) is not None:
+        if plan_id and (bought := await session.get(BillingPlan, plan_id)) is not None:
+            changed = sub.plan_id != plan_id
             sub.plan_id = plan_id
             # Taking a new plan means taking its terms — the same rule change_plan applies.
             sub.grandfathered = False
+            if changed:
+                # The plan the customer just PAID FOR arrives with the credits it is sold with.
+                # Without this the subscription flips to Launch and the balance stays on whatever
+                # the free tier left behind — reported from production, and the single most
+                # visible way a successful payment can look like a broken product.
+                await _grant_plan_credits(session, sub, bought)
         if str(obj.get("payment_status") or "") in ("paid", "no_payment_required"):
             sub.status = "active"
             sub.cancel_at_period_end = False
@@ -399,9 +424,16 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
         if trial_end is not None:
             sub.trial_end = trial_end
         plan_id = str(meta_in.get("plan_id") or "")
-        if plan_id and plan_id != sub.plan_id and await session.get(BillingPlan, plan_id):
-            sub.plan_id = plan_id
-            sub.grandfathered = False
+        if plan_id and plan_id != sub.plan_id:
+            bought = await session.get(BillingPlan, plan_id)
+            if bought is not None:
+                sub.plan_id = plan_id
+                sub.grandfathered = False
+                # Same reasoning as the Checkout branch above. Stripe can deliver the plan on
+                # either event depending on how the subscription was created, so both grant —
+                # and the grant is keyed per plan per period, so whichever arrives second is a
+                # no-op rather than a second helping.
+                await _grant_plan_credits(session, sub, bought)
         outcome["provider_status"] = raw_status
 
     meta["psp_synced_from_event"] = event.event_id
@@ -411,6 +443,72 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
     outcome["status"] = sub.status
     outcome["plan_id"] = sub.plan_id
     return outcome
+
+
+async def _record_provider_invoice(session, sub, obj: dict, psp_invoice_id: str):
+    """Give a Stripe-raised invoice a local row so the customer can see what they paid.
+
+    Stripe raises and charges the invoice for a hosted subscription; we do not. Without this the
+    money moves, `invoice.paid` arrives, we stamp the id onto the subscription — and
+    `GET /billing/invoices` shows nothing, because it reads the invoices WE raise. The one
+    document proving the charge was the one thing the product could not show.
+
+    Our rating deliberately prices nothing here. The provider charged it, so the amount is COPIED
+    rather than recomputed: two authorities disagreeing about one figure is worse than not having
+    the figure locally at all.
+
+    `period_key` is namespaced `stripe:<id>` rather than the calendar month, because
+    `billing_invoices` is unique on (tenant_id, period_key) and our own usage invoice for the
+    same month would otherwise be mutually exclusive with this one. It also makes the row's
+    origin readable without consulting `meta`.
+
+    Returns the row, or None when there is nothing identifiable to record.
+    """
+    from sqlalchemy import select
+
+    from nexus.models.billing import BillingInvoice
+
+    if not psp_invoice_id:
+        return None
+
+    period = f"stripe:{psp_invoice_id}"
+    existing = (
+        await session.scalars(
+            select(BillingInvoice).where(
+                BillingInvoice.tenant_id == sub.tenant_id,
+                BillingInvoice.period_key == period,
+            )
+        )
+    ).first()
+
+    amount = obj.get("amount_paid") if obj.get("amount_paid") else obj.get("amount_due")
+    try:
+        amount_cents = int(amount or 0)
+    except (TypeError, ValueError):
+        amount_cents = 0
+    # Stripe's own status vocabulary, narrowed to ours. `paid` is the only one that means the
+    # money arrived; everything else stays `finalized`, which is what dunning reads.
+    paid = str(obj.get("status") or "") == "paid"
+
+    row = existing or BillingInvoice(tenant_id=sub.tenant_id, period_key=period)
+    row.status = "paid" if paid else "finalized"
+    row.number = str(obj.get("number") or "")[:40] or row.number
+    row.currency = str(obj.get("currency") or "usd").upper()[:3]
+    row.subtotal_cents = amount_cents
+    row.total_cents = amount_cents
+    row.plan_id = sub.plan_id
+    row.meta = {
+        **(row.meta or {}),
+        "psp": "stripe",
+        "psp_invoice_id": psp_invoice_id,
+        "origin": "provider",
+        "hosted_invoice_url": str(obj.get("hosted_invoice_url") or ""),
+        "invoice_pdf_url": str(obj.get("invoice_pdf") or ""),
+    }
+    if existing is None:
+        session.add(row)
+    await session.flush()
+    return row
 
 
 async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome: dict) -> dict:
@@ -473,8 +571,14 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
             "psp_latest_invoice_status": str(obj.get("status") or "")[:40],
             "psp_latest_invoice_event": event.event_type,
         }
+        invoice = await _record_provider_invoice(session, sub, obj, psp_invoice_id)
         await session.flush()
-        outcome["note"] = "recorded on subscription; no local invoice"
+        if invoice is not None:
+            outcome["invoice_id"] = invoice.id
+            outcome["note"] = "recorded the provider's invoice"
+            outcome["status"] = invoice.status
+        else:
+            outcome["note"] = "recorded on subscription; no local invoice"
         outcome["applied"] = True
         return outcome
 

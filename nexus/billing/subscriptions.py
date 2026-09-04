@@ -458,6 +458,48 @@ async def roll_period(ts: TenantSession) -> bool:
     return True
 
 
+async def apply_plan_change_credits(ts: TenantSession, plan, *, at=None) -> bool:
+    """Grant a plan's included credits when a tenant MOVES ONTO it mid-period.
+
+    Reported from production: a customer subscribed to Launch through Stripe Checkout, watched the
+    plan change to Launch, and had zero credits. Two things caused it, and this closes the second.
+
+    `grant_plan_credits` keys its grant `plan_grant:{period}` — by PERIOD ONLY. A workspace signs
+    up on `free`, takes that key with a 200-credit grant, and every upgrade for the rest of the
+    month finds the key already used and grants nothing. The customer pays for 2,000 credits and
+    receives whatever is left of the free tier's 200.
+
+    The obvious fix — put the plan in the existing key — is the wrong one. It would make
+    `plan_grant:{period}` and `plan_grant:free:{period}` two different keys, so every tenant
+    already granted this period gets granted a SECOND time on the next roll. A separate
+    `plan_change:` key leaves the period grant untouched and cannot double-grant anything that
+    already happened.
+
+    Keyed per plan per period, so moving free -> launch -> accelerate delivers both plans once
+    each, while switching back and forth cannot farm the same grant twice.
+
+    Never raises: a customer whose payment succeeded must not see an error because bookkeeping
+    failed. The grant is idempotent, so a retry or a replayed webhook re-runs it safely.
+    """
+    if plan is None or not plan.included_credits:
+        return False        # enterprise/custom deals are invoiced on other terms
+    try:
+        from nexus.billing.credits import grant_credits
+        from nexus.billing.rollups import period_key
+
+        at = at or utcnow()
+        key = period_key(at, "period")
+        return await grant_credits(
+            ts, plan.included_credits, kind="grant",
+            reason=f"{plan.name} included credits",
+            idempotency_key=f"plan_change:{plan.id}:{key}", period_key=key,
+        )
+    except Exception:
+        logger.warning("plan-change credit grant failed for %s", getattr(plan, "id", "?"),
+                       exc_info=True)
+        return False
+
+
 async def grant_plan_credits(ts: TenantSession, plan, *, at=None) -> bool:
     """Grant one period's included credits for ``plan``. Idempotent per period.
 
