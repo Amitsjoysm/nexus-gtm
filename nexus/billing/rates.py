@@ -40,6 +40,25 @@ def validate_rate(
     margin_exception: bool = False,
 ) -> float:
     """Return the margin, or raise if it is below floor without an explicit exception."""
+    # A NEGATIVE price is never a decision, and the margin floor cannot catch it.
+    # `gross_margin` returns 0.0 for any non-positive revenue, so -5 credits/unit fails the floor
+    # for exactly the same reason a FREE capability does — and is therefore waved through the
+    # moment finance records a margin exception, which is a routine thing for them to do.
+    #
+    # The consequence is not that the customer gets paid (the burn floors at zero and returns
+    # "nothing to charge"), it is worse in a quieter way: the capability silently becomes free
+    # while the admin console goes on displaying a price. Refused outright, before the floor is
+    # consulted, because there is no reading of "-5 credits per unit" that anybody meant.
+    if float(credits_per_unit) < 0:
+        raise ValueError(
+            f"{capability_id}: credits_per_unit cannot be negative (got {credits_per_unit}). "
+            "A price of 0 makes a capability free; a negative one is a typo."
+        )
+    if float(unit_cost_usd) < 0:
+        raise ValueError(
+            f"{capability_id}: unit_cost_usd cannot be negative (got {unit_cost_usd}). "
+            "A negative cost inflates every margin computed against it."
+        )
     margin = gross_margin(credits_per_unit, unit_cost_usd)
     if margin < MIN_GROSS_MARGIN and not margin_exception:
         raise MarginFloorError(

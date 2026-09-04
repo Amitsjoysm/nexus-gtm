@@ -226,7 +226,10 @@ async def upsert_rate_card(
                 unit_cost_usd=unit_cost,
                 margin_exception=body.margin_exception,
             )
-        except MarginFloorError as exc:
+        except ValueError as exc:
+            # `MarginFloorError` subclasses ValueError, and `validate_rate` also raises a plain
+            # one for a negative price or cost. Catching the base covers both, so a refusal that
+            # is a bad REQUEST can never surface as a 500 that reads like our fault.
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
             ) from exc
