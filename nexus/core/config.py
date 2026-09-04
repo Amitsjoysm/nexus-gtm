@@ -10,6 +10,61 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _INSECURE_SECRET = "dev-insecure-secret-change-me-please-32chars"
 
 
+# Fraction of the server's connections left for operators. psql, pg_dump, the backup job and the
+# monitoring scrape all need one, and they are needed most at exactly the moment the fleet is
+# saturated — which is when a budget with no reserve has already taken the last of them.
+CONNECTION_RESERVE = 0.20
+
+
+def connection_budget(
+    *, pool: int, overflow: int, platform_pool: int, platform_overflow: int,
+    app_replicas: int, processes_per_replica: int, worker_processes: int = 1,
+    max_connections: int | None = None,
+) -> dict:
+    """What the whole fleet can demand of Postgres at once, and whether that fits.
+
+    The formula is the one `db_pool_size` already documents. What is new is computing it: the
+    comment described the hazard precisely and nothing checked, so a deployment demanding 175
+    connections from a 100-connection server ran for weeks and then failed the moment 200 readers
+    arrived — as HTTP 500s after a 30-second pool wait, which reads as an application fault.
+
+    A ROLLOUT is the peak, not steady state. `docker compose` and every rolling deployer run the
+    old and new app revisions simultaneously, so app connections double for the length of a
+    release. The worker is not doubled; it is replaced rather than duplicated.
+    """
+    per_process = pool + overflow + platform_pool + platform_overflow
+    app_processes = app_replicas * processes_per_replica
+    steady_state = per_process * (app_processes + worker_processes)
+    during_rollout = per_process * app_processes * 2 + per_process * worker_processes
+
+    out = {
+        "per_process": per_process,
+        "app_processes": app_processes,
+        "steady_state": steady_state,
+        "during_rollout": during_rollout,
+        "max_connections": max_connections,
+        "fits": True,
+        "explain": "",
+    }
+    if not max_connections:
+        # Unknown, or SQLite. Not a reason to refuse anything.
+        return out
+
+    usable = int(max_connections * (1 - CONNECTION_RESERVE))
+    out["usable"] = usable
+    if during_rollout > usable:
+        out["fits"] = False
+        out["explain"] = (
+            f"connection budget exceeded: {app_processes} app process(es) + {worker_processes} "
+            f"worker(s) at {per_process} connections each need {steady_state} in steady state and "
+            f"{during_rollout} during a rolling deploy, against max_connections={max_connections} "
+            f"({usable} usable after a {CONNECTION_RESERVE:.0%} operator reserve). "
+            f"Lower NEXUS_DB_POOL_SIZE / NEXUS_DB_MAX_OVERFLOW, run fewer processes, raise the "
+            f"server's max_connections, or put PgBouncer in front."
+        )
+    return out
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="NEXUS_", env_file=".env", extra="ignore"
@@ -148,6 +203,18 @@ class Settings(BaseSettings):
     # pool stays small — but it is still charged against the same server-wide connection limit.
     db_platform_pool_size: int = 2
     db_platform_max_overflow: int = 3
+    # The topology the formula above needs, and the server limit it is measured against. Declared
+    # rather than guessed: the process count is a deployment fact the application cannot read.
+    # Defaults describe the shipped compose file (2 replicas x 2 uvicorn workers, 1 worker
+    # container), so a deployment that changes neither is still checked.
+    #
+    # `db_max_connections` is the SERVER's limit (`SHOW max_connections`). None means "unknown or
+    # not Postgres" and disables the check rather than guessing at a number — refusing to boot
+    # over an assumption would be worse than the problem.
+    app_replicas: int = 2
+    processes_per_replica: int = 2
+    worker_processes: int = 1
+    db_max_connections: int | None = None
 
     # Task queue
     queue_backend: Literal["memory", "redis"] = "memory"

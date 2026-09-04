@@ -16,6 +16,19 @@ services:
       POSTGRES_DB: nexus
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    # max_connections 300, not the 100 default. The fleet is 2 replicas x 2 uvicorn workers plus a
+    # worker container, and a rolling deploy runs the old and new app revisions together — so the
+    # peak is 9 processes, not 5. Measured at the default: 175 demanded against 100 available, and
+    # at 200 concurrent readers the pool exhausted and 4.81% of authenticated requests returned
+    # HTTP 500 after a 30-second wait. At 100 the arithmetic does not close even with a pool of 5.
+    #
+    # Each backend costs roughly 5-10 MB, so 300 is ~2-3 GB of headroom at full saturation. Size
+    # shared_buffers and the host accordingly, and see `connection_budget()` in core/config.py —
+    # the app logs the sum against this number on every boot.
+    command:
+      - postgres
+      - -c
+      - max_connections=300
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

@@ -86,6 +86,50 @@ async def lifespan(app: FastAPI):
 
     get_call_provider()
 
+    # Report the fleet's connection demand against what the server will actually serve.
+    #
+    # `config.py` has documented this arithmetic — including the rolling-deploy doubling — since
+    # the pool settings were added, and nothing computed it. Measured on this deployment: 175
+    # connections demanded against max_connections=100, which surfaced only under load, as HTTP
+    # 500s after a 30-second pool wait. That reads as an application fault and is a capacity
+    # misconfiguration.
+    #
+    # WARNS, never refuses. An over-committed pool is survivable at low traffic and a process that
+    # will not boot is not — the same posture `apply_overrides` takes. The point is that the
+    # number appears in the log on every start, so it is discoverable before peak rather than
+    # during it. `NEXUS_DB_MAX_CONNECTIONS` is read from the server on startup when unset.
+    try:
+        from nexus.core.config import connection_budget
+
+        s = get_settings()
+        limit = s.db_max_connections
+        if limit is None and "postgresql" in (s.database_url or ""):
+            from sqlalchemy import text as _sql
+
+            from nexus.core.db import get_engine
+
+            async with get_engine().connect() as conn:
+                limit = int((await conn.execute(_sql("show max_connections"))).scalar())
+        budget = connection_budget(
+            pool=s.db_pool_size, overflow=s.db_max_overflow,
+            platform_pool=s.db_platform_pool_size,
+            platform_overflow=s.db_platform_max_overflow,
+            app_replicas=s.app_replicas, processes_per_replica=s.processes_per_replica,
+            worker_processes=s.worker_processes, max_connections=limit,
+        )
+        _log = logging.getLogger("nexus.main")
+        if not budget["fits"]:
+            _log.error("DATABASE CONNECTION BUDGET: %s", budget["explain"])
+        elif limit:
+            _log.info(
+                "database connection budget: %s steady / %s during a rollout, of %s",
+                budget["steady_state"], budget["during_rollout"], limit,
+            )
+    except Exception:
+        logging.getLogger("nexus.main").warning(
+            "could not compute the connection budget", exc_info=True
+        )
+
     # Share the auth rate-limit counter across processes when Valkey is available. Without this
     # the limit is per uvicorn worker: compose runs two replicas of two workers, so a "10 per
     # minute" limit was really 40, and it reset on every deploy. Non-fatal and best-effort — a
