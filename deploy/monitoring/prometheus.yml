@@ -24,11 +24,31 @@ alerting:
 scrape_configs:
   # HTTP metrics + the billing decision/webhook counters. Aggregated across both uvicorn workers
   # via PROMETHEUS_MULTIPROC_DIR (set on the app service).
+  # DNS service discovery, NOT a static target. `app` is scaled to 2 replicas and Docker's
+  # embedded DNS round-robins the name, so a single static target scrapes whichever replica DNS
+  # happened to return and labels every sample `instance="app:8000"` regardless of which one
+  # answered. Measured: two distinct series carrying the SAME instance label, one reading 1 and
+  # the other 3, alternating scrape by scrape.
+  #
+  # That breaks three things at once. A counter that alternates between replicas looks like it
+  # decreases, and `rate()` reads a decrease as a counter reset — so every rate over an app
+  # counter is wrong. Roughly half of each replica's samples are discarded as duplicates. And
+  # `up{job="nexus-app"} == 0` can never detect ONE replica failing, because DNS keeps handing
+  # back the survivor — which is precisely the failure two replicas exist to survive, and the
+  # alert named AppDown reads all-clear throughout.
+  #
+  # `type: A` makes Prometheus resolve the name and create one target per address, each with its
+  # own instance label.
   - job_name: nexus-app
     metrics_path: /metrics
-    static_configs:
-      - targets: ["app:8000"]
-        labels: { service: nexus-app }
+    dns_sd_configs:
+      - names: ["app"]
+        type: A
+        port: 8000
+        refresh_interval: 30s
+    relabel_configs:
+      - target_label: service
+        replacement: nexus-app
 
   # Job outcomes and the state gauges. A separate process with no HTTP surface of its own, so it
   # exports on its own port rather than through the API.
