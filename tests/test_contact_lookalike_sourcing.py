@@ -333,3 +333,27 @@ def test_a_location_line_is_not_a_role():
     from nexus.lookalike.contacts import _parse_headline
 
     assert _parse_headline("# Chris Jones\n\nAtlanta Metropolitan Area (US)\n\n500 connections") == ("", "")
+
+
+@pytest.mark.parametrize("value,is_territory", [
+    ("Central", True),
+    ("US Central", True),
+    ("Central Enterprise Sales", True),
+    ("EMEA", True),
+    ("Enterprise", True),
+    # Real companies that must survive — the guard matches the WHOLE value, never a substring.
+    ("CentralSquare Technologies", False),
+    ("OutSystems", False),
+    ("Druva", False),
+    ("NextGen Healthcare", False),
+])
+def test_a_territory_is_not_an_employer(value, is_territory):
+    """Three of six live results put a sales TERRITORY after a comma, where a company belongs:
+    "Vice President of Sales, Central". A hand-list is usually the wrong tool, but territories are a
+    genuinely closed vocabulary where company names are not, and the asymmetry runs the safe way —
+    rejecting a real company called "Central" costs a blank field, accepting a territory shows the
+    rep an employer that does not exist.
+    """
+    from nexus.lookalike.contacts import _looks_like_territory
+
+    assert _looks_like_territory(value) is is_territory

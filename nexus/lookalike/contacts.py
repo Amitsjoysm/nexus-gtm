@@ -58,6 +58,36 @@ _HEADLINE_SPLIT = re.compile(r"\s*[,|@–-]\s+|\s+at\s+")
 _EMPLOYER_SEP = re.compile(r"\s*[,@]\s+|\s+at\s+")
 
 
+# Sales territories and segments that appear after an employer separator where a company should be.
+# Closed vocabulary, unlike company names — which is what makes matching it safe.
+_TERRITORY_WORDS = frozenset({
+    "central", "east", "west", "north", "south", "northeast", "northwest",
+    "southeast", "southwest", "midwest", "eastern", "western", "northern", "southern",
+    "emea", "apac", "apj", "latam", "amer", "americas", "anz", "na", "us", "usa",
+    "uk", "eu", "europe", "asia", "canada", "global", "international", "worldwide",
+    "enterprise", "smb", "mid-market", "midmarket", "commercial", "public sector",
+    "federal", "strategic", "named accounts", "corporate", "remote",
+})
+
+
+def _looks_like_territory(value: str) -> bool:
+    """True when a would-be company name is really a territory or segment.
+
+    Matches the WHOLE value, not a substring: "CentralSquare Technologies" is a real company and
+    must survive, while a bare "Central" must not.
+    """
+    low = " ".join((value or "").lower().split())
+    if not low:
+        return False
+    if low in _TERRITORY_WORDS:
+        return True
+    # "Central Enterprise Sales", "US Central" — every word is territory/segment vocabulary or a
+    # sales noun, so there is no company name in there at all.
+    filler = _TERRITORY_WORDS | {"sales", "region", "territory", "division", "area", "team"}
+    words = low.replace("-", " ").split()
+    return len(words) > 1 and all(w in filler for w in words)
+
+
 def _parse_headline(snippet: str) -> tuple[str, str]:
     """``(title, company)`` from a profile snippet. Both may be empty."""
     lines = [ln.strip().lstrip("#").strip() for ln in (snippet or "").splitlines()]
@@ -79,6 +109,15 @@ def _parse_headline(snippet: str) -> tuple[str, str]:
     # Whatever followed an employer separator may itself carry trailing branding.
     if company:
         company = [c.strip() for c in _HEADLINE_SPLIT.split(company) if c.strip()][0][:120]
+    # ...and may not be a company at all. "Vice President of Sales, Central" puts a TERRITORY after
+    # an employer separator, and three of six live results did exactly that.
+    #
+    # A hand-list is normally the wrong tool here (see the Apify key-spelling note in CLAUDE.md),
+    # but sales territories are a genuinely CLOSED vocabulary where company names are not, and the
+    # asymmetry is safe in this direction: rejecting a real company called "Central" costs a blank
+    # field, while accepting a territory shows the rep a company that does not exist.
+    if company and _looks_like_territory(company):
+        company = ""
     # A "headline" that is really a location line ("Atlanta Metropolitan Area (US)") is not a role.
     if title.lower().endswith(("(us)", "area", "states")):
         return "", ""
