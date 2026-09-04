@@ -768,6 +768,18 @@ class DorkedSearchSource(SignalSource):
         if dork.require_url and dork.require_url not in url.lower():
             return None
 
+        # A DIRECTORY PROFILE IS NOT AN EVENT — here too, and NOT behind `self_evident`.
+        #
+        # This path already had the two filters WebNewsSource was missing (the name must be in the
+        # title, the event is classified from the title alone), which is why it produced one bad
+        # signal live against that source's twenty-nine. The one it produced was a directory page,
+        # because those pass both: they name the account and their title carries the event word.
+        # `self_evident` skips the text gates for a result that is about the company by
+        # construction — a company's own ATS board — and a PitchBook profile is the opposite of
+        # that, so it must be checked before the exemption rather than inside it.
+        if is_profile_page(url):
+            return None
+
         if not dork.self_evident:
             # The name must be in the TITLE, not merely somewhere in the page.
             #

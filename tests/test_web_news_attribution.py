@@ -146,3 +146,32 @@ async def test_the_event_is_classified_from_the_title_alone():
     assert out[0].kind != "funding", (
         "a product page was scored as a funding event because its BODY recalled an old round"
     )
+
+
+# ---- the dork path needs the same host guard -----------------------------------------------------
+
+async def test_the_dork_path_also_refuses_a_directory_page():
+    """The dork path already had the two filters WebNewsSource was missing — name in the title,
+    event from the title — which is why it produced ONE bad signal live against that source's
+    twenty-nine. The one it produced was a directory page, because those pass both gates: they name
+    the account, and their title carries the event word ("... Company Profile: Valuation, Funding").
+
+    Checked BEFORE `self_evident`, which exists to skip the text gates for a result that is about
+    the company by construction (its own ATS board). A PitchBook profile is the opposite of that.
+    """
+    from nexus.ingestion.dorks import select_dorks
+    from nexus.ingestion.sources import DorkedSearchSource
+    from nexus.core.db import utcnow
+
+    src = DorkedSearchSource()
+    dork = select_dorks(has_domain=True, limit=1)[0]
+    hit = {
+        "title": "Catalis 2026 Company Profile: Valuation, Funding & Investors",
+        "snippet": "Catalis raised funding. Government technology.",
+        "url": "https://pitchbook.com/profiles/company/43009-30",
+    }
+    out = src._to_signal(
+        dork, hit, account=Account(name="Catalis", domain="catalisgov.com"),
+        anchor="catalisgov.com", now=utcnow(), seen=set(),
+    )
+    assert out is None, "a PitchBook profile became a dork signal"
