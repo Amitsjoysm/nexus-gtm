@@ -478,6 +478,19 @@ async def list_members(
     return [_member_out(m) for m in await ts.list(Membership)]
 
 
+async def _check_seat_available(ts: TenantSession) -> None:
+    """Refuse a new member when the plan's seats are full. Raises 402 with the upsell.
+
+    Metered rather than merely read, so a workspace at its limit shows up in the usage stream and
+    on the `would_block` counter — which is what makes "how many customers are hitting the seat
+    cap?" answerable before anyone asks support.
+    """
+    from nexus.billing.meter import metered
+
+    async with metered(ts, "seat.member", source="api"):
+        pass
+
+
 @router.post("/members", response_model=MemberOut, status_code=status.HTTP_201_CREATED)
 async def invite_member(
     body: MemberInviteRequest,
@@ -498,6 +511,19 @@ async def invite_member(
     existing = await ts.first(Membership, Membership.user_id == user.id)
     if existing is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "User is already a member of this tenant")
+
+    # Seats are sold per plan, and until this call nothing enforced that. `billing_plans.max_seats`
+    # is read only by the admin console, and the `seat.member` entitlement — which IS the real
+    # limit — was never consulted on the one path that adds a member. A workspace sold one seat
+    # could hold as many people as it liked.
+    #
+    # `seat.member` is a GAUGE: it resolves to live membership rather than to a counter, so a
+    # workspace that removes someone immediately gets the seat back. Checked BEFORE the insert,
+    # because the gauge counts rows and an inserted-then-rejected member would count itself.
+    #
+    # Raises the 402 with its upsell rather than a bare 403: the person hitting a seat limit is
+    # usually the person who can lift it.
+    await _check_seat_available(ts)
 
     membership = Membership(
         tenant_id=ts.tenant_id,

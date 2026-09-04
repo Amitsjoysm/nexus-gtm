@@ -800,6 +800,43 @@ async def handle_expire_trials(payload: dict) -> dict:
     return totals
 
 
+async def handle_grant_plan_credits(payload: dict) -> dict:
+    """Deliver a paid plan's included credits — the REPLAY path for a grant the webhook lost.
+
+    `billing/webhooks.py::_grant_plan_credits` swallows every failure on purpose, so a Stripe
+    retry storm cannot follow a real payment. That leaves the grant undelivered, so the failure is
+    parked in `dead_letter_jobs` under this name and an operator replays it from
+    `/admin/jobs/dead-letters`. The replay endpoint enqueues `Job(name=..., payload=...)` and the
+    worker dispatches by name, which is why this has to be registered rather than merely written.
+
+    Idempotent by construction: `apply_plan_change_credits` keys its grant per tenant/plan/period,
+    so replaying a grant that actually succeeded is a no-op rather than a double credit.
+
+    Returns `{"error": ...}` for a terminal problem — an unknown plan, a vanished tenant — rather
+    than raising. `dispatch` treats a returned error as a normal outcome and a RAISE as retryable,
+    and a dead letter naming a retired plan would otherwise be retried forever.
+    """
+    from nexus.billing.subscriptions import apply_plan_change_credits
+    from nexus.core.tenancy import TenantSession, apply_rls
+    from nexus.models.billing import BillingPlan
+
+    tenant_id = str(payload.get("tenant_id") or "")
+    plan_id = str(payload.get("plan_id") or "")
+    if not tenant_id or not plan_id:
+        return {"error": "tenant_id and plan_id are required"}
+
+    async with get_sessionmaker()() as session:
+        plan = await session.get(BillingPlan, plan_id)
+        if plan is None:
+            return {"error": f"unknown plan: {plan_id}"}
+        # Bound even though the worker holds a privileged session, for the same reason the webhook
+        # does: this function does not choose the role it runs under.
+        await apply_rls(session, tenant_id)
+        granted = await apply_plan_change_credits(TenantSession(session, tenant_id), plan)
+        await session.commit()
+    return {"tenant_id": tenant_id, "plan_id": plan_id, "granted": bool(granted)}
+
+
 async def handle_billing_reconcile(payload: dict) -> dict:
     """Periodic driver: report where our subscription state disagrees with the provider's.
 
@@ -894,6 +931,9 @@ HANDLERS: dict[str, Handler] = {
     "roll_billing_periods": handle_roll_billing_periods,
     "dunning_sweep": handle_dunning_sweep,
     "billing_reconcile": handle_billing_reconcile,
+    # Replay target for a credit grant the Stripe webhook could not deliver. Registered so
+    # the dead-letter replay button is not a no-op; never enqueued on a schedule.
+    "billing_grant_plan_credits": handle_grant_plan_credits,
     "expire_trials": handle_expire_trials,
 }
 

@@ -327,8 +327,53 @@ async def _grant_plan_credits(session, sub, plan) -> None:
     try:
         await apply_rls(session, sub.tenant_id)
         await apply_plan_change_credits(TenantSession(session, sub.tenant_id), plan)
-    except Exception:
+    except Exception as exc:
         logger.warning("could not grant %s credits to %s", plan.id, sub.tenant_id, exc_info=True)
+        # A LOG LINE IS NOT ENOUGH HERE. The customer has paid and holds no credits, and this
+        # function swallows on purpose — so without these two marks the failure is invisible, which
+        # is exactly how the unbound-RLS bug in this same function stayed silent.
+        #
+        # Two marks, not one, because they answer different questions: the counter says it is
+        # happening at all and can page someone; the dead letter says WHICH workspace and lets an
+        # operator replay it. A counter alone leaves them grepping logs for a customer id.
+        try:
+            from nexus.core import metrics
+
+            metrics.record_webhook_event("stripe", "credit_grant_failed")
+        except Exception:  # a metric must never be why a paid upgrade fails
+            pass
+        try:
+            await _dead_letter_credit_grant(sub.tenant_id, plan.id, f"{type(exc).__name__}: {exc}")
+        except Exception:
+            # If the database that rejected the credit write also rejects the dead letter, log the
+            # whole thing at ERROR and return anyway. Raising here would turn one lost grant into a
+            # Stripe retry storm on every paid upgrade — the failure this swallow exists to prevent.
+            logger.exception(
+                "credit grant dead-letter FAILED tenant=%s plan=%s", sub.tenant_id, plan.id
+            )
+
+
+#: Job name for a replayable credit grant. Registered in `workers.tasks.HANDLERS`, because the
+#: replay endpoint enqueues `Job(name=job_name, ...)` and the worker dispatches by name — a dead
+#: letter with no handler shows a replay button that silently does nothing.
+CREDIT_GRANT_JOB = "billing_grant_plan_credits"
+
+
+async def _dead_letter_credit_grant(tenant_id: str, plan_id: str, error: str) -> None:
+    """Park a failed grant where an operator will see it, replayable.
+
+    Reuses the worker's own dead-letter writer rather than inserting directly, so this inherits its
+    dedupe (a grant failing the same way twice updates one row instead of piling up), its digest,
+    and its own last-line-of-defence logging. A second copy of that logic would drift, and the
+    first thing to drift would be the dedupe that keeps the triage queue readable.
+    """
+    from nexus.workers.durability import _write_dead_letter
+    from nexus.workers.queue import Job
+
+    await _write_dead_letter(
+        Job(name=CREDIT_GRANT_JOB, payload={"tenant_id": tenant_id, "plan_id": plan_id}),
+        error,
+    )
 
 
 async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, outcome: dict) -> dict:

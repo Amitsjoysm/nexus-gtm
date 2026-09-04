@@ -118,7 +118,7 @@ PLAN_SEED: list[dict] = [
         # It buys roughly 25 enriched accounts or 66 research briefs — enough to see the product
         # work on the buyer's own data, not enough to run a territory on.
         "base_price_cents": 0, "seat_price_cents": 0, "included_credits": 200,
-        "max_seats": 1, "sort_order": 10,
+        "max_seats": 1, "seats": 1, "sort_order": 10,
         "description": "Try every feature with 1,000 credits.",
         "entitlements": _FREE_ENT,
     },
@@ -179,7 +179,7 @@ PLAN_SEED: list[dict] = [
     {
         "id": "launch", "name": "Launch", "plan_class": "standard", "status": "active",
         "base_price_cents": 9900, "seat_price_cents": 9900, "included_credits": 2000,
-        "max_seats": 25, "sort_order": 20, "interval": "month", "trial_days": 14,
+        "max_seats": 5, "seats": 5, "sort_order": 20, "interval": "month", "trial_days": 14,
         "description": "Everything you need to run signal-led outreach.",
         "entitlements": _GROWTH_ENT,
     },
@@ -193,7 +193,7 @@ PLAN_SEED: list[dict] = [
         # deliberately not on credits: discounting both would compound into a cr/$ ratio well past
         # the design ceiling, and the customer is paying up front for commitment, not for a
         # cheaper unit of consumption.
-        "included_credits": 24000, "max_seats": 25, "sort_order": 21,
+        "included_credits": 24000, "max_seats": 15, "seats": 15, "sort_order": 21,
         "interval": "year", "trial_days": 14,
         "description": "Launch, paid yearly. Two months free.",
         "entitlements": _GROWTH_ENT,
@@ -201,14 +201,14 @@ PLAN_SEED: list[dict] = [
     {
         "id": "accelerate", "name": "Accelerate", "plan_class": "standard", "status": "active",
         "base_price_cents": 19900, "seat_price_cents": 19900, "included_credits": 8000,
-        "max_seats": 100, "sort_order": 30, "interval": "month", "trial_days": 14,
+        "max_seats": 15, "seats": 15, "sort_order": 30, "interval": "month", "trial_days": 14,
         "description": "For teams running the full loop at volume.",
         "entitlements": _PRO_ENT,
     },
     {
         "id": "accelerate-annual", "name": "Accelerate (annual)", "plan_class": "standard",
         "status": "active", "base_price_cents": 191000, "seat_price_cents": 191000,
-        "included_credits": 96000, "max_seats": 100, "sort_order": 31,
+        "included_credits": 96000, "max_seats": 35, "seats": 35, "sort_order": 31,
         "interval": "year", "trial_days": 14,
         "description": "Accelerate, paid yearly. Two months free.",
         "entitlements": _PRO_ENT,
@@ -244,6 +244,29 @@ PLAN_SEED: list[dict] = [
 ]
 
 
+# Seats sold with each plan. Kept on the PLAN rather than in the shared entitlement lists,
+# because `launch` and `launch-annual` deliberately share `_GROWTH_ENT` — the annual is the same
+# product with more people on it, and duplicating the whole list to change one number is how the
+# two drift apart on everything else.
+#
+# Free 1, Launch 5, Accelerate 15; the annuals carry +10 and +20 on top, because an annual is a
+# commitment and buys room to grow into rather than the same team. Custom and enterprise deals
+# set their own and are deliberately absent: a number here would silently override a negotiated one.
+def seat_quota_for(plan_id: str) -> int | None:
+    """Seats for a plan, or None when the plan does not cap them."""
+    for spec in PLAN_SEED:
+        if spec["id"] == plan_id:
+            return spec.get("seats", _seat_from_entitlements(spec))
+    return None
+
+
+def _seat_from_entitlements(spec: dict) -> int | None:
+    for cap_id, _mode, quota, _overage in spec.get("entitlements", ()):
+        if cap_id == "seat.member":
+            return quota
+    return None
+
+
 async def sync_plans() -> dict:
     """Create any missing seed plans + their entitlements. Never mutates an existing plan."""
     created = 0
@@ -252,10 +275,16 @@ async def sync_plans() -> dict:
         for spec in PLAN_SEED:
             if spec["id"] in existing:
                 continue
-            data = {k: v for k, v in spec.items() if k != "entitlements"}
+            data = {k: v for k, v in spec.items() if k not in ("entitlements", "seats")}
             session.add(BillingPlan(**data))
             await session.flush()
+            seats = spec.get("seats")
             for cap_id, mode, quota, overage in spec["entitlements"]:
+                # A plan's own `seats` wins over the shared entitlement list. Two plans share a
+                # list precisely so they cannot drift; the seat count is the one field where they
+                # are meant to differ.
+                if cap_id == "seat.member" and seats is not None:
+                    quota = seats
                 session.add(
                     BillingPlanEntitlement(
                         plan_id=spec["id"], capability_id=cap_id, mode=mode,
