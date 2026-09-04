@@ -311,11 +311,21 @@ async def _grant_plan_credits(session, sub, plan) -> None:
     swallowed, exactly as the rest of this handler treats anything that is not the money state.
 
     Runs on the platform session the handler already holds, bound to the subscription's tenant.
+
+    **`apply_rls` is called even though today's caller is the owner-role platform session**, where
+    RLS is bypassed and the GUC is a no-op costing one `SET LOCAL`. The session is a PARAMETER —
+    this function does not choose the role it gets. If any future caller hands it an app-role
+    session, the unbound write is rejected by Postgres with "new row violates row-level security
+    policy", and because this function deliberately swallows exceptions the customer would pay,
+    receive no credits, and nothing would say so. SQLite has no RLS, so no functional test would
+    catch it either; `tests/test_rls_binding_guard.py` is the only thing that can, and it is right
+    to insist. Same convention as the cross-tenant admin writes in `admin_billing_write.py`.
     """
-    from nexus.core.tenancy import TenantSession
+    from nexus.core.tenancy import TenantSession, apply_rls
     from nexus.billing.subscriptions import apply_plan_change_credits
 
     try:
+        await apply_rls(session, sub.tenant_id)
         await apply_plan_change_credits(TenantSession(session, sub.tenant_id), plan)
     except Exception:
         logger.warning("could not grant %s credits to %s", plan.id, sub.tenant_id, exc_info=True)
