@@ -132,6 +132,54 @@ def _within_size_band(employee_count: int | None, icp: dict) -> bool:
     return True
 
 
+# Country names an enricher actually writes, folded to one form. Not a geography database — just
+# enough that "USA" and "United States" are not treated as different places, because the gate below
+# EXCLUDES on a mismatch and getting this wrong drops a good US company from a US-only ICP. That is
+# the direction a hard gate least can afford to fail in.
+_COUNTRY_ALIASES: dict[str, str] = {
+    "usa": "united states", "us": "united states",
+    "united states of america": "united states",
+    "america": "united states", "uk": "united kingdom",
+    "great britain": "united kingdom", "britain": "united kingdom",
+    "england": "united kingdom", "scotland": "united kingdom", "wales": "united kingdom",
+    "uae": "united arab emirates", "republic of india": "india", "bharat": "india",
+    "republic of korea": "south korea", "korea": "south korea",
+    "russian federation": "russia", "czechia": "czech republic",
+    "holland": "netherlands", "deutschland": "germany",
+}
+
+
+def _norm_country(value: str) -> str:
+    # Periods removed entirely rather than stripped from the end: "U.S." and "U.S.A." are written
+    # both ways and a trailing-only strip leaves "u.s", which matches nothing.
+    v = " ".join((value or "").replace(".", "").strip().lower().split())
+    return _COUNTRY_ALIASES.get(v, v)
+
+
+def _within_geo(country: str | None, icp: dict) -> bool:
+    """Hard geography gate: a known country outside the stated set is a definitive non-match.
+
+    Identical shape to :func:`_within_size_band`, deliberately — the argument for headcount is the
+    argument for geography, and two gates with different semantics would be two rules to hold in
+    your head.
+
+    Scoring alone was not enough. Geo carries weight 0.15 against industry 0.35, size 0.30 and tech
+    0.20, so a UK company against a `["United States"]` ICP scores **75** at default weights and
+    reads as a decent fit. Measured on the live engine with a real account.
+
+    Unknown country is KEPT, not excluded. Search rarely returns one, and discarding a candidate
+    for a field we have not fetched would throw away good companies on missing data — the same call
+    the size gate makes, and the same one `score_icp_fit` makes when it treats a NULL as neutral.
+    """
+    wanted = {_norm_country(c) for c in (icp.get("countries") or []) if str(c).strip()}
+    if not wanted:
+        return True                       # no stated geography: everything passes, as before
+    got = _norm_country(country or "")
+    if not got:
+        return True                       # unknown: ranked, not excluded
+    return got in wanted
+
+
 async def rescreen_discovered_account(ts: TenantSession, account: Account) -> bool:
     """Post-enrichment ICP re-screen: archive an auto-discovered account whose now-known
     headcount is definitively outside the ICP size band.
@@ -155,7 +203,12 @@ async def rescreen_discovered_account(ts: TenantSession, account: Account) -> bo
     profile = await get_profile(ts)
     if profile is None or not profile.icp:
         return False
-    if _within_size_band(account.employee_count, profile.icp):
+    # Discovery's gates run on incomplete data — search rarely returns headcount OR country, and
+    # both are (correctly) admitted when unknown. Once the refresh crawl fills them in, a candidate
+    # can prove out-of-band or out-of-geo, and without this it lingers in the rep's list forever.
+    if _within_size_band(account.employee_count, profile.icp) and _within_geo(
+        account.country, profile.icp
+    ):
         return False
     from nexus.models.account import Contact
 
@@ -284,6 +337,10 @@ async def auto_discover_for_tenant(
         if len(account_ids) >= target_count:
             break
         if not _within_size_band(account.employee_count, profile.icp):
+            continue
+        # A country the ICP excludes is a definitive non-match, not a low score. Without this a UK
+        # company against a USA-only ICP scored 75 and was persisted as a discovery result.
+        if not _within_geo(account.country, profile.icp):
             continue
         fit = relevance.score_icp_fit(profile, account)
         screened += 1
