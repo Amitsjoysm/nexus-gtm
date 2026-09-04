@@ -38,6 +38,18 @@ async def list_signals(
     account_id: str | None = None,
     kind: str | None = None,
     max_age_days: int | None = Query(default=None, ge=1, le=365),
+    # The noise floor, and the same 0.5 the alert subscriber uses.
+    #
+    # `_classify_news` already tiers correctly — a funding headline scores 0.85, a leadership
+    # change 0.6, and a company's own marketing post matches no needle and lands at 0.4, below the
+    # alert floor so it creates no Inbox task. But this list had no way to ASK for the event tier,
+    # so all of it arrived together: measured live, 120 of 134 RSS signals were 0.4 blog posts
+    # sitting alongside the 4 that mattered. The scoring was right and the page showed everything
+    # anyway, which is what made signals look like noise.
+    #
+    # Optional and unset by default, so an existing caller sees exactly what it saw before; the UI
+    # opts in and says how many it is hiding.
+    min_strength: float | None = Query(default=None, ge=0.0, le=1.0),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> list[SignalOut]:
@@ -46,6 +58,8 @@ async def list_signals(
         where.append(SignalEvent.account_id == account_id)
     if kind:
         where.append(SignalEvent.kind == kind)
+    if min_strength is not None:
+        where.append(SignalEvent.strength >= min_strength)
     if max_age_days is not None:
         # Recency window (e.g. 7/15/30/60/90 days). Server-side so pagination stays correct;
         # backed by the (tenant_id, occurred_at) composite index on signal_events.

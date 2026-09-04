@@ -685,6 +685,9 @@ export class ApiClient {
       account_id?: string;
       kind?: string;
       max_age_days?: number;
+      /** Hide the weak-mention tier. 0.5 matches the alert floor, so the list agrees with the
+       *  Inbox about what counts as an event. */
+      min_strength?: number;
       limit?: number;
       offset?: number;
     } = {},
