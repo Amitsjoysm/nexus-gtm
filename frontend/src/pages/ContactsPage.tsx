@@ -25,7 +25,7 @@ import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { strengthMeta } from "@/lib/display";
 import { timeAgo } from "@/lib/format";
-import type { CallTask, ContactLookalike, WorkspaceContact } from "@/lib/types";
+import type { CallTask, ContactLookalike, LookalikeMode, WorkspaceContact } from "@/lib/types";
 import styles from "./ContactsPage.module.css";
 
 const ALL = "__all__";
@@ -92,18 +92,34 @@ export function ContactsPage() {
   const [similarFor, setSimilarFor] = useState<WorkspaceContact | null>(null);
   const [similarLoading, setSimilarLoading] = useState(false);
   const [similarData, setSimilarData] = useState<ContactLookalike[] | null>(null);
+  /** `null` while the rep is still choosing which question to ask. Nothing is requested — and
+   *  nothing is billed — until they pick, because `new` spends a paid search. */
+  const [similarMode, setSimilarMode] = useState<LookalikeMode | null>(null);
   const [similarId, setSimilarId] = useState<string | null>(null);
 
-  async function findSimilar(c: WorkspaceContact) {
-    setSimilarId(c.id);
+  /** Open the modal on the choice step. Nothing is fetched until a mode is picked. */
+  function findSimilar(c: WorkspaceContact) {
     setSimilarFor(c);
+    setSimilarData(null);
+    setSimilarMode(null);
+  }
+
+  /**
+   * Run the chosen mode. `existing` ranks the workspace's own contacts — free, offline, the
+   * customer's own data. `new` sources strangers through Exa and burns credits. The escalation is
+   * never automatic: spending on the rep's behalf because the free answer was empty is exactly the
+   * surprise this split exists to prevent.
+   */
+  async function runSimilar(c: WorkspaceContact, mode: LookalikeMode) {
+    setSimilarId(c.id);
+    setSimilarMode(mode);
     setSimilarData(null);
     setSimilarLoading(true);
     try {
-      const res = await api.findContactLookalikes(c.id, 10);
+      const res = await api.findContactLookalikes(c.id, mode, 10);
       setSimilarData(res.lookalikes);
     } catch (err) {
-      setSimilarFor(null);
+      setSimilarMode(null);
       toast.error("Couldn't find similar people", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
       setSimilarLoading(false);
@@ -589,9 +605,34 @@ export function ContactsPage() {
         open={!!similarFor}
         onClose={() => setSimilarFor(null)}
         title={similarFor ? `People like ${similarFor.full_name}` : "Similar people"}
-        description="Ranked by role, seniority, function, and how similar their company is."
+        description={
+          similarMode === "new"
+            ? "Sourced from the web, seeded with this contact's profile."
+            : "Ranked by role, seniority, function, and how similar their company is."
+        }
       >
-        {similarLoading ? (
+        {similarMode === null ? (
+          <div className={styles.similarChoice}>
+            <p className={styles.muted}>
+              Rank the people already in your workspace, or look outside it for new ones.
+            </p>
+            <div className={styles.similarChoiceRow}>
+              <Button
+                variant="secondary"
+                onClick={() => similarFor && runSimilar(similarFor, "existing")}
+              >
+                Rank my existing contacts
+              </Button>
+              <Button onClick={() => similarFor && runSimilar(similarFor, "new")}>
+                Source new people
+              </Button>
+            </div>
+            <p className={styles.similarChoiceHint}>
+              Ranking is free and searches only your workspace. Sourcing looks outside it and uses
+              credits.
+            </p>
+          </div>
+        ) : similarLoading ? (
           <div className={styles.similarLoading}>
             <Spinner size={16} /> Finding similar people…
           </div>
@@ -600,11 +641,17 @@ export function ContactsPage() {
             {similarData.map((p) => {
               const meta = strengthMeta(p.score / 100);
               return (
-                <li key={p.contact_id} className={styles.similarItem}>
+                <li key={p.contact_id || p.linkedin_url || p.full_name} className={styles.similarItem}>
                   <button
                     type="button"
                     className={styles.similarRow}
+                    // A net-new person has no account to open. Their profile is the only place to
+                    // go, and a row that navigates nowhere is worse than one that says so.
                     onClick={() => {
+                      if (p.is_new) {
+                        if (p.linkedin_url) window.open(p.linkedin_url, "_blank", "noopener");
+                        return;
+                      }
                       setSimilarFor(null);
                       navigate(`/accounts/${p.account_id}`);
                     }}
@@ -612,7 +659,7 @@ export function ContactsPage() {
                     <span className={styles.similarMain}>
                       <span className={styles.name}>{p.full_name}</span>
                       <span className={styles.muted}>
-                        {[p.title, p.account_name].filter(Boolean).join(" · ") || "—"}
+                        {[p.title, p.account_name || p.company].filter(Boolean).join(" · ") || "—"}
                       </span>
                       {p.reasons.length > 0 && (
                         <span className={styles.similarWhy}>{p.reasons.join(" · ")}</span>
@@ -631,7 +678,11 @@ export function ContactsPage() {
             compact
             icon={<Icons.UsersIcon />}
             title="No similar people yet"
-            description="Add more contacts to your workspace to compare against."
+            description={
+              similarMode === "new"
+                ? "We couldn't find anyone similar on the web. A LinkedIn URL on this contact gives the best results."
+                : "Nobody in your workspace resembles them yet. Try sourcing new people instead."
+            }
           />
         )}
       </Modal>

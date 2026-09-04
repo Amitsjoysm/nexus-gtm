@@ -175,3 +175,25 @@
   color: var(--text-muted);
   line-height: var(--leading, 1.5);
 }
+
+/* The choice step, shown before either search runs. */
+.similarChoice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.similarChoiceRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-block: var(--space-2);
+}
+
+.similarChoiceHint {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading);
+  color: var(--text-muted);
+  max-inline-size: 62ch;
+}

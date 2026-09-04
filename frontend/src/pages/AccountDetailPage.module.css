@@ -389,3 +389,38 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+
+/* The two questions "similar people" can answer, offered before either is run. Side by side and
+   equally weighted: neither is the obvious default, and the cost difference is stated in the hint
+   below rather than implied by making one look secondary. */
+.similarChoices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-block: var(--space-3) var(--space-2);
+}
+
+.similarHint {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading);
+  color: var(--text-muted);
+  max-inline-size: 62ch;
+}
+
+/* An inline "do the other one instead" inside a sentence. A Button would break the line. */
+.linkish {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.linkish:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}

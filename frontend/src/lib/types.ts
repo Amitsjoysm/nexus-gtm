@@ -92,10 +92,21 @@ export interface ContactLookalike {
   linkedin_url: string | null;
   score: number;
   reasons: string[];
+  /** True when this person is NOT in the workspace yet — `contact_id` is empty, so offer "add"
+   *  rather than a link to a record that does not exist. */
+  is_new: boolean;
+  /** Employer as plain text. A net-new person has no Account row, so `account_name` is blank. */
+  company: string;
 }
+
+/** Which question "find similar people" is answering. */
+export type LookalikeMode = "existing" | "new";
 
 export interface ContactLookalikeResponse {
   seed_contact_id: string;
+  /** Echoed back so the empty state can be specific: "no comparable contacts in your workspace"
+   *  and "we could not find anyone similar on the web" are different answers. */
+  mode: LookalikeMode;
   lookalikes: ContactLookalike[];
 }
 

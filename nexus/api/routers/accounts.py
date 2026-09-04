@@ -398,19 +398,45 @@ async def find_lookalikes(
 async def find_contact_lookalikes(
     contact_id: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
     limit: int = 10,
+    mode: str = "existing",
 ) -> ContactLookalikeResponse:
-    """Find people in the workspace who resemble this contact — similar role/seniority/department at
-    a similar company. Ranks existing contacts (deterministic, offline-safe)."""
+    """People who resemble this contact, in one of two senses the rep chooses between.
+
+    ``existing`` ranks the contacts ALREADY in the workspace — deterministic, offline-safe, reads
+    only the customer's own data, spends nothing. ``new`` sources people who are NOT in the
+    workspace, Exa `find_similar` on the seed's LinkedIn profile first.
+
+    **The mode is explicit, never inferred.** Falling through to `new` because `existing` came back
+    empty would spend a paid search the rep did not ask for, and the empty result is itself the
+    useful answer when a workspace has no comparable contacts yet.
+    """
     contact = await ts.get(Contact, contact_id)
     if contact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    if mode not in ("existing", "new"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "mode must be 'existing' or 'new'"
+        )
     from nexus.lookalike.contacts import get_contact_lookalike_service
 
-    found = await get_contact_lookalike_service().find(ts, contact, limit=max(1, min(limit, 50)))
+    service = get_contact_lookalike_service()
+    limit = max(1, min(limit, 50))
+    if mode == "new":
+        found = await service.source_new(ts, contact, limit=limit)
+        # Charged on the RESULT and only in this mode. `existing` runs no external call and
+        # returns the customer's own rows, so billing it would charge for sorting a table.
+        # `discovery.lookalike_contact` was catalogued and priced at 2 credits with NO call site —
+        # the "priced and metered nowhere" pattern this codebase keeps finding — so this is also
+        # the first thing that ever charges for it.
+        if found:
+            await _meter(ts, "discovery.lookalike_contact", len(found), principal)
+    else:
+        found = await service.find(ts, contact, limit=limit)
     return ContactLookalikeResponse(
         seed_contact_id=contact.id,
+        mode=mode,
         lookalikes=[ContactLookalikeOut(**lk.as_dict()) for lk in found],
     )
 

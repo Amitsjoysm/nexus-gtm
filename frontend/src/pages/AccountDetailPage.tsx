@@ -34,6 +34,7 @@ import type {
   CallTask,
   Contact,
   ContactLookalike,
+  LookalikeMode,
   Lookalike,
   OutcomeStage,
   Role,
@@ -99,6 +100,9 @@ export function AccountDetailPage() {
   // "Find similar people" — per-contact look-alike results, expanded inline below the row.
   const [similarPeople, setSimilarPeople] = useState<{
     contactId: string;
+    /** `null` while the rep is still choosing which question to ask. Nothing is requested — and
+     *  nothing is billed — until they pick, because `new` spends a paid search. */
+    mode: LookalikeMode | null;
     loading: boolean;
     data: ContactLookalike[] | null;
   } | null>(null);
@@ -160,23 +164,41 @@ export function AccountDetailPage() {
 
   // "Find similar people" — rank the workspace's other contacts by resemblance to this one
   // (role / seniority / department + company similarity). Toggles the inline panel.
-  async function findSimilarPeople(c: Contact) {
+  /** Open the panel. Asks WHICH question first rather than assuming — see `runSimilarPeople`. */
+  function findSimilarPeople(c: Contact) {
     if (similarPeople?.contactId === c.id) {
       setSimilarPeople(null); // clicking again collapses
       return;
     }
-    setSimilarPeople({ contactId: c.id, loading: true, data: null });
+    setSimilarPeople({ contactId: c.id, mode: null, loading: false, data: null });
+  }
+
+  /**
+   * Run the chosen mode.
+   *
+   * The two do different jobs and only one costs money: `existing` ranks contacts already in the
+   * workspace (free, offline, the customer's own data), `new` sources strangers through Exa and
+   * burns credits. Escalating automatically when `existing` finds nothing would spend on the rep's
+   * behalf — and "nobody in your book resembles them yet" is itself a useful answer.
+   */
+  async function runSimilarPeople(c: Contact, mode: LookalikeMode) {
+    setSimilarPeople({ contactId: c.id, mode, loading: true, data: null });
     try {
-      const res = await api.findContactLookalikes(c.id, 10);
-      setSimilarPeople({ contactId: c.id, loading: false, data: res.lookalikes });
+      const res = await api.findContactLookalikes(c.id, mode, 10);
+      setSimilarPeople({ contactId: c.id, mode, loading: false, data: res.lookalikes });
       if (res.lookalikes.length === 0)
         toast.toast({
           tone: "info",
           title: "No similar people",
-          description: "Add more contacts to your workspace to compare against.",
+          // Specific to the mode: these are different findings, and one of them is fixable by
+          // pressing the other button.
+          description:
+            mode === "existing"
+              ? "Nobody in your workspace resembles them yet. Try sourcing new people."
+              : "We couldn't find anyone similar on the web. A LinkedIn URL on this contact gives the best results.",
         });
     } catch (err) {
-      setSimilarPeople(null);
+      setSimilarPeople({ contactId: c.id, mode: null, loading: false, data: null });
       toast.error(
         "Couldn't find similar people",
         err instanceof ApiError ? err.detail : "Please try again.",
@@ -754,10 +776,14 @@ export function AccountDetailPage() {
                         Call
                       </Button>
                     </div>
-                    {similarPeople?.contactId === c.id && similarPeople.data && (
+                    {similarPeople?.contactId === c.id && (
                       <SimilarPeoplePanel
                         seedName={c.full_name}
+                        mode={similarPeople.mode}
+                        loading={similarPeople.loading}
                         people={similarPeople.data}
+                        hasProfile={Boolean(c.linkedin_url)}
+                        onChoose={(m) => runSimilarPeople(c, m)}
                         onOpenAccount={(accountId) => navigate(`/accounts/${accountId}`)}
                       />
                     )}
@@ -1178,39 +1204,109 @@ function LookalikeResult({
 }
 
 /** Inline "people like this contact" results, shown directly under a contact row. */
+/**
+ * "Similar people" answers two different questions, so it asks which one first.
+ *
+ * Ranking the workspace is free, instant and reads only the customer's own data. Sourcing net-new
+ * people spends a paid Exa search and returns strangers. Blending them — or escalating to the paid
+ * one when the free one finds nothing — would spend on the rep's behalf, and "nobody in your book
+ * resembles them yet" is a real answer rather than a failure to be worked around.
+ */
 function SimilarPeoplePanel({
   seedName,
+  mode,
+  loading,
   people,
+  hasProfile,
+  onChoose,
   onOpenAccount,
 }: {
   seedName: string;
-  people: ContactLookalike[];
+  mode: LookalikeMode | null;
+  loading: boolean;
+  people: ContactLookalike[] | null;
+  hasProfile: boolean;
+  onChoose: (mode: LookalikeMode) => void;
   onOpenAccount: (accountId: string) => void;
 }) {
+  if (mode === null) {
+    return (
+      <div className={styles.similarPanel}>
+        <p className={styles.agentNote}>Find people like {seedName} —</p>
+        <div className={styles.similarChoices}>
+          <Button size="sm" variant="secondary" onClick={() => onChoose("existing")}>
+            Rank my existing contacts
+          </Button>
+          <Button size="sm" onClick={() => onChoose("new")}>
+            Source new people
+          </Button>
+        </div>
+        <p className={styles.similarHint}>
+          Ranking is free and searches only your workspace. Sourcing looks outside it and uses
+          credits
+          {hasProfile
+            ? "."
+            : " — this contact has no LinkedIn URL, so results will be weaker."}
+        </p>
+      </div>
+    );
+  }
+
+  if (loading || people === null) {
+    return (
+      <div className={styles.similarPanel}>
+        <p className={styles.agentNote}>
+          {mode === "new" ? "Searching for new people…" : "Ranking your contacts…"}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.similarPanel}>
       {people.length === 0 ? (
         <p className={styles.agentNote}>
-          No similar people in your workspace yet. Source more contacts to compare against{" "}
-          {seedName}.
+          {mode === "existing" ? (
+            <>
+              Nobody in your workspace resembles {seedName} yet.{" "}
+              <button type="button" className={styles.linkish} onClick={() => onChoose("new")}>
+                Source new people instead
+              </button>
+              .
+            </>
+          ) : (
+            <>We couldn&apos;t find anyone similar to {seedName} on the web.</>
+          )}
         </p>
       ) : (
         <ul className={styles.recList}>
           {people.map((p) => {
             const meta = strengthMeta(p.score / 100);
             return (
-              <li key={p.contact_id} className={styles.rec}>
+              <li key={p.contact_id || p.linkedin_url || p.full_name} className={styles.rec}>
                 <div className={styles.recTop}>
                   <div>
                     <span className={styles.recName}>{p.full_name}</span>
                     <span className={styles.recTitle}>
-                      {[p.title, p.account_name].filter(Boolean).join(" · ") || "—"}
+                      {/* `company` for net-new people, who have no Account row and would
+                          otherwise show a name with nothing beside it. */}
+                      {[p.title, p.account_name || p.company].filter(Boolean).join(" · ") || "—"}
                     </span>
                   </div>
                   <div className={styles.recBadges}>
+                    {p.is_new && <Badge tone="info">Not in workspace</Badge>}
                     <Badge tone={meta.tone} dot>
                       Match {p.score}
                     </Badge>
+                    {p.is_new && p.linkedin_url && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => window.open(p.linkedin_url!, "_blank", "noopener")}
+                      >
+                        Profile
+                      </Button>
+                    )}
                     {p.account_id && (
                       <Button
                         size="sm"

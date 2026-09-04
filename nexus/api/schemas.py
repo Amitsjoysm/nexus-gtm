@@ -465,10 +465,19 @@ class ContactLookalikeOut(BaseModel):
     linkedin_url: str | None = None
     score: int
     reasons: list[str] = Field(default_factory=list)
+    # True when this person is not in the workspace yet. `contact_id` is empty for these, so the UI
+    # must offer "add" rather than a link to a record that does not exist.
+    is_new: bool = False
+    # Employer as plain text. A net-new person has no Account row, so `account_name` — read from
+    # one — would be blank and the rep would see a name with no company beside it.
+    company: str = ""
 
 
 class ContactLookalikeResponse(BaseModel):
     seed_contact_id: str
+    # Echoed back so the client renders the right empty state: "no comparable contacts in your
+    # workspace yet" and "we could not find anyone similar on the web" are different answers.
+    mode: str = "existing"
     lookalikes: list[ContactLookalikeOut] = Field(default_factory=list)
 
 

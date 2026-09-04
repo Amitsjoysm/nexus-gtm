@@ -91,6 +91,7 @@ import type {
   LaunchFromSelectionInput,
   LookalikeResponse,
   ContactLookalikeResponse,
+  LookalikeMode,
   CRMConnection,
   CRMConnectionInput,
   CRMConnectionTest,
@@ -497,9 +498,22 @@ export class ApiClient {
     );
   }
   /** Find people in the workspace who resemble this contact (role/seniority/dept + company). */
-  findContactLookalikes(contactId: string, limit = 10, signal?: AbortSignal) {
+  /**
+   * People resembling a contact. `existing` ranks the workspace's own contacts (free, offline);
+   * `new` sources people who are not in the workspace yet via Exa (costs credits).
+   *
+   * The mode is always sent explicitly — the server defaults to `existing`, and a client that
+   * silently escalated to `new` when `existing` came back empty would spend money the rep never
+   * asked to spend.
+   */
+  findContactLookalikes(
+    contactId: string,
+    mode: LookalikeMode = "existing",
+    limit = 10,
+    signal?: AbortSignal,
+  ) {
     return this.request<ContactLookalikeResponse>(
-      `/accounts/contacts/${contactId}/lookalikes?limit=${limit}`,
+      `/accounts/contacts/${contactId}/lookalikes?limit=${limit}&mode=${mode}`,
       { method: "POST", signal },
     );
   }
