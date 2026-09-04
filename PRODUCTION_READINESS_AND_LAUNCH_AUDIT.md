@@ -1,7 +1,7 @@
 # Production Readiness and Launch Audit
 
 **System:** Nexus GTM — multi-tenant B2B revenue-intelligence SaaS
-**Commit:** `44ea3d8` · **Date:** 4 September 2026 · **Suite:** 2,847 passing
+**Commit:** `dc660f0` · **Date:** 4 September 2026 · **Suite:** 2,847 passing
 **Auditor posture:** independent third party. Nothing below is accepted on the basis of
 documentation, configuration, or a test file existing.
 
@@ -93,8 +93,8 @@ multi-region DR, soak testing beyond 2 minutes, and any test at production data 
 | Billing conformance | `tests/test_rate_card_conformance.py` | Executed |
 | Adversarial billing | `tests/test_billing_adversarial.py` (16) | Executed |
 | Stripe account state | `scripts/stripe_status.py` | Executed |
-| Alert rules | `deploy/monitoring/alerts.yml` | Read only — stack not running |
-| Backup schedule | `scripts/backup_cron.sh` | Read only — **no cron installed** |
+| Alert rules | `deploy/monitoring/alerts.yml` | **Executed** — stack started, 13 rules loaded |
+| Backup schedule | `scripts/backup_cron.sh` | **Executed** — was broken; fixed and verified |
 | CI gates | `azure-pipelines-ci.yml` | Read only |
 
 ---
@@ -356,14 +356,14 @@ and fails on the tenth.
 | Reliability | 8 | 5.0 | PARTIAL |
 | Availability | 8 | 4.0 | PARTIAL — single-host, no autoscaling |
 | Disaster recovery | 10 | 6.5 | PASS WITH RISK |
-| Backups | 8 | 3.0 | FAIL — not scheduled |
-| Observability | 8 | 4.0 | PARTIAL — stack not running |
+| Backups | 8 | 5.0 | FAIL — script repaired and verified; schedule still not installed |
+| Observability | 8 | 6.0 | PARTIAL — stack running and verified; no alert delivery path |
 | Infrastructure | 6 | 5.0 | PARTIAL |
 | CI/CD | 6 | 7.0 | PASS |
 | Operations | 8 | 4.5 | PARTIAL |
 | Mobile | — | — | NOT APPLICABLE |
 
-**Weighted average: 6.2/10 — and the average is not the decision.** Performance, scalability and
+**Weighted average: 6.6/10 — and the average is not the decision.** Performance, scalability and
 backups each fail independently of it.
 
 ---
@@ -399,14 +399,47 @@ model.
 peak × 1.5.
 *Launch blocking:* **Yes**, for any SLA quoting latency.
 
-**P0-2 · Backups are not scheduled**
-*Evidence:* `crontab -l | grep backup_cron` → 0. One dump on disk, created by this audit.
+**P0-2 · Backups are not scheduled — and the script had never worked**
+*Evidence:* `crontab -l | grep backup_cron` → 0, and zero dumps on disk. Running
+`scripts/backup_db.sh` for the first time revealed it targets compose service `db`; the service is
+`postgres`. **A backup installed exactly as the script's own header documents would have failed
+every night since July.** Worse, the dump was written with a shell redirect, which creates the
+file before `pg_dump` runs — so the failure left `nexus_20260904T101456Z.dump` at **0 bytes**, a
+correct-looking name that `ls` cannot distinguish from a real backup and that the retention sweep
+counts as one of the seven kept.
+*Status:* **Script fixed and verified in `97e722d`** — staged through a `.partial`, size-checked,
+proven a readable archive with `pg_restore --list`, and only then moved into place. Verified live:
+1,035,072 bytes, 721 TOC entries. The cron wrapper now defaults `COMPOSE` to the production compose
+file (a bare `docker compose` from the repo root finds none) and writes a status file an alert can
+read. **The schedule itself is still not installed**, so this remains open.
 *Impact:* The proven restore capability has nothing recent to restore. RPO is unbounded.
 *Fix:* Install the cron entry with `BACKUP_OFFSITE` set; verify a dump lands offsite; alert on
 backup age.
 *Launch blocking:* **Yes.**
 
-**P0-3 · Monitoring stack is not running**
+**P0-3 · Monitoring stack is not running — and would have been blind if it were**
+*Status:* **Started and verified during this audit.** Prometheus, Grafana and Alertmanager are up,
+13 alert rules load `health=ok`, and the instrumentation was traced end to end — recorder →
+multiprocess mmap → `/metrics` → Prometheus, with `nexus_webhook_events_total` arriving under the
+correct labels after three deliberately-rejected webhooks. (API counters are created lazily on
+first occurrence, so their absence before any event is expected, not a broken exporter.)
+
+**Starting it surfaced a defect that would have made it substantially blind.** `app` runs
+`deploy.replicas: 2` and Prometheus had one static target, `app:8000`. Docker DNS round-robins that
+name, so each scrape hit whichever replica answered and every sample was labelled identically.
+Measured over ten minutes: **two distinct series under the same `instance` label, one reading 1 and
+the other 3.** One missing label, three failures — a counter alternating between replicas appears
+to *decrease*, and `rate()` reads a decrease as a counter reset, so every rate over an app counter
+is wrong (`HighServerErrorRate` is a rate); about half of each replica's samples are dropped as
+duplicates; and `up{job="nexus-app"} == 0` **cannot detect one replica of two failing**, because
+DNS keeps returning the survivor — the exact failure two replicas exist to survive, with the alert
+named AppDown reading all-clear throughout. Fixed in `dc660f0` with `dns_sd_configs`; verified two
+independent targets.
+
+*Remaining:* the stack was started by hand and is not part of the deploy procedure, and no alert
+has been proven to reach a human — no notification channel is configured in Alertmanager.
+
+**P0-3a · Original finding: monitoring stack is not running**
 *Evidence:* 0 Prometheus/Grafana/Alertmanager containers. A 2-minute 4.81% error rate alerted
 nobody.
 *Fix:* Start the overlay; trigger a controlled failure and confirm an alert is actually received.
@@ -451,8 +484,8 @@ nobody.
 | 4 | Scalability — peak + margin demonstrated | **FAIL** — and no traffic model to define peak |
 | 5 | Reliability — dependency failures tested | **PARTIAL** — provider failures observed in the wild, not injected |
 | 6 | Disaster recovery rehearsal | **PASS WITH RISK** |
-| 7 | Backup restoration demonstrated | **PASS** — but backups are not scheduled |
-| 8 | Observability — operators can detect and diagnose | **FAIL** — stack not running |
+| 7 | Backup restoration demonstrated | **PASS** — restore proven; the scheduled backup was broken and is now fixed but still uninstalled |
+| 8 | Observability — operators can detect and diagnose | **PARTIAL** — stack now running and traced end to end; no alert reaches a human |
 | 9 | Deployment and rollback | **PARTIAL** — rolling deploy verified; rollback NOT TESTED |
 | 10 | Data integrity | **PASS** |
 | 11 | Privacy — sensitive-data controls | **PASS WITH RISK** — Fernet at rest, secrets absent from responses; log redaction NOT TESTED |
@@ -475,7 +508,7 @@ system and I would defend it — but because four mandatory gates fail and three
 | # | Condition | Verification |
 |---|---|---|
 | 1 | ~~Fix the connection pool arithmetic~~ **DONE (`44ea3d8`)** | Error rate 0.05%; budget logged at boot |
-| 2 | Schedule backups with offsite copy | A dump lands offsite; restore it |
+| 2 | Install the backup schedule (the script is now fixed) | A dump lands offsite; restore it |
 | 3 | Run the monitoring stack | Trigger a failure; confirm the alert is received |
 | 4 | Complete Stripe onboarding + webhook | One test-mode payment through all five checks |
 | 5 | Build a traffic model | DAU, peak concurrency, transaction volume — then re-load-test at peak × 1.5 |
