@@ -295,10 +295,21 @@ async def list_invoices(
 # let a tenant admin re-buy their own bespoke contract at whatever the price row happens to say.
 ADMIN_MANAGED_PLAN_CLASSES = ("custom", "enterprise")
 
-# Classes that appear on the price list but cannot be bought through hosted checkout. `free` is
-# there to be seen, not purchased: a $0 subscription is a downgrade, and routing it through a
-# payment page would create a Stripe product for a plan that never charges anyone.
-UNPURCHASABLE_PLAN_CLASSES = ("free",)
+# Classes that cannot be bought through hosted checkout. `free` is there to be seen, not
+# purchased: a $0 subscription is a downgrade, and routing it through a payment page would create
+# a Stripe product for a plan that never charges anyone.
+#
+# The other four are the same argument with a much sharper edge, and they were missing. Found by
+# probing the running deployment: a customer POSTed `plan_id: "internal"` and received a real
+# Stripe Checkout session. `internal` is the STAFF tier — $0, and its class is in
+# `entitlements._UNLIMITED_CLASSES`, so `resolve_entitlement` returns `mode="unlimited"` and every
+# quota check and every credit burn is skipped. Completing that $0 checkout puts a customer on
+# unlimited everything. `unlimited` (the pre-billing grandfather plan) and `partner` grant the same
+# thing; `trial` is $0 with credits attached and is meant to be granted by the trial flow.
+#
+# `test_checkout_plan_gating.py` binds this to `_UNLIMITED_CLASSES` rather than to a copy of it,
+# so a fifth unlimited class cannot quietly open a fifth way to buy unlimited usage.
+UNPURCHASABLE_PLAN_CLASSES = ("free", "internal", "unlimited", "partner", "trial")
 
 
 class CheckoutRequest(BaseModel):
