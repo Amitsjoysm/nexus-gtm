@@ -1,7 +1,7 @@
 # Production Readiness and Launch Audit
 
 **System:** Nexus GTM — multi-tenant B2B revenue-intelligence SaaS
-**Commit:** `97d83ee` · **Date:** 4 September 2026
+**Commit:** `44ea3d8` · **Date:** 4 September 2026 · **Suite:** 2,847 passing
 **Auditor posture:** independent third party. Nothing below is accepted on the basis of
 documentation, configuration, or a test file existing.
 
@@ -121,11 +121,32 @@ http_req_failed ........ 4.81%       (876 of 18,211)
 checks_succeeded ....... 95.18%
 ```
 
-| SLO | Target | Actual | Verdict |
-|---|---|---|---|
-| p95 latency | < 500 ms | **2,660 ms** | FAIL (5.3×) |
-| p99 latency | < 1,500 ms | > 2,660 ms | FAIL |
-| Error rate | < 1% | **4.81%** | FAIL (4.8×) |
+| SLO | Target | First run | After the pool fix | Verdict |
+|---|---|---|---|---|
+| Error rate | < 1% | **4.81%** | **0.05%** | **PASS** |
+| p95 latency | < 500 ms | 2,660 ms | **3,090 ms** | **FAIL** (6.2×) |
+| p99 latency | < 1,500 ms | > 2,660 ms | > 3,090 ms | FAIL |
+
+### Re-run after remediation (`44ea3d8`)
+
+The pool was resized (max_connections 100 → 300, pool 16, overflow 5) and the identical test
+re-run. **Errors fell from 876 to 10 — a 96× improvement, and comfortably inside the objective.**
+P0-1 is resolved and the application now logs `130 steady / 234 during a rollout, of 300` at boot.
+
+**Latency did not improve, and the cause is now measured rather than inferred.** Sampling
+container CPU mid-run:
+
+```
+nexus-gtm-app-1        224% CPU
+nexus-gtm-app-2        223% CPU      ~450% of 800% available
+nexus-gtm-postgres-1     0.04% CPU   1 active query of 60 connections
+```
+
+**The remaining bottleneck is application CPU, not the database and not the pool.** Postgres is
+idle. Measured capacity is roughly **37 requests/second per uvicorn worker**, and the cost is in
+the request path itself — Pydantic validation, ORM hydration, the per-request RLS `SET LOCAL` —
+not in query execution. That is a different finding requiring a different fix (P0-5), and it is
+recorded as one rather than folded into the pool result.
 
 ### Root cause — reproducible, not probabilistic
 
@@ -167,6 +188,18 @@ Desktop host cannot reach the host's published ports, so k6 addressed `http://ap
 
 **Also NOT TESTED:** stress beyond 200 VUs, spike, soak, recovery-after-outage, capacity ceiling,
 autoscaling behaviour (there is none configured), and cost under load.
+
+### The latency number is not trustworthy, and the error-rate number is
+
+This matters for how the two results should be read. The Docker host has **8 CPUs and 3.95 GB of
+RAM**, and it ran Postgres, two app replicas, the worker *and* the k6 generator simultaneously. At
+idle, before any load, Postgres sat at 56% CPU and the worker at 44%.
+
+The **error-rate** result is sound regardless: pool exhaustion was a configuration defect, proven
+by arithmetic and fixed deterministically. The **latency** result is partly the test rig measuring
+itself, and a credible p95 requires an environment where the generator is external and the app
+tier is sized. It is reported as FAIL because no evidence exists that it passes — not because
+3.09 s is a trustworthy production figure.
 
 ---
 
@@ -318,8 +351,8 @@ and fails on the tenth.
 | Authentication | 8 | 8.5 | PASS |
 | Authorization | 10 | 8.0 | PASS (after the P0 fix) |
 | Security (broader) | 10 | 6.0 | PARTIAL — no external pen test |
-| **Performance** | 10 | **2.0** | **FAIL** |
-| **Scalability** | 10 | **2.0** | **FAIL** |
+| **Performance** | 10 | **4.0** | **FAIL** — errors fixed, latency unproven |
+| **Scalability** | 10 | **3.0** | **FAIL** — CPU-bound at ~37 req/s per worker; no traffic model |
 | Reliability | 8 | 5.0 | PARTIAL |
 | Availability | 8 | 4.0 | PARTIAL — single-host, no autoscaling |
 | Disaster recovery | 10 | 6.5 | PASS WITH RISK |
@@ -330,7 +363,7 @@ and fails on the tenth.
 | Operations | 8 | 4.5 | PARTIAL |
 | Mobile | — | — | NOT APPLICABLE |
 
-**Weighted average: 5.9/10 — and the average is not the decision.** Performance, scalability and
+**Weighted average: 6.2/10 — and the average is not the decision.** Performance, scalability and
 backups each fail independently of it.
 
 ---
@@ -349,7 +382,22 @@ platform_pool)` ≤ 80% of `max_connections` — with the current topology, pool
 Alternatively raise `max_connections` and size the host for it, or introduce PgBouncer.
 *Verification:* Re-run k6 at 200 VUs; all three SLOs must pass. Then stress to find the true
 ceiling.
-*Launch blocking:* **Yes.**
+*Status:* **RESOLVED in `44ea3d8`.** max_connections 300, pool 16, overflow 5;
+`connection_budget()` computes the fleet demand and logs it at every boot; six regression tests
+pin the arithmetic including the rollout doubling. Re-run: error rate 4.81% → 0.05%.
+*Launch blocking:* No longer.
+
+**P0-5 · Application is CPU-bound at ~37 req/s per worker**
+*Evidence:* Post-fix load test — p95 3.09 s against a 500 ms objective, with both app containers
+at ~224% CPU and Postgres at 0.04% and one active query.
+*Impact:* The latency SLO cannot be met by adding database capacity or connections. Throughput
+scales only with app processes, and each costs a full core under load.
+*Fix:* Profile the request path before adding hardware — the cost is in serialisation, ORM
+hydration and per-request setup, not in queries. Then size the app tier against a real traffic
+model.
+*Verification:* Re-run on a host where the generator is external; all three SLOs must pass at
+peak × 1.5.
+*Launch blocking:* **Yes**, for any SLA quoting latency.
 
 **P0-2 · Backups are not scheduled**
 *Evidence:* `crontab -l | grep backup_cron` → 0. One dump on disk, created by this audit.
@@ -399,7 +447,7 @@ nobody.
 |---|---|---|
 | 1 | Functional — critical journeys proven | **PASS** — signup, ICP, discovery, enrichment, drafting, billing all driven live |
 | 2 | Security — meaningful pen testing | **PARTIAL** — authz/business logic done, external not |
-| 3 | Performance — realistic production-path load | **FAIL** |
+| 3 | Performance — realistic production-path load | **FAIL** — error rate now passes; latency does not, and the environment cannot prove it either way |
 | 4 | Scalability — peak + margin demonstrated | **FAIL** — and no traffic model to define peak |
 | 5 | Reliability — dependency failures tested | **PARTIAL** — provider failures observed in the wild, not injected |
 | 6 | Disaster recovery rehearsal | **PASS WITH RISK** |
@@ -426,7 +474,7 @@ system and I would defend it — but because four mandatory gates fail and three
 
 | # | Condition | Verification |
 |---|---|---|
-| 1 | Fix the connection pool arithmetic | k6 at 200 VUs passes all three SLOs |
+| 1 | ~~Fix the connection pool arithmetic~~ **DONE (`44ea3d8`)** | Error rate 0.05%; budget logged at boot |
 | 2 | Schedule backups with offsite copy | A dump lands offsite; restore it |
 | 3 | Run the monitoring stack | Trigger a failure; confirm the alert is received |
 | 4 | Complete Stripe onboarding + webhook | One test-mode payment through all five checks |
