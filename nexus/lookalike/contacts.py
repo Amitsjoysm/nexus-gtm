@@ -363,6 +363,17 @@ def _score_candidate(
     icp_fit, icp_reason = icp_title_fit(title, targets)
     if icp_reason:
         reasons.append(icp_reason)
+    elif targets.wanted:
+        # The ICP is STATED and this person does not match it. Said out loud, because the score
+        # alone cannot distinguish "close to your champion and exactly who you sell to" from "close
+        # to your champion but not who you sell to" — and those need different decisions.
+        #
+        # Measured on the live workspace: an ICP naming "Facilities Director", a seed who is a VP of
+        # Sales, and eight sourced VPs of Sales all scoring 60 with no indication why they were not
+        # 100. The number was right and unreadable.
+        reasons.append(
+            f"Not one of your ICP buyer titles ({', '.join(targets.wanted[:2])})"
+        )
 
     if targets.wanted:
         blended = seed_fit * _SEED_WEIGHT + icp_fit * _ICP_WEIGHT
