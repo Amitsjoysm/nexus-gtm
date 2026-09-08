@@ -346,3 +346,148 @@ def test_the_provider_setting_is_runtime_switchable_and_declares_its_cost():
     assert spec is not None, "personalization_provider is not switchable at runtime"
     assert spec.risk == "high" and spec.warning
     assert "per contact" in spec.warning
+
+
+# ---- recent posts come from a SECOND actor -------------------------------------------------------
+#
+# No actor returns both a profile and an activity feed. Checked the Apify store on 2026-09-08:
+# `harvestapi/linkedin-profile-scraper` was the strongest all-in-one candidate — its
+# `profileScraperMode` switch turned out to differ only on email search, and a live run returned no
+# posts key at all. `apimaestro/linkedin-profile-detail` likewise. A profile page and an activity
+# feed are separate scrapes, so they are separate runs, and the second run is separately switchable
+# because it roughly doubles the per-contact cost.
+
+
+def test_the_activity_actor_is_registered_and_wired():
+    """`test_every_registered_actor_has_a_real_caller` covers the general rule; this names the
+    actor, because a registered actor with no consumer prints as a capability and is not one."""
+    from nexus.integrations.apify import ACTORS
+    from nexus.personalization.apify_provider import POSTS_ACTOR
+
+    assert POSTS_ACTOR in ACTORS
+    assert ACTORS[POSTS_ACTOR] == "A3cAPGpwBEG8RJwse"
+
+
+def test_posts_are_off_unless_someone_turns_them_on():
+    """The profile half is the cheap half and works alone. Doubling a per-contact cost is a
+    decision somebody should take, not a default they discover on an invoice."""
+    from nexus.core.config import Settings
+
+    assert Settings().personalization_posts_enabled is False
+
+
+def test_the_posts_switch_is_runtime_settable_and_states_its_cost():
+    from nexus.runtime_config.catalog import CATALOG
+
+    spec = CATALOG.get("personalization_posts_enabled")
+    assert spec is not None, "the second actor run cannot be switched off without a redeploy"
+    assert spec.risk == "high" and "SECOND" in (spec.warning or "")
+
+
+async def test_a_post_fetch_failure_does_not_lose_the_profile(monkeypatch):
+    """Headline and About are the reliable half. Taking them down because an activity scrape timed
+    out would trade the half that works for the half that is optional."""
+    from nexus.core.config import get_settings
+    from nexus.personalization.apify_provider import ApifyPersonalizationProvider
+
+    monkeypatch.setattr(get_settings(), "personalization_posts_enabled", True)
+
+    class _Client:
+        configured = True
+
+        async def run_actor(self, actor, run_input, **kw):
+            if actor == "linkedin_posts":
+                raise RuntimeError("activity scrape timed out")
+            return [{"linkedinUrl": "https://www.linkedin.com/in/x",
+                     "headline": "VP Sales", "about": "I sell things."}]
+
+    monkeypatch.setattr(
+        "nexus.integrations.apify.get_apify_client", lambda: _Client(), raising=False
+    )
+    out = await ApifyPersonalizationProvider().fetch(
+        full_name="X", linkedin_url="https://www.linkedin.com/in/x"
+    )
+    assert out is not None and out.headline == "VP Sales"
+    assert out.recent_posts == []
+
+
+async def test_no_post_actor_runs_when_the_switch_is_off(monkeypatch):
+    """The switch has to actually stop the spend, not just hide the result."""
+    from nexus.core.config import get_settings
+    from nexus.personalization.apify_provider import ApifyPersonalizationProvider
+
+    monkeypatch.setattr(get_settings(), "personalization_posts_enabled", False)
+    called: list[str] = []
+
+    class _Client:
+        configured = True
+
+        async def run_actor(self, actor, run_input, **kw):
+            called.append(actor)
+            return [{"linkedinUrl": "https://www.linkedin.com/in/x", "headline": "VP Sales"}]
+
+    monkeypatch.setattr(
+        "nexus.integrations.apify.get_apify_client", lambda: _Client(), raising=False
+    )
+    await ApifyPersonalizationProvider().fetch(
+        full_name="X", linkedin_url="https://www.linkedin.com/in/x"
+    )
+    assert called == ["linkedin_profile"], f"the posts actor ran while switched off: {called}"
+
+
+# ---- the extractor, against what the actor really returns -----------------------------------------
+
+def test_the_post_body_is_read_from_content():
+    """The activity actor puts the post BODY under `content`, which the key sweep did not look for
+    — so the first live run extracted a shared link's title and two LinkedIn URNs, and none of the
+    actual posts. Everything about a post except the post."""
+    from nexus.personalization.apify_provider import parse_profile
+
+    rows = [{
+        "linkedinUrl": "https://www.linkedin.com/in/x",
+        "author": {"linkedinUrl": "https://www.linkedin.com/in/x"},
+        "content": "Super excited about the shift from model selection to model orchestration.",
+    }]
+    out = parse_profile(rows, expect_linkedin_url="https://www.linkedin.com/in/x")
+    assert any("model orchestration" in p for p in out.recent_posts)
+
+
+def test_a_linkedin_urn_is_not_a_post():
+    """Measured: `urn:li:ugcPost:7502385616106512385` was returned as recent activity. Long enough,
+    mostly letters, and completely meaningless to a rep reading it back on a call.
+
+    `phone_finder` again, in the other direction: there the sweep was too narrow, here it was too
+    broad and the value gate too weak. CLAUDE.md records the rule — both halves are required.
+    """
+    from nexus.personalization.apify_provider import _is_substantive
+
+    assert not _is_substantive("urn:li:ugcPost:7502385616106512385")
+    assert not _is_substantive("ACoAAAEkwwAB9KEc2TrQgOLEQ-vzRyZeCDyc6DQ")
+    # Prose has spaces; a single unbroken token of any length is an id, a URL or a hash.
+    assert not _is_substantive("https://www.linkedin.com/feed/update/urn:li:activity:75023856161")
+    assert _is_substantive("Super excited about what this shows for model orchestration.")
+
+
+def test_the_urn_key_is_excluded_from_the_post_sweep():
+    """`shareUrn` matched on its "share" segment. Excluded by SEGMENT, which is why the key matcher
+    works on segments — a substring check cannot tell `content` from `contentAttributes`."""
+    from nexus.core.keys import key_matches
+    from nexus.personalization.apify_provider import _POST_UNWANTED, _POST_WANTED
+
+    assert not key_matches("shareUrn", wanted=_POST_WANTED, unwanted=_POST_UNWANTED)
+    assert not key_matches("contentAttributes", wanted=_POST_WANTED, unwanted=_POST_UNWANTED)
+    assert key_matches("content", wanted=_POST_WANTED, unwanted=_POST_UNWANTED)
+
+
+def test_a_post_still_has_to_be_about_the_person_asked_for():
+    """The identity rule is unchanged and now covers a second dataset shape. A profile scraper and
+    an activity scraper both return a list, and taking row zero is how a rep reads a stranger's
+    posts back to a prospect."""
+    from nexus.personalization.apify_provider import parse_profile
+
+    rows = [{
+        "author": {"linkedinUrl": "https://www.linkedin.com/in/someone-else"},
+        "content": "A long and perfectly substantive post written by a different human being.",
+    }]
+    out = parse_profile(rows, expect_linkedin_url="https://www.linkedin.com/in/x")
+    assert out.recent_posts == []

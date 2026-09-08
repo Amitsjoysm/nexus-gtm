@@ -125,6 +125,16 @@ _SPECS: tuple[SettingSpec, ...] = (
         risk="high",
     ),
     SettingSpec(
+        key="personalization_posts_enabled", label="Fetch recent LinkedIn posts",
+        group="Automation", kind="bool",
+        effect="Also fetches the contact's own recent posts, so a message can reference what they "
+               "actually said. Headline and About are fetched either way.",
+        warning="A SECOND paid actor run per contact, on top of the profile fetch — no actor "
+                "returns both, so this roughly doubles the per-person cost. Off is a complete "
+                "state: messages stay personalised on headline, About, role and signals.",
+        risk="high",
+    ),
+    SettingSpec(
         key="crm_sync_enabled", label="Push to CRM", group="Automation", kind="bool",
         effect="Pushes changed accounts out to each workspace's connected CRM.",
         warning="Writes into the customer's own CRM. Change-aware, so only stale or modified "

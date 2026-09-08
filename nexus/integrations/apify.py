@@ -75,6 +75,17 @@ ACTORS: dict[str, str] = {
     # account in the console before any run succeeds — an unapproved account gets a 403, not a
     # bad-key error.
     "linkedin_profile": "2SyF0bVxmgGr8IVCZ",
+    # LinkedIn profile URL(s) -> that person's own recent posts. `harvestapi/linkedin-profile-posts`.
+    #
+    # **A second actor, because no single one does both.** Checked the store on 2026-09-08:
+    # `harvestapi/linkedin-profile-scraper` (the strongest all-in-one candidate) has a
+    # `profileScraperMode` switch, but its two modes differ only on email search, and a live run
+    # returned no posts key at all. `apimaestro/linkedin-profile-detail` likewise. A profile page
+    # and an activity feed are separate scrapes, so they are separate runs.
+    #
+    # Unlike the two above, this one is LIMITED_PERMISSIONS: no console approval per account, which
+    # removes the blocker that kept `linkedin_profile` dead on two accounts for weeks.
+    "linkedin_posts": "A3cAPGpwBEG8RJwse",
 }
 
 

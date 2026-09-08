@@ -38,15 +38,25 @@ logger = logging.getLogger("nexus.personalization.apify")
 # Registered in nexus/integrations/apify.py ACTORS. A logical name, so swapping the actor is one
 # line there rather than an edit here.
 ACTOR = "linkedin_profile"
+# The activity feed, which the profile actor does not carry. Separate because no actor does both.
+POSTS_ACTOR = "linkedin_posts"
 
 # Keys that hold the person's own one-line positioning.
 _HEADLINE_KEYS = ("headline", "occupation", "subTitle", "sub_title", "title", "jobTitle")
 _SUMMARY_KEYS = ("summary", "about", "aboutSection", "bio", "description")
 # Anything that names a stream of activity, matched by SEGMENT not substring — `updates` contains
 # "date", which a substring exclusion silently dropped (see nexus/core/keys.py).
-_POST_WANTED = frozenset({"post", "activity", "update", "article", "share", "feed"})
+#: `content` is here because it is where the activity actor puts the post BODY, and without it the
+#: sweep matched only `article` (a shared link's title) and `shareUrn` (an identifier) — so the
+#: extractor returned everything about a post except the post. Measured on live output.
+_POST_WANTED = frozenset({"post", "activity", "update", "article", "share", "feed", "content"})
+#: `urn` joins the exclusions for the same run: `shareUrn` matched on "share" and its value is a
+#: LinkedIn internal id. Matched by SEGMENT, so `contentAttributes` (["content","attributes"]) is
+#: excluded by "attribute" while `content` itself is kept — the distinction a substring check
+#: cannot make, which is why `nexus/core/keys.py` works on segments.
 _POST_UNWANTED = frozenset({
     "count", "total", "url", "link", "id", "date", "time", "status", "type", "num", "number",
+    "urn", "attribute", "image", "video",
 })
 # Where the text sits inside a post object, whatever the actor calls it.
 _TEXT_KEYS = ("text", "content", "postText", "post_text", "commentary", "description", "title",
@@ -81,8 +91,25 @@ def _is_substantive(text: str) -> bool:
     Deliberately strict. An SDR opening with "I saw your post" and then referencing a reshare stub
     or a bare congratulations is worse than not referencing anything at all — it reads as
     automation, which is the exact impression personalization exists to avoid.
+
+    **It must also reject IDENTIFIERS, not just short text.** Measured 2026-09-08 against the live
+    activity actor: two of three extracted "posts" were
+    `urn:li:ugcPost:7502385616106512385` — long enough, mostly letters, and completely meaningless
+    to a rep. The key sweep had matched `shareUrn` on its "share" segment and the value gate waved
+    the URN through.
+
+    That is `phone_finder` again, in the other direction. The lesson recorded in CLAUDE.md is that
+    both halves are required: "the sweep alone is reckless, the gate alone missed a real number."
+    Here the sweep was reckless and the gate was too weak to catch it, so both are tightened.
     """
     if len(text) < _MIN_POST_CHARS:
+        return False
+    # An identifier, not prose. `urn:li:...`, a bare uuid, an object id.
+    if text.lower().startswith(("urn:", "urn%3a")):
+        return False
+    # Prose has spaces. A single unbroken token of any length is an id, a URL or a hash — never
+    # something a person wrote and never something worth reading back to them.
+    if " " not in text.strip():
         return False
     # Needs actual words, not just punctuation, emoji and a link.
     letters = sum(1 for ch in text if ch.isalpha())
@@ -135,19 +162,52 @@ def _collect_interests(item: dict) -> list[str]:
     return found[:10]
 
 
-def _row_is_about(item: dict, expect: str) -> bool:
-    """Whether this dataset row is the profile we asked for."""
+#: Where a row states whose profile it is. A profile scraper puts it at the top level; an ACTIVITY
+#: scraper puts it under the post's `author`, because the row is a post rather than a person.
+_IDENTITY_KEYS = ("linkedin_url", "linkedinUrl", "profileUrl", "profile_url", "url", "inputUrl",
+                  "publicIdentifier", "public_identifier")
+#: Nested objects that carry the identity one level down. Named rather than swept, because
+#: descending into every object would let an identity anywhere in the row — a mentioned person, a
+#: tagged company — satisfy a check whose entire job is to be strict.
+_IDENTITY_CONTAINERS = ("author", "actor", "profile", "poster", "creator")
+
+
+def _states_a_profile(item: dict) -> bool:
+    """Whether this row names ANY profile, at either level. Distinguishes "not ours" from "silent"."""
     from nexus.people.store import normalise_linkedin
 
-    for key in ("linkedin_url", "linkedinUrl", "profileUrl", "profile_url", "url", "inputUrl",
-                "publicIdentifier", "public_identifier"):
-        value = item.get(key)
-        if isinstance(value, str):
-            if normalise_linkedin(value) == expect:
+    for scope in (item, *(item.get(c) for c in _IDENTITY_CONTAINERS)):
+        if not isinstance(scope, dict):
+            continue
+        for key in _IDENTITY_KEYS:
+            value = scope.get(key)
+            if isinstance(value, str) and (normalise_linkedin(value) or value.strip()):
                 return True
-            # `publicIdentifier` is the slug alone, not a URL.
-            if value.strip().lower() and expect.endswith("/" + value.strip().lower()):
-                return True
+    return False
+
+
+def _row_is_about(item: dict, expect: str) -> bool:
+    """Whether this dataset row is the profile we asked for.
+
+    **Checks the nested author too.** The activity actor returns POSTS, not people, so the profile
+    URL lives under `author.linkedinUrl` and never at the top level. Reading only the top level
+    meant every post row "named no profile" and was therefore used — the benign single-result case
+    swallowing the exact check that stops a stranger's words being read back to a prospect on a
+    call. Found by test, and only after a second actor with a different row shape existed.
+    """
+    from nexus.people.store import normalise_linkedin
+
+    for scope in (item, *(item.get(c) for c in _IDENTITY_CONTAINERS)):
+        if not isinstance(scope, dict):
+            continue
+        for key in _IDENTITY_KEYS:
+            value = scope.get(key)
+            if isinstance(value, str):
+                if normalise_linkedin(value) == expect:
+                    return True
+                # `publicIdentifier` is the slug alone, not a URL.
+                if value.strip().lower() and expect.endswith("/" + value.strip().lower()):
+                    return True
     return False
 
 
@@ -161,11 +221,7 @@ def parse_profile(items: list[dict], *, expect_linkedin_url: str = "") -> Person
         matched = [r for r in rows if _row_is_about(r, expect)]
         if matched:
             rows = matched
-        elif any(
-            isinstance(r.get(k), str) and normalise_linkedin(str(r.get(k)))
-            for r in rows
-            for k in ("linkedin_url", "linkedinUrl", "profileUrl", "profile_url", "url")
-        ):
+        elif any(_states_a_profile(r) for r in rows):
             # Every row names a profile and none is ours. Refuse rather than personalise a call
             # with someone else's posts.
             logger.info("personalization: dataset identified other profiles only; discarding")
@@ -226,4 +282,50 @@ class ApifyPersonalizationProvider(PersonalizationProvider):
             return None
 
         insights = parse_profile(items, expect_linkedin_url=url)
+        insights.recent_posts.extend(await self._recent_posts(client, url))
         return None if insights.is_empty() else insights
+
+    async def _recent_posts(self, client, url: str) -> list[str]:
+        """This person's own recent posts, from the activity actor. Never raises.
+
+        **A second actor run, and therefore its own switch.** The profile actor's `updates` array
+        came back empty on every profile measured — it scrapes a profile page, not a feed — and no
+        actor in the store does both in one call (checked 2026-09-08:
+        `harvestapi/linkedin-profile-scraper`'s two modes differ only on email search and its live
+        output has no posts key). So posts cost a second run per contact, which is a spending
+        decision rather than a default.
+
+        **A failure here must not lose the profile half.** Headline and About are the cheap part
+        and they work alone; taking them down because an activity scrape timed out would trade the
+        reliable half for the optional one.
+        """
+        from nexus.core.config import get_settings
+
+        settings = get_settings()
+        if not getattr(settings, "personalization_posts_enabled", False):
+            return []
+        try:
+            items = await client.run_actor(
+                POSTS_ACTOR,
+                {
+                    "targetUrls": [url],
+                    # Bounded by the same setting that bounds how many reach the prompt: fetching
+                    # fifty to quote three is paying for forty-seven nobody reads.
+                    "maxPosts": max(1, int(getattr(settings, "personalization_max_posts", 3))),
+                    "postedLimit": getattr(settings, "personalization_posts_window", "3months"),
+                    # A repost is not something this person wrote, and "I saw your post" about
+                    # somebody else's is the automation tell `_is_substantive` exists to avoid.
+                    # A quote post carries their own commentary, so it stays.
+                    "includeReposts": False,
+                    "includeQuotePosts": True,
+                    # Reactions and comments are other people's words and are billed per item.
+                    "scrapeReactions": False,
+                    "scrapeComments": False,
+                },
+            )
+        except Exception:
+            logger.warning("recent-post fetch failed for %s", url, exc_info=True)
+            return []
+        # Reuses the SAME parser as the profile dataset, so the identity check, the substance floor
+        # and the trimming cannot drift between the two actors.
+        return parse_profile(items, expect_linkedin_url=url).recent_posts

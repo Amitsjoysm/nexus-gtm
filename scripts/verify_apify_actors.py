@@ -54,6 +54,10 @@ PROBE_EXPECTED_PHONE = "+17148033540"
 CONSUMERS = {
     "phone_finder": "people/enrich.py",
     "linkedin_profile": "personalization/apify_provider.py",
+    # Same consumer as the profile actor, deliberately: no actor returns both a profile and an
+    # activity feed, so one provider issues two runs. Gated on `personalization_posts_enabled`,
+    # because the second run roughly doubles the per-contact cost.
+    "linkedin_posts": "personalization/apify_provider.py",
 }
 
 

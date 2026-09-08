@@ -445,6 +445,15 @@ class Settings(BaseSettings):
     # — no caller change needed; fetched insights land on contact.custom_fields['personalization'].
     personalization_provider: str = "stub"   # stub | apify | ...
     personalization_max_posts: int = 3       # most-recent posts referenced in a message
+    # Recent activity is a SECOND actor run per contact, so it is its own switch rather than riding
+    # on `personalization_provider`. Measured: the profile actor returns a headline and an About
+    # section and its `updates` array is empty every time — it scrapes a profile, not a feed — so
+    # posts need a separate actor and separate money. Default off: the profile half is the cheap
+    # half and works alone, and doubling a per-contact cost is a decision somebody should take.
+    personalization_posts_enabled: bool = False
+    # How far back a post still counts as "recent". One of the activity actor's own windows.
+    # "I saw your post" about something from eight months ago reads worse than saying nothing.
+    personalization_posts_window: str = "3months"
 
     # Daily ICP Auto-Discovery (sub-project H): each interval, for opted-in tenants, discover
     # net-new companies and add ONLY strict ICP matches (icp-fit >= min_fit). OFF by default
