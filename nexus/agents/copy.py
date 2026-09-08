@@ -81,13 +81,39 @@ OUTPUT_CONTRACT = (
     "then the body. No preamble, no commentary, no markdown."
 )
 
+#: The closing ask. Shared by both agents so an email and a call script cannot drift into asking
+#: for different things.
+#:
+#: **A question is not a CTA.** Measured on live drafts: every one closed with "Would a brief
+#: conversation about reducing plant energy spend be valuable for you?" or "...be helpful?" — a
+#: question, technically, and one a busy buyer cannot answer. It asks them to evaluate whether a
+#: meeting has value rather than to accept a small, specific commitment, which is the difference
+#: between a template and how a real SDR closes. The call scripts were already doing it right
+#: ("Would you be open to a 15-minute call this week?"), so this makes the email match.
+CTA_RULE = (
+    "End with ONE specific, low-friction ask: name a short duration and a rough time, or propose "
+    "one concrete next step they can accept or decline in a word. Do not ask whether something "
+    "would be 'valuable', 'helpful', 'of interest' or 'worth exploring' — those ask the reader to "
+    "do the evaluating, and a busy buyer will not."
+)
+
+#: The register. Stated because "professional" is what a buyer reads as credible and it is not the
+#: default voice a model reaches for on a sales prompt: unprompted it drifts either to breathless
+#: marketing or to matey over-familiarity, and both cost the reply.
+TONE_RULE = (
+    "Tone: professional and plain, the way a competent peer writes to another. Confident without "
+    "hype, warm without familiarity. No exclamation marks, no emoji, no flattery."
+)
+
 EMAIL_RULES = (
     f"Rules: Under {EMAIL_WORD_CAP} words. Short sentences. "
-    "Open with a specific observation about THEM, then connect it to one problem, then ask one "
-    "question. Never open with a pitch or with our company. "
+    "Open with a specific observation about THEM, then connect it to one problem we solve, then "
+    "make the ask. Never open with a pitch or with our company. "
+    f"{TONE_RULE} "
     "Do not write 'hope this finds you well', 'I wanted to reach out', 'circling back', "
     "'synergy', 'leverage', 'game-changer', or 'revolutionary'. "
     "No more than one question. No bullet lists. Plain sentences only. "
+    f"{CTA_RULE} "
     "Use only facts given above — if a detail is missing, leave it out rather than inventing it. "
     "Never state a metric, customer name or case study that is not in the context."
 )
@@ -95,6 +121,8 @@ EMAIL_RULES = (
 CALL_RULES = (
     "Rules: written to be SPOKEN, not read. Short sentences a person can say without pausing. "
     "No jargon, no buzzwords, no bullet-point phrasing. "
+    f"{TONE_RULE} "
+    f"The `cta` field: {CTA_RULE} "
     "Use only facts given above — if a detail is missing, leave it out rather than inventing it. "
     "Never state a metric, customer name or case study that is not in the context."
 )
@@ -144,6 +172,31 @@ MAX_SIGNAL_BODY_CHARS = 320
 MAX_SIGNALS_IN_PROMPT = 3
 
 
+def _revenue_band(revenue: int | None) -> str:
+    """A band rather than the raw figure, for the same reason as `_employee_band`.
+
+    `annual_revenue` is enriched (migration 0051) and filterable in the product, and it was the one
+    firmographic that never reached the prompt — so a draft to a $2M business and one to a $2bn
+    business were written against identical context. It changes how you write: what a 40-person
+    company treats as a project, an enterprise treats as a line item.
+
+    Quoting the exact number back would be worse than omitting it. Revenue estimates are the least
+    reliable field any provider sells, and being precisely wrong about someone's turnover in a cold
+    email is the kind of error that ends the conversation.
+    """
+    if not revenue or revenue <= 0:
+        return ""
+    if revenue < 10_000_000:
+        return "under $10M revenue"
+    if revenue < 50_000_000:
+        return "$10-50M revenue"
+    if revenue < 250_000_000:
+        return "$50-250M revenue"
+    if revenue < 1_000_000_000:
+        return "$250M-1B revenue"
+    return "over $1B revenue"
+
+
 def _employee_band(count: int | None) -> str:
     """A band rather than the raw number.
 
@@ -176,6 +229,10 @@ def account_facts(account) -> str:
     band = _employee_band(getattr(account, "employee_count", None))
     if band:
         lines.append(f"Size: {band}")
+
+    revenue = _revenue_band(getattr(account, "annual_revenue", None))
+    if revenue:
+        lines.append(f"Scale: {revenue}")
 
     # Region before country: "California" tells a rep more than "United States", and both together
     # read as a database dump.
