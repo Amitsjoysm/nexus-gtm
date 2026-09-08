@@ -59,8 +59,21 @@ _POST_UNWANTED = frozenset({
     "urn", "attribute", "image", "video",
 })
 # Where the text sits inside a post object, whatever the actor calls it.
-_TEXT_KEYS = ("text", "content", "postText", "post_text", "commentary", "description", "title",
-              "body", "message", "summary")
+# Where the text sits inside a post object, whatever the actor calls it.
+#
+# **`title` and `description` are deliberately absent, and that is the whole fix for shared links.**
+# A post has no title; a shared ARTICLE does. When somebody quote-posts a link, the activity actor
+# returns their commentary under `content` and the link's metadata under `article`, and reading
+# `title` turned "GPT-6 Astra: Frontier intelligence for work | Microsoft Azure Blog" into a line
+# the prompt presented as something the person said. An SDR opening on a headline the prospect did
+# not write is the automation tell this module exists to avoid.
+#
+# Fixed HERE rather than by dropping `article` from the key sweep, because an actor may legitimately
+# nest a real post under `articles: [{"content": ...}]` — pinned by
+# `test_posts_are_found_under_any_key_spelling`. Narrowing the sweep is the mistake that made
+# `phone_finder` miss real data; narrowing which key inside an object counts as PROSE is not.
+_TEXT_KEYS = ("text", "content", "postText", "post_text", "commentary", "body", "message",
+              "summary")
 _INTEREST_KEYS = ("interests", "topics", "skills", "endorsements", "categories")
 
 # A post shorter than this is a reaction, a reshare stub or an emoji — nothing to write from.

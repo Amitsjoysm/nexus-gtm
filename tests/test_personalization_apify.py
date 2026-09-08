@@ -491,3 +491,81 @@ def test_a_post_still_has_to_be_about_the_person_asked_for():
     }]
     out = parse_profile(rows, expect_linkedin_url="https://www.linkedin.com/in/x")
     assert out.recent_posts == []
+
+
+# ---- only their own prose ------------------------------------------------------------------------
+#
+# When somebody quote-posts a link, the activity actor returns their commentary under `content` and
+# the link's metadata under `article`. Reading the article's `title` turned "GPT-6 Astra: Frontier
+# intelligence for work, now available in Microsoft Foundry | Microsoft Azure Blog" into a line the
+# prompt presented as something the person said.
+#
+# The live article object carries BOTH `title` and `description` — so removing only `title` would
+# have swapped a headline for a marketing blurb, which is no more their words than the headline was.
+
+_ARTICLE = {
+    "title": "GPT-6 Astra: Frontier intelligence for work | Microsoft Azure Blog",
+    "subtitle": "Read more about the launch on the Azure blog today.",
+    "description": "A long marketing blurb written by a content team, not by the person posting.",
+    "link": "https://azure.microsoft.com/blog/astra",
+    "linkLabel": "azure.microsoft.com",
+}
+
+
+def test_a_shared_articles_title_is_not_their_post():
+    """An SDR opening on a headline the prospect did not write is the automation tell this module
+    exists to avoid."""
+    from nexus.personalization.apify_provider import parse_profile
+
+    rows = [{
+        "author": {"linkedinUrl": URL},
+        "content": "Excited to see early customers already using this in production.",
+        "article": _ARTICLE,
+    }]
+    posts = parse_profile(rows, expect_linkedin_url=URL).recent_posts
+    assert posts == ["Excited to see early customers already using this in production."]
+    assert not any("Microsoft Azure Blog" in p for p in posts)
+
+
+def test_a_shared_articles_description_is_not_their_post_either():
+    """The live article object carries `description` beside `title`. Dropping only the title would
+    have promoted the blurb into its place — a different set of words the person still did not
+    write."""
+    from nexus.personalization.apify_provider import parse_profile
+
+    rows = [{"author": {"linkedinUrl": URL}, "article": _ARTICLE}]
+    assert parse_profile(rows, expect_linkedin_url=URL).recent_posts == []
+
+
+def test_the_fix_is_in_the_text_keys_not_in_the_key_sweep():
+    """Narrowing the SWEEP is the mistake that made `phone_finder` miss real data: an actor may
+    legitimately nest a real post under `articles: [{"content": ...}]`, which
+    `test_posts_are_found_under_any_key_spelling` pins. Narrowing which key inside an object counts
+    as PROSE is a different and safe move."""
+    from nexus.core.keys import key_matches
+    from nexus.personalization.apify_provider import (
+        _POST_UNWANTED, _POST_WANTED, _TEXT_KEYS, parse_profile,
+    )
+
+    # The sweep still reaches an `articles` container...
+    assert key_matches("articles", wanted=_POST_WANTED, unwanted=_POST_UNWANTED)
+    # ...and a real post nested inside one is still found.
+    assert parse_profile(
+        [{"linkedin_url": URL, "articles": [{"content": REAL_POST}]}], expect_linkedin_url=URL
+    ).recent_posts == [REAL_POST]
+    # What changed is that a title is no longer prose.
+    assert "title" not in _TEXT_KEYS and "description" not in _TEXT_KEYS
+
+
+def test_a_profiles_own_title_and_about_are_unaffected():
+    """`_TEXT_KEYS` governs POST bodies only. A profile's job title still feeds the headline and its
+    About section still feeds the summary — different keys, different question."""
+    from nexus.personalization.apify_provider import parse_profile
+
+    got = parse_profile(
+        [{"linkedin_url": URL, "title": "VP Sales at Acme",
+          "description": "I have run enterprise sales teams for a decade."}],
+        expect_linkedin_url=URL,
+    )
+    assert got.headline == "VP Sales at Acme"
+    assert got.summary == "I have run enterprise sales teams for a decade."

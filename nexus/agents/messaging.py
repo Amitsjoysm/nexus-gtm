@@ -134,6 +134,25 @@ class MessagingAgent(BaseAgent):
             },
         )
         subject, body = _split_subject(message)
+        # A BLANK COMPLETION IS NOT A DRAFT. Observed live 2026-09-08: the provider returned an
+        # empty string, `_split_subject("")` yielded two empty strings, and the run reported
+        # `status: completed` with an empty subject and an empty body — which reaches the approval
+        # queue looking like the product wrote nothing to say.
+        #
+        # The sibling agent already refuses to do this: `call_script._coerce` degrades to a usable
+        # script rather than passing an unusable one on. There is no equivalent degraded email —
+        # half a cold email is worse than none — so this reports instead, in the same shape
+        # `call_script` uses for its own refusals.
+        if not body.strip():
+            return {
+                "error": "empty_completion",
+                "detail": (
+                    "The model returned nothing for this draft. Nothing was saved. This is "
+                    "usually transient — try again; if it persists, check the LLM provider key "
+                    "and model on the Control plane."
+                ),
+                "contact_id": contact.id if contact else None,
+            }
         return {
             "contact_id": contact.id if contact else None,
             "subject": subject,
