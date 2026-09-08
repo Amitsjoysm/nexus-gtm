@@ -348,5 +348,15 @@ def get_alert_channels() -> AlertChannelRegistry:
 
 
 def set_alert_channels(registry: AlertChannelRegistry | None) -> None:
+    """Install a registry explicitly. Beats a tenant's stored connections.
+
+    Flagged as explicit so `alerts/connections.resolve_alert_channels` can tell "a test installed
+    this" from "the module memoized the env build". Without the distinction the resolver would
+    either ignore the test seam or treat the env singleton as an override and never read a
+    tenant's own credential — the second is the shape of the CRM bug that made `_connector` and
+    `_override` two variables rather than one.
+    """
     global _registry
+    if registry is not None:
+        registry._explicit = True
     _registry = registry

@@ -15,6 +15,7 @@ import {
   Skeleton,
   useToast,
 } from "@/components/ui";
+import { AlertChannelsCard } from "@/components/alerts/AlertChannelsCard";
 import { useApiClient } from "@/app/AuthContext";
 import { useApi } from "@/hooks/useApi";
 import { ApiError } from "@/lib/api";
@@ -55,11 +56,15 @@ export function IntegrationsPage() {
     <div>
       <PageHeader
         title="Integrations"
-        description="Connect your CRM and sales engagement tools. Import accounts and push contacts into sequences."
+        description="Connect your CRM, your sales engagement tools, and the places your alerts should arrive."
       />
       <div className={styles.grid}>
         <CrmConnectionCard />
         <SepCard />
+        {/* Alert channels sit here rather than in Settings because this is the page about
+            connecting other people's systems, and connecting one is a workspace decision. Choosing
+            which of YOUR alerts go there is personal, and stays on Settings. */}
+        <AlertChannelsCard />
       </div>
     </div>
   );

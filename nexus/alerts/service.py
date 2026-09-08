@@ -49,14 +49,24 @@ class AlertService:
         )
         ts.add(alert)
         await ts.flush()
-        await self._deliver(alert)
+        await self._deliver(ts, alert)
         if alert.delivered_at is not None:
             await ts.flush()
         return alert
 
-    async def _deliver(self, alert: Alert) -> None:
+    async def _deliver(self, ts: TenantSession, alert: Alert) -> None:
+        """Deliver on the channel named on the alert, using THIS TENANT's own credentials.
+
+        `get_alert_channels()` is a process-wide singleton built from the deployment env and has no
+        idea whose alert it is holding. One configured Slack URL would therefore have posted every
+        tenant's account names and buying signals into that one workspace — the cross-tenant leak
+        `nexus/ingestion/crm_credentials.py` exists to prevent, in the same shape.
+        """
+        from nexus.alerts.connections import resolve_alert_channels
+
         try:
-            result = await get_alert_channels().deliver(alert)
+            registry = await resolve_alert_channels(ts)
+            result = await registry.deliver(alert)
             if result.ok:
                 alert.delivered_at = utcnow()
             else:

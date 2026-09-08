@@ -1866,3 +1866,41 @@ export interface NotificationPreferences {
   channels: string[];
   modes: AlertMode[];
 }
+
+// ---- alert channel connections ----
+/**
+ * Channels a workspace connects its OWN credential for.
+ *
+ * Deliberately narrower than `NotificationPreferences.channels`: `in_app` needs no credential and
+ * `webhook` stays a deployment-level integration an operator wires. Routing an alert to a channel
+ * in this list is meaningless until somebody has connected it, which is what the guided setup and
+ * the connections panel exist to fix.
+ */
+export type AlertChannelKind = "slack" | "teams" | "telegram" | "email";
+
+/** Connection state for one channel. Carries NO secret — the server never returns one. */
+export interface AlertChannelConnection {
+  kind: AlertChannelKind;
+  connected: boolean;
+  /** A stored credential that no longer decrypts. Its own state: a tick beside a channel that
+   *  silently stopped delivering is worse than no tick at all. */
+  needs_reconnect: boolean;
+  /** `not_connected` | `pending` | `connected` | `error` — only a real test send advances it. */
+  status: string;
+  verified_at: string | null;
+  last_error: string;
+  /** Which fields the connect form must collect. Server-driven so the form cannot drift. */
+  fields: string[];
+}
+
+export interface AlertChannelConnections {
+  channels: AlertChannelConnection[];
+}
+
+/** Only the fields the chosen channel declares are sent; the rest stay absent. */
+export interface AlertChannelSecret {
+  url?: string;
+  bot_token?: string;
+  chat_id?: string;
+  to?: string;
+}

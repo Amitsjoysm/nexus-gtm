@@ -27,7 +27,18 @@ from nexus.core.db import Base, IdMixin, TimestampMixin, TZDateTime
 from nexus.core.tenancy import TenantScoped
 
 # The kinds of integration a tenant can hold credentials for.
-CONNECTION_KINDS = ("crm", "sep")
+#
+# The alert channels joined in 2026-09 for the reason this table exists. They were deployment-global
+# env vars read through a process-wide singleton, so one configured Slack URL would have posted
+# EVERY tenant's account names and buying signals into that one workspace — the same cross-tenant
+# leak the CRM row was created to close. A fourth table would have duplicated the write-only
+# secret, the status ladder and the env-fallback resolution for the third time.
+CONNECTION_KINDS = ("crm", "sep", "slack", "teams", "telegram", "email")
+
+#: The subset that delivers alerts. `in_app` and `webhook` are deliberately absent: in-app needs no
+#: credential, and the generic webhook stays a deployment-level integration rather than something a
+#: rep connects.
+ALERT_CHANNEL_KINDS = ("slack", "teams", "telegram", "email")
 
 
 class IntegrationConnection(IdMixin, TimestampMixin, TenantScoped, Base):

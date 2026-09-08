@@ -24,6 +24,10 @@ import type {
   CostRateResult,
   AdminSubscription,
   AlertMode,
+  AlertChannelConnection,
+  AlertChannelConnections,
+  AlertChannelKind,
+  AlertChannelSecret,
   BillingCredits,
   NotificationPreference,
   NotificationPreferences,
@@ -886,6 +890,35 @@ export class ApiClient {
       `/notifications/${encodeURIComponent(category)}/${encodeURIComponent(channel)}`,
       { method: "DELETE" },
     );
+  }
+
+  // ---- alert channel connections ----
+  /** Which channels this workspace has connected. Readable by every member: "send this to Slack"
+   *  is meaningless without knowing whether Slack exists yet. */
+  alertConnections(signal?: AbortSignal) {
+    return this.request<AlertChannelConnections>("/alert-connections", { signal });
+  }
+  /** Connect or replace one channel's credential. Workspace admin only; the secret is sealed
+   *  server-side and never comes back. */
+  connectAlertChannel(kind: AlertChannelKind, body: AlertChannelSecret) {
+    return this.request<AlertChannelConnection>(`/alert-connections/${encodeURIComponent(kind)}`, {
+      method: "PUT",
+      body,
+    });
+  }
+  /** Send a real message on the channel. A saved credential is not a working one, and only a
+   *  successful send advances the status. */
+  testAlertChannel(kind: AlertChannelKind) {
+    return this.request<AlertChannelConnection>(
+      `/alert-connections/${encodeURIComponent(kind)}/test`,
+      { method: "POST" },
+    );
+  }
+  /** Disconnect, falling back to the deployment default. Never refused. */
+  disconnectAlertChannel(kind: AlertChannelKind) {
+    return this.request<void>(`/alert-connections/${encodeURIComponent(kind)}`, {
+      method: "DELETE",
+    });
   }
 
   billingUsage(signal?: AbortSignal) {
