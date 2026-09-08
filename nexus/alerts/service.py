@@ -71,8 +71,17 @@ class AlertService:
                 alert.delivered_at = utcnow()
             else:
                 logger.info("alert %s not delivered via %s: %s", alert.id, alert.channel, result.detail)
-        except Exception:  # a channel failure must never lose the persisted alert
-            logger.warning("alert %s delivery via %s failed", alert.id, alert.channel, exc_info=True)
+        except Exception as exc:  # a channel failure must never lose the persisted alert
+            # The message, REDACTED — not `exc_info=True`. A Slack or Teams webhook URL is the
+            # credential, and Telegram puts its bot token in the path by design, so httpx's
+            # `raise_for_status` writes all three straight into a traceback. The stack frames on an
+            # outbound HTTP delivery are the same every time; the message is the diagnostic part.
+            from nexus.core.redact import redact
+
+            logger.warning(
+                "alert %s delivery via %s failed: %s",
+                alert.id, alert.channel, redact(f"{type(exc).__name__}: {exc}"),
+            )
 
     async def list(
         self,

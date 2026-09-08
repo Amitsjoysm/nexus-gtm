@@ -140,10 +140,19 @@ async def run_digest_sweep(ts, *, now: datetime | None = None, send=None) -> dic
             await (send or _log_digest)(ts, pref, batch)
             result["sent"] += 1
             result["alerts"] += batch.count
-        except Exception:
+        except Exception as exc:
             # Delivery failed: leave the watermark alone so the next sweep retries. Advancing it
             # here would silently swallow the one digest that failed to send.
-            logger.warning("digest delivery failed for user %s", pref.user_id, exc_info=True)
+            #
+            # Redacted, not `exc_info=True`: this sends through the same channels as an alert, and
+            # a Slack/Teams webhook URL — or Telegram's token-in-the-path — lands whole in a
+            # traceback. See nexus/core/redact.py.
+            from nexus.core.redact import redact
+
+            logger.warning(
+                "digest delivery failed for user %s: %s",
+                pref.user_id, redact(f"{type(exc).__name__}: {exc}"),
+            )
             continue
         pref.last_digest_at = now
 

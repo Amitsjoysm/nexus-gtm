@@ -112,6 +112,19 @@ _SPECS: tuple[SettingSpec, ...] = (
         risk="high",
     ),
     SettingSpec(
+        key="personalization_provider", label="Person-level personalization",
+        group="Automation", kind="str",
+        effect="Which provider fetches a contact's LinkedIn headline and About section, folded "
+               "into every email draft and call script. `apify` fetches; blank or `stub` fetches "
+               "nothing and messages stay personalised on role and signals alone.",
+        warning="`apify` spends a paid actor run per contact enriched, so it is a per-person cost "
+                "on a path that runs in the background. It lives here rather than only in the "
+                "environment so it can be switched off during an incident without a redeploy — "
+                "the worker picks the change up within 30s. An unknown value falls back to the "
+                "stub, which costs nothing and is logged.",
+        risk="high",
+    ),
+    SettingSpec(
         key="crm_sync_enabled", label="Push to CRM", group="Automation", kind="bool",
         effect="Pushes changed accounts out to each workspace's connected CRM.",
         warning="Writes into the customer's own CRM. Change-aware, so only stale or modified "

@@ -85,21 +85,38 @@ def build_personalization_provider(name: str) -> PersonalizationProvider:
 
 
 _provider: PersonalizationProvider | None = None
+#: Which configured name `_provider` was built from. `None` means it was installed explicitly by
+#: `set_personalization_provider` and must not be rebuilt.
+_provider_for: str | None = None
 
 
 def get_personalization_provider() -> PersonalizationProvider:
-    global _provider
-    if _provider is None:
-        from nexus.core.config import get_settings
+    """The configured provider, rebuilt when the configured NAME changes.
 
-        _provider = build_personalization_provider(get_settings().personalization_provider)
+    Keyed on the name rather than memoized once, because `personalization_provider` is a runtime
+    setting: an operator can switch it off from the Control plane and the worker picks the change
+    up on its 30s config refresh. A build-once cache would have made that toggle inert after the
+    first contact enriched — the panel reading "off" while a paid actor run fires per contact,
+    which is precisely the failure `nexus/runtime_config` exists to prevent and warns about.
+
+    An explicit `set_personalization_provider` still wins outright and is never rebuilt over.
+    """
+    global _provider, _provider_for
+    from nexus.core.config import get_settings
+
+    configured = (get_settings().personalization_provider or "").strip().lower()
+    if _provider is not None and (_provider_for is None or _provider_for == configured):
+        return _provider
+    _provider = build_personalization_provider(configured)
+    _provider_for = configured
     return _provider
 
 
 def set_personalization_provider(provider: PersonalizationProvider) -> None:
-    """Test/runtime override."""
-    global _provider
+    """Test/runtime override. Wins outright: `_provider_for` None marks it as not rebuildable."""
+    global _provider, _provider_for
     _provider = provider
+    _provider_for = None
 
 
 async def refresh_person_insights(ts, contact) -> PersonInsights | None:

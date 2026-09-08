@@ -26,6 +26,7 @@ from nexus.alerts.connections import (
 )
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.core.rbac import Permission
+from nexus.core.redact import redact
 from nexus.core.tenancy import TenantSession
 from nexus.models.integration import ALERT_CHANNEL_KINDS
 
@@ -151,7 +152,12 @@ async def test_connection(
         result = await registry.get(kind).deliver(probe)
         ok, detail = bool(result.ok), (result.detail or "")
     except Exception as exc:  # a failing test must report, never 500
-        ok, detail = False, f"{type(exc).__name__}: {exc}"[:500]
+        ok, detail = False, f"{type(exc).__name__}: {exc}"
+    # REDACTED before it is stored or returned. A Slack webhook URL IS the credential, and httpx
+    # puts the full URL into `raise_for_status` — so without this, one failed test wrote the sealed
+    # secret back out in plaintext into `last_error`, into this response, and onto the Integrations
+    # page, right beside the encrypted copy.
+    detail = redact(detail)
 
     row.status = "connected" if ok else "error"
     row.verified_at = utcnow() if ok else None

@@ -221,3 +221,128 @@ def test_insights_reach_the_email_and_call_prompt():
     assert "VP Eng at Acme" in prompt
     assert "pricing model" in prompt
     assert "solutions engineers" in prompt
+
+
+# ---- the About section is the personalization this actor actually returns -------------------------
+#
+# Measured 2026-09-08 against the live `dev_fusion/Linkedin-Profile-Scraper` on a paid Apify plan,
+# two profiles (williamhgates, satyanadella). Both returned a headline and an About section; both
+# returned `updates`, `interests` and `skills` as EMPTY LISTS. The actor's declared input schema
+# accepts only `profileUrls` — there is no activity flag — so it scrapes a profile, not a feed.
+#
+# `PersonInsights.summary` was fetched, stored on `contact.custom_fields['personalization']`, and
+# never read by `to_prompt`. So person-level personalization was running on one line of text while
+# the richest field available sat unused: built, stored and unreachable, the same shape as
+# `notification_preferences` having a table and no endpoint.
+
+def test_the_about_section_reaches_the_prompt():
+    """THE fix. Without it, the only person-level content this actor reliably supplies is dropped."""
+    from nexus.personalization.brief import PersonBrief
+
+    brief = PersonBrief(
+        name="Satya Nadella", title="Chairman and CEO", seniority="c_level",
+        linkedin_url="https://www.linkedin.com/in/satyanadella/",
+        role_angle="executive outcomes", signal_title=None, signal_is_personal=False,
+        insights={"headline": "Chairman and CEO at Microsoft",
+                  "summary": "I define my mission as empowering every person to achieve more."},
+    )
+    prompt = brief.to_prompt()
+    assert "empowering every person" in prompt
+    assert "Chairman and CEO at Microsoft" in prompt
+
+
+def test_the_summary_does_not_double_its_full_stop():
+    """Observed in the live prompt: "…achieve more..". Cosmetic in isolation, but this block is
+    read by a model that is being told to write carefully."""
+    from nexus.personalization.brief import PersonBrief
+
+    brief = PersonBrief(
+        name="A", title=None, seniority=None, linkedin_url=None, role_angle="x",
+        signal_title=None, signal_is_personal=False,
+        insights={"summary": "I build things."},
+    )
+    assert ".." not in brief.to_prompt()
+
+
+def test_a_long_about_section_is_trimmed_not_dropped():
+    """The opening sentences carry who the person says they are; the whole thing would dominate a
+    prompt whose other half is the account's signals. Same rule as a long post."""
+    from nexus.personalization.brief import PersonBrief
+
+    long_about = ("I lead revenue at a logistics company. " * 40).strip()
+    brief = PersonBrief(
+        name="A", title=None, seniority=None, linkedin_url=None, role_angle="x",
+        signal_title=None, signal_is_personal=False, insights={"summary": long_about},
+    )
+    prompt = brief.to_prompt()
+    assert "I lead revenue" in prompt
+    assert len(prompt) < 900, "an essay-length About section swamped the prompt"
+
+
+def test_an_empty_post_list_does_not_produce_an_empty_instruction():
+    """This actor returns `updates: []` every time. An instruction reading "Reference, naturally,
+    their recent activity: ." tells the model to invent one."""
+    from nexus.personalization.brief import PersonBrief
+
+    brief = PersonBrief(
+        name="A", title=None, seniority=None, linkedin_url=None, role_angle="x",
+        signal_title=None, signal_is_personal=False,
+        insights={"headline": "VP Sales", "recent_posts": [], "interests": []},
+    )
+    prompt = brief.to_prompt()
+    assert "recent activity" not in prompt
+    assert "Interests:" not in prompt
+
+
+# ---- the provider must follow the runtime setting ------------------------------------------------
+
+def test_the_provider_is_rebuilt_when_the_setting_changes(monkeypatch):
+    """`personalization_provider` is a runtime setting now, so an operator can switch a per-contact
+    paid actor run off from the Control plane without a redeploy.
+
+    A build-once cache would have made that toggle inert after the first contact enriched — the
+    panel reading "off" while the actor keeps firing. That is exactly the failure
+    `nexus/runtime_config` documents: "the toggle reads 'off' and the feature keeps running"."""
+    from nexus.core.config import get_settings
+    from nexus.personalization import provider as mod
+
+    mod.set_personalization_provider(None)  # type: ignore[arg-type]
+    mod._provider = None
+    mod._provider_for = None
+
+    monkeypatch.setattr(get_settings(), "personalization_provider", "apify")
+    assert mod.get_personalization_provider().name == "apify"
+
+    monkeypatch.setattr(get_settings(), "personalization_provider", "stub")
+    assert mod.get_personalization_provider().name == "stub", (
+        "the provider was memoized and ignored the runtime change"
+    )
+
+
+def test_an_explicitly_installed_provider_is_never_rebuilt_over(monkeypatch):
+    """The test seam has to win outright, or every suite that installs a double would have it
+    silently replaced by whatever the environment says."""
+    from nexus.core.config import get_settings
+    from nexus.personalization import provider as mod
+    from nexus.personalization.provider import StubPersonalizationProvider
+
+    sentinel = StubPersonalizationProvider()
+    sentinel.name = "sentinel"
+    mod.set_personalization_provider(sentinel)
+    monkeypatch.setattr(get_settings(), "personalization_provider", "apify")
+    assert mod.get_personalization_provider() is sentinel
+
+    mod._provider = None
+    mod._provider_for = None
+
+
+def test_the_provider_setting_is_runtime_switchable_and_declares_its_cost():
+    """Every catalog entry states its `effect`, and anything medium or high risk states its
+    `warning` — a toggle whose result nobody can state in a sentence is a trap. This one spends
+    money per contact, so it is high risk and says so."""
+    from nexus.runtime_config.catalog import CATALOG
+
+    spec = CATALOG.get("personalization_provider")
+    assert spec is not None, "personalization_provider is not switchable at runtime"
+    assert spec.risk == "high" and spec.warning
+    assert "per contact" in spec.warning

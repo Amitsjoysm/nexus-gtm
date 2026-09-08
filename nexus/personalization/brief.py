@@ -24,6 +24,23 @@ _ROLE_ANGLES: list[tuple[tuple[str, ...], str]] = [
 ]
 _DEFAULT_ANGLE = "relevance to their specific role and current priorities"
 
+# An "About" section runs to several paragraphs. Trimmed rather than dropped, for the same reason a
+# long post is: the opening sentences carry who the person says they are, and the whole thing would
+# dominate a prompt whose other half is the account's signals.
+_MAX_SUMMARY_CHARS = 400
+
+
+def _trim(value, limit: int) -> str:
+    """Collapse whitespace and cut at a sentence end where one is near the limit."""
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    stop = cut.rfind(". ")
+    # Only honour a sentence break in the last third, or a profile opening with one short line
+    # would be trimmed to that line and lose everything after it.
+    return (cut[: stop + 1] if stop > limit * 0.6 else cut.rstrip()) + ""
+
 
 def _role_angle(title: str | None, seniority: str | None) -> str:
     hay = f"{title or ''} {seniority or ''}".lower()
@@ -67,7 +84,19 @@ class PersonBrief:
         ins = self.insights or {}
         if ins.get("headline"):
             lines.append(f"Their headline: {ins['headline']}.")
-        posts = (ins.get("recent_posts") or [])[:max_posts]
+        # The "About" section, which was FETCHED, STORED and never read — the built-stored-and-
+        # unreachable pattern this codebase keeps finding. It matters more than it looks: measured
+        # against the live LinkedIn actor on two profiles, `recent_posts` and `interests` came back
+        # empty both times because that actor scrapes a profile, not an activity feed. Headline and
+        # About are what it reliably returns, so dropping About left person-level personalization
+        # running on a single line of text.
+        summary = _trim(ins.get("summary"), _MAX_SUMMARY_CHARS)
+        if summary:
+            # An About section usually ends in a full stop of its own; appending another produced
+            # "…achieve more.." in the live prompt. Cosmetic in isolation, but this block is read by
+            # a model that is being told to write carefully.
+            lines.append(f"How they describe themselves: {summary.rstrip('.')}.")
+        posts = [p for p in (ins.get("recent_posts") or [])[:max_posts] if p]
         if posts:
             lines.append("Reference, naturally, their recent activity: " + " | ".join(posts) + ".")
         interests = ins.get("interests") or []
