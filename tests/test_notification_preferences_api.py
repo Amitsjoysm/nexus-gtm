@@ -125,8 +125,13 @@ def test_settings_exposes_alert_delivery():
     assert "AlertDelivery" in settings, "Settings does not render the alert delivery section"
 
     panel = (root / "pages" / "settings" / "AlertDelivery.tsx").read_text(encoding="utf-8")
-    # Teams is why this was built now.
-    assert "teams" in panel.lower()
+    # Teams is why this was built now. The channel NAMES moved into a shared vocabulary module when
+    # the screen became a guided flow, so that both it and the connections panel on Integrations
+    # spell one credential one way — checked where they now live rather than dropped, because the
+    # property is "a user can route an alert to Teams", not "this file contains the string".
+    vocabulary = (root / "components" / "alerts" / "vocabulary.ts").read_text(encoding="utf-8")
+    assert "teams" in vocabulary.lower()
+    assert "vocabulary" in panel, "the panel no longer shares the channel vocabulary"
     # "No preference" must be distinguishable from a chosen default, or the only way back to the
     # workspace setting disappears from the UI.
     assert "Workspace default" in panel

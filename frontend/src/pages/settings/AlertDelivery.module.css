@@ -143,6 +143,14 @@
   color: var(--text-muted);
 }
 
+.routesHint {
+  margin: 0 0 var(--space-3);
+  max-inline-size: 78ch;
+  font-size: var(--text-xs);
+  line-height: var(--leading);
+  color: var(--text-muted);
+}
+
 .routeList {
   list-style: none;
   margin: 0;

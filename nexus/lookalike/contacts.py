@@ -167,12 +167,232 @@ def _parse_profile(title: str) -> tuple[str, str, str]:
     return name, (parts[1] if len(parts) > 1 else ""), (parts[2] if len(parts) > 2 else "")
 
 
+@dataclass(slots=True)
+class IcpTitleTargets:
+    """The titles this workspace actually sells to, read from its ICP.
+
+    `source_new` used to ignore the ICP entirely: it searched the seed's title, scored every result
+    a flat 70, and returned them in whatever order the search engine chose. So a workspace whose ICP
+    names "Chief Revenue Officer, VP of Sales, Head of Recruiting" got a list that was neither
+    ranked nor filtered by any of it, and a Software Engineer who happened to rank well for the
+    query sat above a CRO.
+    """
+
+    wanted: tuple[str, ...] = ()
+    wanted_tokens: frozenset[str] = frozenset()
+    excluded: tuple[str, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.wanted and not self.excluded
+
+
+#: Abbreviations a LinkedIn headline uses where a CRM record spells the role out. Applied to the
+#: SCORING copy of a title only, never to what is displayed.
+#:
+#: Measured on the ranking above: a seed of "Vice President of Sales" scored a candidate "VP of
+#: Sales" — the identical role — at 43, BELOW a "Chief Revenue Officer" at 55, because the token
+#: overlap between "vice president" and "vp" is zero. A sourcing list whose top result is not the
+#: seed's own role is one a rep stops trusting on the first use.
+_TITLE_ABBREVIATIONS: tuple[tuple[str, str], ...] = (
+    (r"\bsvp\b", "senior vice president"),
+    (r"\bevp\b", "executive vice president"),
+    (r"\bavp\b", "assistant vice president"),
+    (r"\bvp\b", "vice president"),
+    (r"\bcro\b", "chief revenue officer"),
+    (r"\bcfo\b", "chief financial officer"),
+    (r"\bcmo\b", "chief marketing officer"),
+    (r"\bcto\b", "chief technology officer"),
+    (r"\bceo\b", "chief executive officer"),
+    (r"\bcoo\b", "chief operating officer"),
+    (r"\bciso\b", "chief information security officer"),
+    (r"\bcio\b", "chief information officer"),
+    (r"\bdir\b", "director"),
+    (r"\bsr\b", "senior"),
+    (r"\bjr\b", "junior"),
+    (r"\bmgr\b", "manager"),
+    (r"\bbd\b", "business development"),
+    (r"\bbiz dev\b", "business development"),
+    (r"\bsdr\b", "sales development representative"),
+    (r"\bae\b", "account executive"),
+    (r"\bhr\b", "human resources"),
+    (r"\bta\b", "talent acquisition"),
+)
+
+
+def expand_title(value: str) -> str:
+    """A title with its abbreviations spelled out, for comparison only.
+
+    Expanding rather than contracting, because the long form is what carries the tokens both the
+    seniority ranker and the department classifier already look for — contracting to "vp" would
+    match neither.
+    """
+    low = " ".join((value or "").lower().split())
+    if not low:
+        return ""
+    for pattern, full in _TITLE_ABBREVIATIONS:
+        low = re.sub(pattern, full, low)
+    return " ".join(low.split())
+
+
+def _title_words(value: str) -> set[str]:
+    """Meaningful words in a title. Parenthetical acronyms are kept — "Chief Revenue Officer (CRO)"
+    is how an ICP writes it and "CRO" is how a headline does."""
+    words = re.split(r"[^a-z0-9]+", expand_title(value))
+    return {w for w in words if len(w) > 2 and w not in _TITLE_STOPWORDS}
+
+
+#: Words that appear in every second title and carry no signal about the role.
+_TITLE_STOPWORDS = frozenset({"the", "and", "for", "our", "his", "her", "their", "with"})
+
+
+def icp_title_targets(icp: dict | None) -> IcpTitleTargets:
+    """Read the ICP's title vocabulary. Every key it may use, because they are not interchangeable.
+
+    `buyer_titles` is what the Relevance page writes and is the common case; `titles` and
+    `title_keywords` predate it and are still honoured, because a workspace that filled one of those
+    in has expressed the same intent and silently ignoring it is the "configured and doing nothing"
+    state this codebase keeps finding.
+    """
+    icp = icp or {}
+    wanted: list[str] = []
+    for key in ("buyer_titles", "titles", "title_keywords", "job_levels"):
+        values = icp.get(key) or []
+        if isinstance(values, str):
+            values = [values]
+        wanted.extend(str(v).strip() for v in values if str(v).strip())
+
+    excluded = [
+        str(v).strip().lower()
+        for v in (icp.get("exclude_title_keywords") or [])
+        if str(v).strip()
+    ]
+    tokens: set[str] = set()
+    for title in wanted:
+        tokens |= _title_words(title)
+    return IcpTitleTargets(
+        wanted=tuple(dict.fromkeys(wanted)),
+        wanted_tokens=frozenset(tokens),
+        excluded=tuple(dict.fromkeys(excluded)),
+    )
+
+
+def icp_title_fit(title: str, targets: IcpTitleTargets) -> tuple[float, str]:
+    """How well a candidate's title matches the ICP. ``(0..1, reason)``.
+
+    Returns ``0.0`` with no reason when the ICP names no titles — an unstated ICP must not be read
+    as "nobody fits", the same bias as the relevance engine scoring an unknown attribute neutral
+    rather than punishing it.
+    """
+    if not targets.wanted or not title:
+        return 0.0, ""
+    low = " ".join(title.lower().split())
+    for wanted in targets.wanted:
+        w = " ".join(wanted.lower().split())
+        # Substring both ways: the ICP writes "Vice President of Sales" and a headline writes
+        # "VP of Sales, Central" — neither contains the other whole, so the token overlap below is
+        # what actually catches most real pairs. This is the exact-ish case.
+        if w and (w in low or low in w):
+            return 1.0, f"Exactly an ICP buyer title: {wanted}"
+    overlap = _title_words(title) & targets.wanted_tokens
+    if not overlap:
+        return 0.0, ""
+    fit = min(1.0, len(overlap) / 2.0)
+    return fit, f"Matches ICP buyer titles on {', '.join(sorted(overlap)[:3])}"
+
+
+def _is_excluded(title: str, targets: IcpTitleTargets) -> bool:
+    """A title the workspace has said it does not sell to. Dropped, not ranked low.
+
+    Ranking an excluded title merely low still puts it in front of a rep when the list is short,
+    and `exclude_title_keywords` is the one part of an ICP that is a statement about who NOT to
+    contact.
+    """
+    low = (title or "").lower()
+    return any(bad in low for bad in targets.excluded)
+
+
 def _canonical_profile(url: str) -> str:
     """Compare profiles by path, ignoring scheme/host/query. `linkedin.com/in/alex-kim` and
     `www.linkedin.com/in/alex-kim/?trk=x` are the same person."""
     low = (url or "").strip().lower().split("?")[0].rstrip("/")
     marker = "linkedin.com/in/"
     return low.split(marker, 1)[1] if marker in low else low
+
+
+#: How a sourced candidate's score is split between resembling the SEED and fitting the ICP.
+#:
+#: Weighted toward the seed because that is what the rep asked for — "people like this person" —
+#: while the ICP is the workspace's standing answer to "who is worth contacting at all". Both
+#: matter: seed-only returns the seed's peers at companies nobody sells to, ICP-only ignores the
+#: question that was asked.
+_SEED_WEIGHT = 0.6
+_ICP_WEIGHT = 0.4
+
+#: With a stated ICP, a candidate the ICP does not name must at least be this close to the seed to
+#: survive. Below it, it is neither who the workspace sells to nor who the rep asked for.
+#:
+#: **Only applied when the ICP actually names titles.** Without one there is no basis to call a
+#: search result noise, and dropping on the seed score alone cost real coverage: measured, a "VP
+#: Revenue Operations" sourced for a "VP Sales" seed — same seniority, adjacent function, an
+#: entirely reasonable peer — fell under a flat floor. Unknown means allow here, as it does in the
+#: entitlements engine and the alert resolver; what an absent ICP costs is ranking, not results.
+_SEED_ONLY_FLOOR = 0.5
+
+
+def _score_candidate(
+    *, title: str, seed, seed_features, targets: IcpTitleTargets
+) -> tuple[int, list[str]] | None:
+    """``(score 0..100, reasons)`` for a sourced person, or None to drop them.
+
+    Every sourced candidate used to score a flat 70, which is not a score — it is the absence of
+    one. The list then had no top, so a CRO and a regional coordinator were indistinguishable and
+    the rep worked whichever order the search engine returned.
+    """
+    reasons: list[str] = []
+
+    # Resemblance to the seed, through the same scorer that ranks the workspace's own contacts, so
+    # `existing` and `new` cannot disagree about what "similar role" means. The title is expanded
+    # for comparison only — "VP of Sales" and "Vice President of Sales" are one role.
+    candidate = _TitleOnly(title=expand_title(title))
+    seed_sim = contact_similarity(seed, candidate, seed_features=seed_features)
+    seed_fit = seed_sim.score / 100.0
+    if seed_sim.reasons and seed_sim.breakdown:
+        reasons.extend(seed_sim.reasons[:2])
+
+    icp_fit, icp_reason = icp_title_fit(title, targets)
+    if icp_reason:
+        reasons.append(icp_reason)
+
+    if targets.wanted:
+        blended = seed_fit * _SEED_WEIGHT + icp_fit * _ICP_WEIGHT
+        # With a STATED ICP, a candidate must either be a title this workspace sells to or be
+        # genuinely close to the seed. "Regional Coordinator" for a VP of Sales seed cleared a flat
+        # floor on seniority alone and sat in the list; noise in a sourcing list is what makes a rep
+        # stop opening it.
+        if icp_fit <= 0.0 and seed_fit < _SEED_ONLY_FLOOR:
+            return None
+    else:
+        # An ICP that names no titles must not drag every candidate's score down by 40%, and must
+        # not drop anybody either. Unstated is not "nobody fits".
+        blended = seed_fit
+
+    if not reasons:
+        reasons.append(f"{title} — sourced on role")
+    return round(blended * 100), reasons[:4]
+
+
+@dataclass(slots=True)
+class _TitleOnly:
+    """A sourced person, for the scorer.
+
+    A LinkedIn headline gives a title and nothing else — no seniority field, no department — and
+    `prepare_contact` reads both from the title anyway. This exists so the sourced path can use the
+    SAME scorer as the existing-contact path rather than a second one that would drift.
+    """
+
+    title: str
+    seniority: str | None = None
 
 
 @dataclass(slots=True)
@@ -301,19 +521,42 @@ class ContactLookalikeService:
         registry = get_registry()
         account = await ts.get(Account, contact.account_id) if contact.account_id else None
 
+        # The ICP, read ONCE. It is used three ways below — to shape the query, to rank the
+        # results, and to drop the ones this workspace has said it does not sell to. Before this,
+        # `source_new` read it only in the fallback path that runs when everything else found
+        # nothing, so a workspace whose ICP names "CRO, VP of Sales, Head of Recruiting" got a list
+        # that was neither ranked nor filtered by any of it.
+        icp: dict = {}
+        try:
+            from nexus.relevance.engine import get_profile
+
+            profile = await get_profile(ts)
+            icp = (getattr(profile, "icp", None) or {}) if profile else {}
+        except Exception:  # an unreadable ICP must not take the feature down
+            logger.warning("could not read the ICP for contact %s", contact.id, exc_info=True)
+        targets = icp_title_targets(icp)
+
         # ROLE SEARCH FIRST, not `find_similar`. Both are Exa; the difference is what "similar"
         # means for a PERSON. Measured live against Brian Biggs' profile, `find_similar` returned
         # two other Brian Biggses in its top five — a profile page's dominant text is the name, so
         # page similarity resolves to name similarity. The same seed's ROLE ("Vice President of
         # Sales" + the account's industry) returned eight distinct peers, none of them namesakes,
         # one with `healthcaresales` in the profile slug.
-        #
-        # `find_similar` is kept as the fallback for a seed with no title, where there is nothing
-        # to search a role with and a weak answer beats none.
         hits = []
         title_q = (contact.title or "").strip()
+        # A seed with no title used to fall straight to `find_similar` and its namesakes. If the
+        # ICP names the titles this workspace sells to, that is a far better query than a page whose
+        # dominant text is somebody's name — and it costs the same one call.
+        if not title_q and targets.wanted:
+            title_q = targets.wanted[0]
         if title_q:
+            # The industry the query names: the seed's own account first, because that is a fact
+            # about the person we are matching. The ICP's industries are the fallback, which is what
+            # makes this work for an account whose industry nobody has filled in.
             industry = ((account.industry if account else "") or "").strip()
+            if not industry:
+                industries = [str(i).strip() for i in (icp.get("industries") or []) if str(i).strip()]
+                industry = industries[0] if industries else ""
             query = " ".join(
                 p for p in (title_q, "at a", industry, "company LinkedIn profile") if p
             )
@@ -322,6 +565,8 @@ class ContactLookalikeService:
             except Exception:  # a search backend must never break the page
                 logger.warning("role search failed for contact %s", contact.id, exc_info=True)
                 hits = []
+        # `find_similar` is kept as the fallback for a seed with no title AND no ICP titles, where
+        # there is nothing to search a role with and a weak answer beats none.
         if not hits and seed_url:
             try:
                 hits = list(await registry.find_similar(seed_url, limit=max(limit * 2, 10)) or [])
@@ -329,6 +574,7 @@ class ContactLookalikeService:
                 logger.warning("find_similar failed for contact %s", contact.id, exc_info=True)
                 hits = []
 
+        seed_features = prepare_contact(contact)
         for hit in hits:
             url = str(getattr(hit, "url", "") or "")
             if not _profile_url(url):
@@ -350,20 +596,33 @@ class ContactLookalikeService:
             company = company or snip_company
             if not title:
                 continue
+            # A title the workspace has said it does not sell to. Dropped rather than ranked low:
+            # on a short list, "ranked low" still means "in front of the rep".
+            if _is_excluded(title, targets):
+                continue
+
+            scored = _score_candidate(
+                title=title, seed=contact, seed_features=seed_features, targets=targets
+            )
+            if scored is None:
+                # Neither similar to the seed nor anything the ICP asks for. A Software Engineer
+                # returned for a VP of Sales seed is noise, and noise in a sourcing list is what
+                # makes a rep stop opening it.
+                continue
+            score, reasons = scored
             seen.add(key)
             out.append(ContactLookalike(
                 contact_id="", full_name=name, account_id="", title=title or None,
-                linkedin_url=url, company=company, is_new=True, score=70,
-                reasons=[
-                    f"{title} — similar role to {contact.title or seed_name}"
-                    if contact.title else f"Similar profile to {seed_name}"
-                ],
+                linkedin_url=url, company=company, is_new=True, score=score,
+                reasons=reasons,
             ))
-            if len(out) >= limit:
-                return out
 
         if out:
-            return out
+            # RANKED, not returned in search order. Every result used to score a flat 70, so the
+            # list had no top: a CRO and a regional coordinator were indistinguishable, and the rep
+            # worked whichever the search engine happened to put first.
+            out.sort(key=lambda lk: lk.score, reverse=True)
+            return out[:limit]
 
         # Fallback: search by ROLE at the seed's own account. Weaker than profile similarity — it
         # finds the same job at the same company rather than the same kind of person anywhere — but

@@ -357,3 +357,186 @@ def test_a_territory_is_not_an_employer(value, is_territory):
     from nexus.lookalike.contacts import _looks_like_territory
 
     assert _looks_like_territory(value) is is_territory
+
+
+# ---- the ICP is what makes a sourced list worth working ------------------------------------------
+#
+# `source_new` used to ignore the ICP entirely: it searched the seed's title, scored EVERY result a
+# flat 70, and returned them in whatever order the search engine chose. So a workspace whose ICP
+# names "Chief Revenue Officer, VP of Sales, Head of Recruiting" got a list that was neither ranked
+# nor filtered by any of it — a Software Engineer who happened to rank well for the query sat above
+# a CRO, and the rep had no way to tell which was which.
+
+_ICP = {
+    "buyer_titles": [
+        "Chief Revenue Officer (CRO)",
+        "Vice President of Sales",
+        "Director of Marketing",
+        "Sales Operations Manager",
+    ],
+    "industries": ["Software & SaaS"],
+    "exclude_title_keywords": ["intern", "student"],
+}
+
+
+async def _source_with_icp(monkeypatch, seed, registry, account=None, icp=None):
+    """Same harness, but the workspace HAS a relevance profile."""
+    from nexus.lookalike import contacts as mod
+
+    monkeypatch.setattr(mod, "get_registry", lambda: registry, raising=False)
+
+    class _Profile:
+        def __init__(self, icp):
+            self.icp = icp
+
+    async def _get_profile(_ts):
+        return _Profile(icp if icp is not None else _ICP)
+
+    import nexus.relevance.engine as engine_mod
+
+    monkeypatch.setattr(engine_mod, "get_profile", _get_profile, raising=False)
+
+    class _TS:
+        tenant_id = "t1"
+
+        async def get(self, model, ident):
+            return account
+
+        async def list(self, model, *w, **kw):
+            return []
+
+        async def first(self, model, *w, **kw):
+            return None
+
+    return await mod.ContactLookalikeService().source_new(_TS(), seed, limit=10)
+
+
+def test_the_icp_title_vocabulary_is_read_from_every_key_it_may_use():
+    """`buyer_titles` is what the Relevance page writes; `titles` and `title_keywords` predate it.
+    A workspace that filled one of the older ones in expressed the same intent, and ignoring it is
+    the "configured and doing nothing" state this codebase keeps finding."""
+    from nexus.lookalike.contacts import icp_title_targets
+
+    for key in ("buyer_titles", "titles", "title_keywords"):
+        targets = icp_title_targets({key: ["Vice President of Sales"]})
+        assert targets.wanted == ("Vice President of Sales",), key
+
+
+def test_an_abbreviated_title_is_the_same_role():
+    """Measured on the ranking: a seed of "Vice President of Sales" scored a candidate "VP of Sales"
+    — the identical role — BELOW a "Chief Revenue Officer", because the token overlap between "vice
+    president" and "vp" is zero. A sourcing list whose top result is not the seed's own role is one
+    a rep stops trusting on first use."""
+    from nexus.lookalike.contacts import expand_title
+
+    assert expand_title("VP of Sales") == "vice president of sales"
+    assert expand_title("SVP Sales") == "senior vice president sales"
+    assert expand_title("CRO") == "chief revenue officer"
+    # A word that merely CONTAINS an abbreviation must survive intact.
+    assert expand_title("Advertising Director") == "advertising director"
+
+
+async def test_results_are_ranked_by_icp_fit_and_role_not_returned_flat(monkeypatch):
+    """THE property. Every sourced person used to score a flat 70, which is not a score — it is the
+    absence of one. The list then had no top, and the rep worked whichever order Exa returned."""
+    reg = _Registry(results=[
+        _hit("Sam Patel", "https://www.linkedin.com/in/sam-patel",
+             "# Sam Patel\n\nSales Operations Manager, Ramp\n\nNew York (US)"),
+        _hit("Dana Reed", "https://www.linkedin.com/in/dana-reed",
+             "# Dana Reed\n\nVP of Sales, Ramp\n\nNew York (US)"),
+    ])
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim",
+                   title="Vice President of Sales")
+
+    out = await _source_with_icp(monkeypatch, seed, reg,
+                                 account=Account(id="a1", name="Acme", domain="acme.com"))
+
+    assert [p.full_name for p in out] == ["Dana Reed", "Sam Patel"], (
+        "the seed's own role must outrank a different ICP title"
+    )
+    assert out[0].score > out[1].score, "every result scored the same; the list has no top"
+
+
+async def test_a_title_the_icp_excludes_is_dropped_not_ranked_low(monkeypatch):
+    """`exclude_title_keywords` is the one part of an ICP that is a statement about who NOT to
+    contact. On a short list, "ranked low" still means "in front of the rep"."""
+    reg = _Registry(results=[
+        _hit("Robin Yu", "https://www.linkedin.com/in/robin-yu",
+             "# Robin Yu\n\nSales Intern, Ramp\n\nNew York (US)"),
+        _hit("Dana Reed", "https://www.linkedin.com/in/dana-reed",
+             "# Dana Reed\n\nVP of Sales, Ramp\n\nNew York (US)"),
+    ])
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim",
+                   title="Vice President of Sales")
+
+    out = await _source_with_icp(monkeypatch, seed, reg)
+    assert [p.full_name for p in out] == ["Dana Reed"]
+
+
+async def test_an_off_role_result_is_dropped_when_the_icp_names_titles(monkeypatch):
+    """A Software Engineer returned for a VP of Sales seed is noise, and noise in a sourcing list is
+    what makes a rep stop opening it. Only with a STATED ICP, though — see the test below."""
+    reg = _Registry(results=[
+        _hit("Kit Alvarez", "https://www.linkedin.com/in/kit-alvarez",
+             "# Kit Alvarez\n\nSenior Software Engineer, Ramp\n\nNew York (US)"),
+    ])
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim",
+                   title="Vice President of Sales")
+
+    assert await _source_with_icp(monkeypatch, seed, reg) == []
+
+
+async def test_an_unstated_icp_drops_nobody(monkeypatch):
+    """Unknown means allow, as it does in the entitlements engine and the alert resolver. What an
+    absent ICP costs is RANKING, not results — dropping on the seed score alone cost real coverage:
+    a "VP Revenue Operations" sourced for a "VP Sales" seed is a reasonable peer and fell under a
+    flat floor."""
+    reg = _Registry(results=[
+        _hit("Kit Alvarez", "https://www.linkedin.com/in/kit-alvarez",
+             "# Kit Alvarez\n\nSenior Software Engineer, Ramp\n\nNew York (US)"),
+    ])
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim",
+                   title="Vice President of Sales")
+
+    out = await _source_with_icp(monkeypatch, seed, reg, icp={})
+    assert [p.full_name for p in out] == ["Kit Alvarez"]
+
+
+async def test_the_icp_supplies_the_query_when_the_seed_has_no_title(monkeypatch):
+    """A seed with no title used to fall straight to `find_similar` and its namesakes. If the ICP
+    names the titles this workspace sells to, that is a far better query than a page whose dominant
+    text is somebody's name — and it costs the same one call."""
+    reg = _Registry(results=[], similar=[])
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim", title=None,
+                   linkedin_url="https://www.linkedin.com/in/alex-kim")
+
+    await _source_with_icp(monkeypatch, seed, reg)
+    assert reg.search_calls, "no role search ran for a titleless seed with a stated ICP"
+    assert "Chief Revenue Officer" in reg.search_calls[0]
+
+
+async def test_the_icp_industry_backs_up_an_account_that_has_none(monkeypatch):
+    """The seed's own account names the industry when it has one — that is a fact about the person
+    being matched. The ICP is the fallback, which is what makes this work at all for an account
+    whose industry nobody has filled in."""
+    reg = _Registry(results=[])
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim",
+                   title="Vice President of Sales")
+
+    await _source_with_icp(monkeypatch, seed, reg,
+                           account=Account(id="a1", name="Acme", domain="acme.com"))
+    assert "Software & SaaS" in reg.search_calls[0]
+
+
+async def test_a_result_carries_the_reason_it_was_sourced(monkeypatch):
+    """A suggestion a rep cannot judge is one they open to find out, which is the cost the score
+    exists to remove."""
+    reg = _Registry(results=[
+        _hit("Dana Reed", "https://www.linkedin.com/in/dana-reed",
+             "# Dana Reed\n\nDirector of Marketing, Ramp\n\nNew York (US)"),
+    ])
+    seed = Contact(id="c1", account_id="a1", full_name="Alex Kim",
+                   title="Vice President of Sales")
+
+    out = await _source_with_icp(monkeypatch, seed, reg)
+    assert out and any("ICP buyer title" in r for r in out[0].reasons), out[0].reasons

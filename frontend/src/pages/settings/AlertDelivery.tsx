@@ -395,6 +395,12 @@ function RoutesList({
           above and it will appear here.
         </p>
       ) : (
+        <>
+        <p className={styles.routesHint}>
+          Setting a route back to <strong>Workspace default</strong> removes it, which is different
+          from <strong>Never</strong>: never means never send it, the default means whatever your
+          workspace decides.
+        </p>
         <ul className={styles.routeList}>
           {rows.map((p) => {
             const key = `${p.category}|${p.channel}`;
@@ -413,33 +419,32 @@ function RoutesList({
                     Muted
                   </Badge>
                 )}
+                {/* One control, not a dropdown beside a delete button, because "Workspace default"
+                    and "remove this route" are the SAME act and offering both invites the reading
+                    that they differ. Choosing it deletes the row, which is not the same as "Never":
+                    never means never send me this, no row means whatever the workspace decides, and
+                    this option is the only way back to the second. */}
                 <Select
                   className={styles.routeMode}
                   value={p.mode}
                   disabled={busy === key}
-                  aria-label={`Timing for ${label(CATEGORY_LABEL, p.category)} on ${label(
+                  aria-label={`Delivery for ${label(CATEGORY_LABEL, p.category)} on ${label(
                     CHANNEL_LABEL,
                     p.channel,
                   )}`}
-                  onChange={(e) => change(p.category, p.channel, e.target.value as AlertMode)}
-                  options={data.modes.map((m) => ({ value: m, label: MODE_SHORT[m] ?? m }))}
+                  onChange={(e) =>
+                    change(p.category, p.channel, (e.target.value || null) as AlertMode | null)
+                  }
+                  options={[
+                    ...data.modes.map((m) => ({ value: m, label: MODE_SHORT[m] ?? m })),
+                    { value: "", label: "Workspace default" },
+                  ]}
                 />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy === key}
-                  aria-label={`Remove ${label(CATEGORY_LABEL, p.category)} on ${label(
-                    CHANNEL_LABEL,
-                    p.channel,
-                  )}`}
-                  onClick={() => change(p.category, p.channel, null)}
-                >
-                  <Icons.TrashIcon />
-                </Button>
               </li>
             );
           })}
         </ul>
+        </>
       )}
     </section>
   );
