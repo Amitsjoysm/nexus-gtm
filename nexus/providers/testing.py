@@ -115,8 +115,12 @@ async def probe(provider: str, key: str, *, transport=None) -> TestResult:
                                headers={"X-API-KEY": key},
                                json_body={"q": "test", "num": 1}, transport=transport)
         elif provider == "apify":
-            resp = await _call("GET", f"https://api.apify.com/v2/users/me?token={key}",
-                               headers={}, transport=transport)
+            # Header, not `?token=`. A query-string credential is copied into every exception
+            # message, log line and error report that carries the URL — the same leak this
+            # file's own key-hint discipline exists to prevent.
+            resp = await _call("GET", "https://api.apify.com/v2/users/me",
+                               headers={"Authorization": f"Bearer {key}"},
+                               transport=transport)
         else:  # github
             resp = await _call("GET", "https://api.github.com/rate_limit",
                                headers={"Authorization": f"Bearer {key}"}, transport=transport)
@@ -162,8 +166,9 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
         elif provider == "apify":
             # Listing actors exercises the token against a real, authorised resource without
             # starting a billed actor run.
-            resp = await _call("GET", f"https://api.apify.com/v2/acts?token={key}&limit=1",
-                               headers={}, transport=transport)
+            resp = await _call("GET", "https://api.apify.com/v2/acts?limit=1",
+                               headers={"Authorization": f"Bearer {key}"},
+                               transport=transport)
         else:
             # For the search providers the probe already issues a real query against the real
             # endpoint, so there is no deeper call to make. Inventing a second request that proves

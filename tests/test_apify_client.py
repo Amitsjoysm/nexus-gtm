@@ -25,7 +25,15 @@ class _Transport:
         self.bodies: list[dict] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.tokens.append(request.url.params.get("token", ""))
+        # Read from the AUTHORIZATION HEADER, not the query string. The client used to send
+        # `?token=<key>`, which httpx copies into `HTTPStatusError` — one 400 printed a live API
+        # key into the exception message and the logs. The rotation behaviour these tests pin is
+        # unchanged; only where the credential travels is.
+        auth = request.headers.get("authorization", "")
+        self.tokens.append(auth[len("Bearer "):] if auth.startswith("Bearer ") else "")
+        assert "token=" not in str(request.url), (
+            f"the Apify key is in the URL again: {request.url}"
+        )
         self.urls.append(str(request.url.path))
         import json as _json
 
@@ -300,3 +308,103 @@ async def test_a_genuine_rate_limit_still_reports_as_one(monkeypatch):
     with pytest.raises(ApifyError) as exc:
         await client.run_actor("phone_finder", {"linkedin_url": ["x"]})
     assert "rate limits" in str(exc.value).lower()
+
+
+# ---- the credential must not ride in the URL -----------------------------------------------------
+
+def test_the_token_is_sent_as_a_header_never_a_query_parameter():
+    """A live key leak, observed 2026-09-08 against a real Apify token.
+
+    The client passed `params={"token": key}`. Apify accepts that, and httpx puts the FULL URL into
+    `HTTPStatusError` — so one 400 from a wrong actor input printed the entire live API key into the
+    exception message, the log line and anything that reports them:
+
+        Client error '400 Bad Request' for url
+        'https://api.apify.com/v2/acts/.../run-sync-get-dataset-items?token=apify_api_...'
+
+    This file's own discipline is that a key is never rendered — `key_hint` is all the panel gets.
+    That has to hold for request plumbing too, or the panel refusing to show the key is decoration.
+    """
+    import inspect
+
+    from nexus.integrations import apify
+
+    src = inspect.getsource(apify)
+    assert 'params={"token"' not in src, "the Apify token is back in the query string"
+    assert "Authorization" in inspect.getsource(apify.ApifyClient.run_actor)
+
+
+def test_no_provider_test_puts_a_token_in_a_url():
+    """The same leak in the panel's own Test button, which is the one place an operator is most
+    likely to be looking at an error message when it fails."""
+    import pathlib
+
+    src = pathlib.Path("nexus/providers/testing.py").read_text(encoding="utf-8")
+    assert "token={key}" not in src, "a provider probe still interpolates the key into its URL"
+
+
+# ---- an actor can refuse inside a 200 -------------------------------------------------------------
+
+def test_an_actor_refusal_row_raises_instead_of_reading_as_no_results():
+    """THE bug this found. Measured 2026-09-08 against `dev_fusion/Linkedin-Profile-Scraper`: the
+    run succeeded at the HTTP layer and the dataset was one row reading "Users on the free Apify
+    plan can run the actor through the UI and not via other methods."
+
+    Every check in `run_actor` passed, so it returned that row, `parse_profile` found no headline
+    and no posts, and `refresh_person_insights` returned None. A hard refusal presented to the
+    operator as "this person has no social footprint" — for every contact, forever.
+
+    That is this integration's recurring shape: a real problem wearing "no results". `phone_finder`
+    extracting nothing because of key spellings, `build_personalization_provider` returning the stub
+    for a configured provider, and now this.
+    """
+    import pytest
+
+    from nexus.integrations.apify import ApifyError, _raise_if_actor_refused
+
+    with pytest.raises(ApifyError) as exc:
+        _raise_if_actor_refused("act1", [{"error": "Users on the free Apify plan can run the "
+                                                   "actor through the UI and not via other methods."}])
+    assert "free Apify plan" in str(exc.value)
+
+
+def test_a_refusal_carrying_apifys_own_error_type_still_raises():
+    from nexus.integrations.apify import ApifyError, _raise_if_actor_refused
+    import pytest
+
+    with pytest.raises(ApifyError):
+        _raise_if_actor_refused("act1", [{"error": "nope", "errorType": "x", "statusCode": 403}])
+
+
+def test_a_row_that_carries_real_data_beside_an_error_field_is_data():
+    """The opposite bug, and the reason this is not a blanket "any row with an error" check. An
+    actor that reports a partial failure alongside a usable result must not have that result thrown
+    away — dropping it would invent the mirror image of the bug above."""
+    from nexus.integrations.apify import _raise_if_actor_refused
+
+    _raise_if_actor_refused("act1", [{"error": "partial", "headline": "VP Sales",
+                                      "posts": ["a real post"]}])
+
+
+def test_a_normal_dataset_is_untouched():
+    """Every shape that is NOT a bare refusal: real rows, several rows, an empty dataset, a blank
+    error string. A guard that fired on any of these would take down working actors."""
+    from nexus.integrations.apify import _raise_if_actor_refused
+
+    _raise_if_actor_refused("act1", [])
+    _raise_if_actor_refused("act1", [{"headline": "VP Sales"}])
+    _raise_if_actor_refused("act1", [{"error": "a"}, {"error": "b"}])
+    _raise_if_actor_refused("act1", [{"error": "   "}])
+
+
+def test_the_refusal_reaches_the_personalization_provider_as_a_failure():
+    """`ApifyPersonalizationProvider.fetch` already logs and returns None on an exception, which is
+    the right posture — a social-fetch outage must never break enrichment. What was missing was
+    anything to catch: the refusal arrived as a successful empty answer, so the log line that names
+    the real reason never ran."""
+    import inspect
+
+    from nexus.personalization import apify_provider
+
+    src = inspect.getsource(apify_provider.ApifyPersonalizationProvider.fetch)
+    assert "except Exception" in src and "logger.warning" in src

@@ -91,6 +91,39 @@ class ApifyNotConfigured(ApifyError):
     """
 
 
+def _raise_if_actor_refused(actor_id: str, items: list[dict]) -> None:
+    """Turn an actor's own refusal into an error, instead of an empty answer.
+
+    **An actor can refuse inside a 200.** Measured 2026-09-08 against
+    `dev_fusion/Linkedin-Profile-Scraper`: the run succeeded at the HTTP layer and the dataset was a
+    single row reading *"Users on the free Apify plan can run the actor through the UI and not via
+    other methods."* Every check above passed, `run_actor` returned that row, `parse_profile` found
+    no headline and no posts, and `refresh_person_insights` returned None — so a hard refusal
+    presented to the operator as **"this person has no social footprint"**, for every contact,
+    forever.
+
+    That is the exact failure this integration keeps producing in new forms: `phone_finder`
+    extracting nothing because of key spellings, `build_personalization_provider` returning the stub
+    for a configured provider. The shape is always the same — a real problem wearing "no results".
+
+    Only a row whose ONLY meaningful content is an error is treated this way. A real dataset row
+    that happens to carry an `error` field alongside actual data is data, and dropping it would
+    invent the opposite bug.
+    """
+    if len(items) != 1:
+        return
+    row = items[0]
+    message = row.get("error") or row.get("errorMessage") or row.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return
+    payload_keys = {k for k, v in row.items() if v not in (None, "", [], {})}
+    if payload_keys - {"error", "errorMessage", "message", "errorType", "type", "statusCode"}:
+        return  # carries real data too; not a bare refusal
+    text = " ".join(message.split())[:300]
+    logger.warning("Apify actor %s refused the run: %s", actor_id, text)
+    raise ApifyError(f"Apify actor {actor_id} refused the run: {text}")
+
+
 def _describe_error(resp) -> str:
     """Apify's own error text, so the reason survives into our exception.
 
@@ -170,8 +203,17 @@ class ApifyClient:
         for attempt in range(len(keys) + len(_RETRY_BACKOFFS)):
             try:
                 async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
+                    # The token goes in a HEADER, never `params`. Apify accepts both, and the
+                    # query-string form leaks the credential: httpx puts the full URL into
+                    # `HTTPStatusError`, so a single 400 printed the whole live API key into the
+                    # exception message, the logs and anything that reports them. Observed
+                    # 2026-09-08 against a real key. The rule this file already states about
+                    # response models — the key is never rendered — has to hold for request
+                    # plumbing too, or the panel that refuses to show it is decoration.
                     resp = await client.post(
-                        url, json=run_input, params={"token": keys[self._key_idx]},
+                        url,
+                        json=run_input,
+                        headers={"Authorization": f"Bearer {keys[self._key_idx]}"},
                     )
                 if resp.status_code in (401, 403):
                     # A bad key is not a transient failure. Rotate past it — one revoked key in a
@@ -217,8 +259,10 @@ class ApifyClient:
                 resp.raise_for_status()
                 payload = resp.json()
                 # The sync endpoint returns the dataset as a bare array.
-                return [item for item in payload if isinstance(item, dict)] \
+                items = [item for item in payload if isinstance(item, dict)] \
                     if isinstance(payload, list) else []
+                _raise_if_actor_refused(actor_id, items)
+                return items
             except (ApifyError, asyncio.CancelledError):
                 raise
             except Exception as exc:
