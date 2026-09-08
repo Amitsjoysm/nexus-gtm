@@ -22,14 +22,13 @@ paying customer:
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
 
 from nexus.models.identity import Tenant
 
 
 async def _tenant_on(plan_id: str, *, credits: float = 0.0):
     """A tenant on ``plan_id`` whose credit balance is exactly ``credits``."""
-    from nexus.billing.credits import balance, burn_credits, grant_credits
+    from nexus.billing.credits import balance, grant_credits
     from nexus.billing.subscriptions import ensure_subscription
     from nexus.core.db import get_sessionmaker
     from nexus.core.tenancy import TenantSession

@@ -68,7 +68,6 @@ async def test_an_icp_with_no_titles_still_searches():
 async def test_a_result_outside_the_spec_is_discarded():
     """The expanded queries over-match on purpose. A person who fails the spec must not reach the
     rep — the noise belongs in the query, not in the output."""
-    from nexus.integrations import contact_search as cs
     from nexus.integrations.contact_search import SearchBackedContactSearchProvider
 
     class _Hit:

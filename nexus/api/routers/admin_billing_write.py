@@ -210,7 +210,7 @@ async def upsert_rate_card(
     The same ``validate_rate`` guard that runs on the seed runs here, so there is no path — seed
     or admin — that lands an underwater price in the database without an explicit exception.
     """
-    from nexus.billing.rates import MarginFloorError, gross_margin, validate_rate
+    from nexus.billing.rates import gross_margin, validate_rate
 
     async with get_sessionmaker()() as session:
         if await session.get(BillingCapability, capability_id) is None:

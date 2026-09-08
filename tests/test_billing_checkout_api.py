@@ -35,8 +35,6 @@ async def _seeded_tenant(client, *, slug: str, plan_id: str = "launch"):
     from nexus.billing.plans import sync_plans
     from nexus.billing.rates import sync_rates
     from nexus.core.security import decode_access_token
-    from nexus.models.billing import BillingSubscription
-    from tests.conftest import tenant_session
 
     await sync_catalog()
     await sync_plans()

@@ -16,7 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
-from nexus.api.deps import Principal, get_principal, require_platform_permission
+from nexus.api.deps import Principal, require_platform_permission
 from nexus.billing.audit import record_admin_action
 from nexus.billing.permissions import PRICING_WRITE
 from nexus.core.db import get_platform_sessionmaker

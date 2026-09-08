@@ -22,7 +22,6 @@ deployment configured only by env behaving exactly as it did before this existed
 """
 from __future__ import annotations
 
-import pytest
 
 from tests.conftest import make_tenant, tenant_session
 
@@ -118,7 +117,6 @@ async def test_the_webhook_url_is_sealed_at_rest(fresh_db):
 async def test_the_api_never_returns_the_secret(fresh_db):
     """`_connection_out` in the CRM router is the single place connection state becomes JSON, and
     that is what makes "the secret never leaves the server" checkable. Same rule here."""
-    import inspect
 
     from nexus.api.routers import alert_connections
 

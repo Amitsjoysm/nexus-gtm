@@ -19,7 +19,6 @@ These pin the rung that closes it, and the two things that make an approval mean
 """
 from __future__ import annotations
 
-import pytest
 
 from tests.conftest import auth, signup
 

@@ -6,7 +6,6 @@ the interleaving the database would otherwise have to produce.
 """
 from __future__ import annotations
 
-import pytest
 
 from tests.conftest import make_tenant, tenant_session
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 
-from nexus.alerts.channels import get_alert_channels
 from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.models.alerts import ALERT_CHANNELS, ALERT_SEVERITIES, Alert

@@ -23,7 +23,6 @@ over exactly as before.
 """
 from __future__ import annotations
 
-import pytest
 
 
 def test_a_provider_can_exist_before_its_keys_resolve():

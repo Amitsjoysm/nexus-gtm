@@ -18,7 +18,6 @@ id; a row with no counter is only found by someone who already went looking.
 """
 from __future__ import annotations
 
-import pytest
 
 
 class _Plan:

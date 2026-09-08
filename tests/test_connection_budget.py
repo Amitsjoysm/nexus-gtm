@@ -20,7 +20,6 @@ configuration that cannot be satisfied says so at boot rather than at peak.
 """
 from __future__ import annotations
 
-import pytest
 
 
 def test_the_budget_matches_the_documented_formula():

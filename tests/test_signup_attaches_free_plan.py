@@ -26,7 +26,7 @@ from sqlalchemy import select
 
 from nexus.models.billing import BillingSubscription
 from nexus.models.identity import Tenant
-from tests.conftest import auth, signup
+from tests.conftest import signup
 
 
 async def _subscription_for(slug: str):

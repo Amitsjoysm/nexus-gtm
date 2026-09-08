@@ -23,7 +23,7 @@ from nexus.models.identity import Tenant
 async def _tenant(plan_id: str, *, credits: float):
     from nexus.billing.credits import grant_credits
     from nexus.billing.subscriptions import ensure_subscription
-    from nexus.core.db import get_sessionmaker, utcnow
+    from nexus.core.db import get_sessionmaker
     from nexus.core.tenancy import TenantSession
 
     async with get_sessionmaker()() as s:

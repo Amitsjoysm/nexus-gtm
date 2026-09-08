@@ -422,7 +422,6 @@ async def roll_period(ts: TenantSession) -> bool:
     Order matters: rate and finalize BEFORE advancing the window, so the invoice describes the
     period that just closed rather than the one starting.
     """
-    from nexus.billing.credits import grant_credits
     from nexus.billing.rating import finalize_invoice, rate_period
     from nexus.billing.rollups import period_key, rebuild_rollups
 

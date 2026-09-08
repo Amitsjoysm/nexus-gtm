@@ -16,7 +16,6 @@ Three gaps, each small in code and large in consequence:
 from __future__ import annotations
 
 import httpx
-import pytest
 
 from nexus.billing.payments import StripePaymentProvider
 

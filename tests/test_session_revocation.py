@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from tests.conftest import make_tenant, tenant_session
+from tests.conftest import make_tenant
 
 
 async def _user(tid: str, email: str = "u@example.com"):

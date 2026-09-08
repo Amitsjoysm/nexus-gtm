@@ -18,7 +18,6 @@ Two further measurements shaped the design, and both contradict the obvious read
 """
 from __future__ import annotations
 
-import pytest
 
 from nexus.agents.llm import LLMMessage
 
@@ -130,7 +129,6 @@ def test_an_unparseable_retry_after_does_not_become_a_busy_loop():
 async def test_a_413_shrinks_the_prompt_and_succeeds(monkeypatch):
     """The measured failure, end to end. 413 means one request exceeded the whole minute budget:
     rotation and waiting are both useless, only a smaller prompt works."""
-    import httpx
 
     from nexus.agents.llm import GroqLLMProvider
 
@@ -177,7 +175,6 @@ async def test_a_413_shrinks_the_prompt_and_succeeds(monkeypatch):
 async def test_a_429_rotates_before_it_waits(monkeypatch):
     """The keys are separate organizations with separate budgets, so the next one may be clear.
     Waiting first would burn 30 seconds on a request another key would have served immediately."""
-    import httpx
 
     from nexus.agents.llm import GroqLLMProvider
 

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import pytest
 
-from nexus.models.account import Account
 
 
 def _icp(countries=None, **extra):

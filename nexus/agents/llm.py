@@ -355,7 +355,7 @@ class GroqLLMProvider(OpenAICompatProvider):
         # "Request too large ... on tokens per minute", which no retry and no key rotation can fix.
         # Trimming here is what makes the whole thing work on a small tier; everything below only
         # handles the cases where traffic, not size, is the problem.
-        from nexus.agents.token_budget import GATE, fit_messages, parse_limit
+        from nexus.agents.token_budget import GATE, fit_messages
 
         budget = _prompt_budget()
         messages, trimmed = fit_messages(list(messages), budget)
@@ -368,7 +368,6 @@ class GroqLLMProvider(OpenAICompatProvider):
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        last_resp: httpx.Response | None = None
         # Bounded process-wide. The token budget belongs to the account and is shared by every
         # endpoint — `/enrich`, `/lookalikes` and `/source-contacts` fired in the same second in the
         # reported failure, and each holding its own limiter would have allowed exactly that.

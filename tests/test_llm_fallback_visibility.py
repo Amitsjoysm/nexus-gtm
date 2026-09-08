@@ -20,7 +20,6 @@ Two properties close it:
 """
 from __future__ import annotations
 
-import pytest
 
 from nexus.agents.llm import (
     FallbackLLMProvider,

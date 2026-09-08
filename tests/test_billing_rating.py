@@ -252,7 +252,6 @@ async def test_overage_never_undercuts_the_cheapest_in_plan_rate():
 
     from nexus.billing.catalog import sync_catalog
     from nexus.billing.plans import sync_plans
-    from nexus.billing.rating import CREDIT_CENTS
     from nexus.core.db import get_sessionmaker
     from nexus.models.billing import BillingPlan
 

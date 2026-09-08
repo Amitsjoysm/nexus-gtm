@@ -18,7 +18,6 @@ granted this period would be granted a second time on the next roll.
 """
 from __future__ import annotations
 
-import pytest
 
 from tests.conftest import make_tenant, tenant_session
 

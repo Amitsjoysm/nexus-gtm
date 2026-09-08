@@ -117,7 +117,6 @@ async def resolve_alert_channels(ts: TenantSession):
         TeamsChannel,
         TelegramChannel,
         WebhookChannel,
-        get_alert_channels,
     )
     from nexus.core.config import get_settings
 

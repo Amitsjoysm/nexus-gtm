@@ -21,7 +21,6 @@ until they have been enriched and scored — the same shape as the bulk verifier
 """
 from __future__ import annotations
 
-import pytest
 
 from tests.conftest import make_tenant, tenant_session
 

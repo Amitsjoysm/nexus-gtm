@@ -16,10 +16,9 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexus.models.billing import BillingPlan, BillingPlanEntitlement
+from nexus.models.billing import BillingPlan
 
 logger = logging.getLogger("nexus.billing.custom_plans")
 

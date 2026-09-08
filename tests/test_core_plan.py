@@ -27,8 +27,6 @@ from tests.conftest import auth, signup
 async def _tenant_on_plan(client, slug: str, plan_id: str) -> str:
     from nexus.billing.catalog import sync_catalog
     from nexus.billing.plans import sync_plans
-    from nexus.models.billing import BillingSubscription
-    from nexus.workers.tasks import tenant_session
     from tests.conftest import principal_from_token
 
     await sync_catalog()
