@@ -18,7 +18,7 @@
 }
 
 .link {
-  color: var(--color-accent, var(--text-default));
+  color: var(--accent, var(--text-default));
   text-decoration: none;
   font-weight: var(--font-weight-medium);
 }

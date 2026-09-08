@@ -130,6 +130,120 @@ async def diff_sample(*, limit: int = 50) -> dict:
     return report
 
 
+async def diff_companies(*, limit: int = 50, only_unproven: bool = True) -> list[dict]:
+    """The same comparison, rolled up per COMPANY, so an operator can act on it.
+
+    ``diff_sample`` answers "is the shared crawl broadly right?" and details only disagreements —
+    the right shape for a health check and the wrong one for approval, because the companies an
+    operator most needs to see are the ones that AGREE and are still waiting for a verdict.
+
+    Delivery is gated per company (``companies.crawl_verdict``), and no production code path writes
+    that column, so every company sits at ``unknown`` forever: the shared crawl gathers and fans out
+    nothing, while the per-tenant crawl still runs in full. This is the read behind the screen that
+    closes it.
+
+    **A company agrees only when EVERY compared account agrees.** One tenant missing signals the
+    shared crawl does not have is exactly the failure fan-out would multiply, and averaging it away
+    across the other tenants is how it would ship unnoticed.
+
+    Cross-tenant by nature, so it runs on the platform sessionmaker. Under the RLS-bound role it
+    would compare zero rows against zero rows and report perfect agreement — the most dangerous
+    possible false negative for a gate.
+    """
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.account import Account
+    from nexus.models.company import Company
+
+    out: list[dict] = []
+    try:
+        async with get_platform_sessionmaker()() as session:
+            query = select(Company).order_by(Company.last_crawled_at.desc().nullslast())
+            if only_unproven:
+                # The queue an operator is working: everything still waiting for a decision.
+                query = query.where(Company.crawl_verdict == "unknown")
+            companies = (await session.scalars(query.limit(limit))).all()
+
+            for company in companies:
+                accounts = (
+                    await session.scalars(
+                        select(Account).where(Account.company_id == company.id)
+                    )
+                ).all()
+                agree = disagree = 0
+                missing: list[str] = []
+                for account in accounts:
+                    result = await diff_account(session, account)
+                    if result is None:
+                        continue
+                    if result.agrees:
+                        agree += 1
+                    else:
+                        disagree += 1
+                        missing.extend(result.tenant_only[:5])
+                out.append({
+                    "company_id": company.id,
+                    "domain": company.domain,
+                    "name": company.name or company.domain,
+                    "verdict": company.crawl_verdict,
+                    "verdict_at": company.verdict_at.isoformat() if company.verdict_at else None,
+                    "last_crawled_at": (
+                        company.last_crawled_at.isoformat() if company.last_crawled_at else None
+                    ),
+                    "accounts": len(accounts),
+                    "accounts_agreeing": agree,
+                    "accounts_disagreeing": disagree,
+                    # Dedupe keys of signals a TENANT has and the shared crawl does not. This is the
+                    # evidence: `shared_only` is usually fine, this is the failure.
+                    "missing_from_shared": sorted(set(missing))[:10],
+                    # Never crawled means there is nothing to compare, and an "agreement" between
+                    # two empty sets is not evidence of anything.
+                    "comparable": company.last_crawled_at is not None and agree + disagree > 0,
+                    "would_agree": disagree == 0 and agree > 0,
+                })
+    except Exception:
+        logger.warning("per-company diff failed", exc_info=True)
+    return out
+
+
+async def verdict_counts() -> dict:
+    """How many companies sit at each verdict, and how many accounts that covers.
+
+    The headline number for the console: while everything is `unknown`, the shared crawl is running
+    and delivering nothing, and both crawls are being paid for.
+    """
+    from sqlalchemy import func, select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.account import Account
+    from nexus.models.company import Company
+
+    counts = {"unknown": 0, "agrees": 0, "disagrees": 0}
+    delivering = 0
+    try:
+        async with get_platform_sessionmaker()() as session:
+            rows = (
+                await session.execute(
+                    select(Company.crawl_verdict, func.count()).group_by(Company.crawl_verdict)
+                )
+            ).all()
+            for verdict, count in rows:
+                counts[verdict or "unknown"] = counts.get(verdict or "unknown", 0) + int(count)
+            delivering = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Account)
+                    .join(Company, Account.company_id == Company.id)
+                    .where(Company.crawl_verdict == "agrees")
+                )
+                or 0
+            )
+    except Exception:
+        logger.warning("verdict counts failed", exc_info=True)
+    return {"companies": counts, "accounts_served_by_shared_crawl": delivering}
+
+
 async def record_verdict(session, company_id: str, agrees: bool) -> str:
     """Persist what a comparison concluded about one company.
 

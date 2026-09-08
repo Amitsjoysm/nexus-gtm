@@ -31,8 +31,10 @@ from nexus.imports.crm_pull import (
 )
 from nexus.imports.csv_ingest import (
     ACCOUNT_INT_FIELDS,
+    ACCOUNT_LIST_FIELDS,
     ACCOUNT_TEXT_FIELDS,
     CONTACT_TEXT_FIELDS,
+    CUSTOM_PREFIX,
     import_accounts_csv,
     import_contacts_csv,
 )
@@ -47,7 +49,9 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 # The fields a CSV column may be mapped onto, surfaced so the UI can build the mapping picker from
 # the server rather than from a hard-coded list that drifts.
-ACCOUNT_FIELDS = (*ACCOUNT_TEXT_FIELDS, "domain", *ACCOUNT_INT_FIELDS)
+ACCOUNT_FIELDS = (
+    *ACCOUNT_TEXT_FIELDS, "domain", *ACCOUNT_INT_FIELDS, *ACCOUNT_LIST_FIELDS,
+)
 CONTACT_FIELDS = ("full_name", "email", *CONTACT_TEXT_FIELDS, "account_domain", "account_name")
 
 
@@ -59,15 +63,58 @@ class ImportResult(BaseModel):
     errors: list[str]
 
 
+class CustomFieldOut(BaseModel):
+    """One of the workspace's own field definitions, offered as a mapping target."""
+
+    #: The value to send as the mapping target, already prefixed: `custom:territory`.
+    target: str
+    key: str
+    label: str
+    kind: str
+
+
 class ImportFieldsOut(BaseModel):
     account_fields: list[str]
     contact_fields: list[str]
+    #: This workspace's own `custom_field_defs`. Empty is normal and means the picker offers only
+    #: the built-in columns; an unmapped CSV column is still kept, under its own header.
+    account_custom_fields: list[CustomFieldOut] = []
+    contact_custom_fields: list[CustomFieldOut] = []
     max_rows: int
     default_limit: int
     max_upload_bytes: int
 
 
-def _parse_mapping(raw: str, allowed: tuple[str, ...]) -> dict[str, str]:
+async def _custom_targets(ts: TenantSession, entity: str) -> list[CustomFieldOut]:
+    """The workspace's defined fields for one entity, as mapping targets.
+
+    Read per request rather than cached: a user who has just defined a field and come straight to
+    the import screen must see it, and this is one indexed read on a table with a handful of rows.
+    """
+    from nexus.models.chat import CustomFieldDef
+
+    rows = await ts.list(CustomFieldDef, CustomFieldDef.entity == entity, limit=200)
+    return [
+        CustomFieldOut(
+            target=f"{CUSTOM_PREFIX}{r.key}", key=r.key, label=r.label or r.key, kind=r.kind
+        )
+        for r in sorted(rows, key=lambda r: (r.label or r.key).lower())
+    ]
+
+
+async def _allowed_targets(
+    ts: TenantSession, entity: str, builtin: tuple[str, ...]
+) -> set[str]:
+    """Built-in columns plus this workspace's own `custom:` targets.
+
+    Resolved against the DEFINITIONS, not against whatever the client sent: accepting any
+    `custom:<anything>` would turn the prefix into a way to write arbitrary keys into
+    `custom_fields`, which is the namespace the workspace's own filters read.
+    """
+    return set(builtin) | {c.target for c in await _custom_targets(ts, entity)}
+
+
+def _parse_mapping(raw: str, allowed: set[str]) -> dict[str, str]:
     try:
         parsed = json.loads(raw)
     except ValueError as exc:
@@ -81,7 +128,8 @@ def _parse_mapping(raw: str, allowed: tuple[str, ...]) -> dict[str, str]:
         # discovers it only by noticing the data is missing later.
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            f"unknown target field(s): {', '.join(unknown)}. Allowed: {', '.join(allowed)}",
+            f"unknown target field(s): {', '.join(unknown)}. "
+            f"Allowed: {', '.join(sorted(allowed))}",
         )
     return {str(k): str(v) for k, v in parsed.items()}
 
@@ -100,14 +148,23 @@ async def _read_upload(file: UploadFile) -> bytes:
 
 @router.get("/fields", response_model=ImportFieldsOut)
 async def importable_fields(
+    ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ImportFieldsOut:
-    """What a CSV column can be mapped onto. The mapping UI builds itself from this."""
+    """What a CSV column can be mapped onto. The mapping UI builds itself from this.
+
+    Tenant-scoped, because half the answer is the workspace's own `custom_field_defs`. Before that,
+    a column could only be mapped onto a built-in column or dropped into `custom_fields` under its
+    RAW HEADER — so a workspace that had defined `territory` and uploaded a "Territory (2026)"
+    column stored the value under that literal string, where the field it defined never saw it.
+    """
     from nexus.imports.csv_ingest import MAX_ROWS
 
     return ImportFieldsOut(
         account_fields=list(ACCOUNT_FIELDS),
         contact_fields=list(CONTACT_FIELDS),
+        account_custom_fields=await _custom_targets(ts, "account"),
+        contact_custom_fields=await _custom_targets(ts, "contact"),
         max_rows=MAX_ROWS,
         default_limit=DEFAULT_LIMIT,
         max_upload_bytes=MAX_UPLOAD_BYTES,
@@ -152,8 +209,9 @@ async def upload_accounts_csv(
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ImportResult:
+    allowed = await _allowed_targets(ts, "account", ACCOUNT_FIELDS)
     result = await import_accounts_csv(
-        ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, ACCOUNT_FIELDS)
+        ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, allowed)
     )
     await _meter_import(ts, result, user_id=principal.user_id, kind="accounts")
     await ts.commit()
@@ -167,8 +225,9 @@ async def upload_contacts_csv(
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ImportResult:
+    allowed = await _allowed_targets(ts, "contact", CONTACT_FIELDS)
     result = await import_contacts_csv(
-        ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, CONTACT_FIELDS)
+        ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, allowed)
     )
     await _meter_import(ts, result, user_id=principal.user_id, kind="contacts")
     await ts.commit()

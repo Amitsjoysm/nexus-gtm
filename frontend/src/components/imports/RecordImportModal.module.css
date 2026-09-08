@@ -11,23 +11,23 @@
 }
 
 .section + .section {
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--border);
   padding-top: var(--space-5);
 }
 
 .heading {
   margin: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--color-text-muted);
+  color: var(--text-muted);
 }
 
 .hint {
   margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
@@ -35,16 +35,89 @@
   display: none;
 }
 
-.fileRow {
+/* A drop target rather than a bare button. The button alone gave no indication that dragging a
+   file onto the dialog would work, and no place for the chosen file to live once picked. */
+.drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: center;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.dropActive {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--accent-quiet);
+}
+
+.dropIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 36px;
+  block-size: 36px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  color: var(--text-muted);
+}
+
+.dropTitle {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+/* The picked file, replacing the drop target. Name, size and a way back — "Choose file" with a
+   filename beside it left no way to tell whether a second click would replace or add. */
+.file {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.fileIcon {
+  display: inline-flex;
+  flex: none;
+  color: var(--success);
+}
+
+.fileText {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  flex: 1 1 auto;
+}
+
+.fileName {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .muted {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drop {
+    transition: none;
+  }
 }
 
 .mapGrid {
@@ -61,8 +134,8 @@
 .sample {
   display: block;
   margin-top: var(--space-1);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -82,20 +155,23 @@
   margin-top: var(--space-2);
 }
 
+/* Body colour, not the warning colour: amber text on an amber tint fails contrast, and this
+   sentence is the one telling the operator why the import button is disabled. */
 .warn {
   margin: 0;
   padding: var(--space-3);
+  border: 1px solid var(--warning);
   border-radius: var(--radius-sm);
-  background: var(--color-warning-subtle, var(--color-surface-sunken));
-  color: var(--color-warning-strong, var(--color-text));
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
+  background: var(--warning-quiet);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
 }
 
 .error {
   margin: 0;
-  color: var(--color-danger);
-  font-size: var(--font-size-sm);
+  color: var(--danger);
+  font-size: var(--text-sm);
 }
 
 .result {
@@ -112,8 +188,8 @@
 }
 
 .errors {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 
 .errors summary {

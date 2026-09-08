@@ -58,6 +58,11 @@ import type {
   SubscriptionPatch,
   ProviderModels,
   RuntimeSetting,
+  SharedCrawlCompany,
+  SharedCrawlSummary,
+  SourceDatabase,
+  SourceTestResult,
+  SourceVocabulary,
   WebhookInfo,
   WebhookTestResult,
   SupportedProvider,
@@ -1023,6 +1028,82 @@ export class ApiClient {
       `/admin/provider-keys/${id}/test`, { method: "POST", query: { depth } },
     );
   }
+  // ---- external source databases (superadmin, `sources.manage`) ----
+  /** Every registered source. The DSN is in no response, in any form. */
+  adminSourceDatabases(signal?: AbortSignal) {
+    return this.request<SourceDatabase[]>("/admin/sources", { signal });
+  }
+  /** What a mapping may name. Read from the server so the form cannot drift from the validator. */
+  sourceDatabaseVocabulary(signal?: AbortSignal) {
+    return this.request<SourceVocabulary>("/admin/sources/vocabulary", { signal });
+  }
+  registerSourceDatabase(body: { name: string; dsn: string; kind?: string }) {
+    return this.request<SourceDatabase>("/admin/sources", { method: "POST", body });
+  }
+  /** Rung 1. Also ASSERTS the connection is read-only rather than assuming it. */
+  testSourceDatabase(id: string) {
+    return this.request<SourceTestResult>(
+      `/admin/sources/${encodeURIComponent(id)}/test`, { method: "POST" },
+    );
+  }
+  /** Rung 2. Clears any existing proof: a mapping verified against a schema that has since been
+   *  rebuilt is exactly the wrong-attribution bug. */
+  introspectSourceDatabase(id: string) {
+    return this.request<SourceDatabase>(
+      `/admin/sources/${encodeURIComponent(id)}/introspect`, { method: "POST" },
+    );
+  }
+  /** Rung 3. `schema_name` because `schema` is reserved on the server's model. */
+  setSourceDatabaseMapping(
+    id: string,
+    body: { entity: string; schema_name: string; table: string; columns: Record<string, string> },
+  ) {
+    return this.request<SourceDatabase>(
+      `/admin/sources/${encodeURIComponent(id)}/mapping`, { method: "PUT", body },
+    );
+  }
+  /** Rung 4. Reads a bounded sample and writes nothing, anywhere. A 200 that did not verify is a
+   *  finding to read, not an error to retry. */
+  dryRunSourceDatabase(id: string) {
+    return this.request<SourceDatabase>(
+      `/admin/sources/${encodeURIComponent(id)}/dry-run`, { method: "POST" },
+    );
+  }
+  /** Enabling is refused below `verified`; disabling is never refused. */
+  setSourceDatabaseEnabled(id: string, enabled: boolean) {
+    return this.request<SourceDatabase>(
+      `/admin/sources/${encodeURIComponent(id)}/enabled`, { method: "PUT", body: { enabled } },
+    );
+  }
+  deleteSourceDatabase(id: string) {
+    return this.request<void>(`/admin/sources/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  // ---- shared company crawl (superadmin, `sources.manage`) ----
+  /** How many companies are approved, and how many accounts that actually serves. */
+  sharedCrawlSummary(signal?: AbortSignal) {
+    return this.request<SharedCrawlSummary>("/admin/shared-crawl/summary", { signal });
+  }
+  /** The approval queue with the evidence attached. Bounded and comparatively expensive: it diffs
+   *  every linked account of every company returned. */
+  sharedCrawlCompanies(
+    params: { limit?: number; only_unproven?: boolean } = {},
+    signal?: AbortSignal,
+  ) {
+    return this.request<SharedCrawlCompany[]>("/admin/shared-crawl/companies", {
+      query: { limit: params.limit, only_unproven: params.only_unproven },
+      signal,
+    });
+  }
+  /** Record what the operator concluded. Approving is what lets fan-out deliver this company; a
+   *  disagreement is recorded rather than merely withheld. */
+  setSharedCrawlVerdict(companyId: string, agrees: boolean, note = "") {
+    return this.request<SharedCrawlCompany>(
+      `/admin/shared-crawl/companies/${encodeURIComponent(companyId)}/verdict`,
+      { method: "POST", body: { agrees, note } },
+    );
+  }
+
   /** Asks the PROVIDER what it currently offers — their catalogue changes without notice. */
   providerModels(provider: string, signal?: AbortSignal) {
     return this.request<ProviderModels>(

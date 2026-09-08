@@ -117,7 +117,7 @@
 }
 .titleRecDept {
   font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
+  font-weight: var(--weight-normal);
   color: var(--text-subtle);
   text-transform: capitalize;
 }

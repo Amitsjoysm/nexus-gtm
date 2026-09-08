@@ -31,12 +31,57 @@ MAX_ROWS = 50_000
 # Fields an operator may map a CSV column onto. Anything else is kept on `custom_fields` rather
 # than dropped: an ops CSV always carries columns we have no column for, and those columns are
 # usually the reason the list was built — territory, tier, owner, campaign.
-ACCOUNT_TEXT_FIELDS = ("name", "industry", "country", "region", "postal_code")
+#
+# `crm_id` / `crm_source` are mappable because an ops CSV is usually a CRM export that carries the
+# record id. Without them the import creates a second row for an account the CRM already knows, and
+# the next sync pushes a duplicate back.
+ACCOUNT_TEXT_FIELDS = (
+    "name", "industry", "country", "region", "postal_code", "crm_id", "crm_source",
+)
 ACCOUNT_INT_FIELDS = ("employee_count", "annual_revenue")
+
+# Multi-value columns. `tech_stack` is mappable because the relevance engine scores on it — an
+# imported technographic column that landed in `custom_fields` was data the product had and could
+# not read.
+ACCOUNT_LIST_FIELDS = ("tech_stack",)
 
 # `full_name` and `email` are handled separately: one is the fallback identity, the other IS the
 # identity, so neither can be written blindly in a loop.
 CONTACT_TEXT_FIELDS = ("title", "seniority", "phone", "linkedin_url")
+
+# A mapping target naming one of the workspace's OWN custom field definitions, e.g.
+# ``custom:territory``.
+#
+# Without this, every unmapped column lands in ``custom_fields`` keyed by its RAW CSV HEADER — so a
+# workspace that had defined a `territory` field and uploaded a file with a "Territory (2026)"
+# column got the value stored under that literal string, invisible to every filter and to the field
+# it defined. The prefix keeps the two namespaces apart: a custom field keyed `industry` and the
+# real `industry` column are different targets and must stay distinguishable.
+CUSTOM_PREFIX = "custom:"
+
+
+def split_targets(mapping: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+    """``{csv_column: target}`` -> (column->real field, column->custom field key)."""
+    real: dict[str, str] = {}
+    custom: dict[str, str] = {}
+    for column, target in mapping.items():
+        if target.startswith(CUSTOM_PREFIX):
+            key = target[len(CUSTOM_PREFIX):].strip()
+            if key:
+                custom[column] = key
+        else:
+            real[column] = target
+    return real, custom
+
+
+def _split_list(raw: str) -> list[str]:
+    """``'AWS, Snowflake; dbt'`` -> ``['AWS', 'Snowflake', 'dbt']``.
+
+    Comma AND semicolon, because a CSV column holding commas is usually quoted and exported with
+    semicolons instead — and an operator who did quote it should not lose the split.
+    """
+    parts = [p.strip() for chunk in (raw or "").split(";") for p in chunk.split(",")]
+    return [p for p in parts if p]
 
 
 def _decode(content: bytes) -> str:
@@ -87,6 +132,20 @@ def _extras(row: dict, mapped_columns: set[str]) -> dict:
     }
 
 
+def _custom_values(row: dict, custom: dict[str, str], extras: dict) -> dict:
+    """Merge explicitly-mapped custom fields over the unmapped-column extras.
+
+    Explicit wins: the operator said this column IS the `territory` field, and a raw header that
+    happens to collide must not overwrite the thing they chose.
+    """
+    merged = dict(extras)
+    for column, key in custom.items():
+        value = (row.get(column) or "").strip()
+        if value:
+            merged[key] = value
+    return merged
+
+
 def _to_int(raw: str) -> int | None:
     """Parse '1,200', '$25,000,000' and '25000000'. Returns None for anything else.
 
@@ -118,6 +177,21 @@ def _apply_account(account: Account, fields: dict, extras: dict) -> None:
         if parsed is not None:
             setattr(account, field, parsed)
 
+    for field in ACCOUNT_LIST_FIELDS:
+        values = _split_list(fields.get(field, ""))
+        if values:
+            # UNIONED, not replaced — the same rule the shared company store applies to
+            # `tech_stack`, and the same rule as the blank cell above. A three-column CSV listing
+            # the two technologies the rep happens to care about must not delete the eleven an
+            # enrichment provider was paid to find.
+            current = list(getattr(account, field, None) or [])
+            seen = {str(v).casefold() for v in current}
+            for value in values:
+                if value.casefold() not in seen:
+                    seen.add(value.casefold())
+                    current.append(value)
+            setattr(account, field, current)
+
     if extras:
         account.custom_fields = {**(account.custom_fields or {}), **extras}
 
@@ -128,9 +202,10 @@ async def import_accounts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
     errors: list[str] = []
     rows = _rows(content)
     mapped_columns = set(mapping)
+    real, custom = split_targets(mapping)
 
     for index, row in enumerate(rows, start=2):  # 2 == the first data line in a spreadsheet
-        fields = {field: (row.get(column) or "").strip() for column, field in mapping.items()}
+        fields = {field: (row.get(column) or "").strip() for column, field in real.items()}
         name = fields.get("name", "")
         domain = normalise_domain(fields.get("domain", ""))
 
@@ -145,13 +220,14 @@ async def import_accounts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
         if existing is None and name:
             existing = await ts.first(Account, Account.name == name)
 
+        extras = _custom_values(row, custom, _extras(row, mapped_columns))
         if existing is None:
             account = Account(tenant_id=ts.tenant_id, name=name or domain, source="csv_import")
-            _apply_account(account, fields, _extras(row, mapped_columns))
+            _apply_account(account, fields, extras)
             ts.add(account)
             created += 1
         else:
-            _apply_account(existing, fields, _extras(row, mapped_columns))
+            _apply_account(existing, fields, extras)
             updated += 1
         await ts.flush()
 
@@ -172,9 +248,10 @@ async def import_contacts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
     errors: list[str] = []
     rows = _rows(content)
     mapped_columns = set(mapping)
+    real, custom = split_targets(mapping)
 
     for index, row in enumerate(rows, start=2):
-        fields = {field: (row.get(column) or "").strip() for column, field in mapping.items()}
+        fields = {field: (row.get(column) or "").strip() for column, field in real.items()}
         email = normalise_email(fields.get("email", ""))
         full_name = fields.get("full_name", "")
 
@@ -212,7 +289,7 @@ async def import_contacts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
                 value = (fields.get(field) or "").strip()
                 if value:
                     setattr(contact, field, value)
-            extras = _extras(row, mapped_columns)
+            extras = _custom_values(row, custom, _extras(row, mapped_columns))
             if extras:
                 contact.custom_fields = extras
             ts.add(contact)
@@ -225,7 +302,7 @@ async def import_contacts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
                 value = (fields.get(field) or "").strip()
                 if value:
                     setattr(existing, field, value)
-            extras = _extras(row, mapped_columns)
+            extras = _custom_values(row, custom, _extras(row, mapped_columns))
             if extras:
                 existing.custom_fields = {**(existing.custom_fields or {}), **extras}
             updated += 1

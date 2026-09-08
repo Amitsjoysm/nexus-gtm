@@ -12,10 +12,19 @@ import {
 import type { SelectOption } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { parseCsv } from "@/lib/csv";
+import { formatNumber } from "@/lib/format";
 import type { ParsedCsv } from "@/lib/csv";
 import type { ImportFields, RecordImportResult } from "@/lib/types";
 import styles from "./RecordImportModal.module.css";
+
+/** "1.2 MB". Sizes are shown so an operator can tell a 40-row test file from the real export. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 /**
  * Bring an existing list in — by CSV upload, or pulled from the connected CRM.
@@ -54,6 +63,9 @@ const LABELS: Record<string, string> = {
   postal_code: "ZIP / postal code",
   employee_count: "Employee count",
   annual_revenue: "Annual revenue",
+  tech_stack: "Technologies used",
+  crm_id: "CRM record ID",
+  crm_source: "CRM name",
   full_name: "Full name",
   email: "Email",
   title: "Job title",
@@ -62,6 +74,15 @@ const LABELS: Record<string, string> = {
   linkedin_url: "LinkedIn URL",
   account_domain: "Company website / domain",
   account_name: "Company name",
+};
+
+/** Fields whose format is not obvious from the label. Shown under the picker once chosen, because
+ *  an operator who separates technologies with a slash gets one long string and no warning. */
+const FORMAT_HINT: Record<string, string> = {
+  tech_stack: "Separate several with commas or semicolons. Added to what is already known.",
+  crm_id: "Matches the record in your CRM so a sync updates it instead of creating a duplicate.",
+  annual_revenue: "Whole numbers. $25,000,000 and 25000000 both work.",
+  employee_count: "Whole numbers.",
 };
 
 /** Fields that identify the record. At least one must be mapped or the import cannot match
@@ -85,6 +106,11 @@ function guessField(header: string, allowed: string[]): string {
     [/^(zip|zipcode|postal|postalcode|postcode)$/, "postal_code"],
     [/^(employees|employeecount|headcount|staff|size)$/, "employee_count"],
     [/^(revenue|annualrevenue|arr|turnover)$/, "annual_revenue"],
+    // A CRM export is the commonest shape of file here, and both of these were previously guessed
+    // as "keep as extra data" — which quietly cost the relevance engine the stack and the CRM sync
+    // its match key.
+    [/^(technologies|techstack|tech|stack|technology|tools)$/, "tech_stack"],
+    [/^(crmid|sfid|salesforceid|hubspotid|recordid|externalid|accountid)$/, "crm_id"],
     [/^(name|fullname|contactname|person)$/, "full_name"],
     [/^(email|emailaddress|workemail)$/, "email"],
     [/^(title|jobtitle|role|position)$/, "title"],
@@ -105,7 +131,11 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
   const [parsed, setParsed] = useState<ParsedCsv | null>(null);
   const [fileName, setFileName] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [mapping, setMapping] = useState<Record<string, string>>({});
+  /** Only what the OPERATOR chose. The guess is derived, so a file picked before the field list
+   *  arrives still gets guessed once it does — previously the guess ran in the file handler
+   *  against an empty field list and every column silently read "Keep as extra data". */
+  const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<RecordImportResult | null>(null);
@@ -113,6 +143,14 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
 
   const allowed = useMemo(
     () => (entity === "accounts" ? fields?.account_fields : fields?.contact_fields) ?? [],
+    [fields, entity],
+  );
+
+  /** The workspace's own defined fields. Mapping a column onto one of these is what puts the value
+   *  on the field the workspace's filters read, instead of under the raw CSV header. */
+  const customFields = useMemo(
+    () =>
+      (entity === "accounts" ? fields?.account_custom_fields : fields?.contact_custom_fields) ?? [],
     [fields, entity],
   );
 
@@ -142,7 +180,7 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
     setParsed(null);
     setFile(null);
     setFileName("");
-    setMapping({});
+    setOverrides({});
     setError("");
     setResult(null);
   }, [open]);
@@ -156,6 +194,10 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
       setError(`That file is ${(chosen.size / 1024 / 1024).toFixed(1)} MB. The limit is ${Math.round(max / 1024 / 1024)} MB.`);
       return;
     }
+    if (!/\.csv$/i.test(chosen.name) && chosen.type && !chosen.type.includes("csv")) {
+      setError(`${chosen.name} is not a CSV. Export the sheet as CSV and try again.`);
+      return;
+    }
     const text = await chosen.text();
     const csv = parseCsv(text, { maxRows: PREVIEW_ROWS });
     if (!csv.headers.length) {
@@ -165,10 +207,25 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
     setFile(chosen);
     setFileName(chosen.name);
     setParsed(csv);
-    setMapping(
-      Object.fromEntries(csv.headers.map((h) => [h, guessField(h, allowed)])),
-    );
+    setOverrides({});
   }
+
+  function clearFile() {
+    setFile(null);
+    setFileName("");
+    setParsed(null);
+    setOverrides({});
+    setError("");
+  }
+
+  /** The operator's choice where they made one, the guess otherwise. */
+  const mapping = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const header of parsed?.headers ?? []) {
+      out[header] = overrides[header] ?? guessField(header, allowed);
+    }
+    return out;
+  }, [parsed, overrides, allowed]);
 
   const mapped = useMemo(
     () => Object.entries(mapping).filter(([, v]) => v && v !== IGNORE),
@@ -191,9 +248,20 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
   const fieldOptions: SelectOption[] = useMemo(
     () => [
       { value: IGNORE, label: "Keep as extra data" },
-      ...allowed.map((f) => ({ value: f, label: LABELS[f] ?? f })),
+      ...allowed.map((f) => ({
+        value: f,
+        label: LABELS[f] ?? f,
+        group: entity === "accounts" ? "Company fields" : "Contact fields",
+      })),
+      // The workspace's OWN fields, grouped separately: a field somebody defined and a field we
+      // ship are different things, and a flat list of thirty makes neither findable.
+      ...customFields.map((c) => ({
+        value: c.target,
+        label: c.label,
+        group: "Your workspace's fields",
+      })),
     ],
-    [allowed],
+    [allowed, customFields, entity],
   );
 
   async function runCsvImport() {
@@ -293,35 +361,79 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
                 className={styles.hiddenInput}
                 onChange={(e) => void onFile(e.target.files?.[0])}
               />
-              <div className={styles.fileRow}>
-                <Button variant="secondary" onClick={() => fileInput.current?.click()}>
-                  <Icons.UploadIcon aria-hidden />
-                  Choose file
-                </Button>
-                {fileName && <span className={styles.muted}>{fileName}</span>}
-              </div>
+              {file ? (
+                <div className={styles.file}>
+                  <span className={styles.fileIcon} aria-hidden="true">
+                    <Icons.CheckIcon />
+                  </span>
+                  <span className={styles.fileText}>
+                    <span className={styles.fileName}>{fileName}</span>
+                    <span className={styles.muted}>
+                      {parsed?.headers.length ?? 0} columns · {formatBytes(file.size)}
+                    </span>
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={clearFile} disabled={busy}>
+                    Choose a different file
+                  </Button>
+                </div>
+              ) : (
+                <div
+                  className={cn(styles.drop, dragging && styles.dropActive)}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragging(true);
+                  }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragging(false);
+                    void onFile(e.dataTransfer.files?.[0]);
+                  }}
+                >
+                  <span className={styles.dropIcon} aria-hidden="true">
+                    <Icons.UploadIcon />
+                  </span>
+                  <span className={styles.dropTitle}>Drop a CSV here</span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    iconLeft={<Icons.UploadIcon />}
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    Choose a file
+                  </Button>
+                  <span className={styles.muted}>
+                    Up to {Math.round((fields?.max_upload_bytes ?? 20971520) / 1024 / 1024)} MB and{" "}
+                    {formatNumber(fields?.max_rows ?? 50000)} rows. You match the columns next.
+                  </span>
+                </div>
+              )}
 
               {parsed && (
                 <>
                   <p className={styles.hint}>
                     Match each column to a field. Anything left as{" "}
-                    <strong>Keep as extra data</strong> is stored on the record rather than dropped.
+                    <strong>Keep as extra data</strong> is stored on the record under its own column
+                    name rather than dropped.
                   </p>
                   <div className={styles.mapGrid}>
-                    {parsed.headers.map((header, columnIndex) => (
-                      <Field key={header} label={header}>
-                        <Select
-                          value={mapping[header] ?? IGNORE}
-                          options={fieldOptions}
-                          onChange={(e) =>
-                            setMapping((m) => ({ ...m, [header]: e.target.value }))
-                          }
-                        />
-                        <span className={styles.sample}>
-                          {parsed.rows[0]?.[columnIndex] || <em>empty</em>}
-                        </span>
-                      </Field>
-                    ))}
+                    {parsed.headers.map((header, columnIndex) => {
+                      const target = mapping[header] ?? IGNORE;
+                      return (
+                        <Field key={header} label={header} hint={FORMAT_HINT[target]}>
+                          <Select
+                            value={target}
+                            options={fieldOptions}
+                            onChange={(e) =>
+                              setOverrides((m) => ({ ...m, [header]: e.target.value }))
+                            }
+                          />
+                          <span className={styles.sample}>
+                            {parsed.rows[0]?.[columnIndex] || <em>empty</em>}
+                          </span>
+                        </Field>
+                      );
+                    })}
                   </div>
 
                   {identityMissing && (

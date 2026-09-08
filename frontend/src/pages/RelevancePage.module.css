@@ -87,7 +87,7 @@
   padding: 4px 10px;
   font-size: var(--text-xs);
   color: var(--text);
-  background: var(--surface-subtle, rgba(127, 127, 127, 0.08));
+  background: var(--surface-2);
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   cursor: pointer;
@@ -245,23 +245,23 @@
 .levelChipOn {
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-full, 999px);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
   font-size: var(--text-sm);
   cursor: pointer;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .levelChip:hover:not(:disabled) {
-  border-color: var(--color-accent);
-  color: var(--color-text);
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 .levelChipOn {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: var(--color-accent-contrast, #fff);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast, #fff);
 }
 
 .levelChip:disabled,
@@ -272,7 +272,7 @@
 
 .levelChip:focus-visible,
 .levelChipOn:focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 

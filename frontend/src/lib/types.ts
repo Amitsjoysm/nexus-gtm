@@ -1828,12 +1828,126 @@ export interface RecordImportResult {
 
 /** `GET /imports/fields` — the mapping picker builds itself from the server rather than from a
  * hard-coded list that drifts out of step with what the importer actually accepts. */
+/** One of the workspace's own field definitions, offered as a CSV mapping target. */
+export interface ImportCustomField {
+  /** Send this as the mapping value — already prefixed, e.g. `custom:territory`. */
+  target: string;
+  key: string;
+  label: string;
+  kind: string;
+}
+
 export interface ImportFields {
   account_fields: string[];
   contact_fields: string[];
+  /** Empty is normal. An unmapped column is still kept, under its own header — mapping it here is
+   *  what lands it on the DEFINED field the workspace's filters actually read. */
+  account_custom_fields: ImportCustomField[];
+  contact_custom_fields: ImportCustomField[];
   max_rows: number;
   default_limit: number;
   max_upload_bytes: number;
+}
+
+// ---- external source databases (superadmin) ----
+/**
+ * A read-only DSN into somebody else's Postgres, tried AHEAD of the paid enrichment APIs.
+ *
+ * The status ladder IS the safety story: `registered → connected → introspected → mapped →
+ * verified`. Only the server advances it, and re-introspecting or re-mapping clears the proof —
+ * a source that stayed `verified` after its table was rebuilt is the wrong-attribution bug.
+ *
+ * The connection string is in no field here, in any form. A "show DSN" affordance would turn every
+ * read of this console into a credential disclosure.
+ */
+export interface SourceDatabase {
+  id: string;
+  name: string;
+  kind: string;
+  /** Host and database only. Never the credentials. */
+  dsn_redacted: string;
+  status: "registered" | "connected" | "introspected" | "mapped" | "verified" | "failed" | string;
+  enabled: boolean;
+  discovered_schema: { tables?: SourceTable[] };
+  mapping: SourceMapping | Record<string, never>;
+  dry_run: SourceDryRun | Record<string, never>;
+  last_ok_at: string | null;
+  last_error: string;
+  /** Verified AND enabled: the only state in which anything reads from it. */
+  usable: boolean;
+}
+
+export interface SourceTable {
+  schema: string;
+  table: string;
+  columns: { name: string; type: string }[];
+}
+
+export interface SourceMapping {
+  entity: string;
+  schema: string;
+  table: string;
+  /** `{app_field: source_column}`. Names only — never an expression. */
+  columns: Record<string, string>;
+}
+
+export interface SourceDryRun {
+  entity: string;
+  rows: number;
+  /** The number that matters. Rows alone say the query ran; this says the mapping found the column
+   *  that makes a row joinable to anything. */
+  usable_rows: number;
+  identity_field: string;
+  sample: Record<string, unknown>[];
+  statement: string;
+  verified: boolean;
+}
+
+export interface SourceTestResult {
+  server_version: string;
+  database: string;
+  read_only: boolean;
+}
+
+// ---- shared company crawl (superadmin) ----
+/**
+ * One company's agreement between the shared crawl and the per-tenant crawls.
+ *
+ * Delivery is gated per company on `crawl_verdict`, and until this screen existed nothing in
+ * production wrote that column — so every company sat at `unknown`, the shared crawl gathered and
+ * delivered nothing, and the per-tenant crawl still ran in full.
+ */
+export interface SharedCrawlCompany {
+  company_id: string;
+  domain: string;
+  name: string;
+  verdict: "unknown" | "agrees" | "disagrees" | string;
+  verdict_at: string | null;
+  last_crawled_at: string | null;
+  accounts: number;
+  accounts_agreeing: number;
+  accounts_disagreeing: number;
+  /** Signals a TENANT holds that the shared crawl does not. Extra shared signals are usually fine;
+   *  this is the failure, because fan-out would present less than the tenant already has. */
+  missing_from_shared: string[];
+  /** False when nothing has been crawled or nothing is linked. Agreement between two empty sets is
+   *  not evidence, and approving on it would make the whole gate decorative. */
+  comparable: boolean;
+  would_agree: boolean;
+}
+
+export interface SharedCrawlSummary {
+  companies: Record<string, number>;
+  /** Accounts whose company is approved. While this is 0, both crawls run for every account. */
+  accounts_served_by_shared_crawl: number;
+  fanout_enabled: boolean;
+}
+
+/** What a mapping may name. Server-driven so the form cannot drift from `validate_mapping`. */
+export interface SourceVocabulary {
+  entities: Record<string, string[]>;
+  required: Record<string, string[]>;
+  identity_note: Record<string, string>;
 }
 
 /** One signal kind and whether this workspace collects it. Absent server-side means enabled. */

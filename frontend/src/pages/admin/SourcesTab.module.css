@@ -1,0 +1,265 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.warning {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--warning-quiet);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  max-inline-size: 78ch;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.headText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.dsn {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ---- the ladder ------------------------------------------------------------------------------
+   Five rungs rather than a status badge, because "mapped" and "verified" look identical in a badge
+   and are the difference between configured and proven. */
+.ladder {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.rung {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+
+.rungDot {
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+.rung[data-state="done"] {
+  color: var(--text);
+}
+
+.rung[data-state="done"] .rungDot {
+  background: var(--success);
+}
+
+.rung[data-state="failed"] .rungDot {
+  background: var(--danger);
+}
+
+.rungLabel {
+  white-space: nowrap;
+}
+
+.detail {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-muted);
+  max-inline-size: 78ch;
+}
+
+.code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.error {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--danger);
+  max-inline-size: 78ch;
+  overflow-wrap: anywhere;
+}
+
+/* ---- the dry run ----------------------------------------------------------------------------- */
+.dryRun {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.dryRun[data-verified="true"] {
+  border-color: var(--success);
+}
+
+.dryRunHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.statement {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.statement summary {
+  cursor: pointer;
+}
+
+.pre {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading);
+  overflow-x: auto;
+  max-block-size: 220px;
+}
+
+/* ---- actions ---------------------------------------------------------------------------------- */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-block-start: var(--space-2);
+  border-block-start: 1px solid var(--border);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+/* ---- forms ------------------------------------------------------------------------------------ */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.formRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+
+.formNote {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-muted);
+  max-inline-size: 72ch;
+}
+
+.mapGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-4);
+  max-block-size: 340px;
+  overflow-y: auto;
+  padding-inline-end: var(--space-2);
+}
+
+.warn {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-quiet);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+}
+
+/* ---- empty ------------------------------------------------------------------------------------ */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.emptyBody {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-muted);
+  max-inline-size: 72ch;
+}
+
+@media (max-width: 640px) {
+  .head {
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+}

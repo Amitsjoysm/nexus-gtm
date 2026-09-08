@@ -128,6 +128,40 @@ async def _audit(principal: Principal, action: str, row: SourceDatabase | None,
         await session.commit()
 
 
+class VocabularyOut(BaseModel):
+    """What a mapping may name. The console builds its form from this rather than from a copy.
+
+    `ENTITIES` and `REQUIRED_FIELDS` are what `validate_mapping` checks against, so a client list
+    that drifts from them is a form whose submit button fails for a reason the form cannot show.
+    """
+
+    #: entity -> every app field it accepts, in the order the engine declares them.
+    entities: dict[str, list[str]]
+    #: entity -> fields the mapping cannot omit. Empty for `person`, whose rule is "either
+    #: linkedin_url or email", which is stated in `identity_note` rather than as a required list.
+    required: dict[str, list[str]]
+    identity_note: dict[str, str]
+
+
+@router.get("/vocabulary", response_model=VocabularyOut)
+async def vocabulary(
+    principal: Principal = Depends(require_platform_permission(SOURCES_MANAGE)),
+) -> VocabularyOut:
+    from nexus.sources.engine import REQUIRED_FIELDS
+
+    return VocabularyOut(
+        entities={k: list(v) for k, v in ENTITIES.items()},
+        required={k: list(v) for k, v in REQUIRED_FIELDS.items()},
+        identity_note={
+            "company": "A company is identified by its domain and nothing else. A name match "
+                       "across tenants is how this subsystem shipped six wrong-attribution bugs.",
+            "person": "A person needs linkedin_url or email. A name is not an identity, and "
+                      "getting a person wrong means a rep phones a stranger with someone "
+                      "else's context.",
+        },
+    )
+
+
 @router.get("", response_model=list[SourceOut])
 async def list_sources(
     principal: Principal = Depends(require_platform_permission(SOURCES_MANAGE)),

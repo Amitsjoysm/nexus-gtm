@@ -11,6 +11,7 @@ from nexus.api.routers import (
     alert_connections,
     notifications,
     admin_runtime_config,
+    admin_shared_crawl,
     admin_sources,
     admin_health,
     billing_webhooks,
@@ -67,6 +68,7 @@ all_routers = [
     alert_connections.router,
     notifications.router,
     admin_runtime_config.router,
+    admin_shared_crawl.router,
     admin_sources.router,
     admin_health.router,
 ]

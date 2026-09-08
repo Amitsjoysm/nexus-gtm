@@ -21,6 +21,7 @@ import {
   USERS_MANAGE,
   PROVIDERS_MANAGE,
   FEATURES_MANAGE,
+  SOURCES_MANAGE,
 } from "@/lib/permissions";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
@@ -36,6 +37,8 @@ import { ApiError } from "@/lib/api";
 import { CustomersTab } from "./admin/CustomersTab";
 import { PaymentsTab } from "./admin/PaymentsTab";
 import { ProviderKeysTab } from "./admin/ProviderKeysTab";
+import { SharedCrawlTab } from "./admin/SharedCrawlTab";
+import { SourcesTab } from "./admin/SourcesTab";
 import { RuntimeConfigTab } from "./admin/RuntimeConfigTab";
 import { FeatureSwitchesTab } from "./admin/FeatureSwitchesTab";
 import styles from "./AdminBillingPage.module.css";
@@ -803,6 +806,11 @@ export function AdminBillingPage() {
     // separate acts.
     ...(can(PROVIDERS_MANAGE) ? [{ value: "keys", label: "Provider keys" }] : []),
     ...(can(FEATURES_MANAGE) ? [{ value: "features", label: "Feature switches" }] : []),
+    // Its own permission, deliberately not folded into admins.manage: registering a data
+    // source and granting platform power are different acts, and only `superadmin` holds it.
+    ...(can(SOURCES_MANAGE) ? [{ value: "sources", label: "Data sources" }] : []),
+    // Same permission and the same act: authorising a data source to reach every tenant.
+    ...(can(SOURCES_MANAGE) ? [{ value: "shared", label: "Shared crawl" }] : []),
     // Its own tab, not folded into Provider keys: these decide whether the platform spends money
     // unattended, which is a different question from which credential it spends it with. Gated on
     // pricing-write for the same reason.
@@ -837,6 +845,8 @@ export function AdminBillingPage() {
           {tab === "access" && can(ADMINS_MANAGE) && <PlatformAdmins />}
           {tab === "keys" && can(PROVIDERS_MANAGE) && <ProviderKeysTab />}
           {tab === "features" && can(FEATURES_MANAGE) && <FeatureSwitchesTab />}
+          {tab === "sources" && can(SOURCES_MANAGE) && <SourcesTab />}
+          {tab === "shared" && can(SOURCES_MANAGE) && <SharedCrawlTab />}
           {tab === "runtime" && can(PRICING_WRITE) && <RuntimeConfigTab />}
           {tab === "users" && (can(USERS_MANAGE) || can(USERS_IMPERSONATE)) && (
             <UserAdmin />
