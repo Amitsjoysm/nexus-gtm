@@ -1028,6 +1028,7 @@ export function AccountDetailPage() {
             contactId={emailFor.id}
             contactName={emailFor.full_name}
             contactEmail={emailFor.email}
+            emailStatus={emailFor.email_status}
           />
         )}
       </Modal>

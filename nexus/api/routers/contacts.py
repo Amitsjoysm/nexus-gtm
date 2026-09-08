@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -285,4 +286,79 @@ async def export_contacts(
             ]
             for r in rows
         ),
+    )
+
+
+# ---- one-off outbound: the rep sends the draft they just read ------------------------------------
+
+class SendEmailIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    subject: str = Field(default="", max_length=300)
+    body: str = Field(min_length=1)
+    #: Acknowledge an address the verifier called `invalid`. Not a default, because those bounce
+    #: and bounces cost the sending domain its ability to deliver anything at all.
+    allow_risky: bool = False
+
+
+class SendEmailOut(BaseModel):
+    ok: bool
+    detail: str
+    to: str = ""
+    from_email: str = ""
+    email_status: str = ""
+
+
+@router.post("/{contact_id}/send-email", response_model=SendEmailOut)
+async def send_email_to_contact(
+    contact_id: str,
+    body: SendEmailIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> SendEmailOut:
+    """Send one drafted email, from the CALLER'S OWN mailbox.
+
+    The product could draft a hyper-personalised email and could not send it: the composer offered
+    Copy and a `mailto:` link, so a rep's last step was copy-and-paste into Outlook. The sender,
+    the per-mailbox SMTP credentials and the priced `outreach.email_send` capability all already
+    existed and were wired to nothing.
+
+    Rep-level (`manage_accounts`), and the rep's click IS the review — the "nothing sends until you
+    approve it" rule governs AUTOMATED outreach, and the orchestrator's `SendMessageTool` still
+    carries `requires_approval`. A second gate on a message a human just read and edited would make
+    "one click" untrue without making anything safer.
+
+    A send that the SMTP server rejects returns **200 with `ok: false` and the server's own reason**,
+    not a 5xx: "authentication failed" and "recipient rejected" send a rep to two completely
+    different places, and an opaque error sends them to neither.
+    """
+    from nexus.outreach.send import MailboxNotConnected, SendRefused, send_to_contact
+
+    contact = await ts.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+
+    try:
+        outcome = await send_to_contact(
+            ts,
+            contact=contact,
+            subject=body.subject,
+            body=body.body,
+            user_id=principal.user_id,
+            allow_risky=body.allow_risky,
+        )
+    except MailboxNotConnected as exc:
+        # 409, not 400: the request is well-formed and it is the STATE that forbids it — the same
+        # distinction `admin_payment_credentials` draws for an unverified credential.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except SendRefused as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    await ts.commit()
+    return SendEmailOut(
+        ok=outcome.ok,
+        detail=outcome.detail,
+        to=outcome.to,
+        from_email=outcome.from_email,
+        email_status=outcome.email_status,
     )

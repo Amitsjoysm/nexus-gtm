@@ -44,3 +44,41 @@
   background: var(--danger-quiet, rgba(192, 57, 43, 0.08));
   border-radius: var(--radius-sm);
 }
+
+/* Who this is going to, and what we know about the address — shown BEFORE the send, because a rep
+   about to email an unverified address should know while they can still decide not to. */
+.recipient {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding-block-end: var(--space-2);
+}
+
+.to {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.sent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--success);
+  border-radius: var(--radius);
+  background: var(--success-quiet);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.warn {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-quiet);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+}

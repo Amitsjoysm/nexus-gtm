@@ -1950,6 +1950,15 @@ export interface SourceVocabulary {
   identity_note: Record<string, string>;
 }
 
+/** Result of sending one drafted email. `ok:false` carries the SMTP server's own reason. */
+export interface SendEmailResult {
+  ok: boolean;
+  detail: string;
+  to: string;
+  from_email: string;
+  email_status: string;
+}
+
 /** One signal kind and whether this workspace collects it. Absent server-side means enabled. */
 export interface SignalPreference {
   kind: string;

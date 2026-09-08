@@ -255,8 +255,11 @@ from nexus.integrations.email_sender import (  # noqa: E402
 )
 
 
-def _account_out(a: dict) -> EmailAccountOut:
+def _account_out(a: dict, *, caller_user_id: str = "") -> EmailAccountOut:
+    owner = a.get("owner_user_id") or ""
     return EmailAccountOut(
+        mine=bool(owner) and owner == caller_user_id,
+        unassigned=not owner,
         id=a["id"],
         label=a.get("label", ""),
         provider=a.get("provider", "gmail"),
@@ -292,14 +295,14 @@ def _save_accounts(tenant: Tenant, accounts: list[dict]) -> None:
 @router.get("/email/accounts", response_model=list[EmailAccountOut])
 async def list_email_accounts(
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_workspace)),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
 ) -> list[EmailAccountOut]:
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     accounts = _load_accounts(tenant)
     if accounts and "accounts" not in (tenant.email_settings or {}):
         _save_accounts(tenant, accounts)  # persist the legacy → accounts migration once
         await ts.flush()
-    return [_account_out(a) for a in accounts]
+    return [_account_out(a, caller_user_id=principal.user_id) for a in accounts]
 
 
 @router.get("/email/mailboxes", response_model=list[MailboxOut])
@@ -324,7 +327,7 @@ async def list_send_mailboxes(
 async def add_email_account(
     body: EmailAccountIn,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_workspace)),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
 ) -> EmailAccountOut:
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     accounts = _load_accounts(tenant)
@@ -342,6 +345,12 @@ async def add_email_account(
         "enabled": body.enabled,
         "default": not any(a.get("default") for a in accounts),  # first added becomes default
         "verified_at": None,
+        # WHO SENDS FROM THIS. A reply goes back to whoever sent it, so a shared workspace address
+        # turns every reply into a triage problem — `outreach/send.py` therefore sends only from a
+        # mailbox the rep owns. Stamped on creation and never reassigned by an edit; a mailbox
+        # created before this existed has no owner and is deliberately not usable for sending,
+        # because silently sending as somebody else is worse than asking a rep to connect one.
+        "owner_user_id": principal.user_id,
     }
     accounts.append(acct)
     _save_accounts(tenant, accounts)
@@ -381,6 +390,39 @@ async def update_email_account(
     _save_accounts(tenant, accounts)
     await ts.flush()
     return _account_out(acct)
+
+
+@router.post("/email/accounts/{account_id}/claim", response_model=EmailAccountOut)
+async def claim_email_account(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailAccountOut:
+    """Take ownership of a mailbox that has none, so you can send from it.
+
+    Ownership arrived after mailboxes did, so a workspace that configured one earlier has an entry
+    nobody owns — and `outreach/send.py` refuses to send from an unowned mailbox, because sending
+    as an address whose replies go to an unknown person is worse than asking. This is the way back
+    without deleting and re-adding the credential.
+
+    **Only an UNOWNED mailbox can be claimed.** Taking one from a colleague would silently redirect
+    their replies, which is the exact failure ownership exists to prevent.
+    """
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    accounts = _load_accounts(tenant)
+    acct = next((a for a in accounts if a["id"] == account_id), None)
+    if acct is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
+    owner = acct.get("owner_user_id") or ""
+    if owner and owner != principal.user_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Another member already owns this mailbox. Add your own instead.",
+        )
+    acct["owner_user_id"] = principal.user_id
+    _save_accounts(tenant, accounts)
+    await ts.flush()
+    return _account_out(acct, caller_user_id=principal.user_id)
 
 
 @router.delete("/email/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)

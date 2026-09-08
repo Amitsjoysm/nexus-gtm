@@ -665,6 +665,13 @@ class EmailAccountOut(BaseModel):
     default: bool = False
     has_password: bool = False           # never return the secret itself
     verified_at: str | None = None
+    #: Whether the CALLER owns this mailbox. Not the owner's id: the list is workspace-wide and a
+    #: rep does not need to be told which colleague owns which address, only which one is theirs —
+    #: sending requires their own (see `nexus/outreach/send.py`).
+    mine: bool = False
+    #: A mailbox created before ownership existed. Its own state, because "nobody owns this" and
+    #: "somebody else owns this" need different fixes: the first is claimable, the second is not.
+    unassigned: bool = False
 
 
 class MailboxOut(BaseModel):

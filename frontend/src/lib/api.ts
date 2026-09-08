@@ -58,6 +58,7 @@ import type {
   SubscriptionPatch,
   ProviderModels,
   RuntimeSetting,
+  SendEmailResult,
   SharedCrawlCompany,
   SharedCrawlSummary,
   SourceDatabase,
@@ -894,6 +895,25 @@ export class ApiClient {
     return this.request<void>(
       `/notifications/${encodeURIComponent(category)}/${encodeURIComponent(channel)}`,
       { method: "DELETE" },
+    );
+  }
+
+  /** Send a drafted email to a contact from the CALLER'S OWN mailbox. 409 when they have not
+   *  connected one; 422 when the address was verified invalid and `allow_risky` was not set. */
+  sendEmailToContact(
+    contactId: string,
+    body: { subject: string; body: string; allow_risky?: boolean },
+  ) {
+    return this.request<SendEmailResult>(
+      `/contacts/${encodeURIComponent(contactId)}/send-email`,
+      { method: "POST", body },
+    );
+  }
+  /** Take ownership of a mailbox nobody owns, so you can send from it. */
+  claimEmailAccount(accountId: string) {
+    return this.request<EmailAccount>(
+      `/workspace/email/accounts/${encodeURIComponent(accountId)}/claim`,
+      { method: "POST" },
     );
   }
 
