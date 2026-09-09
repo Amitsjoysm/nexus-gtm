@@ -2,7 +2,10 @@
   display: flex;
   flex-direction: column;
   width: var(--sidebar-w);
+  /* Paired with `100dvh` like the shell: a sidebar sized to the LARGEST viewport height
+     overhangs the visible one wherever the browser toolbar retracts. */
   height: 100vh;
+  height: 100dvh;
   position: sticky;
   top: 0;
   background: var(--surface);

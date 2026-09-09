@@ -18,7 +18,10 @@
 .dialog {
   position: relative;
   width: 100%;
+  /* `100dvh` so a tall dialog stays inside the VISIBLE viewport; with `100vh` its footer
+     (where the confirm button lives) can sit under a retracted toolbar. */
   max-height: calc(100vh - var(--space-8));
+  max-height: calc(100dvh - var(--space-8));
   display: flex;
   flex-direction: column;
   background: var(--surface);

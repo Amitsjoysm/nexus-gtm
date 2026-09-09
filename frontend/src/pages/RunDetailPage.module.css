@@ -98,7 +98,14 @@
 .miniChat {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--topbar-h) - var(--space-12));
+  /* Two faults, both producing dead space below the brief.
+     `100vh` is the largest viewport height rather than the visible one on any browser with a
+     retracting toolbar — see `AppShell.module.css`, which pairs it with `100dvh` for exactly this.
+     And the subtraction missed `.container`'s TOP padding: that container is
+     `padding: var(--space-6) var(--space-5) var(--space-12)`, so a panel sized to the viewport has
+     to give back both, and giving back only the bottom one left it `--space-6` too tall. */
+  height: calc(100vh - var(--topbar-h) - var(--space-6) - var(--space-12));
+  height: calc(100dvh - var(--topbar-h) - var(--space-6) - var(--space-12));
   min-height: 420px;
   background: var(--surface);
   border: 1px solid var(--border);

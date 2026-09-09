@@ -1,5 +1,8 @@
 .page {
+  /* `min-height: 100vh` makes the page taller than the screen wherever the toolbar retracts,
+     which is blank space under the sign-in form on the very first screen anyone sees. */
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-columns: 1.1fr 1fr;
 }

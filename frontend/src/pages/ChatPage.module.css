@@ -5,7 +5,15 @@
   display: grid;
   grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
   gap: var(--space-5);
+  /* `100dvh`, with `100vh` as the fallback — the same pair `AppShell` uses, and for the reason it
+     documents: on any browser with a retracting toolbar `100vh` is the LARGEST viewport height,
+     not the visible one, so a page sized from it is taller than the screen and scrolling reveals
+     empty space below the content. The @media block at the bottom of this file already used
+     `100dvh`; only the desktop rule was left on `100vh`, which is why the blank space showed up on
+     a desktop window and not a narrow one.
+     The subtraction covers the topbar plus BOTH of `.container`'s vertical paddings. */
   height: calc(100vh - var(--topbar-h) - var(--space-6) - var(--space-12));
+  height: calc(100dvh - var(--topbar-h) - var(--space-6) - var(--space-12));
   min-height: 520px;
 }
 
