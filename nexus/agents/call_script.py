@@ -16,6 +16,7 @@ from nexus.agents.copy import (
     format_pains,
     select_value_prop,
     signal_facts,
+    today_line,
 )
 from nexus.agents.llm import LLMMessage
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
@@ -119,6 +120,9 @@ class CallScriptAgent(BaseAgent):
         signals_block = f"\nRECENT SIGNALS (strongest first):\n{recent}\n" if recent else ""
 
         content = (
+            # Same anchor as the email agent: the `cta` field is told to name a specific weekday,
+            # and a model with no clock either invents one or hedges back to a vague close.
+            f"{today_line()}\n\n"
             f"Write a cold-call talk track for an experienced SDR calling {contact_name} "
             f"({contact.title if contact and contact.title else 'a buyer'}) at {ctx.account.name}.\n\n"
             f"WHAT WE KNOW ABOUT THEM:\n{facts}\n"

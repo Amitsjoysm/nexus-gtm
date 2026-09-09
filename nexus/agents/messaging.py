@@ -8,6 +8,7 @@ from nexus.agents.copy import (
     format_pains,
     select_value_prop,
     signal_facts,
+    today_line,
 )
 from nexus.agents.llm import LLMMessage
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
@@ -96,6 +97,9 @@ class MessagingAgent(BaseAgent):
         recent = signal_facts(ctx.signals)
 
         content = (
+            # First, because everything after it is dated relative to now: the signal ages, and the
+            # specific day the CTA is told to propose.
+            f"{today_line()}\n\n"
             f"Write a cold email from an experienced SDR to {who}"
             f"{f', {role},' if role else ''} at {ctx.account.name}.\n\n"
             f"WHAT WE KNOW ABOUT THEM:\n{facts}\n"

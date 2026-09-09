@@ -161,3 +161,77 @@ def test_the_system_grounding_names_the_specific_fabrications():
     for term in ("customer name", "metric", "percentage", "case study", "integration"):
         assert term in prompt, f"grounding no longer names {term!r}"
     assert "leave it out" in prompt, "omission is no longer offered as the alternative"
+
+
+# ---- the model needs a clock ---------------------------------------------------------------------
+
+def test_the_prompt_states_todays_date():
+    """Signals carry a RELATIVE age ("3 days ago") and nothing told the model what day it is.
+
+    That became load-bearing when the CTA rule started asking for a specific slot: "Would Tuesday at
+    10am work?" is a better ask than "would that be valuable?", and a worse one if Tuesday was
+    yesterday. A model with no clock either invents a date or hedges back into the vague close the
+    rule exists to remove.
+    """
+    from datetime import datetime, timezone
+
+    from nexus.agents.copy import today_line
+
+    line = today_line(datetime(2026, 9, 9, tzinfo=timezone.utc))
+    assert "Wednesday" in line and "9 September 2026" in line
+
+
+def test_the_proposed_days_are_computed_not_left_to_the_model():
+    """Date arithmetic is exactly what a model gets quietly wrong, so the two choosable weekdays are
+    worked out here and named."""
+    from datetime import datetime, timezone
+
+    from nexus.agents.copy import today_line
+
+    line = today_line(datetime(2026, 9, 9, tzinfo=timezone.utc))   # a Wednesday
+    assert "Thursday 10 September" in line
+    assert "Friday 11 September" in line
+
+
+def test_the_proposed_days_skip_the_weekend():
+    """Nobody takes a discovery call on Sunday. From a Friday the next two slots are Monday and
+    Tuesday, not Saturday and Sunday."""
+    from datetime import datetime, timezone
+
+    from nexus.agents.copy import today_line
+
+    line = today_line(datetime(2026, 9, 11, tzinfo=timezone.utc))  # a Friday
+    assert "Monday 14 September" in line and "Tuesday 15 September" in line
+    assert "Saturday" not in line and "Sunday" not in line
+
+
+def test_the_date_line_survives_a_year_boundary():
+    """A slot in the next year must still name a real day rather than falling over on the rollover."""
+    from datetime import datetime, timezone
+
+    from nexus.agents.copy import today_line
+
+    line = today_line(datetime(2026, 12, 31, tzinfo=timezone.utc))  # a Thursday
+    assert "Friday 1 January" in line and "Monday 4 January" in line
+
+
+def test_the_day_number_carries_no_leading_zero():
+    """"09 September" reads as machine output in a sentence a buyer will read. `%-d` is glibc-only
+    and raises on Windows, so the day is formatted from the integer instead."""
+    from datetime import datetime, timezone
+
+    from nexus.agents.copy import today_line
+
+    assert "09 September" not in today_line(datetime(2026, 9, 9, tzinfo=timezone.utc))
+
+
+def test_both_agents_anchor_the_model_in_time():
+    """An email proposing a past date and a call script proposing a different one would be two
+    bugs; they share `today_line` so they cannot disagree about what day it is."""
+    import inspect
+
+    from nexus.agents.call_script import CallScriptAgent
+    from nexus.agents.messaging import MessagingAgent
+
+    for agent in (MessagingAgent, CallScriptAgent):
+        assert "today_line()" in inspect.getsource(agent.run), agent.__name__

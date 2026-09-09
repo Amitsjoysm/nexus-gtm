@@ -253,6 +253,38 @@ def account_facts(account) -> str:
     return "\n".join(lines)
 
 
+def today_line(now=None) -> str:
+    """Anchor the model in real time, and give it dates it can actually name.
+
+    Signals already carry a relative age ("3 days ago"), but nothing told the model what day it is.
+    That became load-bearing the moment the CTA rule started asking for a specific slot: "Would
+    Tuesday at 10am work?" is a better ask than "would that be valuable?", and it is a WORSE one if
+    Tuesday was yesterday. A model with no clock either invents a date or hedges back into the vague
+    close the rule exists to remove.
+
+    So it gets today, and the two concrete weekdays it should choose between — computed here rather
+    than left to the model, because date arithmetic is exactly the kind of thing it gets quietly
+    wrong. Weekends are skipped: nobody takes a discovery call on Sunday.
+
+    Also stops a stale signal being written up as fresh. The age phrase says "5 months ago"; this
+    says what that means in a sentence the reader will check against their own calendar.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = now or datetime.now(timezone.utc)
+    slots: list[str] = []
+    probe = now
+    while len(slots) < 2:
+        probe += timedelta(days=1)
+        if probe.weekday() < 5:                      # Mon-Fri
+            slots.append(f"{probe.strftime('%A')} {probe.day} {probe.strftime('%B')}")
+    return (
+        f"Today is {now.strftime('%A')}, {now.day} {now.strftime('%B')} {now.year} (UTC). "
+        f"If you propose a time, name one of these: {slots[0]} or {slots[1]}. "
+        "Never propose a day that has already passed, and never a weekend."
+    )
+
+
 def _age_phrase(occurred_at) -> str:
     """How fresh the fact is.
 
