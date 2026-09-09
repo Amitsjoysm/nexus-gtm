@@ -107,7 +107,7 @@ class CallScriptAgent(BaseAgent):
         brief = build_person_brief(contact, ctx.account, ctx.signals) if contact else None
         hook = brief.signal_title if (brief and brief.signal_title) else trigger
         person_block = (
-            " " + brief.to_prompt(max_posts=get_settings().personalization_max_posts)
+            " " + brief.to_prompt(max_posts=get_settings().personalization_max_posts, channel="call")
             if brief is not None else ""
         )
         # Facts, then task, then rules, then the output contract — the same order as the email

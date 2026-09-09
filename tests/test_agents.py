@@ -185,3 +185,42 @@ def test_split_subject_still_tolerates_a_missing_subject_line():
     subject, body = _split_subject("Hi Dana,\n\nWe help teams cut energy spend. Worth 15 minutes?")
     assert body.strip()
     assert subject == "" or isinstance(subject, str)
+
+
+def test_the_email_agent_reserves_budget_for_a_reasoning_model():
+    """The default 800 is not enough when the deployment runs a reasoning model, and this one does
+    (`openai/gpt-oss-120b`). Reasoning tokens are charged against `max_tokens` alongside the answer,
+    so the budget buys the model's thinking first and the email second.
+
+    Measured 2026-09-09 by replaying the real 5,146-character prompt: reasoning alone came to 1,923
+    characters — roughly 550 tokens — leaving about a hundred for a 90-word email. It fits when the
+    model thinks briefly and overruns when it does not, so the failure is INTERMITTENT and looks
+    like flakiness rather than a setting: five live attempts returned four empty drafts and one good
+    one; six attempts after the change returned six good ones.
+
+    An overrun ends with `finish_reason: length` and EMPTY content, which is what the blank-draft
+    guard started catching — the guard made the fault visible, and this removes it.
+    """
+    import inspect
+
+    from nexus.agents.messaging import MessagingAgent
+
+    src = inspect.getsource(MessagingAgent.run)
+    assert "max_tokens=" in src, "the email agent is back on the inherited default"
+    budget = int(src.split("max_tokens=")[1].split(",")[0])
+    assert budget >= 1200, f"{budget} leaves a reasoning model no room for the email itself"
+
+
+def test_both_agents_reserve_comparable_room_to_think():
+    """`call_script` learned this first and carries 1,800. Sizing the email to its own short output
+    rather than to the thinking is exactly how the gap reappears."""
+    import inspect
+
+    from nexus.agents.call_script import CallScriptAgent
+    from nexus.agents.messaging import MessagingAgent
+
+    budgets = []
+    for agent in (MessagingAgent, CallScriptAgent):
+        src = inspect.getsource(agent.run)
+        budgets.append(int(src.split("max_tokens=")[1].split(",")[0]))
+    assert min(budgets) >= 1200, budgets

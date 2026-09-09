@@ -129,6 +129,21 @@ class MessagingAgent(BaseAgent):
         message = await ctx.complete(
             [ctx.system_message(), user],
             purpose="outreach_message",
+            # THE DEFAULT 800 IS NOT ENOUGH FOR A REASONING MODEL, and this deployment runs one
+            # (`openai/gpt-oss-120b`). Reasoning tokens are charged against `max_tokens` alongside
+            # the answer, so the budget buys the model's thinking first and the email second.
+            #
+            # Measured 2026-09-09 by replaying the real 5,146-character prompt: reasoning alone came
+            # to 1,923 characters — roughly 550 tokens — leaving about a hundred for a 90-word
+            # email. It fits when the model thinks briefly and overruns when it does not, so the
+            # failure is INTERMITTENT: five live attempts returned four empty drafts and one good
+            # one. An overrun ends with `finish_reason: length` and EMPTY content, which is exactly
+            # what the blank-draft guard below started catching.
+            #
+            # The sibling agent already learned this: `call_script` carries 1,800 for the same
+            # reason and has never shown the fault. Sized to the same shape rather than to the
+            # email's own length, because what needs the headroom is the thinking, not the output.
+            max_tokens=1500,
             variables={
                 "account": ctx.account.name,
                 "contact": contact.full_name if contact else "there",

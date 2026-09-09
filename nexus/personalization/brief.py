@@ -69,9 +69,18 @@ class PersonBrief:
     signal_is_personal: bool
     insights: dict | None  # contact.custom_fields['personalization'] (Apify-fetched), if any
 
-    def to_prompt(self, *, max_posts: int = 3) -> str:
-        """A compact instruction block the LLM uses to write to this specific person."""
-        lines = [f"Write to {self.name}"]
+    def to_prompt(self, *, max_posts: int = 3, channel: str = "email") -> str:
+        """A compact instruction block the LLM uses to write to this specific person.
+
+        `channel` picks the verb. The block opened with "Write to Satya Nadella…" for BOTH agents,
+        and a call script is not written to anybody — it is spoken at them. Measured: the call
+        agent received a full 1,438-character person block carrying his headline, his About section
+        and three of his own posts, and used none of it, while the email agent with the same block
+        opened on his own words. Email framing in a prompt that has just been told to produce a
+        spoken talk track reads as instructions for a different artefact.
+        """
+        opener = "You are calling" if channel == "call" else "Write to"
+        lines = [f"{opener} {self.name}"]
         if self.title:
             lines[0] += f", {self.title}"
         if self.seniority:
@@ -98,11 +107,25 @@ class PersonBrief:
             lines.append(f"How they describe themselves: {summary.rstrip('.')}.")
         posts = [p for p in (ins.get("recent_posts") or [])[:max_posts] if p]
         if posts:
-            lines.append("Reference, naturally, their recent activity: " + " | ".join(posts) + ".")
+            # On a CALL the personal reference belongs in the opener, and saying so is what makes
+            # it survive: the call agent has seven structured fields to fill and, told only to
+            # "reference it naturally", it spent its attention on the structure and dropped the
+            # person entirely. A named slot competes on equal terms.
+            where = (
+                "Use this in the opener or hook, in their own words, not a summary"
+                if channel == "call"
+                else "Reference this naturally"
+            )
+            lines.append(f"{where} — their recent activity: " + " | ".join(posts) + ".")
         interests = ins.get("interests") or []
         if interests:
             lines.append("Interests: " + ", ".join(interests) + ".")
-        lines.append("Make it specific to them; never generic.")
+        lines.append(
+            "Make it specific to them; never generic."
+            if channel != "call"
+            else "Make it specific to them; never generic. It is spoken aloud, so keep every "
+                 "reference short enough to say in one breath."
+        )
         return " ".join(lines)
 
 
