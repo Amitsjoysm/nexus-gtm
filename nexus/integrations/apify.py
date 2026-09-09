@@ -86,6 +86,15 @@ ACTORS: dict[str, str] = {
     # Unlike the two above, this one is LIMITED_PERMISSIONS: no console approval per account, which
     # removes the blocker that kept `linkedin_profile` dead on two accounts for weeks.
     "linkedin_posts": "A3cAPGpwBEG8RJwse",
+    # Domain -> structured company firmographics + tech stack, with NO LLM extraction step.
+    # `teodor_banea/b2b-lead-enrichment-free`. Consumed by `nexus/enrichment/b2b_actor.py`, which
+    # is tried AHEAD of the search+LLM path: that path's extraction half is an LLM completion, and
+    # a rate-limited model chain turns a perfectly good search into an empty answer. Measured
+    # 2026-09-09: `anthropic.com` enriched for 66.6s and filled nothing while Exa answered 200 to
+    # every request.
+    #
+    # LIMITED_PERMISSIONS, so no per-account console approval.
+    "b2b_enrichment": "teodor_banea~b2b-lead-enrichment-free",
 }
 
 

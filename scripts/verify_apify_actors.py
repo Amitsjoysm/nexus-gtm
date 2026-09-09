@@ -58,6 +58,9 @@ CONSUMERS = {
     # activity feed, so one provider issues two runs. Gated on `personalization_posts_enabled`,
     # because the second run roughly doubles the per-contact cost.
     "linkedin_posts": "personalization/apify_provider.py",
+    # Structured firmographics with no LLM extraction step, tried AHEAD of the search+LLM
+    # path — see enrichment/b2b_actor.py for why that ordering is deliberate.
+    "b2b_enrichment": "enrichment/b2b_actor.py",
 }
 
 
@@ -139,7 +142,10 @@ async def main() -> int:
                     # validation (cheap) instead of doing paid work.
                     probe = await c.post(
                         f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items",
-                        json={}, params={"token": key},
+                        # Header, not `?token=`: httpx copies the URL into HTTPStatusError, so a
+                        # query-string credential lands in every exception and log line that
+                        # carries it. Same rule as the client in nexus/integrations/apify.py.
+                        json={}, headers=auth,
                     )
                     kind = ""
                     try:

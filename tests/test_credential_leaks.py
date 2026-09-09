@@ -25,11 +25,19 @@ import re
 
 import pytest
 
-SRC = pathlib.Path("nexus")
+#: `scripts/` is in scope too, and was not at first: `verify_apify_actors.py` still probed with
+#: `?token=<key>` after the client was fixed, because the original scan only walked `nexus/`. An
+#: operator script is exactly where a leaked credential gets pasted into a terminal and a ticket.
+SRC_DIRS = (pathlib.Path("nexus"), pathlib.Path("scripts"))
 
 
 def _python_files():
-    return [p for p in SRC.rglob("*.py") if "__pycache__" not in str(p)]
+    return [
+        f
+        for d in SRC_DIRS
+        for f in d.rglob("*.py")
+        if "__pycache__" not in str(f)
+    ]
 
 
 # ---- no secret in a URL ----------------------------------------------------------------------

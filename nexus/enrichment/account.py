@@ -351,6 +351,29 @@ class SearchBackedAccountEnricher:
         })
         return filled, hit
 
+    async def from_b2b_actor(self, account: Account) -> list[str]:
+        """Fill blanks from the structured B2B actor. Returns fields filled; never raises.
+
+        Tried ahead of the web+LLM path because it returns PARSED fields. The web path is a search
+        plus an LLM completion that reads those fields out of page text, and the completion is the
+        part that breaks: a rate-limited model chain turns a perfectly good search into an empty
+        answer, silently, which is the failure this ordering removes.
+
+        Routed through `apply`, exactly like `from_source_db`, so it obeys the blank-only rule and
+        can never overwrite a customer's own data.
+        """
+        domain = (account.domain or "").strip()
+        if not domain:
+            return []
+        try:
+            from nexus.enrichment.b2b_actor import fetch as _fetch
+
+            data = await _fetch(domain)
+        except Exception as exc:  # provider isolation, same as every other provider here
+            logger.warning("b2b actor account enrich failed: %r", exc)
+            return []
+        return self.apply(account, data) if data else []
+
     async def enrich(
         self, ts, account: Account, *, user_id: str | None = None,
         raise_on_block: bool = False, meter: bool = True, force: bool = False,
@@ -379,6 +402,32 @@ class SearchBackedAccountEnricher:
         due = should_attempt(account, force=force)
 
         filled, hit = await self.from_source_db(account)
+        # Then the structured actor, and only then the web+LLM path. Ordered this way because the
+        # web path's extraction half is an LLM completion and that is the half that fails: measured
+        # 2026-09-09, `anthropic.com` spent 66.6 seconds filling NOTHING while Exa answered 200 to
+        # every search, because Groq was rate-limited past ten minutes and the chain fell to the
+        # stub. This actor returns already-parsed fields, so it has no reader to be down.
+        actor_filled = await self.from_b2b_actor(account)
+        filled += actor_filled
+
+        # THE ACTOR ANSWERED, SO THE WEB PATH DOES NOT RUN. The instruction is "prefer it, and go
+        # to the search only when it found nothing", and this is where that is honoured.
+        #
+        # The gate below is not enough on its own: it releases only when `employee_count` is also
+        # set, and the actor's free providers rarely return a headcount — so a run that filled
+        # industry, description, geography and tech stack still fell through to the search and the
+        # LLM completion, which is the pair this ordering exists to avoid. Measured: 47s and ten
+        # fields, where the actor alone had already supplied the ones a rep reads.
+        #
+        # The cost of stopping here is that `employee_count` stays blank more often, and size is a
+        # real ICP dimension. That is the trade the instruction asks for, and it is recoverable:
+        # the account stays `due`, so a later refresh with a healthy model chain fills it.
+        if actor_filled and account.industry:
+            if meter:
+                from nexus.sources.provider import meter_hit
+
+                await meter_hit(ts, ACCOUNT_CAPABILITY, user_id=user_id, source_name="apify_b2b")
+            return filled
 
         # The paid path runs only if the basics are still missing — the same gate `pipeline.py`
         # applies before calling here at all. When a registered source answered in full there is
