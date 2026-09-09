@@ -89,3 +89,63 @@ def test_the_link_is_left_exactly_as_published():
     items = _parse_feed(xml)
     # XML decodes &amp; to & — that is correct and is the URL as published.
     assert items[0]["link"] == "https://x.example/a?b=1&c=2"
+
+
+# ---- markdown, not just HTML ---------------------------------------------------------------------
+
+def test_markdown_navigation_links_are_not_the_story():
+    """Measured on the live deployment: 29 stored search-backed signals opened with
+    "[Skip to content](...)" followed by a run of "[Share on Facebook](...)". A search provider
+    asked for page CONTENT returns markdown, and its links are the page's chrome — served into the
+    one line a rep reads to decide whether an account is worth touching."""
+    from nexus.ingestion.sources import clean_feed_text
+
+    got = clean_feed_text(
+        "[Skip to content](https://techcrunch.com/x/#wp--skip-link--target) "
+        "Stripe valuation soars 74% to $159 billion "
+        "[Share on Facebook](https://www.facebook.com/sharer.php?u=x)"
+    )
+    assert "](" not in got and "http" not in got
+    assert "Stripe valuation soars 74%" in got
+
+
+def test_the_link_label_survives_because_it_is_often_the_sentence():
+    from nexus.ingestion.sources import clean_feed_text
+
+    assert clean_feed_text("[Acme raises $40M](https://x.com/a)") == "Acme raises $40M"
+
+
+def test_images_and_bare_urls_go():
+    from nexus.ingestion.sources import clean_feed_text
+
+    assert clean_feed_text("![logo](https://x.com/a.png) Acme raises $40M.") == "Acme raises $40M."
+    assert clean_feed_text("Read more at https://example.com/a?b=c now.") == "Read more at now."
+
+
+def test_headings_and_emphasis_are_unwrapped():
+    from nexus.ingestion.sources import clean_feed_text
+
+    got = clean_feed_text("# Stockoscope (Pty Ltd.)  **Stockoscope** is a _Financial Services_ company.")
+    assert got == "Stockoscope (Pty Ltd.) Stockoscope is a Financial Services company."
+
+
+def test_ordinary_prose_is_untouched():
+    """The cleaner runs on every feed and search body. Mangling text that was already fine would
+    trade one display bug for a subtler one."""
+    from nexus.ingestion.sources import clean_feed_text
+
+    plain = "Acme raised $40M led by Sequoia to expand European operations."
+    assert clean_feed_text(plain) == plain
+
+
+def test_both_search_backed_sources_clean_their_snippet():
+    """RSS was cleaned from the start; the two SEARCH paths set `body=snippet` raw. Structural,
+    because the fault only shows when a provider returns page content rather than a sentence."""
+    import inspect
+
+    from nexus.ingestion import sources
+
+    src = inspect.getsource(sources)
+    assert src.count("body=clean_feed_text(snippet) or None") == 2, (
+        "a search-backed source is storing an uncleaned snippet again"
+    )

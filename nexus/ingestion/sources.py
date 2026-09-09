@@ -296,6 +296,17 @@ class DemoSignalSource(SignalSource):
 
 _FEED_TAGS = re.compile(r"<[^>]+>")
 _FEED_WS = re.compile(r"\s+")
+#: `![alt](src)` — an image's alt text is noise in a one-line signal body. Stripped BEFORE links,
+#: or its `](` confuses the link pattern.
+_MD_IMAGE = re.compile(r"!\[[^\]\n]*\]\([^)\n]*\)")
+#: `[label](https://…)` -> `label`. A search provider asked for page CONTENT returns markdown, and
+#: the links in it are the page's navigation rather than the story.
+_MD_LINK = re.compile(r"\[([^\]\n]*)\]\([^)\n]*\)")
+#: Whatever URL survives the two above.
+_BARE_URL = re.compile(r"<?https?://[^\s)>\]]+>?")
+#: Leading heading hashes and inline emphasis, once the links are gone.
+_MD_HEADING = re.compile(r"(?m)^\s{0,3}#{1,6}\s*")
+_MD_EMPHASIS = re.compile(r"[*_`]{1,3}")
 
 
 def clean_feed_text(value: str | None) -> str:
@@ -324,6 +335,16 @@ def clean_feed_text(value: str | None) -> str:
     text = html.unescape(value or "")
     text = _FEED_TAGS.sub(" ", text)
     text = html.unescape(text)
+    # MARKDOWN TOO, not just HTML. A search provider asked for page content hands back markdown,
+    # and the links in it are the page's chrome rather than the story. Measured on the live
+    # deployment: 29 stored search-backed signals opened with "[Skip to content](...)" followed by
+    # a run of "[Share on Facebook](...)" — a wall of link soup in the one line a rep reads to
+    # decide whether an account is worth touching.
+    text = _MD_IMAGE.sub(" ", text)
+    text = _MD_LINK.sub(r"\1", text)
+    text = _BARE_URL.sub(" ", text)
+    text = _MD_HEADING.sub("", text)
+    text = _MD_EMPHASIS.sub("", text)
     return _FEED_WS.sub(" ", text).strip()
 
 
@@ -554,7 +575,9 @@ class WebNewsSource(SignalSource):
                     kind=kind,
                     source=self.name,
                     title=title[:380],
-                    body=snippet or None,
+                    # CLEANED, like an RSS summary. A search provider asked for page content
+                    # returns markdown, and its navigation links are not the story.
+                    body=clean_feed_text(snippet) or None,
                     url=url,
                     strength=strength,
                     dedupe_key=dedupe_key,
@@ -819,7 +842,7 @@ class DorkedSearchSource(SignalSource):
             kind=kind,
             source=self.name,
             title=title[:380],
-            body=snippet or None,
+            body=clean_feed_text(snippet) or None,
             url=url or None,
             strength=strength,
             dedupe_key=dedupe_key,
