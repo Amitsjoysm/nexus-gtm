@@ -324,6 +324,7 @@ CATALOG: dict[str, SettingSpec] = {s.key: s for s in _SPECS}
 # asserts none of these can reach the catalog.
 FORBIDDEN: frozenset[str] = frozenset({
     "source_db_allow_private",
+    "alert_webhook_allow_private",
     "security_headers_enabled",
     "auth_rate_limit_enabled",
     "demo_signals_enabled",

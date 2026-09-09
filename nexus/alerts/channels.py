@@ -30,6 +30,15 @@ HttpPoster = Callable[[str, dict], Awaitable[int]]
 async def _httpx_post(url: str, payload: dict) -> int:
     import httpx
 
+    from nexus.alerts.url_guard import validate_webhook_url
+    from nexus.core.config import get_settings
+
+    # The SSRF boundary. A customer chose this URL and it may have been stored before the guard
+    # existed, or resolve to a private address only now (DNS rebinding), so it is re-checked here
+    # at the moment of connection rather than trusted from storage. Test-injected posters do not
+    # pass through this function, so the offline suite is unaffected.
+    validate_webhook_url(url, allow_private=get_settings().alert_webhook_allow_private)
+
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()

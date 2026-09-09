@@ -107,12 +107,19 @@ async def connect(
             f"{kind} needs {', '.join(needed)}; missing {', '.join(missing)}",
         )
     # A webhook URL that is not a URL fails at delivery time, inside a try/except that swallows —
-    # so it would look connected and simply never arrive.
-    if "url" in values and not values["url"].lower().startswith("https://"):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "the webhook URL must be an https:// address",
-        )
+    # so it would look connected and simply never arrive. It is also an SSRF primitive: the same
+    # guard delivery enforces is run here so a bad URL is refused at the form rather than stored and
+    # discovered when it fires. Delivery re-checks regardless (DNS can rebind after storage).
+    if "url" in values:
+        from nexus.alerts.url_guard import WebhookURLRejected, validate_webhook_url
+        from nexus.core.config import get_settings
+
+        try:
+            validate_webhook_url(
+                values["url"], allow_private=get_settings().alert_webhook_allow_private
+            )
+        except WebhookURLRejected as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
 
     await save_connection(ts, kind=kind, secret=values, actor_user_id=principal.user_id)
     states = await connection_states(ts)

@@ -16,7 +16,6 @@ from nexus.alerts.channels import (
     InAppChannel,
     SlackChannel,
     WebhookChannel,
-    build_alert_channels_from_settings,
     set_alert_channels,
 )
 from nexus.alerts.service import get_alert_service
@@ -26,9 +25,17 @@ from tests.conftest import make_tenant, tenant_session
 
 @pytest.fixture(autouse=True)
 def _restore_channels():
-    """Keep the module-global channel registry from leaking between tests."""
+    """Keep the module-global channel registry from leaking between tests — and between FILES.
+
+    This used to reinstall `build_alert_channels_from_settings()`, but `set_alert_channels` marks
+    whatever it is handed as an EXPLICIT override, and `resolve_alert_channels` returns an explicit
+    registry outright, ahead of any tenant's stored credential. So the "cleanup" left a process
+    global that outranked per-tenant resolution, and the next file's connection tests resolved to
+    this empty env registry instead of the credential they had just saved (a Slack channel with an
+    empty `_url`). Clearing to None restores the true module default: the lazy accessor rebuilds a
+    NON-explicit registry on next use, and per-tenant resolution works again."""
     yield
-    set_alert_channels(build_alert_channels_from_settings())
+    set_alert_channels(None)
 
 
 class RecordingPoster:

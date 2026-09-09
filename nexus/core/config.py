@@ -584,6 +584,12 @@ class Settings(BaseSettings):
     # `_reject_private_source_dsn_in_production` below refuses to start if it is true in
     # staging/prod, mirroring how demo signal sources are handled.
     source_db_allow_private: bool = False
+    # The same SSRF guard, for alert webhook URLs (Slack/Teams/Telegram). A customer supplies these,
+    # so the delivery path is refused a private/loopback/link-local/metadata host unless this is set
+    # — a setting, never a request field, and in the runtime FORBIDDEN set for the same reason as
+    # `source_db_allow_private`. `_reject_private_source_dsn_in_production` refuses to boot if it is
+    # true in staging/prod. Exists only so a local mock receiver on localhost can be tested in dev.
+    alert_webhook_allow_private: bool = False
     # Ceiling on rows a dry run reads. A dry run exists to prove a mapping, not to move data; an
     # unbounded "sample" against a vendor's production table is a load test they did not agree to.
     source_db_dry_run_limit: int = 25
@@ -753,6 +759,12 @@ class Settings(BaseSettings):
                 "NEXUS_SOURCE_DB_ALLOW_PRIVATE is true but NEXUS_ENV is "
                 f"'{self.env}'. That disables the SSRF guard on admin-supplied connection "
                 "strings; it is a local-development affordance only."
+            )
+        if self.env in ("staging", "prod") and self.alert_webhook_allow_private:
+            raise ValueError(
+                "NEXUS_ALERT_WEBHOOK_ALLOW_PRIVATE is true but NEXUS_ENV is "
+                f"'{self.env}'. That disables the SSRF guard on customer-supplied alert webhook "
+                "URLs; it is a local-development affordance only."
             )
         return self
 
