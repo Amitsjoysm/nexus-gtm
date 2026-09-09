@@ -28,6 +28,34 @@ interface EmailComposerProps {
  * an unverified address should know that while they can still decide not to.
  */
 
+/**
+ * What actually went wrong, in the rep's terms.
+ *
+ * A 402 from a superadmin FEATURE SWITCH and a 402 from a plan limit are the same status code and
+ * completely different situations, and the server distinguishes them: `switch_state` and
+ * `switch_message` ride on the payload for exactly this reason. Rendering `res.statusText` turned a
+ * feature WE turned off into "Payment Required" on a workspace with an unlimited plan — observed
+ * live 2026-09-09 with `module.outreach` disabled.
+ */
+function explainFailure(err: unknown): string {
+  if (!(err instanceof ApiError)) return "Couldn't generate the email.";
+  if (err.switchState && err.switchState !== "enabled") {
+    // The operator's own words win when they left any — that is the whole point of the message
+    // field on a switch.
+    if (err.switchMessage.trim()) return err.switchMessage.trim();
+    const label: Record<string, string> = {
+      disabled: "Email drafting has been turned off for all workspaces by your administrator.",
+      coming_soon: "Email drafting is not available yet.",
+      maintenance: "Email drafting is temporarily down for maintenance. Try again shortly.",
+    };
+    return label[err.switchState] ?? "Email drafting is unavailable right now.";
+  }
+  if (err.status === 402) {
+    return `${err.detail} — this workspace is over its plan limit for drafting.`;
+  }
+  return err.detail || "Couldn't generate the email.";
+}
+
 /** How a verifier verdict reads to a rep, and how alarmed to be about it. */
 function statusChip(status: string): { tone: "success" | "warning" | "danger"; text: string } | null {
   const s = (status || "").toLowerCase();
@@ -75,7 +103,7 @@ export function EmailComposer({
       setSubject(typeof out.subject === "string" ? out.subject : "");
       setBody(typeof out.body === "string" ? out.body : "");
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't generate the email.");
+      setError(explainFailure(err));
     } finally {
       setLoading(false);
     }
@@ -110,7 +138,7 @@ export function EmailComposer({
         toast.error("The mail server refused it", res.detail);
       }
     } catch (err) {
-      const detail = err instanceof ApiError ? err.detail : "Couldn't send.";
+      const detail = err instanceof ApiError ? explainFailure(err) : "Couldn't send.";
       if (err instanceof ApiError && err.status === 422 && /invalid/i.test(detail)) {
         // The address guard. Offer the override rather than dead-ending: the rep may know the
         // address is good, and the verifier returns `unknown` far more often than anything else.

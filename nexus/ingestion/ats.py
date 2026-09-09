@@ -177,11 +177,49 @@ def guess_refs(domain: str) -> list[BoardRef]:
     return [BoardRef(provider=p, token=root, via="domain_guess") for p in _OWNER_ENDPOINTS]
 
 
+def _identity_token(domain: str) -> str:
+    """The label that IS the company, out of a hostname.
+
+    `(domain or "").split(".")[0]` was taking the SUBDOMAIN. On `inter.ikea.com` that is `inter`,
+    which is how a guessed Greenhouse token of `inter` came to be checked against the word `inter`
+    and passed — see `_owner_matches`. The registrable label is `ikea`, and that is the thing a
+    board has to corroborate.
+    """
+    host = (domain or "").strip().lower()
+    host = host.split("//")[-1].split("/")[0].split(":")[0]
+    parts = [p for p in host.split(".") if p]
+    if len(parts) < 2:
+        return parts[0] if parts else ""
+    # Skip the public suffix, allowing for two-part ones like `.co.uk` / `.com.br`.
+    if len(parts) >= 3 and len(parts[-2]) <= 3 and len(parts[-1]) <= 3:
+        return parts[-3]
+    return parts[-2]
+
+
 def _owner_matches(board_name: str, account_name: str, domain: str) -> bool:
     """Whether a board's stated owner is plausibly this account.
 
-    Token overlap rather than equality: "Stripe" vs "Stripe, Inc." and "Figma" vs "Figma Inc" must
-    match, while "Democorp" vs "Example" must not.
+    **The board must corroborate the DOMAIN, not merely share a word with the name.** Any single
+    token overlap used to be enough, and that is how 140 Brazilian retail-bank vacancies became
+    IKEA's strongest buying signal:
+
+        account "Inter IKEA Group" (inter.ikea.com)
+        guessed Greenhouse token "inter"
+        board name "Inter Carreiras"   <- Banco Inter, in Portuguese
+        overlap {"inter"} -> accepted
+
+    Observed live 2026-09-09, and it reached the call script and the email draft, which is exactly
+    the wrong-attribution failure the ownership check exists to prevent. The shared word was not a
+    company name at all; it was the SUBDOMAIN, which the old identity extraction mistook for the
+    company (see `_identity_token`).
+
+    So the rule is the one `nexus/companies/` already settled on: identity is the domain. A guessed
+    board proves ownership by naming the registrable label — "Stripe" for stripe.com, "Figma Inc"
+    for figma.com — and a board that shares only some other word does not.
+
+    The cost is a guess rejected for a company whose board is named after something other than its
+    domain. That is the right way to be wrong here: a rejected guess loses one source for one
+    account, an accepted wrong one puts another company's hiring in front of a rep as fact.
     """
     from nexus.ingestion.sources import _GENERIC_NAME_TOKENS
 
@@ -194,8 +232,24 @@ def _owner_matches(board_name: str, account_name: str, domain: str) -> bool:
     board = tokens(board_name)
     if not board:
         return False
-    wanted = tokens(account_name) | tokens((domain or "").split(".")[0])
-    return bool(board & wanted)
+
+    identity = _identity_token(domain)
+    if identity and identity not in _GENERIC_NAME_TOKENS and len(identity) >= 4:
+        # SQUASHED containment, not token equality. A domain concatenates what a board name spaces
+        # out, and requiring an exact token rejected two real boards when this was first written:
+        #
+        #   rectanglehealth.com vs "Rectangle Health"  -> "rectanglehealth" is no single token
+        #   useascend.com       vs "Ascend"            -> the domain carries a "use" prefix
+        #
+        # Containment either way covers both, and still refuses the case this exists for:
+        # "ikea" appears nowhere in "intercarreiras".
+        squashed = re.sub(r"[^a-z0-9]+", "", (board_name or "").lower())
+        return bool(squashed) and (identity in squashed or squashed in identity)
+
+    # No usable domain to corroborate against. Fall back to the account NAME, and require every
+    # distinctive word of it — "Democorp" must not satisfy "Example Corp" on one shared token.
+    wanted = tokens(account_name)
+    return bool(wanted) and wanted.issubset(board)
 
 
 async def verify_owner(ref: BoardRef, *, account_name: str, domain: str, fetch=None) -> bool:

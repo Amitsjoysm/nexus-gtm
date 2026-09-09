@@ -159,12 +159,44 @@ import type {
 export class ApiError extends Error {
   status: number;
   detail: string;
-  constructor(status: number, detail: string) {
+  /**
+   * A 402 raised by a superadmin FEATURE SWITCH rather than by the customer's plan.
+   *
+   * The server has always sent these — `switch_state` and `switch_message` ride on the 402
+   * precisely because "coming soon", "we broke it" and "your plan lacks this" are one
+   * `mode="disabled"` and three completely different sentences. The client threw them away and
+   * rendered `res.statusText`, so a feature WE turned off reached the rep as "Payment Required".
+   *
+   * Observed live 2026-09-09: `module.outreach` was switched off, and the email composer showed a
+   * billing error on a workspace with an unlimited plan.
+   */
+  switchState: string | null;
+  switchMessage: string;
+  /** The capability the server refused, e.g. `ai.email_draft`. */
+  capability: string;
+  constructor(
+    status: number,
+    detail: string,
+    extra?: { switchState?: string | null; switchMessage?: string; capability?: string },
+  ) {
     super(detail);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.switchState = extra?.switchState ?? null;
+    this.switchMessage = extra?.switchMessage ?? "";
+    this.capability = extra?.capability ?? "";
   }
+}
+
+/** Pull the feature-switch fields off an error body, if it carries them. */
+function switchInfo(data: unknown) {
+  const d = (data ?? {}) as Record<string, unknown>;
+  return {
+    switchState: typeof d.switch_state === "string" ? d.switch_state : null,
+    switchMessage: typeof d.switch_message === "string" ? d.switch_message : "",
+    capability: typeof d.capability === "string" ? d.capability : "",
+  };
 }
 
 interface RequestOptions {
@@ -224,7 +256,7 @@ export class ApiClient {
     const data = text ? safeJsonParse(text) : null;
 
     if (!res.ok) {
-      throw new ApiError(res.status, errorDetail(data, res.statusText));
+      throw new ApiError(res.status, errorDetail(data, res.statusText), switchInfo(data));
     }
     return data as T;
   }
@@ -244,7 +276,7 @@ export class ApiClient {
     const text = await res.text();
     const data = text ? safeJsonParse(text) : null;
     if (!res.ok) {
-      throw new ApiError(res.status, errorDetail(data, res.statusText));
+      throw new ApiError(res.status, errorDetail(data, res.statusText), switchInfo(data));
     }
     return data as T;
   }

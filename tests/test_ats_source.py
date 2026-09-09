@@ -295,3 +295,78 @@ def test_no_ats_opts_out(monkeypatch):
 def test_it_claims_a_timeout_budget_above_the_shared_default():
     """Discovery is several requests plus a board fetch; the shared 8s default assumes one."""
     assert AtsSignalSource.timeout_s > 8.0
+
+
+# ---- a guessed board must corroborate the DOMAIN -------------------------------------------------
+
+def test_a_subdomain_is_not_the_company():
+    """`domain.split(".")[0]` took the SUBDOMAIN. On `inter.ikea.com` that is `inter`, which is what
+    let a guessed Greenhouse token of `inter` be checked against the word `inter` and pass."""
+    from nexus.ingestion.ats import _identity_token
+
+    assert _identity_token("inter.ikea.com") == "ikea"
+    assert _identity_token("www.figma.com") == "figma"
+    assert _identity_token("stripe.com") == "stripe"
+    assert _identity_token("acme.co.uk") == "acme"
+    assert _identity_token("shop.example.com.br") == "example"
+    assert _identity_token("") == ""
+
+
+def test_another_companys_board_is_rejected_however_the_names_overlap():
+    """THE live failure, observed 2026-09-09 and reaching the call script and the email draft.
+
+        account "Inter IKEA Group" (inter.ikea.com)
+        guessed Greenhouse token "inter"
+        board name "Inter Carreiras"   <- Banco Inter, a Brazilian retail bank, in Portuguese
+        old rule: overlap {"inter"} is non-empty -> ACCEPTED
+
+    140 Brazilian bank vacancies became IKEA's strongest buying signal, and the shared word was not
+    a company name at all — it was the subdomain.
+    """
+    from nexus.ingestion.ats import _owner_matches
+
+    assert not _owner_matches("Inter Carreiras", "Inter IKEA Group", "inter.ikea.com")
+
+
+def test_the_documented_democorp_case_still_fails():
+    """`example.com` guesses the Greenhouse token `example`, which is a real board with 21 open
+    roles owned by "Democorp". The original reason this check exists."""
+    from nexus.ingestion.ats import _owner_matches
+
+    assert not _owner_matches("Democorp", "Example", "example.com")
+
+
+def test_a_real_board_still_matches_through_the_usual_suffixes():
+    """The check has to keep working, or every guessed board is rejected and the source goes quiet
+    — which looks exactly like "this company is not hiring"."""
+    from nexus.ingestion.ats import _owner_matches
+
+    assert _owner_matches("Stripe", "Stripe", "stripe.com")
+    assert _owner_matches("Stripe, Inc.", "Stripe", "stripe.com")
+    assert _owner_matches("Figma Inc", "Figma", "figma.com")
+    assert _owner_matches("Vanta", "Vanta", "vanta.com")
+    assert _owner_matches("bswift ", "bswift", "bswift.com")
+
+
+def test_a_domain_may_concatenate_what_the_board_name_spaces_out():
+    """Requiring the domain label as a single TOKEN was the first attempt, and auditing the live
+    deployment rejected two real boards with it:
+
+        rectanglehealth.com vs "Rectangle Health"  -> no single token is "rectanglehealth"
+        useascend.com       vs "Ascend"            -> the domain carries a "use" prefix
+
+    Squashed containment covers both and still refuses the case the check exists for."""
+    from nexus.ingestion.ats import _owner_matches
+
+    assert _owner_matches("Rectangle Health", "Rectangle Health", "rectanglehealth.com")
+    assert _owner_matches("Ascend", "Ascend", "useascend.com")
+    assert _owner_matches("OneStream", "OneStream Software", "onestream.com")
+
+
+def test_with_no_domain_every_distinctive_word_of_the_name_must_appear():
+    """Falling back to the name is the weaker path, so it is the stricter one: one shared token is
+    what produced the IKEA failure, and a name-only check has no domain to corroborate against."""
+    from nexus.ingestion.ats import _owner_matches
+
+    assert _owner_matches("Acme Robotics", "Acme Robotics", "")
+    assert not _owner_matches("Acme Logistics", "Acme Robotics", "")
