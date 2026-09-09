@@ -231,3 +231,49 @@ async def test_archived_rows_do_not_shrink_the_page(client):
     assert r.headers["X-Total-Count"] == "3"  # only the 3 active
     assert len(body) == 3  # a full page of ACTIVE rows, not shrunk by the 3 archived
     assert all(a["name"].startswith("Active") for a in body)
+
+
+# ---- adding a company must not run the pipeline inline -------------------------------------------
+
+def test_neither_add_path_crawls_inside_the_request():
+    """`create_account` states the rule: "Enqueued, never inline: ingestion makes ~10 outbound HTTP
+    calls, and a POST that blocks on a live crawl would take tens of seconds and fail whenever a
+    provider is slow." `add_from_lookalike` was never given it and called `process_account`
+    directly.
+
+    Measured on the live deployment 2026-09-09, with Groq answering `retry-after=569s` and all three
+    Firecrawl keys 402ing, adding ONE company took 48.4 seconds. It returned 201 with a real Fit
+    score, so nothing recorded a failure — the rep watched a spinner for most of a minute and
+    reported that adding a company was broken.
+
+    Structural, because the fault only appears when a provider is degraded: with warm providers the
+    inline version returns in a couple of seconds and looks perfectly healthy.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from nexus.api.routers import accounts
+
+    for fn in (accounts.create_account, accounts.add_from_lookalike):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        calls = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "process_account" not in calls, (
+            f"{fn.__name__} crawls inside the request again; enqueue it instead"
+        )
+        assert "_enqueue_first_ingest" in calls, f"{fn.__name__} never schedules the first crawl"
+
+
+async def test_a_deferred_account_is_still_due_for_the_worker():
+    """Deferring is only safe because the account is already persisted and due. `next_refresh_at`
+    defaults to now, so the worker claims it on the next tick whether or not the enqueue
+    succeeded — which is what makes the best-effort `try/except` around the queue acceptable."""
+    from nexus.models.account import Account
+
+    column = Account.__table__.c["next_refresh_at"]
+    assert not column.nullable
+    assert column.default is not None, "a new account with no due-time would never be claimed"

@@ -490,11 +490,19 @@ async def add_from_lookalike(
     )
     ts.add(account)
     await ts.flush()
-    # Enrich firmographics + score so the new account lands with a Fit score (no contact sourcing
-    # here — that's an explicit follow-up action).
-    from nexus.pipeline import process_account
-
-    await process_account(ts, account)
+    # ENQUEUED, NEVER INLINE — the same rule `create_account` states 350 lines above, for the same
+    # reason, which this endpoint was not given.
+    #
+    # It called `process_account` here: enrichment, every signal source, then scoring, all inside
+    # the POST. Measured on the live deployment 2026-09-09, with Groq answering `retry-after=569s`
+    # and all three Firecrawl keys 402ing, adding ONE company took **48.4 seconds**. It returned
+    # 201 and a real Fit score, so nothing anywhere recorded a failure — the rep just watched a
+    # spinner for most of a minute and reported that adding a company was broken.
+    #
+    # The account is already flushed, and `next_refresh_at` defaults to now, so the worker claims
+    # it on the next tick whether or not the enqueue below succeeds. Deferring loses nothing except
+    # the Fit score in this response, and the caller already renders that as optional.
+    await _enqueue_first_ingest(ts.tenant_id, account.id)
     scores = await _latest_fit_scores(ts, [account.id])
     return _account_out(account, fit_score=scores.get(account.id))
 
