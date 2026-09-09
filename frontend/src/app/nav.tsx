@@ -79,13 +79,16 @@ export const NAV_ITEMS: NavItem[] = [
     to: "/approvals", label: "Approvals", icon: <ShieldCheckIcon />, minRole: "manager",
     capability: "module.agents",
   },
+  // Their OWN gates, not `module.outreach`. Holding bulk outreach back is a common position, and
+  // while these shared a gate with `ai.email_draft` it could not be taken without also taking down
+  // the email composer a rep uses one contact at a time.
   {
     to: "/campaigns", label: "Campaigns", icon: <SendIcon />, minRole: "manager",
-    capability: "module.outreach",
+    capability: "module.campaigns",
   },
   {
     to: "/cadences", label: "Cadences", icon: <MessageIcon />, minRole: "manager",
-    capability: "module.outreach",
+    capability: "module.cadences",
   },
   {
     to: "/plays", label: "Plays", icon: <BoltIcon />, minRole: "manager",

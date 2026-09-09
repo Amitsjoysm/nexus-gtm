@@ -376,3 +376,74 @@ def test_a_validation_error_renders_as_text_not_object_object():
     api = (_ROOT / "frontend" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
     assert "export function errorDetail(" in api, "the 422 detail formatter is gone"
     assert "Array.isArray(detail)" in api, "the 422 array shape is no longer handled"
+
+
+# ---- campaigns and cadences got their own gates ---------------------------------------------------
+
+async def test_the_campaign_cadence_split_changes_what_no_plan_could_reach(client):
+    """The split must leave every plan's EFFECTIVE access exactly as it was.
+
+    The obvious test — "the new gates are on no plan, so they default to enabled" — is the wrong
+    invariant here and asserting it would have shipped a real regression: `free` and `core` both
+    DISABLE `module.outreach`, which is what used to switch campaigns and cadences off for them.
+    Leaving the new gates unlisted would have GIVEN those customers two features they have never
+    had, which is the opposite of additive.
+
+    So the rule is per plan: a plan that could reach campaigns before can still reach them, and a
+    plan that could not, still cannot.
+    """
+    for slug, plan, reachable in (
+        ("campsplit1", "free", False),
+        ("campsplit2", "growth", True),
+    ):
+        token = await _tenant_on_plan(client, slug, plan)
+        body = (await client.get("/api/billing/entitlements", headers=auth(token))).json()
+        modules = {m["capability_id"]: m for m in body["modules"]}
+        for cap in ("module.campaigns", "module.cadences"):
+            assert cap in modules, f"{cap} missing from the entitlements response"
+            assert modules[cap]["included"] is reachable, (
+                f"{cap} on {plan} is included={modules[cap]['included']}, expected {reachable}"
+            )
+        # And the composer is reachable exactly where outreach itself is — unchanged by the split.
+        assert modules["module.outreach"]["included"] is reachable
+
+
+def test_drafting_and_sending_no_longer_share_a_gate_with_bulk_outreach():
+    """THE point of the split. Measured 2026-09-09: switching `module.outreach` off hid Campaigns
+    and Cadences as intended AND made the email composer return "Payment Required" to a rep on an
+    unlimited plan, because `ai.email_draft` hung off the same gate.
+
+    An operator holding bulk outreach back is a common position; losing the one-contact composer
+    with it is not something they asked for."""
+    from nexus.billing.catalog import CAPABILITY_SEED
+
+    caps = {c["id"]: c for c in CAPABILITY_SEED}
+    assert caps["outreach.campaign"]["depends_on"] == ["module.campaigns"]
+    assert caps["outreach.cadence_touch"]["depends_on"] == ["module.cadences"]
+    # The composer and the send stay on `module.outreach`, so it still means "one-off email".
+    assert caps["ai.email_draft"]["depends_on"] == ["module.outreach"]
+    assert caps["outreach.email_send"]["depends_on"] == ["module.outreach"]
+    # And the call script was never on that gate, so it is unaffected either way.
+    assert caps["ai.call_script"]["depends_on"] == ["module.calling"]
+
+
+def test_the_new_module_gates_are_enabled_and_on_no_plan():
+    """What makes the split additive. A module capability that shipped `disabled`, or that a plan
+    listed, would take a feature away from a paying customer on deploy."""
+    from nexus.billing.catalog import CAPABILITY_SEED
+    from nexus.billing.plans import PLAN_SEED
+
+    caps = {c["id"]: c for c in CAPABILITY_SEED}
+    for cap in ("module.campaigns", "module.cadences"):
+        assert caps[cap]["default_mode"] == "enabled", cap
+
+    # Every plan that disabled `module.outreach` must disable the two new gates too, or the split
+    # hands it campaigns and cadences it never had. `free` and `core` are both in that position.
+    for plan in PLAN_SEED:
+        modes = {e[0]: e[1] for e in (plan.get("entitlements") or [])}
+        if modes.get("module.outreach") == "disabled":
+            for cap in ("module.campaigns", "module.cadences"):
+                assert modes.get(cap) == "disabled", (
+                    f"{plan['id']} disables module.outreach but not {cap}; the split would grant "
+                    f"it a feature it has never had"
+                )

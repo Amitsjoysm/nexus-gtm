@@ -33,6 +33,13 @@ DEFAULT_SIGNUP_PLAN_ID = "free"
 #   (capability_id, mode, quota, overage_price_credits)
 _FREE_ENT = [
     ("module.outreach", "disabled", None, None),
+    # Campaigns and cadences moved off `module.outreach` to their own gates so an operator can
+    # hold bulk outreach back without taking the one-contact email composer down with it. Both
+    # are repeated here on purpose: a plan that disabled outreach never granted campaigns or
+    # cadences, and leaving them unlisted would GIVE this plan two features it has never had —
+    # the opposite of the additive change the split is meant to be.
+    ("module.campaigns", "disabled", None, None),
+    ("module.cadences", "disabled", None, None),
     ("module.network", "disabled", None, None),
     ("module.calling", "disabled", None, None),
     ("module.discovery", "disabled", None, None),
@@ -55,6 +62,13 @@ _FREE_ENT = [
 _CORE_ENT = [
     ("module.signals", "disabled", None, None),
     ("module.outreach", "disabled", None, None),
+    # Campaigns and cadences moved off `module.outreach` to their own gates so an operator can
+    # hold bulk outreach back without taking the one-contact email composer down with it. Both
+    # are repeated here on purpose: a plan that disabled outreach never granted campaigns or
+    # cadences, and leaving them unlisted would GIVE this plan two features it has never had —
+    # the opposite of the additive change the split is meant to be.
+    ("module.campaigns", "disabled", None, None),
+    ("module.cadences", "disabled", None, None),
     ("module.calling", "disabled", None, None),
     ("module.network", "disabled", None, None),
     ("module.discovery", "disabled", None, None),

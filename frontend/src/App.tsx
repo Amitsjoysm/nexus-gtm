@@ -282,7 +282,7 @@ export function App() {
                   path="/campaigns"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.outreach" name="Campaigns">
+                      <RequireCapability capability="module.campaigns" name="Campaigns">
                         <CampaignsPage />
                       </RequireCapability>
                     </RequireRole>
@@ -292,7 +292,7 @@ export function App() {
                   path="/cadences"
                   element={
                     <RequireRole minRole="manager">
-                      <RequireCapability capability="module.outreach" name="Campaigns">
+                      <RequireCapability capability="module.cadences" name="Cadences">
                         <CadencesPage />
                       </RequireCapability>
                     </RequireRole>

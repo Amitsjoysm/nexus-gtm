@@ -38,8 +38,24 @@ def _cap(
 
 # ---- module gates: coarse on/off switches other capabilities depend on ----------------------
 _MODULES = [
+    # THREE gates, not one, because they answer different questions.
+    #
+    # `module.outreach` used to carry campaigns, cadences, drafting AND sending together, so an
+    # operator who wanted to hold bulk outreach back — a common "these are coming later" position —
+    # had to take the email composer down with it. Measured 2026-09-09: switching `module.outreach`
+    # off hid Campaigns and Cadences as intended and made the composer return "Payment Required" to
+    # a rep on an unlimited plan, because `ai.email_draft` hangs off the same gate.
+    #
+    # Splitting them is safe by the same argument that made the five nav gates safe: a new
+    # capability defaults to `enabled`, is on no plan, and `resolve_entitlement` falls back to the
+    # catalog default for anything a plan does not list. Nothing changes until an operator switches
+    # one off. Pinned by `test_the_campaign_cadence_split_changes_nothing_for_existing_plans`.
     _cap("module.outreach", "module", "Outreach module", default_mode="enabled",
-         description="Campaigns, cadences, sending."),
+         description="Drafting and sending a one-off email to a contact."),
+    _cap("module.campaigns", "module", "Campaigns module", default_mode="enabled",
+         description="Multi-account campaign runs."),
+    _cap("module.cadences", "module", "Cadences module", default_mode="enabled",
+         description="Multi-touch sequences and their scheduled steps."),
     _cap("module.calling", "module", "Calling module", default_mode="enabled",
          description="Call queue, AI scripts, dispositions."),
     _cap("module.network", "module", "Relationship graph module", default_mode="enabled",
@@ -175,10 +191,13 @@ _OUTREACH = [
          default_mode="metered", depends_on=["module.outreach"]),
     _cap("outreach.email_draft_save", "outreach", "Draft saved to mailbox", unit="message",
          default_mode="metered", depends_on=["module.outreach"]),
+    # Repointed off `module.outreach` so bulk outreach can be held back without taking the email
+    # composer down with it. `sync_catalog` re-asserts `depends_on` for ids the seed names, so an
+    # existing deployment picks the new edge up on its next startup with no migration.
     _cap("outreach.campaign", "outreach", "Campaign launched", unit="run",
-         default_mode="metered", depends_on=["module.outreach"]),
+         default_mode="metered", depends_on=["module.campaigns"]),
     _cap("outreach.cadence_touch", "outreach", "Cadence touch", default_mode="metered",
-         depends_on=["module.outreach"]),
+         depends_on=["module.cadences"]),
     _cap("outreach.sep_push", "outreach", "Sales-engagement push", default_mode="metered",
          depends_on=["module.integrations"]),
     _cap("calling.task", "calling", "Call task", default_mode="enabled",
