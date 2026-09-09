@@ -11,6 +11,8 @@ swapping in a keyed Exa provider lights this up without touching callers.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -73,6 +75,25 @@ def _similar_query(account: Account) -> str:
     return f"companies similar to {name}: {profile}" if name else profile
 
 
+logger = logging.getLogger("nexus.lookalike.service")
+
+#: How long the seed's own enrichment may hold up a lookalike search.
+#:
+#: Enrichment is an OPTIMISATION here — it makes the similarity query richer — so its budget is
+#: sized to what a person will wait for on top of the search itself, not to what enrichment needs
+#: on a bad day. Twelve seconds covers the normal case comfortably (a warm enrich is 2-4s) and cuts
+#: off the degraded one, where a rate-limited LLM chain waits out `retry-after` after `retry-after`.
+_SEED_ENRICH_BUDGET_S = 12.0
+
+#: And how long the CANDIDATE enrichment may. Larger than the seed's because it legitimately does
+#: more work — up to `lookalike_enrich_max` companies concurrently — but still a ceiling, because
+#: it is the same optimisation-versus-answer trade: enriched candidates rank better, unenriched
+#: candidates still rank, and a search nobody waited for ranks nothing.
+#:
+#: Together these cap the request at roughly 12 + 20 seconds of enrichment plus the search itself.
+_CANDIDATE_ENRICH_BUDGET_S = 20.0
+
+
 class LookalikeService:
     async def find(
         self, ts: TenantSession, account: Account, *, limit: int = 10
@@ -87,8 +108,28 @@ class LookalikeService:
             try:
                 from nexus.enrichment.account import get_account_enricher
 
-                if await get_account_enricher().enrich(ts, account):
-                    await ts.flush()
+                # BOUNDED IN TIME, not just guarded against errors. The `except` below has always
+                # said enrichment must never block lookalikes; it only ever delivered that for
+                # enrichment that FAILED, and a slow one blocked exactly as long as it liked.
+                #
+                # Measured on the live deployment 2026-09-09: four sequential lookalike requests
+                # took 28s, 49s, 55s then 66s, climbing monotonically. Enrichment makes an LLM call,
+                # the deployment's Groq account is rate-limited at 8,000 TPM, and each request
+                # waited out a longer `retry-after` than the last. Nothing failed — every response
+                # was a 200 carrying ten good results — but no rep waits a minute for a button, so
+                # it reads as a hang and gets reported as "find lookalike failed".
+                #
+                # A lookalike WITHOUT a freshly enriched seed is still a lookalike: the query falls
+                # back to the name, domain and whatever firmographics are already stored. A
+                # lookalike nobody waited for is nothing at all.
+                async with asyncio.timeout(_SEED_ENRICH_BUDGET_S):
+                    if await get_account_enricher().enrich(ts, account):
+                        await ts.flush()
+            except TimeoutError:
+                logger.info(
+                    "seed enrichment for %s exceeded %ss; searching on what we already know",
+                    account.id, _SEED_ENRICH_BUDGET_S,
+                )
             except Exception:  # enrichment must never block lookalikes
                 pass
 
@@ -153,9 +194,28 @@ class LookalikeService:
         if enrich is None:
             enrich = settings.account_enrich_enabled
         if enrich:
-            await self._enrich_candidates(
-                ts, [c for c, _ in candidates[: settings.lookalike_enrich_max]], settings
-            )
+            # BOUNDED, for the same reason the seed enrichment above is, and this is the half that
+            # actually dominated: the seed is ONE enrichment, this is up to `lookalike_enrich_max`
+            # of them, each making its own LLM call. Capping only the seed moved the live figures
+            # the wrong way — 28/49/55/66s became 28/57/123/123s — because the candidate pass
+            # inherited every second the seed no longer spent, against the same exhausted budget.
+            #
+            # `_enrich_candidates` already documents the exact fallback this needs: "over quota the
+            # candidates go unenriched and similarity is scored on snippet text — a weaker ranking,
+            # not a failed search". That was only ever applied to QUOTA. Slowness deserves the same
+            # answer, because the outcome for the rep is identical.
+            try:
+                async with asyncio.timeout(_CANDIDATE_ENRICH_BUDGET_S):
+                    await self._enrich_candidates(
+                        ts, [c for c, _ in candidates[: settings.lookalike_enrich_max]], settings
+                    )
+            except TimeoutError:
+                logger.info(
+                    "candidate enrichment exceeded %ss; ranking on snippet text instead",
+                    _CANDIDATE_ENRICH_BUDGET_S,
+                )
+            except Exception:  # best-effort, exactly as before
+                pass
 
         # 5) Rank by RESEMBLANCE TO THE SEED (the actual lookalike signal), lightly blended with
         #    ICP fit so results are both close to the seed *and* good for this tenant. Extract the

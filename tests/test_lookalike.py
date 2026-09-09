@@ -140,3 +140,61 @@ async def test_lookalikes_endpoint_unknown_account_404(client):
     h = auth(await signup(client))
     r = await client.post("/api/accounts/nope/lookalikes", headers=h)
     assert r.status_code == 404
+
+
+# ---- a slow seed enrichment must not hold the search hostage -------------------------------------
+
+async def test_seed_enrichment_is_bounded_in_time(fresh_db, monkeypatch):
+    """The `except` in `find` has always claimed enrichment must never block lookalikes. It only
+    ever delivered that for enrichment that FAILED; a slow one blocked as long as it liked.
+
+    Measured on the live deployment 2026-09-09: four sequential lookalike requests took 28s, 49s,
+    55s and 66s, climbing monotonically. Enrichment makes an LLM call, the Groq account is
+    rate-limited at 8,000 TPM, and each request waited out a longer `retry-after` than the last.
+    Nothing errored — every response was a 200 carrying ten good results — but no rep waits a
+    minute for a button, so it read as a hang and was reported as "find lookalike failed".
+    """
+    import asyncio
+    import time
+
+    from nexus.lookalike import service as mod
+    from nexus.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "account_enrich_enabled", True)
+    monkeypatch.setattr(mod, "_SEED_ENRICH_BUDGET_S", 0.2)
+
+    class _Hanging:
+        async def enrich(self, ts, account, **kw):
+            await asyncio.sleep(30)          # a rate-limited LLM chain waiting out retry-after
+            return True
+
+        async def enrich_batch(self, ts, candidates, **kw):
+            # The candidate pass, which runs later and is separately best-effort. Left fast so the
+            # measurement isolates the SEED enrichment this test is about.
+            return None
+
+    monkeypatch.setattr(
+        "nexus.enrichment.account.get_account_enricher", lambda: _Hanging(), raising=False
+    )
+
+    tenant_id = await make_tenant()
+    async with tenant_session(tenant_id) as ts:
+        account = Account(tenant_id=tenant_id, name="Acme", domain="acme.com")
+        ts.add(account)
+        await ts.flush()
+
+        started = time.monotonic()
+        found = await mod.LookalikeService().find(ts, account, limit=5)
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 5, f"the search waited {elapsed:.1f}s on a hanging enrichment"
+    assert isinstance(found, list), "the search must still return, on what it already knows"
+
+
+def test_the_budget_is_sized_for_a_person_not_for_a_bad_day():
+    """Enrichment is an OPTIMISATION on this path — it makes the query richer. Its budget belongs
+    to what somebody will wait for on top of the search, not to what enrichment needs when the
+    model chain is degraded."""
+    from nexus.lookalike.service import _SEED_ENRICH_BUDGET_S
+
+    assert 5 <= _SEED_ENRICH_BUDGET_S <= 20, _SEED_ENRICH_BUDGET_S
