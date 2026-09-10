@@ -53,6 +53,7 @@ resources:
         --health-timeout 3s --health-retries 10
 
 variables:
+  - group: gtm-deploy
   - name: PYTHON_VERSION
     value: "3.10"
   - name: NODE_VERSION
@@ -277,7 +278,8 @@ stages:
     dependsOn: [Changes, Fast, Test]
     condition: |
       and(
-        succeeded(),
+        in(dependencies.Changes.result, 'Succeeded'),
+        in(dependencies.Fast.result, 'Succeeded'),
         in(dependencies.Test.result, 'Succeeded', 'Skipped'),
         ne(variables['Build.Reason'], 'PullRequest'),
         in(variables['Build.SourceBranch'], 'refs/heads/master', 'refs/heads/main')
@@ -317,11 +319,20 @@ stages:
               inlineScript: |
                 set -euo pipefail
                 az acr login --name "$(ACR_NAME)"
-                curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-                  | sh -s -- -b /tmp v0.55.2
-                /tmp/trivy image \
+
+                # The scanner's OWN IMAGE — no installer, no release-asset filename to guess.
+                # contrib/install.sh resolves the version then exits 1 regardless (recorded in
+                # .github/workflows/ci.yml), and the release tarball naming is not stable enough
+                # to hardcode. Same version the GitHub workflow pins, so both gates scan
+                # identically. `.trivyignore.yaml` is mounted because the file lives in the
+                # checkout, not inside the container.
+                docker run --rm \
+                  -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
+                  -v "$(Build.SourcesDirectory)/.trivyignore.yaml:/work/.trivyignore.yaml:ro" \
+                  aquasec/trivy:0.65.0 image \
                   --severity HIGH,CRITICAL \
                   --ignore-unfixed \
                   --exit-code 1 \
                   --no-progress \
+                  --ignorefile /work/.trivyignore.yaml \
                   "$(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(Build.SourceVersion)"

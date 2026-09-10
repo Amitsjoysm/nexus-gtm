@@ -55,6 +55,7 @@ variables:
   # image staging validated. Two registries would mean copying the image between them, and a copy
   # is a new artifact — at which point "the same image was tested" becomes an assumption instead
   # of a fact the `Verify` stage can check.
+  - group: gtm-deploy
   - name: IMAGE_REPO
     value: nexus-gtm
 
