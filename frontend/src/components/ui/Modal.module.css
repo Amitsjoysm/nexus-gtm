@@ -58,6 +58,7 @@
 }
 
 .body {
+  position: relative;
   padding: var(--space-5);
   overflow-y: auto;
 }

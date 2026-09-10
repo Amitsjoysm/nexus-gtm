@@ -345,6 +345,7 @@
   color: var(--text);
 }
 .stepOutputPre {
+  position: relative;
   margin: var(--space-2) 0 0;
   padding: var(--space-2) var(--space-3);
   max-height: 260px;

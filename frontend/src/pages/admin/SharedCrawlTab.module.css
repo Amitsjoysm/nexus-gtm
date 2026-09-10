@@ -137,6 +137,7 @@
 }
 
 .keys {
+  position: relative;
   margin: var(--space-2) 0 0;
   padding-inline-start: var(--space-5);
   max-block-size: 160px;

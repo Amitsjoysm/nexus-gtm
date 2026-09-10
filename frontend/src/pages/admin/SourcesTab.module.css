@@ -163,6 +163,7 @@
 }
 
 .pre {
+  position: relative;
   margin: var(--space-2) 0 0;
   padding: var(--space-3);
   border-radius: var(--radius-sm);
@@ -211,6 +212,7 @@
 }
 
 .mapGrid {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: var(--space-4);

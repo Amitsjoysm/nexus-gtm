@@ -23,6 +23,13 @@
 /* The main content is its own scroll container, so the sidebar + topbar stay fixed and only
    the page body scrolls (with its own scrollbar). */
 .main {
+  /* A containing block, which a scroll container must be. Without it an absolutely-positioned
+     descendant is placed relative to the DOCUMENT: every `.sr-only` label sits at its static
+     position far down a long page, escapes both this scroller and the shell's `overflow: hidden`,
+     and stretches the document. Measured 2026-09-10: the Ask box's hidden "Your question" label
+     grew the page from 855px to 2,309px after "Generate brief", giving the window a second
+     scrollbar and blank space below the entire app. Pinned by tests/test_scroll_containers.py. */
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;

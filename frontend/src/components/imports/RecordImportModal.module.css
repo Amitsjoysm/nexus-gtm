@@ -121,6 +121,7 @@
 }
 
 .mapGrid {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: var(--space-4);
@@ -197,6 +198,7 @@
 }
 
 .errors ul {
+  position: relative;
   margin: var(--space-2) 0 0;
   padding-left: var(--space-5);
   max-height: 180px;
