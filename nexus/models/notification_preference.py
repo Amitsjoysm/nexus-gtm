@@ -40,6 +40,13 @@ class NotificationPreference(IdMixin, TimestampMixin, TenantScoped, Base):
     category: Mapped[str] = mapped_column(String(40), index=True)
     channel: Mapped[str] = mapped_column(String(20), default="in_app")
     mode: Mapped[str] = mapped_column(String(20), default="immediate")
+    # Which alerts this route covers: "all" of the category, or only those on accounts this user
+    # owns ("mine"). Defaults to "all" because that is what every row written before this column
+    # existed MEANT — a saved "funding -> Teams" was never scoped to anything, and narrowing it on
+    # upgrade would silently stop alerts somebody explicitly asked for.
+    scope: Mapped[str] = mapped_column(
+        String(10), default="all", server_default="all", nullable=False
+    )
     # Quiet hours in the user's local offset, as minutes from midnight. Null disables them.
     # Stored as minutes rather than a time so the "22:00 → 07:00" wrap is arithmetic, not a
     # special case in every comparison.

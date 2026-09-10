@@ -47,6 +47,16 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     custom_fields: Mapped[dict] = mapped_column(JSON, default=dict)
     # Provenance: "discovery" for web-sourced rows so results can filter own vs discovered.
     source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Who works this account. Accounts had no owner at all, so "only alerts for MY accounts" had no
+    # source of truth — found when an SDR could not route their own alerts. Set to whoever adds the
+    # account; a rep can claim an unowned one or release their own, and a manager can reassign.
+    #
+    # NULL means unowned, not "everyone's": a personal route scoped to "my accounts" never fires for
+    # it, and workspace rules are how unowned accounts still reach a shared channel. Automated
+    # sources (ICP discovery, CRM sync) create unowned rows because nobody chose them.
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), index=True, nullable=True
+    )
     # Continuous Automation: when the autonomous heartbeat last re-processed this account.
     # NULL = never refreshed (always due). Stamped when the refresh driver claims the account.
     last_refreshed_at: Mapped[datetime | None] = mapped_column(

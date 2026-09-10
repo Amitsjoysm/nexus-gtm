@@ -319,6 +319,12 @@ class AlertChannelRegistry:
     def get(self, name: str) -> AlertChannel:
         return self._channels.get(name) or self._channels["in_app"]
 
+    def has(self, name: str) -> bool:
+        """Whether a channel by this name exists. `get` falls back to in-app for an unknown name,
+        which is right for the channel stamped on an alert and wrong for fan-out, where "post to
+        Slack" silently becoming "post in-app" would be recorded as a successful Slack delivery."""
+        return name in self._channels
+
     async def deliver(self, alert: Alert) -> AlertDelivery:
         return await self.get(alert.channel).deliver(alert)
 

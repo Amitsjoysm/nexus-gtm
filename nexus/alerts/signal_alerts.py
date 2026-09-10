@@ -44,6 +44,7 @@ async def raise_alerts_for(ts, account, signals) -> list:
 
     created = []
     seen: set[str] = set()
+    registry: list = []  # resolved lazily, once per batch, and only if something is routed
     try:
         service = get_alert_service()
         for signal in signals:
@@ -62,7 +63,7 @@ async def raise_alerts_for(ts, account, signals) -> list:
                 continue
             seen.add(key)
 
-            created.append(await service.create(
+            alert = await service.create(
                 ts,
                 title=signal.title or f"New {signal.kind} signal",
                 body="\n\n".join(x for x in (signal.body, decision.suggested_action) if x),
@@ -79,10 +80,55 @@ async def raise_alerts_for(ts, account, signals) -> list:
                     "source_url": signal.url or "",
                     "reason": decision.reason,
                 },
-            ))
+            )
+            created.append(alert)
+            # The alert is persisted and delivered in-app above; this ADDS the shared channels that
+            # a workspace rule or somebody's personal route asked for. It rides the dedupe above, so
+            # a channel gets the same once-per-category-per-account-per-day as the inbox.
+            await _route_externally(
+                ts, alert, account, signal,
+                category=decision.category, severity=decision.severity, registry=registry,
+            )
     except Exception:
         logger.warning("failed to raise alerts for %s", getattr(account, "id", "?"), exc_info=True)
     return created
+
+
+async def _route_externally(ts, alert, account, signal, *, category, severity, registry) -> None:
+    """Post one alert to the channels routed to it. Never raises — the next alert must still go.
+
+    ``registry`` is a one-slot cache owned by the caller: resolving the tenant's channels reads four
+    connection rows, and a batch where nothing is routed should not pay for it at all.
+    """
+    from nexus.alerts.fanout import channels_for, fan_out
+    from nexus.core.db import utcnow
+
+    try:
+        owner = getattr(account, "owner_user_id", None)
+        if account is None or getattr(account, "id", None) != signal.account_id:
+            owner = await _owner_of(ts, signal.account_id)
+        channels = await channels_for(
+            ts, category=category, severity=severity, owner_user_id=owner, now=utcnow()
+        )
+        if not channels:
+            return
+        if not registry:
+            from nexus.alerts.connections import resolve_alert_channels
+
+            registry.append(await resolve_alert_channels(ts))
+        await fan_out(alert, channels, registry[0])
+        await ts.flush()
+    except Exception:
+        logger.warning("routing alert %s to external channels failed", alert.id, exc_info=True)
+
+
+async def _owner_of(ts, account_id: str | None) -> str | None:
+    from nexus.models.account import Account
+
+    if not account_id:
+        return None
+    acct = await ts.first(Account, Account.id == account_id)
+    return getattr(acct, "owner_user_id", None)
 
 
 async def _already_alerted(ts, account_id: str | None, key: str) -> bool:

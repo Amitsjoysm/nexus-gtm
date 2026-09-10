@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nexus.core.db import Base, IdMixin, TimestampMixin
@@ -41,3 +41,29 @@ class Alert(IdMixin, TimestampMixin, TenantScoped, Base):
         DateTime(timezone=True), nullable=True
     )
     acked_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
+class AlertChannelRule(IdMixin, TimestampMixin, TenantScoped, Base):
+    """A workspace rule: "this shared channel receives this category of alert, for everyone".
+
+    The team-level half of routing. A personal route is one member's choice and their own `off` and
+    quiet hours apply to it; a rule is a manager's decision about a SHARED channel, and nobody's
+    personal setting mutes it — a rep silencing funding for themselves must not silence the team's
+    Slack. Rules are also how alerts on UNOWNED accounts reach a channel, since a personal route
+    scoped to "my accounts" never covers them.
+
+    Its own table rather than a column on the channel's `IntegrationConnection` row: that row is a
+    credential, disconnecting deletes it, and the rules a manager chose should survive swapping one
+    Slack webhook for another.
+    """
+
+    __tablename__ = "alert_channel_rules"
+    __table_args__ = (
+        # One row per (channel, category). A UI that saves twice must not produce two rules and
+        # post the same alert twice.
+        UniqueConstraint("tenant_id", "channel", "category", name="uq_alert_channel_rule"),
+    )
+
+    channel: Mapped[str] = mapped_column(String(20))
+    category: Mapped[str] = mapped_column(String(40))
+    created_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
