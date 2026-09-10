@@ -206,9 +206,14 @@ stages:
               path: $(Pipeline.Workspace)/.pip
             displayName: Cache pip
 
+          # `metrics` is here because the production image installs it (deploy/Dockerfile:
+          # `.[postgres,redis,migrate,metrics]`). Without it CI tested an application missing the
+          # instrumentation production ships: `/metrics` 404'd and every counter was a silent no-op,
+          # so two tests failed here that pass on the real image. CI must install at least what
+          # production installs, or it is testing something that never ships.
           - bash: |
               set -euo pipefail
-              pip install --cache-dir "$(Pipeline.Workspace)/.pip" -e ".[dev,migrate,postgres,redis]"
+              pip install --cache-dir "$(Pipeline.Workspace)/.pip" -e ".[dev,migrate,postgres,redis,metrics]"
             displayName: Install dependencies
 
           # Coverage instrumentation slows every test. On a PR the number is noise; on master
@@ -216,6 +221,17 @@ stages:
           - bash: |
               set -euo pipefail
               START=$(date +%s)
+              # RECORD THE TIME EVEN WHEN PYTEST FAILS, THEN FAIL WITH ITS EXIT CODE.
+              #
+              # Under `set -e` a failing pytest aborted the script on the spot, so the lines that
+              # compute ELAPSED and set `pytestSeconds` never ran. The telemetry step below then saw
+              # the literal text `$(pytestSeconds)` — ADO leaves an undefined macro untouched — and
+              # bash ran it as COMMAND SUBSTITUTION: "pytestSeconds: command not found". The budget
+              # number was lost on exactly the runs where it matters, the failing ones.
+              #
+              # `set +e` is scoped to the two pytest calls alone; `exit "$RC"` restores the real
+              # result, so a failing suite still fails this step. Measured 2026-09-10.
+              set +e
               if [ "${BUILD_REASON}" = "PullRequest" ]; then
                 pytest -n auto -p no:cacheprovider --timeout=120 -q \
                   --junitxml=junit-unit.xml
@@ -224,9 +240,12 @@ stages:
                   --junitxml=junit-unit.xml \
                   --cov=nexus --cov-report=xml --cov-report=term-missing --cov-fail-under=60
               fi
+              RC=$?
+              set -e
               ELAPSED=$(( $(date +%s) - START ))
               echo "PYTEST_SECONDS=${ELAPSED}"
               echo "##vso[task.setvariable variable=pytestSeconds]${ELAPSED}"
+              exit "$RC"
             displayName: pytest (unit)
 
           # Real Postgres + Redis. NEXUS_TEST_* are the same variables the GitHub workflow used,

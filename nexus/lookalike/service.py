@@ -11,12 +11,12 @@ swapping in a keyed Exa provider lights this up without touching callers.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
+from nexus.core.aio import run_with_timeout
 from nexus.core.config import get_settings
 from nexus.core.tenancy import TenantSession
 from nexus.integrations.company_search import clean_company_name, domain_from_url, looks_like_company
@@ -122,9 +122,13 @@ class LookalikeService:
                 # A lookalike WITHOUT a freshly enriched seed is still a lookalike: the query falls
                 # back to the name, domain and whatever firmographics are already stored. A
                 # lookalike nobody waited for is nothing at all.
-                async with asyncio.timeout(_SEED_ENRICH_BUDGET_S):
+                # Both statements stay inside the budget, exactly as the `async with` block had them:
+                # a flush that runs after an enrichment which blew its budget is still waiting.
+                async def _enrich_seed() -> None:
                     if await get_account_enricher().enrich(ts, account):
                         await ts.flush()
+
+                await run_with_timeout(_enrich_seed(), _SEED_ENRICH_BUDGET_S)
             except TimeoutError:
                 logger.info(
                     "seed enrichment for %s exceeded %ss; searching on what we already know",
@@ -205,10 +209,12 @@ class LookalikeService:
             # not a failed search". That was only ever applied to QUOTA. Slowness deserves the same
             # answer, because the outcome for the rep is identical.
             try:
-                async with asyncio.timeout(_CANDIDATE_ENRICH_BUDGET_S):
-                    await self._enrich_candidates(
+                await run_with_timeout(
+                    self._enrich_candidates(
                         ts, [c for c, _ in candidates[: settings.lookalike_enrich_max]], settings
-                    )
+                    ),
+                    _CANDIDATE_ENRICH_BUDGET_S,
+                )
             except TimeoutError:
                 logger.info(
                     "candidate enrichment exceeded %ss; ranking on snippet text instead",

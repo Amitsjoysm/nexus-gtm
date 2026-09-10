@@ -25,7 +25,6 @@ Two fields are deliberately NOT taken from it:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 
 logger = logging.getLogger("nexus.enrichment.b2b_actor")
@@ -110,10 +109,14 @@ async def fetch(domain: str) -> dict:
         return {}
     from nexus.integrations.apify import ApifyNotConfigured, get_apify_client
 
+    from nexus.core.aio import run_with_timeout
+
     client = get_apify_client()
     try:
-        async with asyncio.timeout(TIMEOUT_S):
-            items = await client.run_actor(
+        # `run_with_timeout`, not `asyncio.timeout`: the latter does not exist on 3.10, which is the
+        # floor `pyproject.toml` declares. See nexus/core/aio.py for why `wait_for` alone is not safe.
+        items = await run_with_timeout(
+            client.run_actor(
                 ACTOR,
                 {
                     # The actor reads a CSV, so one company is a header plus one row.
@@ -129,7 +132,9 @@ async def fetch(domain: str) -> dict:
                     "technographicProviderOrder": list(_PROVIDER_ORDER),
                 },
                 timeout=TIMEOUT_S,
-            )
+            ),
+            TIMEOUT_S,
+        )
     except ApifyNotConfigured:
         return {}
     except TimeoutError:

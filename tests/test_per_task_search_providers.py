@@ -46,6 +46,10 @@ def test_a_task_override_wins(monkeypatch, settings):
     from nexus.integrations.search.engines import FirecrawlSearchProvider
     from nexus.integrations.search.provider import provider_for_task
 
+    # The key the two tests below already set, and this one forgot. Without it `build_engine`
+    # correctly degrades a keyless selection to DuckDuckGo. It passed locally only because
+    # pydantic-settings read a real Firecrawl key from the developer's `.env`; CI has none.
+    monkeypatch.setattr(settings, "firecrawl_api_keys", "fc-test-key")
     monkeypatch.setattr(settings, "enrichment_search_provider", "firecrawl")
     assert isinstance(provider_for_task("enrichment"), FirecrawlSearchProvider)
 
