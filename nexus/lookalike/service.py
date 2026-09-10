@@ -19,7 +19,12 @@ from sqlalchemy import select
 from nexus.core.aio import run_with_timeout
 from nexus.core.config import get_settings
 from nexus.core.tenancy import TenantSession
-from nexus.integrations.company_search import clean_company_name, domain_from_url, looks_like_company
+from nexus.integrations.company_search import (
+    clean_company_name,
+    company_name_from_title,
+    domain_from_url,
+    looks_like_company,
+)
 from nexus.integrations.search.provider import get_search_provider
 from nexus.lookalike.similarity import company_similarity, prepare_company
 from nexus.models.account import Account
@@ -172,11 +177,18 @@ class LookalikeService:
             domain = domain_from_url(getattr(hit, "url", None))
             if not domain or domain == seed_domain or domain in seen:
                 continue
-            title = clean_company_name(getattr(hit, "title", None)) or domain
+            raw_title = getattr(hit, "title", None)
             # Drop aggregator / data-vendor / profile pages — a real lookalike is a company,
-            # not the seed's listing on LinkedIn / Crunchbase / PitchBook / an app store.
-            if not looks_like_company(domain, title):
+            # not the seed's listing on LinkedIn / Crunchbase / PitchBook / an app store. Judged on
+            # the page's own leading segment, before naming, so a listicle cannot be laundered
+            # into a plausible name by the fallback below.
+            if not looks_like_company(domain, clean_company_name(raw_title) or domain):
                 continue
+            # Named after the CANDIDATE, never after the page that mentioned it or the seed it was
+            # compared to — "Marketjoy Competitor" on revpue.com is RevPue.
+            title = company_name_from_title(
+                raw_title, domain, not_named=(account.name or "", seed_domain)
+            )
             seen.add(domain)
             from nexus.accounts.dedupe import normalise_on_write
 

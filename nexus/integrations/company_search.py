@@ -117,6 +117,88 @@ def clean_company_name(title: str | None) -> str:
     return (_TITLE_SPLIT_RE.split(title.strip(), maxsplit=1)[0] or "").strip()
 
 
+#: A title segment containing any of these is a headline ABOUT companies, not a company's name.
+_NOT_A_NAME_RE = re.compile(
+    r"\b(competitors?|alternatives?|vs\.?|versus|compared?|comparison|reviews?|similar\s+to"
+    r"|best|top\s+\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _registrable_label(domain_or_name: str) -> str:
+    # The ATS source already solved "which label IS the company" (subdomains, `.co.uk`); one
+    # definition, not two. Imported here rather than at module level to keep integrations free of an
+    # import-time dependency on ingestion.
+    from nexus.ingestion.ats import _identity_token
+
+    return _identity_token(domain_or_name)
+
+
+def company_name_from_title(
+    title: str | None, domain: str | None, *, not_named: tuple[str, ...] = ()
+) -> str:
+    """The company's name for a search hit on ``domain`` — the company's, not the page's.
+
+    `clean_company_name` always kept the FIRST title segment, and SEO titles routinely lead with a
+    tagline or with the competitor the page is targeting: staging stored revpue.com as "Marketjoy
+    Competitor", and a plain web search names hypergen.io "B2B Lead Generation Company". The domain
+    is the one thing about a hit that is unambiguously the company, so, in order:
+
+    1. a segment that spells the domain ("RevPue" for revpue.com) — exact first, then one that
+       contains it ("BuzzLead.io"), then one the domain contains ("GenRiver" for genriverai.com);
+    2. the brand as a run of words inside a longer segment ("... with Growbots");
+    3. the leading segment, exactly as before — which is what keeps real names that do not spell
+       their domain ("Outsource Demand Gen" is odgleads.com) — unless it is a headline or carries
+       a name in ``not_named`` (the seed a lookalike was found from);
+    4. the domain itself, capitalised. Honest, where the seed's name on somebody else's account
+       is not.
+    """
+    label = _squash(_registrable_label(domain or ""))
+    banned = {
+        _squash(_registrable_label(n) if "." in n and " " not in n else n) for n in not_named if n
+    }
+    banned = {b for b in banned if len(b) >= 3}
+
+    def disqualified(segment: str) -> bool:
+        sq = _squash(segment)
+        return not sq or any(b in sq for b in banned) or bool(_NOT_A_NAME_RE.search(segment))
+
+    segments = [s.strip() for s in _TITLE_SPLIT_RE.split((title or "").strip()) if s.strip()]
+    usable = [s for s in segments if not disqualified(s)]
+
+    if label:
+        # 1) Ranked passes, so a tagline that merely CONTAINS the brand ("Why Hypergen Works")
+        #    never beats a segment that IS the brand.
+        for matches in (
+            lambda sq, words: sq == label,
+            lambda sq, words: label in sq and words <= 4,
+            # The domain carries a suffix the name does not ("genriverai" / "GenRiver"). Required to
+            # be most of the label, so "Sales" does not name salesforce.com.
+            lambda sq, words: sq in label and len(sq) >= 0.6 * len(label) and words <= 4,
+        ):
+            for seg in usable:
+                if matches(_squash(seg), len(seg.split())):
+                    return seg
+        # 2) The brand as a short run of words inside a longer segment.
+        words = re.findall(r"\w[\w&.'-]*", title or "")
+        for n in (3, 2, 1):
+            for i in range(len(words) - n + 1):
+                run = " ".join(words[i:i + n])
+                if _squash(run) == label and not disqualified(run):
+                    return run
+
+    # 3) The leading segment, as before — unless it is a headline or names the seed.
+    if segments and not disqualified(segments[0]):
+        return segments[0]
+    # 4) The domain.
+    raw = _registrable_label(domain or "")
+    return raw[:1].upper() + raw[1:] if raw else ""
+
+
 def looks_like_company(domain: str | None, name: str | None) -> bool:
     """True when a SERP hit plausibly *is* a company, not an aggregator/listicle/job/news page.
 
@@ -216,11 +298,14 @@ class SearchBackedCompanySearchProvider(CompanySearchProvider):
         out: list[CompanyCandidate] = []
         for hit in hits:
             domain = domain_from_url(getattr(hit, "url", None))
-            name = clean_company_name(getattr(hit, "title", None))
+            raw_title = getattr(hit, "title", None)
             # Skip aggregators, job boards, news, and listicles — they were being persisted as
             # bogus Accounts. A general web SERP is mostly these; only keep plausible companies.
-            if not looks_like_company(domain, name):
+            # Judged on the page's own leading segment, BEFORE naming: a listicle renamed after
+            # its domain would otherwise sail through as "Somesite".
+            if not looks_like_company(domain, clean_company_name(raw_title)):
                 continue
+            name = company_name_from_title(raw_title, domain)
             out.append(
                 CompanyCandidate(
                     name=(name or domain).strip(),
