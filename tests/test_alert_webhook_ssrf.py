@@ -16,7 +16,6 @@ rebind after a URL is stored and rows predate the check.
 from __future__ import annotations
 
 import inspect
-import re
 
 import pytest
 

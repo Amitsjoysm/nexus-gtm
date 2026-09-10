@@ -27,6 +27,14 @@
 #   cust-dir-probe-1         tests/test_admin_customers.py - a lookup key, not a credential
 #   sk-test-abcdefgh1234     tests/test_provider_keys.py and the plan doc quoting it
 #   s3cr3t-pw-9f2a1c         tests/test_source_databases.py - fixture DSN password
+#
+# Added 2026-09-10:
+#
+#   sk_live_abcdefghijklmnop tests/test_credential_leaks.py - one of six fake tokens the redactor
+#                            must mask. It has to keep the real `sk_live_` shape or the test stops
+#                            exercising the Stripe pattern, which is exactly what trips the
+#                            stripe-access-token rule. The other five fakes in that list do not
+#                            match an upstream rule and are deliberately NOT listed here.
 
 [extend]
 useDefault = true
@@ -40,4 +48,5 @@ regexes = [
   'cust-dir-probe-1',
   'sk-test-abcdefgh1234',
   's3cr3t-pw-9f2a1c',
+  'sk_live_abcdefghijklmnop',
 ]
