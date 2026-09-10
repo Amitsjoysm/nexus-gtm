@@ -58,13 +58,23 @@ export const APPROVAL_STATUS_TONE: Record<ApprovalStatus, BadgeTone> = {
  */
 export const EMAIL_STATUS_META: Record<EmailStatus, { tone: BadgeTone; label: string }> = {
   valid: { tone: "success", label: "Deliverable" },
+  catch_all: { tone: "info", label: "Catch-all domain" },
+  risky: { tone: "warning", label: "Risky" },
   unknown: { tone: "warning", label: "Unverified" },
   invalid: { tone: "danger", label: "Undeliverable" },
 };
 
+const EMAIL_STATUSES: readonly EmailStatus[] = [
+  "valid",
+  "catch_all",
+  "risky",
+  "unknown",
+  "invalid",
+];
+
 /** Narrow an unknown payload value to a known EmailStatus, or null. */
 export function asEmailStatus(value: unknown): EmailStatus | null {
-  return value === "valid" || value === "invalid" || value === "unknown" ? value : null;
+  return EMAIL_STATUSES.includes(value as EmailStatus) ? (value as EmailStatus) : null;
 }
 
 /** Friendly names for the tools a step can invoke. */

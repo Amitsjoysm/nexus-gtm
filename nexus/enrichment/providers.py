@@ -9,7 +9,13 @@ from typing import Awaitable, Callable
 
 from nexus.enrichment.browser import BrowserProvider
 from nexus.models.account import Account, Contact
-from nexus.verification import STATUS_INVALID, STATUS_VALID, EmailVerification
+from nexus.verification import (
+    STATUS_CATCH_ALL,
+    STATUS_INVALID,
+    STATUS_RISKY,
+    STATUS_VALID,
+    EmailVerification,
+)
 
 _EMAIL = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 # Deliberately loose: it runs over search-result prose, so it must catch a number in any
@@ -266,10 +272,13 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
         for i, email in enumerate(cands):
             verdict = await verify(email)
             if i == 0 and verdict.signals.get("is_catch_all"):
-                # Catch-all: every guess "works"; return canonical guess flagged risky.
+                # Catch-all: every guess "works", so probing the rest buys nothing. Return the
+                # canonical guess labelled for what it is — an unprovable address on a domain that
+                # accepts everything — rather than as `risky`, which would claim we found something
+                # doubtful about it. We found nothing about it at all.
                 return EnrichmentResult(
                     found=True, email=canonical, email_confidence=0.5,
-                    email_status="risky", provider_type=verdict.provider_type,
+                    email_status=STATUS_CATCH_ALL, provider_type=verdict.provider_type,
                     source=self.name,
                 )
             if verdict.status == STATUS_VALID:
@@ -279,7 +288,7 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
                     source=self.name,
                 )
             if verdict.status != STATUS_INVALID:
-                rank = 2.0 if verdict.status == "risky" else 1.0
+                rank = 2.0 if verdict.status in (STATUS_RISKY, STATUS_CATCH_ALL) else 1.0
                 if best is None or rank > best[0]:
                     best = (rank, email, verdict)
 

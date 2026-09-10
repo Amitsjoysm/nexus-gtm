@@ -1,4 +1,5 @@
 from nexus.verification.provider import (
+    STATUS_CATCH_ALL,
     STATUS_INVALID,
     STATUS_RISKY,
     STATUS_UNKNOWN,
@@ -13,6 +14,7 @@ from nexus.verification.provider import (
 from nexus.verification.reacher import ReacherEmailVerifier
 
 __all__ = [
+    "STATUS_CATCH_ALL",
     "STATUS_INVALID",
     "STATUS_RISKY",
     "STATUS_UNKNOWN",

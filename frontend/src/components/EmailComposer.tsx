@@ -57,10 +57,15 @@ function explainFailure(err: unknown): string {
 }
 
 /** How a verifier verdict reads to a rep, and how alarmed to be about it. */
-function statusChip(status: string): { tone: "success" | "warning" | "danger"; text: string } | null {
+function statusChip(
+  status: string,
+): { tone: "success" | "warning" | "danger" | "info"; text: string } | null {
   const s = (status || "").toLowerCase();
   if (s === "valid") return { tone: "success", text: "Address verified" };
   if (s === "invalid") return { tone: "danger", text: "Address looks invalid" };
+  // Not a warning: nothing is wrong with the address, the domain just accepts every recipient, so
+  // no verifier can confirm it. Say which of those two situations the rep is in.
+  if (s === "catch_all") return { tone: "info", text: "Catch-all domain — can't be confirmed" };
   if (s === "risky") return { tone: "warning", text: "Address is risky" };
   if (s === "unknown") return { tone: "warning", text: "Address unverified" };
   return null;

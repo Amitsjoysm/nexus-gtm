@@ -15,7 +15,9 @@ import time
 import httpx
 
 from nexus.verification.provider import (
+    STATUS_CATCH_ALL,
     STATUS_INVALID,
+    STATUS_RISKY,
     STATUS_UNKNOWN,
     STATUS_VALID,
     EmailVerification,
@@ -28,9 +30,15 @@ logger = logging.getLogger("nexus.verification.reacher")
 _VERDICT = {
     "safe": (STATUS_VALID, 0.95),
     "invalid": (STATUS_INVALID, 0.95),
-    "risky": ("risky", 0.40),
+    "risky": (STATUS_RISKY, 0.40),
     "unknown": (STATUS_UNKNOWN, 0.20),
 }
+
+#: Confidence for an address promoted to `valid` by the SMTP transaction rather than by Reacher's
+#: own `safe`. Deliberately below the 0.95 that `safe` earns: Reacher declined to certify the
+#: mailbox and we are overriding it on corroborating evidence, which is strong but is not the
+#: same thing as the verifier agreeing.
+_PROMOTED_CONFIDENCE = 0.80
 
 # ESP classification from the MX record hosts (lowercased, joined). Order matters: the
 # office365 business needle (`mail.protection.outlook.com`) is checked before the consumer
@@ -124,18 +132,27 @@ class ReacherEmailVerifier(EmailVerificationProvider):
     # makes verification look broken, because two of these are addresses the receiving server
     # explicitly ACCEPTED and one is a throwaway.
     #
-    # (signal, reason, confidence) — first match wins.
-    _RISKY_GRADES: tuple[tuple[str, str, float], ...] = (
+    # (signal, reason, status, confidence) — FIRST MATCH WINS, AND THE ORDER IS THE SAFETY
+    # PROPERTY. `is_catch_all` is tested before the deliverability promotion below can run, so an
+    # address on a domain that accepts everything can never be promoted to `valid`. Re-ordering
+    # these is not a cosmetic change: measured on 2026-09-10, `zzqqnotreal7788@google.com` and
+    # `nosuchperson9x7@vercel.com` — both invented for the test — return `is_deliverable: true`.
+    _RISKY_GRADES: tuple[tuple[str, str, str, float], ...] = (
         # A throwaway domain. Deliverable and worthless; the worst kind of risky.
-        ("is_disposable", "disposable", 0.15),
+        ("is_disposable", "disposable", STATUS_RISKY, 0.15),
         # Accepted, but the mailbox is full — mail may bounce today and land tomorrow.
-        ("has_full_inbox", "full_inbox", 0.25),
+        ("has_full_inbox", "full_inbox", STATUS_RISKY, 0.25),
         # The server accepts every recipient, so acceptance proves nothing about this mailbox.
-        # Still the best of the risky outcomes when the server did accept it.
-        ("is_catch_all", "catch_all", 0.55),
-        # A shared inbox (info@, support@). Real, reachable, rarely the person you want.
-        ("is_role_account", "role_account", 0.35),
+        # Its own verdict, not a shade of risky — see STATUS_CATCH_ALL.
+        ("is_catch_all", "catch_all", STATUS_CATCH_ALL, 0.55),
+        # A shared inbox (info@, support@). Real, reachable, rarely the person you want — but if
+        # the server accepted it below, the mailbox demonstrably exists.
+        ("is_role_account", "role_account", STATUS_RISKY, 0.35),
     )
+
+    #: Risky reasons a positive SMTP answer does NOT redeem. A burner domain accepting mail is what
+    #: makes it worthless, not reassurance; a full mailbox accepts today and bounces tomorrow.
+    _NEVER_PROMOTE = ("disposable", "full_inbox")
 
     def _map(self, email: str, data: dict) -> EmailVerification:
         reachable = str(data.get("is_reachable", "unknown")).lower()
@@ -156,26 +173,39 @@ class ReacherEmailVerifier(EmailVerificationProvider):
             "is_deliverable": deliverable,
         }
 
-        if status == "risky":
-            # THE STATUS IS NOT PROMOTED. Reacher declined to certify the mailbox, and turning that
-            # into `valid` would invent a certainty it explicitly withheld — which is how a
-            # campaign bounces. Only the confidence and the stated reason change, so the UI can say
-            # "accepted, catch-all domain" rather than an unexplained amber label.
-            for key, reason, graded in self._RISKY_GRADES:
+        if status == STATUS_RISKY:
+            for key, reason, graded_status, graded in self._RISKY_GRADES:
                 if signals.get(key):
                     signals["risky_reason"] = reason
-                    confidence = graded
+                    status, confidence = graded_status, graded
                     break
             else:
                 signals["risky_reason"] = "unspecified"
-            # The server accepting the recipient is corroboration; not accepting it is not proof of
-            # absence on a catch-all, so this only ever adds.
-            #
-            # Never for a disposable address: "the throwaway domain accepts mail" is not
-            # reassurance, it is the thing that makes it useless. Corroborating deliverability
-            # there would rank a burner above a real shared inbox.
-            if deliverable and signals.get("risky_reason") != "disposable":
-                confidence = min(0.75, confidence + 0.10)
+
+            if deliverable:
+                reason = signals["risky_reason"]
+                if status == STATUS_RISKY and reason not in self._NEVER_PROMOTE:
+                    # PROMOTED TO `valid`, and the two conditions guarding it are what make that
+                    # safe rather than optimistic. The domain is NOT catch-all (the loop above
+                    # would have taken the address out of `risky` if it were), so this server
+                    # rejects recipients it does not host — and it accepted this one. That is the
+                    # receiving mail server confirming the mailbox exists, which is the strongest
+                    # statement available about an address from outside it.
+                    #
+                    # This used to stay `risky` on the argument that promoting invents a certainty
+                    # Reacher withheld. The argument was right about the danger and wrong about
+                    # where it lives: the danger is catch-all domains, and it is now handled by
+                    # name. What the old rule actually produced was a screen on which NOTHING was
+                    # ever valid — `sales@marketjoy.com`, a mailbox the server accepted on a
+                    # domain that rejects `zzqnotreal123@marketjoy.com` outright, read the same
+                    # amber as an unprovable guess. A verdict that is always amber is not a verdict.
+                    status, confidence = STATUS_VALID, _PROMOTED_CONFIDENCE
+                elif reason != "disposable":
+                    # Not promotable, but acceptance is still corroboration: it lifts confidence
+                    # within the grade. Never for a disposable address — "the throwaway domain
+                    # accepts mail" is the thing that makes it useless, and rewarding it would
+                    # rank a burner above a real shared inbox.
+                    confidence = min(0.75, confidence + 0.10)
 
         return EmailVerification(
             email=email, status=status, confidence=confidence, source=self.name,

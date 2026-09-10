@@ -46,7 +46,12 @@ from nexus.models.orchestration import OrchestrationRun, RUN_COMPLETED
 from nexus.models.workflow import ListItem
 from nexus.orchestration.engine import get_orchestration_engine
 from nexus.orchestration.tools import SendMessageTool, ToolContext, ToolError
-from nexus.verification import STATUS_INVALID, STATUS_RISKY, STATUS_UNKNOWN
+from nexus.verification import (
+    STATUS_CATCH_ALL,
+    STATUS_INVALID,
+    STATUS_RISKY,
+    STATUS_UNKNOWN,
+)
 
 
 class CampaignError(Exception):
@@ -240,14 +245,20 @@ class CampaignService:
 
         valid            -> send
         invalid          -> SKIP_UNDELIVERABLE (also hard-blocked by SendMessageTool)
-        risky            -> send iff campaign.send_risky else SKIP_RISKY
+        risky | catch_all -> send iff campaign.send_risky else SKIP_RISKY
         unknown & sourced & confidence < bar -> SKIP_UNVERIFIED
         unknown & real (non-sourced) contact -> send (no regression vs. today)
+
+        `catch_all` rides the SAME gate as `risky` and must keep doing so. Those addresses were
+        graded `risky` before catch-all became its own verdict, so letting the new status fall
+        through to the `unknown` branch would quietly start bulk-sending to every unprovable
+        address on every catch-all domain — a change in blast radius disguised as a relabelling.
+        The per-campaign `send_risky` opt-in is exactly the control that decision needs.
         """
         status = draft.get("email_status")
         if status == STATUS_INVALID:
             return SKIP_UNDELIVERABLE
-        if status == STATUS_RISKY:
+        if status in (STATUS_RISKY, STATUS_CATCH_ALL):
             return None if campaign.send_risky else SKIP_RISKY
         if status == STATUS_UNKNOWN or status is None:
             if draft.get("sourced"):

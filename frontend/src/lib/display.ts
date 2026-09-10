@@ -111,14 +111,21 @@ export function signalSourceMeta(sig: SignalEvent): SignalSourceMeta {
   };
 }
 
-/** Email-verification verdict → tone + label. Mirrors the backend statuses (valid/risky/
- *  invalid/unknown); null/blank means we have an address but no verdict yet. */
+/** Email-verification verdict → tone + label. Mirrors the backend statuses (valid/catch_all/
+ *  risky/invalid/unknown); null/blank means we have an address but no verdict yet.
+ *
+ *  `catch_all` is `info`, not `warning`, and the distinction is the point of it existing: amber
+ *  reads as "something is wrong with this address", and nothing is. The domain accepts every
+ *  recipient, so the address is simply unprovable from outside — a fact about the DOMAIN that the
+ *  rep weighs against how they sourced the name, not a defect in the address. */
 export function emailStatusMeta(
   status: string | null | undefined,
 ): { tone: BadgeTone; label: string } {
   switch ((status ?? "").toLowerCase()) {
     case "valid":
       return { tone: "success", label: "valid" };
+    case "catch_all":
+      return { tone: "info", label: "catch-all" };
     case "risky":
       return { tone: "warning", label: "risky" };
     case "invalid":

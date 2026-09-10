@@ -19,6 +19,14 @@ STATUS_VALID = "valid"
 STATUS_INVALID = "invalid"
 STATUS_UNKNOWN = "unknown"
 STATUS_RISKY = "risky"
+#: The receiving server accepts EVERY recipient, so its acceptance says nothing about this
+#: mailbox. Its own verdict rather than a flavour of `risky`, because the two demand different
+#: actions from a rep: `risky` means "something about this address is doubtful", catch-all means
+#: "the address is unprovable from outside — decide on the strength of how you sourced it".
+#: Measured against the live verifier: `zzqqnotreal7788@google.com`, an address invented for the
+#: test, returns `is_deliverable: true`. Every domain in that state must land here and nowhere
+#: else, which is what keeps the deliverability promotion below from certifying fiction.
+STATUS_CATCH_ALL = "catch_all"
 
 # ESP classification from MX host names — so the UI can show whether an address is Google
 # Workspace, Microsoft 365, etc. Shared by the DNS verifier and (conceptually) Reacher.

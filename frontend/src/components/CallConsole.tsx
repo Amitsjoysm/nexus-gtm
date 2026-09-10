@@ -20,7 +20,7 @@ import type {
   TelephonyStatus,
 } from "@/lib/types";
 import { formatNumber, humanize, timeAgo } from "@/lib/format";
-import { strengthMeta } from "@/lib/display";
+import { emailStatusMeta, strengthMeta } from "@/lib/display";
 import styles from "./CallConsole.module.css";
 
 const DISPO_LABEL: Record<string, string> = {
@@ -321,10 +321,12 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
 }
 
 /** Deliverability verdict → badge tone for the contact's email. */
-function emailTone(status: string | null): "success" | "warning" | "danger" | "neutral" {
+function emailTone(status: string | null): "success" | "warning" | "danger" | "neutral" | "info" {
   switch (status) {
     case "valid":
       return "success";
+    case "catch_all":
+      return "info";
     case "risky":
       return "warning";
     case "invalid":
@@ -484,7 +486,9 @@ function BriefPanel({
                   {contact.email}
                 </a>
                 {contact.email_status && (
-                  <Badge tone={emailTone(contact.email_status)}>{contact.email_status}</Badge>
+                  <Badge tone={emailTone(contact.email_status)}>
+                    {emailStatusMeta(contact.email_status).label}
+                  </Badge>
                 )}
               </KV>
             )}

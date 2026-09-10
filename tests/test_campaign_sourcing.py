@@ -124,6 +124,29 @@ async def test_send_risky_campaign_sends_risky_draft(offline_services):
     assert svc._send_policy(risky, _D()) == "risky_address"
 
 
+def test_send_policy_holds_catch_all_on_the_same_gate_as_risky():
+    """Splitting `catch_all` out of `risky` must not widen who gets bulk-mailed.
+
+    Those addresses graded `risky` before catch-all became its own verdict, so they were held
+    unless the campaign opted in. If the new status fell through to the `unknown` branch instead,
+    the relabelling would silently start sending to every unprovable address on every catch-all
+    domain — github.com, stripe.com and google.com are all catch-all, so that is most of a normal
+    prospect list. A change in blast radius must never arrive disguised as a rename.
+    """
+    svc = CampaignService()
+    draft = {"email_status": "catch_all", "email_confidence": 0.65, "sourced": True,
+             "grounded": True, "contact_id": "c1", "subject": "Hi", "body": "x"}
+
+    class _OptedIn:
+        send_risky = True
+
+    class _Default:
+        send_risky = False
+
+    assert svc._send_policy(draft, _Default()) == "risky_address"
+    assert svc._send_policy(draft, _OptedIn()) is None
+
+
 def test_send_policy_invalid_always_held():
     svc = CampaignService()
 

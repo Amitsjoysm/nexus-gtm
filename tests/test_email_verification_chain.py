@@ -245,10 +245,10 @@ async def test_a_deliverable_catch_all_is_separated_from_an_unverifiable_address
     the third is not. `safe` did not appear once — catch-all domains and role accounts both force
     `risky`, and B2B prospecting addresses are overwhelmingly one or the other.
 
-    The status stays `risky` in every case. Reacher declined to certify the mailbox and promoting
-    it to `valid` would invent a certainty it explicitly withheld — that is how a campaign bounces.
-    What changes is that the REASON and the server's own acceptance are carried, so the screen can
-    say "accepted, catch-all domain" instead of an unexplained amber label.
+    The two now separate by STATUS, not only by confidence. The accepted one is on a catch-all
+    domain, so it grades `catch_all`: the server answers for every recipient and cannot confirm
+    this mailbox. Neither becomes `valid` — that is reserved for a mailbox a NON-catch-all server
+    accepted, which is the case covered in test_reacher_verifier.py.
     """
     accepted = _map({
         "is_reachable": "risky",
@@ -261,7 +261,9 @@ async def test_a_deliverable_catch_all_is_separated_from_an_unverifiable_address
         "misc": {"is_role_account": True},
     })
 
-    assert accepted.status == "risky" and unproven.status == "risky"
+    assert accepted.status == "catch_all"
+    assert unproven.status == "risky"
+    assert accepted.status != "valid", "a catch-all domain can never certify a mailbox"
     assert accepted.signals["is_deliverable"] is True
     assert accepted.confidence > unproven.confidence, (
         "an address the server accepted scores no better than one it did not"

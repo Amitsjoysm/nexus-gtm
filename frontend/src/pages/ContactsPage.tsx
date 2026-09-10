@@ -30,12 +30,15 @@ import styles from "./ContactsPage.module.css";
 
 const ALL = "__all__";
 
-const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral" | "info"> = {
   valid: "success",
+  catch_all: "info",
   risky: "warning",
   unknown: "neutral",
   invalid: "danger",
 };
+// The raw status is a wire value; `catch_all` is the one that must not reach the badge verbatim.
+const STATUS_LABEL: Record<string, string> = { catch_all: "catch-all" };
 
 // Detected email service provider (from MX records) → a friendly label shown under the address.
 const PROVIDER_LABELS: Record<string, string> = {
@@ -357,7 +360,7 @@ export function ContactsPage() {
         render: (c) =>
           c.email_status ? (
             <Badge tone={STATUS_TONE[c.email_status] ?? "neutral"} dot>
-              {c.email_status}
+              {STATUS_LABEL[c.email_status] ?? c.email_status}
             </Badge>
           ) : c.email ? (
             // Has an address but no verdict yet — say so (and offer "Verify"), don't show a blank.
@@ -525,6 +528,7 @@ export function ContactsPage() {
           options={[
             { value: ALL, label: "Any status" },
             { value: "valid", label: "Valid" },
+            { value: "catch_all", label: "Catch-all" },
             { value: "risky", label: "Risky" },
             { value: "unknown", label: "Unknown" },
             { value: "invalid", label: "Invalid" },

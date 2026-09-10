@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from nexus.verification import (
+    STATUS_CATCH_ALL,
     STATUS_RISKY,
     STATUS_UNKNOWN,
     EmailVerification,
@@ -104,8 +105,8 @@ async def test_invalid_maps_to_invalid_hard():
     assert out.confidence == 0.95
 
 
-async def test_risky_catchall_office365_carries_signals():
-    """`risky` is graded by REASON now, not a flat 0.40.
+async def test_risky_catchall_office365_gets_its_own_status():
+    """A catch-all is its OWN verdict, not a flavour of `risky`.
 
     Measured against the live Reacher instance on 2026-09-02: `safe` never appeared once across
     real B2B addresses, because catch-all domains and role accounts each force `risky` and
@@ -113,12 +114,13 @@ async def test_risky_catchall_office365_carries_signals():
     an address it did not both scored 0.40 with no reason attached, which is what made the whole
     feature read as broken.
 
-    The status is deliberately unchanged — promoting a catch-all to `valid` would invent the
-    certainty Reacher withheld. Only the confidence and the stated reason move.
+    It is not promoted to `valid` — see the fabricated-address test below for why that would be
+    actively dangerous — but calling it `risky` claims we found something doubtful about the
+    address, and we found nothing about it at all. The domain answers for everyone.
     """
     v = _verifier(lambda req: _resp(RISKY_CATCHALL_O365))
     out = await v.verify_one("guess@acme.com")
-    assert out.status == "risky"
+    assert out.status == STATUS_CATCH_ALL
     assert out.provider_type == "office365"
     assert out.signals["is_catch_all"] is True
     assert out.signals["is_role_account"] is True
@@ -126,6 +128,110 @@ async def test_risky_catchall_office365_carries_signals():
     assert out.confidence > 0.40, (
         "a catch-all the server accepted still scores like an unverifiable address"
     )
+
+
+# A mailbox the receiving server CONFIRMED, on a domain that rejects unknown recipients. Reacher
+# grades it `risky` only because it is a shared inbox. Modelled on the live response for
+# `sales@marketjoy.com`, measured 2026-09-10.
+RISKY_ROLE_DELIVERABLE = {
+    "input": "sales@acme.com",
+    "is_reachable": "risky",
+    "misc": {"is_disposable": False, "is_role_account": True},
+    "mx": {"accepts_mail": True, "records": ["aspmx.l.google.com."]},
+    "smtp": {"is_catch_all": False, "has_full_inbox": False, "is_deliverable": True},
+}
+
+# The same server declining the recipient. Nothing here says the mailbox exists.
+RISKY_ROLE_NOT_DELIVERABLE = {
+    **RISKY_ROLE_DELIVERABLE,
+    "smtp": {"is_catch_all": False, "has_full_inbox": False, "is_deliverable": False},
+}
+
+DISPOSABLE_DELIVERABLE = {
+    "input": "x@mailinator.com",
+    "is_reachable": "risky",
+    "misc": {"is_disposable": True, "is_role_account": False},
+    "mx": {"accepts_mail": True, "records": ["mail.mailinator.com."]},
+    "smtp": {"is_catch_all": False, "has_full_inbox": False, "is_deliverable": True},
+}
+
+FULL_INBOX_DELIVERABLE = {
+    "input": "packed@acme.com",
+    "is_reachable": "risky",
+    "misc": {"is_disposable": False, "is_role_account": False},
+    "mx": {"accepts_mail": True, "records": ["mail.acme.com."]},
+    "smtp": {"is_catch_all": False, "has_full_inbox": True, "is_deliverable": True},
+}
+
+
+async def test_a_mailbox_the_server_confirmed_is_valid():
+    """The whole point of the change: an address the receiving server ACCEPTED, on a domain that
+    is not catch-all, reads `valid`.
+
+    Before this, nothing on the screen was ever valid. `sales@marketjoy.com` — a mailbox that
+    server accepts on a domain which rejects `zzqnotreal123@marketjoy.com` outright — wore the
+    same amber label as a guess nobody could confirm. A verdict that is always amber is not a
+    verdict, and reps stopped reading it.
+    """
+    v = _verifier(lambda req: _resp(RISKY_ROLE_DELIVERABLE))
+    out = await v.verify_one("sales@acme.com")
+    assert out.status == STATUS_VALID
+    assert out.confidence == 0.80, "below the 0.95 Reacher's own `safe` earns"
+    # The reason Reacher hesitated is kept, so the UI can still say "shared inbox".
+    assert out.signals["risky_reason"] == "role_account"
+    assert out.signals["is_deliverable"] is True
+
+
+async def test_a_fabricated_address_on_a_catch_all_domain_is_never_valid():
+    """THE SAFETY PROPERTY. Do not relax this test; it is the reason the promotion is safe.
+
+    Measured against the live verifier on 2026-09-10, `zzqqnotreal7788@google.com` and
+    `nosuchperson9x7@vercel.com` — addresses invented for the test — BOTH return
+    `is_deliverable: true`, because a catch-all server accepts every recipient. So "deliverable
+    means valid", applied on its own, certifies addresses that do not exist and sends a campaign
+    into a wall of bounces.
+
+    Catch-all is tested first and takes the address out of `risky` before the promotion can see
+    it. That ordering in `_RISKY_GRADES` is load-bearing.
+    """
+    fabricated = {
+        "input": "zzqqnotreal7788@google.com",
+        "is_reachable": "risky",
+        "misc": {"is_disposable": False, "is_role_account": False},
+        "mx": {"accepts_mail": True, "records": ["aspmx.l.google.com."]},
+        "smtp": {"is_catch_all": True, "has_full_inbox": False, "is_deliverable": True},
+    }
+    v = _verifier(lambda req: _resp(fabricated))
+    out = await v.verify_one("zzqqnotreal7788@google.com")
+    assert out.status == STATUS_CATCH_ALL
+    assert out.status != STATUS_VALID
+    assert out.is_deliverable is False, "catch-all must not read as deliverable downstream"
+
+
+async def test_a_rejected_role_account_stays_risky():
+    """Acceptance is what promotes. Without it there is nothing to promote on."""
+    v = _verifier(lambda req: _resp(RISKY_ROLE_NOT_DELIVERABLE))
+    out = await v.verify_one("sales@acme.com")
+    assert out.status == STATUS_RISKY
+    assert out.signals["risky_reason"] == "role_account"
+    assert out.confidence == 0.35
+
+
+async def test_a_deliverable_burner_is_still_risky():
+    """A throwaway domain accepting mail is what makes it useless, not a reason to trust it."""
+    v = _verifier(lambda req: _resp(DISPOSABLE_DELIVERABLE))
+    out = await v.verify_one("x@mailinator.com")
+    assert out.status == STATUS_RISKY
+    assert out.signals["risky_reason"] == "disposable"
+    assert out.confidence == 0.15, "acceptance must not even lift a burner's confidence"
+
+
+async def test_a_full_mailbox_is_not_promoted():
+    """It accepts today and bounces tomorrow — that is exactly the risk `risky` names."""
+    v = _verifier(lambda req: _resp(FULL_INBOX_DELIVERABLE))
+    out = await v.verify_one("packed@acme.com")
+    assert out.status == STATUS_RISKY
+    assert out.signals["risky_reason"] == "full_inbox"
 
 
 async def test_unknown_custom_low_confidence():

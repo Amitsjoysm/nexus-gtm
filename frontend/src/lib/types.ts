@@ -634,7 +634,9 @@ export interface RunStep {
 }
 
 /** Deliverability verdict from the email-verification provider. */
-export type EmailStatus = "valid" | "invalid" | "unknown";
+// `risky` was missing here, so `asEmailStatus` narrowed it to null and the Approvals page showed
+// NO deliverability chip at all for the one verdict a reviewer most needs to see before approving.
+export type EmailStatus = "valid" | "catch_all" | "risky" | "invalid" | "unknown";
 
 /** Citations + provenance attached to a grounded draft. */
 export interface DraftGrounding {

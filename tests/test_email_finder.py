@@ -78,7 +78,7 @@ async def test_finder_stops_on_first_valid():
     assert calls == ["jane.doe@acme.com", "jane@acme.com", "janedoe@acme.com"]
 
 
-async def test_finder_catch_all_short_circuits_to_canonical_risky():
+async def test_finder_catch_all_short_circuits_to_canonical_catch_all():
     calls = []
 
     async def verify(email):
@@ -96,7 +96,9 @@ async def test_finder_catch_all_short_circuits_to_canonical_risky():
         contact = Contact(tenant_id=tid, account_id=acc.id, full_name="Jane Doe")
         res = await VerifyingPatternEmailProvider(verify=verify).enrich(acc, contact)
     assert res.email == "jane.doe@acme.com"  # canonical guess
-    assert res.email_status == "risky"
+    # `catch_all`, not `risky`: we found nothing doubtful about this address, we found nothing
+    # about it at all — a guessed pattern on a domain that accepts every recipient.
+    assert res.email_status == "catch_all"
     assert res.email_confidence == 0.5
     assert calls == ["jane.doe@acme.com"]  # did not blast further permutations
 
