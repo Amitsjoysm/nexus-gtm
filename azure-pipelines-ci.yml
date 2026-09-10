@@ -28,9 +28,12 @@ pool:
   vmImage: ubuntu-latest
 
 # Service containers for the integration stage. Declared here, bound per-job under `services:`.
-# Versions match deploy/docker-compose.prod.yml (postgres:16) and the GitHub workflow this
-# replaces — CI must exercise the engine production actually runs, or the advisory-lock and RLS
-# behaviour it exists to prove is untested.
+# CI must exercise the engines production actually runs, or the advisory-lock and RLS behaviour
+# it exists to prove is untested:
+#   postgres:16           — deploy/cloud/azure var.pg_version, and deploy/docker-compose.prod.yml
+#   valkey/valkey:8-alpine — deploy/cloud/azure/container_apps.tf, and the same compose file.
+#                           NOT redis:7: production retired Redis for Valkey, and a queue proven
+#                           against a server production does not run proves nothing about it.
 resources:
   containers:
     - container: postgres
@@ -44,18 +47,21 @@ resources:
       options: >-
         --health-cmd "pg_isready -U nexus" --health-interval 5s
         --health-timeout 3s --health-retries 10
-    - container: redis
-      image: redis:7-alpine
+    - container: valkey
+      image: valkey/valkey:8-alpine
       ports:
         - 6379:6379
       options: >-
-        --health-cmd "redis-cli ping" --health-interval 5s
+        --health-cmd "valkey-cli ping" --health-interval 5s
         --health-timeout 3s --health-retries 10
 
 variables:
   - group: gtm-deploy
+  # The PRODUCTION interpreter (deploy/Dockerfile: python:3.11-slim), not the pyproject floor
+  # (>=3.10). This pipeline builds the image production runs, so its tests must run on the same
+  # Python — a 3.10 pass says nothing about 3.11 behaviour. Change both together.
   - name: PYTHON_VERSION
-    value: "3.10"
+    value: "3.11"
   - name: NODE_VERSION
     value: "20"
   # Set these as pipeline variables in the ADO UI (Pipelines > Edit > Variables):
@@ -190,7 +196,7 @@ stages:
         timeoutInMinutes: 45
         services:
           postgres: postgres
-          redis: redis
+          valkey: valkey
         steps:
           - checkout: self
             fetchDepth: 1
@@ -211,10 +217,16 @@ stages:
           # instrumentation production ships: `/metrics` 404'd and every counter was a silent no-op,
           # so two tests failed here that pass on the real image. CI must install at least what
           # production installs, or it is testing something that never ships.
+          #
+          # `-c constraints.txt` for the same reason, applied to VERSIONS: the image installs with
+          # it, so without it CI resolves whatever is newest on PyPI today — a dependency set
+          # production never runs (the floated-starlette break in constraints.txt's header is that
+          # failure mode). The constraints cap versions only; the dev extras still resolve.
           - bash: |
               set -euo pipefail
-              pip install --cache-dir "$(Pipeline.Workspace)/.pip" -e ".[dev,migrate,postgres,redis,metrics]"
-            displayName: Install dependencies
+              pip install --cache-dir "$(Pipeline.Workspace)/.pip" -c constraints.txt \
+                -e ".[dev,migrate,postgres,redis,metrics]"
+            displayName: Install dependencies (production pins)
 
           # Coverage instrumentation slows every test. On a PR the number is noise; on master
           # it is a trend and a gate. So PRs run bare and master pays for the signal.
@@ -248,8 +260,8 @@ stages:
               exit "$RC"
             displayName: pytest (unit)
 
-          # Real Postgres + Redis. NEXUS_TEST_* are the same variables the GitHub workflow used,
-          # so tests_integration/conftest.py needs no change.
+          # Real Postgres + Valkey (the Redis protocol — hence the REDIS_URL name). NEXUS_TEST_* are
+          # the same variables the GitHub workflow used, so tests_integration/conftest.py needs no change.
           - bash: |
               set -euo pipefail
               pytest tests_integration -p no:cacheprovider --timeout=120 -q \
@@ -257,7 +269,7 @@ stages:
             env:
               NEXUS_TEST_POSTGRES_URL: postgresql+asyncpg://nexus:nexus@localhost:5432/nexus
               NEXUS_TEST_REDIS_URL: redis://localhost:6379/0
-            displayName: pytest (integration — real Postgres + Redis)
+            displayName: pytest (integration — real Postgres + Valkey)
 
           - task: PublishTestResults@2
             condition: always()
@@ -291,6 +303,12 @@ stages:
   #
   # Tagged with the commit SHA. The CD pipeline DEPLOYS THAT EXACT TAG and never rebuilds —
   # a rebuild at deploy time ships an image that nothing in this pipeline ever scanned.
+  #
+  # SCAN BEFORE THE DEPLOYABLE TAG EXISTS. The build pushes only `candidate-<sha>`. The `<sha>`
+  # tag — the one CD's Verify stage accepts as "CI built and scanned this" — and `latest` are
+  # added to the candidate's DIGEST only after Trivy passes. This stage used to push `<sha>`
+  # first and scan second, so a failed scan still left a deployable image behind, and Verify
+  # believed it. A failed candidate stays in the registry as evidence; CD never matches it.
   # ============================================================================
   - stage: Package
     displayName: Build image (on ACR) + scan
@@ -312,7 +330,7 @@ stages:
             fetchDepth: 1
 
           - task: AzureCLI@2
-            displayName: Build + push image on ACR
+            displayName: Build + push candidate image on ACR
             inputs:
               azureSubscription: $(AZURE_SUBSCRIPTION)
               scriptType: bash
@@ -321,11 +339,10 @@ stages:
                 set -euo pipefail
                 az acr build \
                   --registry "$(ACR_NAME)" \
-                  --image "$(IMAGE_REPO):$(Build.SourceVersion)" \
-                  --image "$(IMAGE_REPO):latest" \
+                  --image "$(IMAGE_REPO):candidate-$(Build.SourceVersion)" \
                   --file deploy/Dockerfile \
                   .
-                echo "Pushed $(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(Build.SourceVersion)"
+                echo "Pushed $(ACR_NAME).azurecr.io/$(IMAGE_REPO):candidate-$(Build.SourceVersion) — not deployable until scanned."
 
           # Trivy against the pushed image. `--exit-code 1` with `--ignore-unfixed` keeps the
           # gate actionable: it fails only on CVEs you can actually do something about.
@@ -354,4 +371,40 @@ stages:
                   --exit-code 1 \
                   --no-progress \
                   --ignorefile /work/.trivyignore.yaml \
-                  "$(ACR_NAME).azurecr.io/$(IMAGE_REPO):$(Build.SourceVersion)"
+                  "$(ACR_NAME).azurecr.io/$(IMAGE_REPO):candidate-$(Build.SourceVersion)"
+
+          # PROMOTE — reached only when the scan passed. `az acr import` within the same registry
+          # adds tags to the candidate's manifest: same digest, nothing rebuilt or re-pushed, so the
+          # bytes CD deploys are the bytes Trivy scanned. Import needs importImage/action, which
+          # the service connection holds through Contributor on the production resource group
+          # that owns the registry (docs/deployment/14-AZURE-DEPLOY-GUIDE.md §12.2).
+          - task: AzureCLI@2
+            displayName: Promote the scanned image (tag <sha> + latest)
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                CANDIDATE="$(IMAGE_REPO):candidate-$(Build.SourceVersion)"
+                RELEASE="$(IMAGE_REPO):$(Build.SourceVersion)"
+                az acr import --name "$(ACR_NAME)" \
+                  --source "$(ACR_NAME).azurecr.io/${CANDIDATE}" \
+                  --image "${RELEASE}" \
+                  --image "$(IMAGE_REPO):latest" \
+                  --force
+
+                # Prove it rather than assume it: the deployable tag must point at the scanned digest.
+                SCANNED=$(az acr repository show --name "$(ACR_NAME)" --image "${CANDIDATE}" --query digest -o tsv)
+                PROMOTED=$(az acr repository show --name "$(ACR_NAME)" --image "${RELEASE}" --query digest -o tsv)
+                echo "scanned=${SCANNED} promoted=${PROMOTED}"
+                if [ -z "${SCANNED}" ] || [ "${SCANNED}" != "${PROMOTED}" ]; then
+                  echo "##[error]${RELEASE} does not point at the digest Trivy scanned; removing it so CD cannot deploy it."
+                  az acr repository untag --name "$(ACR_NAME)" --image "${RELEASE}" || true
+                  exit 1
+                fi
+                echo "Promoted ${SCANNED} as ${RELEASE} and latest."
+
+                # Tidy only: the digest keeps its <sha> tag. A leftover candidate tag harms nothing.
+                az acr repository untag --name "$(ACR_NAME)" --image "${CANDIDATE}" \
+                  || echo "##[warning]Could not remove ${CANDIDATE}; harmless, CD only matches the exact SHA tag."
