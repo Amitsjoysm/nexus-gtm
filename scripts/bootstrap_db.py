@@ -5,6 +5,7 @@ The bootstrap is state-dependent:
   * fresh database (no tables)          -> create_all + ``alembic stamp head``
   * tables but no alembic_version       -> ``alembic stamp head`` (create_all-origin DB)
   * stamped database                    -> ``alembic upgrade head`` (normal upgrade path)
+  * stamped AHEAD of this image         -> nothing, with a warning (normal after a rollback)
 
 Historical note: the "create" branch used to be *required*, because the old ``0001_initial``
 called ``Base.metadata.create_all()`` and so pre-created tables that later revisions then failed
@@ -46,6 +47,22 @@ async def _table_names() -> set[str]:
     try:
         async with engine.connect() as conn:
             return set(await conn.run_sync(lambda c: inspect(c).get_table_names()))
+    finally:
+        await engine.dispose()
+
+
+async def _db_revisions() -> set[str]:
+    """The revision(s) ``alembic_version`` names — what the database was last migrated to."""
+    from alembic.runtime.migration import MigrationContext
+
+    from nexus.core.db import get_engine
+
+    engine = get_engine()
+    try:
+        async with engine.connect() as conn:
+            return set(
+                await conn.run_sync(lambda c: MigrationContext.configure(c).get_current_heads())
+            )
     finally:
         await engine.dispose()
 
@@ -114,9 +131,42 @@ async def _run() -> None:
         print("[bootstrap] unstamped create_all database: stamping head")
         _alembic("stamp", "head")
     else:
-        print("[bootstrap] stamped database: alembic upgrade head")
-        _alembic("upgrade", "head")
+        await _upgrade()
     print("[bootstrap] done")
+
+
+async def _upgrade() -> None:
+    """``alembic upgrade head`` — unless the database is AHEAD of this image.
+
+    The CD Rollback stage redeploys the previous image, and a rollback does not revert
+    migrations. If the failed release applied one, ``alembic_version`` names a revision this
+    image's ``migrations/`` does not contain, and ``alembic upgrade head`` dies with "Can't locate
+    revision". Failing on that crash-loops the rollback against a schema it can serve: migrations
+    are additive, so an older image runs on a newer schema. So that case is reported and left
+    alone.
+
+    Only a revision this image does not KNOW is skipped. A known one is upgraded exactly as
+    before, and a migration that fails still fails the boot. An older image cannot tell a newer
+    release's revision from one on a diverged branch, so both are skipped — which is why this is a
+    loud warning, and why the Rollback stage still has to see ``/ready`` before calling it done.
+    The flip side: an image without the database's revision skips its OWN migrations too, so a
+    revision that has reached any database must never be deleted or renumbered — supersede it.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    # The same alembic.ini, so the same migrations/, that the `alembic` subprocess resolves.
+    script = ScriptDirectory.from_config(Config("alembic.ini"))
+    ahead = await _db_revisions() - {sc.revision for sc in script.walk_revisions()}
+    if ahead:
+        print(
+            "[bootstrap] WARNING: database is at a newer revision than this image; skipping "
+            f"upgrade — expected after a rollback (database: {', '.join(sorted(ahead))}; "
+            f"this image: {', '.join(script.get_heads())})"
+        )
+        return
+    print("[bootstrap] stamped database: alembic upgrade head")
+    _alembic("upgrade", "head")
 
 
 if __name__ == "__main__":

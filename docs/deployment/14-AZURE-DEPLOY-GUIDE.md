@@ -1289,7 +1289,9 @@ CD does this automatically when a production deploy fails — see the `Rollback`
 
 > **A rollback does not revert database migrations.** Migrations in this repo are additive-only, so
 > the previous image runs correctly against the newer schema. That is a property of the codebase,
-> not of Azure — verify it holds for the specific release before relying on it.
+> not of Azure — verify it holds for the specific release before relying on it. If the backed-out
+> release applied a migration, the restored app logs `database is at a newer revision than this
+> image; skipping upgrade` and starts without migrating — expected (`scripts/bootstrap_db.py`).
 
 ---
 
