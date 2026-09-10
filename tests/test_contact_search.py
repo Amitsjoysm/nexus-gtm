@@ -81,7 +81,10 @@ def test_parse_people_tolerates_prose_and_garbage():
 
 async def test_search_contact_extracts_real_names_via_llm():
     acc = Account(tenant_id="t", name="Acme", domain="acme.com")
-    hits = [_Hit("Jane Smith - VP Sales at Acme | LinkedIn", "Jane Smith, VP Sales, Acme")]
+    # A LinkedIn profile naming Acme — the URL it plainly is. A result with no URL proves nothing
+    # about where anyone works (`nexus/contacts/affiliation.py`).
+    hits = [_Hit("Jane Smith - VP Sales at Acme | LinkedIn", "Jane Smith, VP Sales, Acme",
+                 "https://www.linkedin.com/in/jane")]
     llm = _FakeLLM('[{"full_name":"Jane Smith","title":"VP Sales","seniority":"VP",'
                    '"linkedin_url":"https://linkedin.com/in/jane"}]')
     prov = SearchBackedContactSearchProvider(_FakeSearch(hits), llm)

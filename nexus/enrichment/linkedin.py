@@ -62,13 +62,15 @@ class LinkedInFinder:
             except Exception as exc:  # a flaky search must never break enrichment
                 logger.warning("linkedin search failed for %r: %r", name, exc)
                 hits = []
-            match = self._best_match(hits, tokens)
+            match = self._best_match(hits, tokens, account)
             if match:
                 return match
         return None
 
     @staticmethod
-    def _best_match(hits, tokens: list[str]) -> str | None:
+    def _best_match(hits, tokens: list[str], account: Account | None = None) -> str | None:
+        from nexus.contacts.affiliation import proves_affiliation
+
         surname = tokens[-1]
         given = tokens[0]
         for hit in hits:
@@ -83,8 +85,13 @@ class LinkedInFinder:
             hay = f"{canon} {title} {snippet}".lower()
             # Require the surname (in slug/title/snippet); for multi-token names also the given
             # name, so "…/in/john-collison" isn't matched for "Jane Collison".
-            if surname in hay and (given in hay or len(tokens) == 1):
-                return canon
+            if not (surname in hay and (given in hay or len(tokens) == 1)):
+                continue
+            # A NAME does not tell one Furqan Mustafa from another — the staging report was
+            # exactly a namesake's profile. The profile must name THIS company too.
+            if account is not None and not proves_affiliation(hit, account):
+                continue
+            return canon
         return None
 
 

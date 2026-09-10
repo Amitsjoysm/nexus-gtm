@@ -72,7 +72,9 @@ async def test_a_result_outside_the_spec_is_discarded():
 
     class _Hit:
         title = "Acme leadership"
-        snippet = "..."
+        # The team page names both people — a page that does not mention someone cannot prove
+        # they work there (`nexus/contacts/affiliation.py`), so the title filter is what drops Sam.
+        snippet = "Jane Roe, Director of Facilities. Sam Poe, Software Engineer."
         url = "https://acme.com/team"
 
     class _Search:

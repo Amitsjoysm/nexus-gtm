@@ -130,6 +130,8 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
                            getattr(account, "domain", None), exc)
             return []
 
+        from nexus.contacts.affiliation import names_person, proves_affiliation
+
         out: list[ContactCandidate] = []
         seen: set[str] = set()
         for p in people:
@@ -142,13 +144,24 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
             # a workspace using plain buyer_titles is untouched.
             if any(title_spec.values()) and not matches_title(p.get("title") or "", title_spec):
                 continue
+            # PROVEN to work here, or not a contact of this account. The model was asked who
+            # "plausibly holds these roles" in results about a NAME, and a leadership page on
+            # another company's domain titled "Leadership – Devbay" is plausible and wrong — the
+            # staging report. See `nexus/contacts/affiliation.py`.
+            proof = [h for h in hits if names_person(h, name) and proves_affiliation(h, account)]
+            if not proof:
+                logger.info(
+                    "dropping %r for %s: no result on its own site or LinkedIn names them there",
+                    name, getattr(account, "domain", None),
+                )
+                continue
             seen.add(name.lower())
             out.append(
                 ContactCandidate(
                     full_name=name,
                     title=(p.get("title") or "").strip() or None,
                     seniority=(p.get("seniority") or "").strip() or None,
-                    linkedin_url=p.get("linkedin_url") or None,
+                    linkedin_url=self._proven_profile(p.get("linkedin_url"), proof),
                     source=self.name,
                     confidence=self.confidence,
                 )
@@ -156,6 +169,24 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
             if len(out) >= limit:
                 break
         return out
+
+    @staticmethod
+    def _proven_profile(claimed: str | None, proof: list[dict]) -> str | None:
+        """The person's LinkedIn profile, only from a result that proved their employment.
+
+        A URL the model returned is kept only if the search actually returned it among the proving
+        results — never invented, never a namesake's from a result that named them but not this
+        company. Absent a claim, a proving LinkedIn profile fills it, since it is grounded already.
+        """
+        from nexus.contacts.affiliation import canonical_url
+        from nexus.enrichment.linkedin import canonical_profile_url
+
+        proven = [canonical_profile_url(h.get("url")) for h in proof]
+        proven = [u for u in proven if u]
+        if claimed:
+            want = canonical_url(canonical_profile_url(claimed) or claimed)
+            return next((u for u in proven if canonical_url(u) == want), None)
+        return proven[0] if proven else None
 
     async def _gather_hits(self, account: Account, titles: list[str], limit: int) -> list[dict]:
         company = account.name or account.domain or ""
