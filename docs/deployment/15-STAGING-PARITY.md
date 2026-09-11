@@ -63,6 +63,20 @@ No longer read, safe to delete: `NEXUS_ENRICHMENT_SEARCH_PROVIDER`, `NEXUS_CONTA
 
 ## 2. Control plane → Runtime settings
 
+Most of §1's degrading defaults can be **fixed live from here — no redeploy**, and each change takes
+effect within 30 seconds in every process (the cached provider is rebuilt; clearing an override
+restores the environment value everywhere):
+
+* **Providers** card: `llm_provider`, `contact_search_sources`, `research_provider`,
+  `email_verify_provider`, `signal_search_provider`. Each shows what it does, a warning, and a risk
+  badge; high-risk changes need a stated reason.
+* **Automation / Billing / Access** cards: personalisation provider and posts, account enrichment,
+  ICP discovery, automation, billing enforcement, cadences, CRM sync, OTP sign-up.
+* **Not changeable here, on purpose:** `search_provider` (discovery is strictly Exa in staging and
+  prod and reads nothing else), `payment_provider` (use the Payment credentials screen — switching to
+  "noop" would silently stop collecting money), `demo_signals_enabled` (fabricated signals in a real
+  inbox). The panel refuses them with the reason.
+
 | Setting | Local | Staging / prod |
 |---|---|---|
 | `account_enrich_min_interval_days` | `30` | `30` |

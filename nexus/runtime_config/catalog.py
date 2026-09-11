@@ -223,6 +223,67 @@ _SPECS: tuple[SettingSpec, ...] = (
         risk="medium", requires_restart=True,
     ),
 
+    # ---- providers: what the product runs on ------------------------------------------------------
+    #
+    # Added 2026-09-11. Each of these ships with an OFFLINE default, and staging ran on them: find
+    # contacts that found nobody, briefs with no web research, every address "unverified". None was
+    # in the panel, so fixing one meant a redeploy.
+    #
+    # Every one is read once into a cached singleton, so each has an on-change hook in
+    # `runtime_config/service.py` that drops those caches — without it the entry would save,
+    # report "in effect" and change nothing until a restart. Pickers offer REAL values only: the
+    # stub LLM and "exa" for signals are left out on purpose, not by accident.
+    SettingSpec(
+        key="llm_provider", label="LLM provider", group="Providers", kind="str",
+        effect="Which model provider writes every email draft, call script, research brief and "
+               "summary.",
+        warning="Leave on 'auto' unless you have a reason. 'auto' is the ONLY choice that uses Groq "
+                "keys added under Provider keys; 'groq', 'anthropic' and 'openai_compat' need their "
+                "key in the deployment environment, and without it every completion falls through "
+                "to the offline stub — whose fluent, canned text is then sent to real prospects "
+                "with nothing reporting a problem.",
+        risk="high", options=("auto", "anthropic", "groq", "openai_compat"),
+    ),
+    SettingSpec(
+        key="contact_search_sources", label="Contact discovery source", group="Providers",
+        kind="str",
+        effect="Where \"Find contacts\" looks for people. 'search' queries Exa and keeps only people "
+               "proven to work at the account (its own site, or LinkedIn naming it).",
+        warning="'stub' is the offline test double and the SHIPPED DEFAULT: it returns role "
+                "placeholders that sourcing discards, so Find contacts finds nobody on any account. "
+                "If a deployment 'finds no contacts', check this first.",
+        risk="high", options=("search", "stub"),
+    ),
+    SettingSpec(
+        key="research_provider", label="Research brief source", group="Providers", kind="str",
+        effect="Where the account research brief and \"Ask about this account\" get live facts. "
+               "'search' runs an Exa search and summarises what it finds.",
+        warning="'stub' turns web research off: briefs and answers are written from stored data "
+                "only, and read just as confidently. It is the shipped default.",
+        risk="medium", options=("search", "stub"),
+    ),
+    SettingSpec(
+        key="email_verify_provider", label="Email verification", group="Providers", kind="str",
+        effect="How found addresses are checked. 'reacher' asks the receiving mail server about the "
+               "mailbox; 'dns' only checks the domain can receive mail; 'reacher,dns' tries Reacher "
+               "and falls back to DNS when it is unreachable.",
+        warning="'dns' alone never confirms a mailbox, so no address can ever read valid. Reacher "
+                "needs NEXUS_EMAIL_VERIFY_URL pointing at a running instance on a SEPARATE host — "
+                "probing from the app's own IP gets it blocklisted.",
+        risk="medium", options=("reacher,dns", "reacher", "dns"),
+    ),
+    SettingSpec(
+        key="signal_search_provider", label="Signal search provider", group="Providers",
+        kind="str",
+        effect="Which index the signal dork search queries for funding, hiring and launch news. "
+               "Never Exa — empty means Firecrawl. News, RSS, job boards and EDGAR are unaffected.",
+        warning="A provider without a working key degrades to keyless DuckDuckGo, which is paced "
+                "and starts refusing after about ten rapid queries: signals keep coming from the "
+                "other sources but lose the dork search, their strongest one. Check this provider's "
+                "key under Provider keys before switching — a 402 there means out of credits.",
+        risk="medium", options=("", "firecrawl", "serper", "brave", "duckduckgo"),
+    ),
+
     # ---- search cost -----------------------------------------------------------------------------
     #
     # There used to be four per-task search-provider pickers here (enrichment, contact discovery,
@@ -296,6 +357,15 @@ FORBIDDEN: frozenset[str] = frozenset({
     "source_db_dsn_enc_key",
     "stripe_secret_key",
     "stripe_webhook_secret",
+    # Withheld 2026-09-11, and named so a request for them is told why:
+    # * search_provider — in staging and prod, discovery is strictly Exa (`exa_search`) and reads
+    #   nothing else. A picker would save, report "in effect" and change nothing. Platform health
+    #   shows the routing that actually runs.
+    # * payment_provider — switching to "noop" would silently stop collecting money, and money fails
+    #   silently: it looks exactly like a quiet month. The Payment credentials screen governs it,
+    #   with activation gated on a verification that proves WHICH Stripe account is live.
+    "search_provider",
+    "payment_provider",
 })
 
 

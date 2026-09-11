@@ -614,8 +614,11 @@ class DorkedSearchSource(SignalSource):
 
     def __init__(self, search=None, *, max_queries: int = 4, per_query: int = 4,
                  recency_days: int = 120, max_signals: int = 6, pace_s: float = 0.0) -> None:
-        # Injectable so the whole thing runs offline against canned hits.
+        # Injectable so the whole thing runs offline against canned hits. An injected provider is
+        # never re-resolved; a resolved one is rebuilt when `signal_search_provider` changes.
         self._search = search
+        self._search_injected = search is not None
+        self._search_choice: str | None = None
         # The budget that matters: each dork is one billed search call, so this multiplies the cost
         # of every account refresh. Four is enough for funding + hiring + exec + one event class.
         self._max_queries = max_queries
@@ -666,20 +669,29 @@ class DorkedSearchSource(SignalSource):
         those down silently: the base ``find_similar`` returns ``[]``, so lookalikes would report
         "no results" with nothing in the logs to explain why.
         """
-        if self._search is None:
-            from nexus.integrations.search.provider import (
-                build_search_provider,
-                explicit_search_provider,
-                signal_search_choice,
-            )
+        if self._search_injected:
+            return self._search
+        from nexus.integrations.search.provider import (
+            build_search_provider,
+            explicit_search_provider,
+            signal_search_choice,
+        )
 
-            # NEVER EXA (decided 2026-09-10: signals and the daily scan do not use it). Empty used to
-            # mean "the global provider", which is Exa, so a blank setting quietly spent Exa credits
-            # on every dork; `signal_search_choice` maps empty and "exa" to Firecrawl. A provider a
-            # test installed explicitly still wins, as it does in every resolver.
-            self._search = explicit_search_provider() or build_search_provider(
-                signal_search_choice()
-            )
+        # A provider a test installed explicitly still wins, as it does in every resolver.
+        explicit = explicit_search_provider()
+        if explicit is not None:
+            return explicit
+        # NEVER EXA (decided 2026-09-10: signals and the daily scan do not use it). Empty used to
+        # mean "the global provider", which is Exa, so a blank setting quietly spent Exa credits on
+        # every dork; `signal_search_choice` maps empty and "exa" to Firecrawl.
+        #
+        # Re-read on every call, rebuilt only when the choice MOVED. The ingestion service is built
+        # once and keeps its sources, so a source that cached its provider forever would ignore a
+        # change made in the Control plane until a restart. Reading the setting is a dict lookup.
+        choice = signal_search_choice()
+        if self._search is None or self._search_choice != choice:
+            self._search = build_search_provider(choice)
+            self._search_choice = choice
         return self._search
 
     async def _run(self, query: str, include: tuple, exclude: tuple) -> list[dict] | None:

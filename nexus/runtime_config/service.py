@@ -70,6 +70,76 @@ _EXTERNAL_READERS = {"admin_ip_allowlist": _get_allowlist}
 _EXTERNAL_VALIDATORS = {"admin_ip_allowlist": _validate_allowlist}
 
 
+#: Keys this process applied from a stored row. One that later has NO row was cleared — possibly by
+#: ANOTHER process — and is put back to its environment value here too; see `apply_overrides`.
+_overridden_here: set[str] = set()
+
+
+def _reset_providers() -> None:
+    """Drop every cached provider so the next use rebuilds from the settings just changed.
+
+    The LLM chain, email verifier, research provider, account enricher, registry and agent runtime
+    are each built once and cached, and several capture another at construction — the registry holds
+    a research provider and a contact searcher, each holding an LLM. Dropping them together is the
+    only way a change to any one input reaches all of them. Rebuilding is lazy and cheap; a reset
+    that fails is logged and never raised, because a settings change must not take a process down.
+    """
+    from nexus.agents.llm import set_llm_provider
+    from nexus.agents.runtime import reset_agent_runtime
+    from nexus.enrichment.account import set_account_enricher
+    from nexus.integrations.registry import set_registry
+    from nexus.research.provider import set_research_provider
+    from nexus.verification.provider import set_email_verifier
+
+    for reset in (
+        lambda: set_llm_provider(None),
+        reset_agent_runtime,
+        lambda: set_account_enricher(None),
+        lambda: set_registry(None),
+        lambda: set_research_provider(None),
+        lambda: set_email_verifier(None),
+    ):
+        try:
+            reset()
+        except Exception:
+            logger.warning("could not reset a cached provider", exc_info=True)
+
+
+#: Settings read ONCE into a cached object. Changing one must drop the cache, or the panel reports it
+#: "in effect" while nothing changes until a restart — the trap this catalog exists to prevent.
+#: `signal_search_provider` is absent on purpose: the dork source re-reads it on every crawl.
+_ON_CHANGE = {
+    key: _reset_providers
+    for key in ("llm_provider", "contact_search_sources", "research_provider",
+                "email_verify_provider")
+}
+
+
+def _apply_value(settings, key: str, typed) -> None:
+    """Set one Settings field, firing its on-change hook only when the value actually moved.
+
+    The sweep re-applies every override every 30s; rebuilding on each pass would throw away the
+    registry's cache and the LLM chain's sticky key rotation for nothing.
+    """
+    old = getattr(settings, key, None)
+    setattr(settings, key, typed)
+    if old != typed:
+        hook = _ON_CHANGE.get(key)
+        if hook is not None:
+            hook()
+
+
+def _environment_value(key: str):
+    """What this setting is WITHOUT any override: a fresh read of the environment.
+
+    A fresh `Settings()` rather than the live object, which is the mutated singleton and no longer
+    remembers what the environment said.
+    """
+    from nexus.core.config import Settings
+
+    return getattr(Settings(), key)
+
+
 def _spec(key: str):
     if key in FORBIDDEN:
         # A distinct message from "unknown". An operator hunting for a setting they know exists
@@ -125,10 +195,26 @@ async def apply_overrides() -> dict[str, object]:
                 # `api/deps_ip.py` for why the IP allowlist is one of these.
                 _EXTERNAL_SINKS[key](typed)
             else:
-                setattr(settings, key, typed)
+                _apply_value(settings, key, typed)
+                _overridden_here.add(key)
             applied[key] = typed
         except Exception:
             logger.warning("runtime override for %s could not be applied", key, exc_info=True)
+
+    # Overrides CLEARED since this process applied them — by the panel in another process, most
+    # often: `clear_override` runs in one API worker, and the worker and the other API process only
+    # learn of it here. They used to keep the old value until a restart, whatever the comment on
+    # `clear_override` said about the sweep converging it. Only keys this process itself overrode
+    # are touched, so a value set any other way (a test's monkeypatch, an operator's shell) is left
+    # alone.
+    for key in list(_overridden_here - set(raw)):
+        _overridden_here.discard(key)
+        if key not in CATALOG or key in _EXTERNAL_SINKS:
+            continue
+        try:
+            _apply_value(settings, key, _environment_value(key))
+        except Exception:
+            logger.warning("could not restore %s to its environment value", key, exc_info=True)
     return applied
 
 
@@ -171,17 +257,22 @@ async def set_override(key: str, raw_value, *, note: str = "", user_id: str = ""
     if key in _EXTERNAL_SINKS:
         _EXTERNAL_SINKS[key](typed)
     else:
-        setattr(get_settings(), key, typed)
+        # Through the on-change hook, so a provider setting rebuilds its cached provider now rather
+        # than reading "in effect" while the old one keeps running until a restart.
+        _apply_value(get_settings(), key, typed)
+        _overridden_here.add(key)
     return typed
 
 
 async def clear_override(key: str) -> bool:
-    """Drop the override so the environment value applies again.
+    """Drop the override so the environment value applies again — in this process NOW, and in
+    every other process on its next sweep.
 
-    Deliberately does NOT restore the environment value into the live object here — this process
-    would revert on the next TTL sweep anyway, and reading the original value back out of a mutated
-    singleton is not reliable. `apply_overrides` runs from a fresh `Settings()` view on the next
-    process start; between now and then the TTL sweep is what converges everything.
+    This used to leave the live value alone, on the claim that "the TTL sweep is what converges
+    everything". It did not: the sweep only ever APPLIED stored rows, so a cleared override stayed in
+    force everywhere until a restart. The environment value is read from a fresh `Settings()` — not
+    from the live object, which is the mutated singleton and no longer remembers it — and the other
+    processes restore it in `apply_overrides`.
     """
     spec = _spec(key)
     async with get_platform_sessionmaker()() as s:
@@ -192,12 +283,19 @@ async def clear_override(key: str) -> bool:
             return False
         await s.delete(row)
         await s.commit()
+    _overridden_here.discard(spec.key)
     if spec.key in _EXTERNAL_SINKS:
-        # A `Settings` field reverts on the next TTL sweep from a fresh read; an external sink has
-        # no environment value to fall back to, so it has to be reset explicitly. Leaving a stale
-        # allowlist installed after clearing it would keep the panel locked to an address the
-        # operator believes they just removed.
+        # An external sink has no environment value to fall back to, so it is reset explicitly.
+        # Leaving a stale allowlist installed after clearing it would keep the panel locked to an
+        # address the operator believes they just removed.
         _EXTERNAL_SINKS[spec.key]("")
+    else:
+        try:
+            from nexus.core.config import get_settings
+
+            _apply_value(get_settings(), spec.key, _environment_value(spec.key))
+        except Exception:
+            logger.warning("could not restore %s to its environment value", spec.key, exc_info=True)
     return True
 
 

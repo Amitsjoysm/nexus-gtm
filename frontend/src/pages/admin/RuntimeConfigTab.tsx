@@ -144,7 +144,9 @@ function SettingRow({ row, onChanged }: { row: RuntimeSetting; onChanged: () => 
           <>
             {row.options.length > 0 ? (
               <Select value={draft} onChange={(e) => setDraft(e.target.value)}
-                      options={row.options.map((o) => ({ value: o, label: o }))} />
+                      // An empty option means "the default", and rendered verbatim it was a blank
+                      // line an operator could not read. Each setting's `effect` names the default.
+                      options={row.options.map((o) => ({ value: o, label: o || "(default)" }))} />
             ) : (
               <Input
                 type="number"
