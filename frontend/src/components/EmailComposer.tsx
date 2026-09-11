@@ -88,12 +88,15 @@ export function EmailComposer({
   const [sentTo, setSentTo] = useState<string | null>(null);
   /** Set when the server refused an invalid address; the retry carries the acknowledgement. */
   const [needsRiskyConfirm, setNeedsRiskyConfirm] = useState(false);
+  /** When the draft on screen was written — shown so a reused one is visibly today's. */
+  const [draftedAt, setDraftedAt] = useState<string | null>(null);
 
   async function generate() {
     setLoading(true);
     setError(null);
     setSentTo(null);
     setNeedsRiskyConfirm(false);
+    setDraftedAt(null);
     try {
       const res = await api.runAgent("messaging", accountId, { contact_id: contactId });
       const out = res.output ?? {};
@@ -107,6 +110,7 @@ export function EmailComposer({
       }
       setSubject(typeof out.subject === "string" ? out.subject : "");
       setBody(typeof out.body === "string" ? out.body : "");
+      setDraftedAt(new Date().toISOString());
     } catch (err) {
       setError(explainFailure(err));
     } finally {
@@ -114,8 +118,41 @@ export function EmailComposer({
     }
   }
 
+  /**
+   * Opening the composer used to write — and bill — a brand-new draft every time. The draft was
+   * saved on the server all along, so today's is reused. ONLY today's: it proposes specific
+   * meeting dates, and one from yesterday could one-click-send days that have passed. Anything
+   * else (none saved, stale, a failed write, a lookup that errored) falls through to writing one.
+   */
+  async function openDraft() {
+    setLoading(true);
+    setError(null);
+    setSentTo(null);
+    setNeedsRiskyConfirm(false);
+    try {
+      const saved = (await api.latestAgentRuns(accountId, contactId)).messaging;
+      const out = saved?.output ?? {};
+      if (
+        saved?.fresh &&
+        !out.error &&
+        typeof out.subject === "string" &&
+        typeof out.body === "string" &&
+        out.body.trim()
+      ) {
+        setSubject(out.subject);
+        setBody(out.body);
+        setDraftedAt(saved.created_at);
+        setLoading(false);
+        return;
+      }
+    } catch {
+      /* a lookup we could not do must not stop a draft being written */
+    }
+    await generate();
+  }
+
   useEffect(() => {
-    generate();
+    void openDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId]);
 
@@ -220,6 +257,13 @@ export function EmailComposer({
       )}
 
       <div className={styles.actions}>
+        {draftedAt && (
+          <span className={styles.when}>
+            Drafted{" "}
+            {new Date(draftedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}{" "}
+            today
+          </span>
+        )}
         <Button variant="secondary" iconLeft={<Icons.RefreshIcon />} onClick={generate}>
           Regenerate
         </Button>

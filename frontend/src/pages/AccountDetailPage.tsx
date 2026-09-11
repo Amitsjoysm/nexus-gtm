@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -70,6 +70,21 @@ interface AgentState {
   loading: boolean;
   result: AgentRunResponse | null;
   error: string | null;
+  /** When the result on screen was generated — set for a fresh run and for a saved one. */
+  generatedAt?: string | null;
+  /** Generated today. Only matters for dated content (a draft's proposed meeting times). */
+  fresh?: boolean;
+}
+
+/** The AI Actions whose last result is shown again when the page is opened. */
+const RETAINED_AGENTS = ["research", "messaging", "contact_rec", "qa"] as const;
+
+/** "today at 12:37" or "on 10 Sep, 12:37" — short enough for a card, exact enough to trust. */
+function formatGenerated(iso: string): string {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === new Date().toDateString()) return `today at ${time}`;
+  return `on ${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
 }
 
 export function AccountDetailPage() {
@@ -215,6 +230,45 @@ export function AccountDetailPage() {
     [id, windowDays],
   );
 
+  // Show each AI Action's last result again. Every run was saved on the server all along, and the
+  // page threw it away on every load — Marketjoy held two completed briefs behind an empty card,
+  // and "Generate brief" bought a third. Reset on account change FIRST: this component is reused
+  // across route params, so without it one account's brief would sit on the next account's page.
+  useEffect(() => {
+    setAgents({});
+    if (!id) return;
+    const ctrl = new AbortController();
+    api
+      .latestAgentRuns(id, undefined, ctrl.signal)
+      .then((saved) => {
+        setAgents((current) => {
+          const next = { ...current };
+          for (const name of RETAINED_AGENTS) {
+            const run = saved[name];
+            // Never overwrite a result generated while this was loading.
+            if (!run || current[name]?.result || current[name]?.loading) continue;
+            const output =
+              name === "qa" ? { ...run.output, question: run.input.question } : run.output;
+            next[name] = {
+              loading: false,
+              error: null,
+              generatedAt: run.created_at,
+              fresh: run.fresh,
+              result: {
+                agent: run.agent, status: "completed", output, error: null,
+                latency_ms: 0, tokens: 0, run_id: null,
+              },
+            };
+          }
+          return next;
+        });
+      })
+      // A lookup that fails leaves the cards empty, exactly as before — never a broken page.
+      .catch(() => undefined);
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   async function runAgent(name: string, inputs: Record<string, unknown> = {}) {
     setAgents((s) => ({
       ...s,
@@ -225,7 +279,16 @@ export function AccountDetailPage() {
       if (res.status !== "completed" || res.error) {
         throw new ApiError(0, res.error || "The agent could not complete.");
       }
-      setAgents((s) => ({ ...s, [name]: { loading: false, result: res, error: null } }));
+      // An answer is only useful beside the question it answers, so the question travels with it.
+      const result =
+        name === "qa" ? { ...res, output: { ...res.output, question: inputs.question } } : res;
+      setAgents((s) => ({
+        ...s,
+        [name]: {
+          loading: false, result, error: null,
+          generatedAt: new Date().toISOString(), fresh: true,
+        },
+      }));
     } catch (err) {
       const msg = err instanceof ApiError ? err.detail : "Please try again.";
       setAgents((s) => ({ ...s, [name]: { loading: false, result: null, error: msg } }));
@@ -907,6 +970,7 @@ export function AccountDetailPage() {
               state={agents.messaging}
               runLabel="Draft message"
               onRun={() => runAgent("messaging")}
+              dated
             >
               {(out) => <MessagingResult output={out} onCopy={copyToClipboard} />}
             </ActionCard>
@@ -955,6 +1019,11 @@ export function AccountDetailPage() {
               <AgentResult state={agents.qa}>
                 {(out) => <QAResult output={out} />}
               </AgentResult>
+              {agents.qa?.result && agents.qa.generatedAt && !agents.qa.loading && (
+                <span className={styles.generatedAt}>
+                  Answered {formatGenerated(agents.qa.generatedAt)}
+                </span>
+              )}
             </Card>
           </div>
         </div>
@@ -1062,6 +1131,7 @@ function ActionCard({
   runLabel,
   onRun,
   state,
+  dated = false,
   children,
 }: {
   icon: React.ReactNode;
@@ -1070,9 +1140,12 @@ function ActionCard({
   runLabel: string;
   onRun: () => void;
   state: AgentState | undefined;
+  /** The result proposes specific dates (a draft's meeting times), so an old one is flagged. */
+  dated?: boolean;
   children: (output: Record<string, unknown>) => React.ReactNode;
 }) {
   const hasResult = !!state?.result;
+  const stale = dated && hasResult && state?.fresh === false;
   return (
     <Card padding="lg" className={styles.actionCard}>
       <div className={styles.actionHead}>
@@ -1093,7 +1166,16 @@ function ActionCard({
         >
           {hasResult ? "Regenerate" : runLabel}
         </Button>
+        {hasResult && state?.generatedAt && !state.loading && (
+          <span className={styles.generatedAt}>Generated {formatGenerated(state.generatedAt)}</span>
+        )}
       </div>
+      {stale && (
+        <p className={styles.staleNote} role="status">
+          Written before today — the meeting times it proposes may have passed. Regenerate before
+          you send it.
+        </p>
+      )}
       <AgentResult state={state}>{children}</AgentResult>
     </Card>
   );
@@ -1448,6 +1530,8 @@ const QA_CONFIDENCE_META: Record<
 
 function QAResult({ output }: { output: Record<string, unknown> }) {
   const answer = typeof output.answer === "string" ? output.answer : "";
+  // Carried with the answer — a restored answer with no question above it is a riddle.
+  const question = typeof output.question === "string" ? output.question.trim() : "";
   const grounded = typeof output.grounded_on === "number" ? output.grounded_on : 0;
   const confidence =
     typeof output.confidence === "string" ? QA_CONFIDENCE_META[output.confidence] : undefined;
@@ -1457,6 +1541,7 @@ function QAResult({ output }: { output: Record<string, unknown> }) {
   if (!answer) return null;
   return (
     <div className={styles.resultStack}>
+      {question && <p className={styles.askedQuestion}>“{question}”</p>}
       {confidence && (
         <Badge tone={confidence.tone} dot>
           {confidence.label}

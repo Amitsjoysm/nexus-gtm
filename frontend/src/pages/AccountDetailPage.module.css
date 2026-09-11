@@ -305,6 +305,31 @@
   font-size: var(--text-xs);
   color: var(--text-subtle);
 }
+/* When a result on screen was generated. A saved result comes back when the page reopens, so the
+   rep needs to see how old it is at a glance rather than assume it was written just now. */
+.generatedAt {
+  display: inline-block;
+  margin-left: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+/* A saved draft from before today: its proposed meeting times may have passed. */
+.staleNote {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--warning-quiet, var(--surface-2));
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+}
+/* The question a restored answer was given for. */
+.askedQuestion {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-style: italic;
+  color: var(--text-muted);
+}
 .recList {
   display: flex;
   flex-direction: column;

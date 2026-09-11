@@ -82,6 +82,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-3);
+}
+/* When the script was written. Reused only on that day, so the rep can see it is today's. */
+.scriptWhen {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
 }
 .scriptHead h4,
 .logBlock h4 {

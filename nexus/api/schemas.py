@@ -328,6 +328,8 @@ class CallScriptOut(BaseModel):
     objections: list[dict] = Field(default_factory=list)
     cta: str = ""
     voicemail: str = ""
+    #: When this script was written. The console shows it, and a script is reused only on that day.
+    generated_at: str | None = None
 
 
 class DispositionIn(BaseModel):

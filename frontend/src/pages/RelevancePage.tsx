@@ -20,6 +20,7 @@ import { ApiError } from "@/lib/api";
 import { JOB_LEVELS } from "@/lib/types";
 import type {
   IcpDefinition,
+  LastWebsiteAnalysis,
   LearnedWeights,
   RelevanceProfile,
   RelevanceProfileInput,
@@ -173,6 +174,20 @@ export function RelevancePage() {
   // ---- AI: draft the ICP from a website + suggest buyer titles ----
   const [website, setWebsite] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
+  // The last analysis that found something. It used to live only in the unsaved form: leave the
+  // page before Save and it was gone, and "Generate ICP" bought it again. Now it is offered back.
+  const lastAnalysis = useApi<LastWebsiteAnalysis>((signal) => api.lastWebsiteAnalysis(signal), []);
+  useEffect(() => {
+    const url = lastAnalysis.data?.url;
+    if (url) setWebsite((w) => w || url);
+  }, [lastAnalysis.data]);
+
+  function reapplyLastAnalysis() {
+    const saved = lastAnalysis.data?.draft;
+    if (!saved) return;
+    applyDraftFromProfile(saved);
+    toast.success("Draft re-applied", "Review it below, then Save changes. Nothing was re-run.");
+  }
   const [suggesting, setSuggesting] = useState(false);
   const [titleSuggestions, setTitleSuggestions] = useState<TitleRecommendation[]>([]);
 
@@ -218,6 +233,7 @@ export function RelevancePage() {
       const hasData = Boolean(drafted.icp?.industries?.length || drafted.product_context?.trim());
       applyDraftFromProfile(drafted);
       if (hasData) {
+        lastAnalysis.refetch();
         toast.success("Draft ICP generated", "Review and edit below, then Save changes.");
       } else {
         toast.toast({
@@ -399,6 +415,27 @@ export function RelevancePage() {
                       Generate ICP
                     </Button>
                   </div>
+                  {lastAnalysis.data?.draft && lastAnalysis.data.analyzed_at && (
+                    <div className={styles.lastAnalysis}>
+                      <span>
+                        Last analysed <strong>{lastAnalysis.data.url}</strong>{" "}
+                        {new Date(lastAnalysis.data.analyzed_at).toLocaleString([], {
+                          day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
+                        })}
+                        .
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        iconLeft={<Icons.RefreshIcon />}
+                        onClick={reapplyLastAnalysis}
+                        disabled={analyzing}
+                      >
+                        Re-apply this draft
+                      </Button>
+                    </div>
+                  )}
                 </Card>
               )}
               <Card padding="lg">

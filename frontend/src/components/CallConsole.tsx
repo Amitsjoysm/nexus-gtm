@@ -87,10 +87,12 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
 
   const isLive = telephony?.mode === "live";
 
-  async function generate() {
+  /** Load today's script, generating one only if there is none. `refresh` is the Regenerate
+   *  button — the only path that always writes a new script (and costs a completion). */
+  async function generate(refresh = false) {
     setScriptBusy(true);
     try {
-      setScript(await api.generateCallScript(task.id));
+      setScript(await api.generateCallScript(task.id, { refresh }));
     } catch (err) {
       toast.error("Couldn't generate script", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
@@ -254,7 +256,22 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
       <div className={styles.scriptBlock}>
         <div className={styles.scriptHead}>
           <h4>AI call script</h4>
-          <Button size="sm" variant="secondary" loading={scriptBusy} onClick={generate}>
+          {script?.generated_at && (
+            <span className={styles.scriptWhen}>
+              Written{" "}
+              {new Date(script.generated_at).toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+              })}{" "}
+              today
+            </span>
+          )}
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={scriptBusy}
+            onClick={() => generate(Boolean(script))}
+          >
             {script ? "Regenerate" : "Generate script"}
           </Button>
         </div>

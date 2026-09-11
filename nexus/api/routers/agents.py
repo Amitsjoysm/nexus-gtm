@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import AgentRunRequest, AgentRunResponse
@@ -32,6 +33,73 @@ _DEFAULT_AGENT_CAPABILITY = "ai.chat_turn"
 @router.get("", response_model=list[str])
 async def list_agents(_: Principal = Depends(require(Permission.run_agents))) -> list[str]:
     return available_agents()
+
+
+class LatestRunOut(BaseModel):
+    """The most recent COMPLETED run of one agent — what the page shows instead of an empty card."""
+
+    agent: str
+    input: dict = Field(default_factory=dict)
+    output: dict = Field(default_factory=dict)
+    created_at: str
+    #: Generated today (UTC). Drafts and call scripts propose specific meeting dates computed on
+    #: the day they were written; one from yesterday may name days that have passed, so the
+    #: composer regenerates rather than reuses it. A brief carries no dates and ignores this.
+    fresh: bool
+
+
+#: How far back to look. Bounded, because the latest-per-agent is found by scanning rather than by a
+#: JSON-path query: SQLite and Postgres disagree on JSON syntax, and a filter on `input.contact_id`
+#: that raised on one of them would break the page on every load.
+_LATEST_SCAN = 200
+
+
+@router.get("/runs/latest", response_model=dict[str, LatestRunOut])
+async def latest_runs(
+    account_id: str,
+    contact_id: str | None = None,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.run_agents)),
+) -> dict[str, LatestRunOut]:
+    """The latest completed result of each agent for this account — or for one contact at it.
+
+    Every run was already SAVED (`AgentRun` holds the full output) and nothing read one back, so a
+    brief the customer paid for vanished on reload and "Generate brief" bought it again. Measured:
+    Marketjoy held two completed briefs while its page showed an empty card.
+
+    Account-level and contact-level results are kept apart: with `contact_id`, only runs made for
+    that contact (the composer's drafts); without it, only runs made for the account as a whole —
+    a draft written to one person is never shown as the account's, or as another person's.
+    A failed run is never offered: a failure newer than a good brief must not replace it on screen.
+    """
+    from nexus.core.db import utcnow
+    from nexus.models.intelligence import AgentRun
+
+    if await ts.get(Account, account_id) is None:
+        # Tenant-scoped lookup, so another workspace's account is simply not found.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+
+    stmt = (
+        ts.select(AgentRun, AgentRun.account_id == account_id, AgentRun.status == "completed")
+        .order_by(AgentRun.created_at.desc())
+        .limit(_LATEST_SCAN)
+    )
+    today = utcnow().date()
+    out: dict[str, LatestRunOut] = {}
+    for run in (await ts.session.scalars(stmt)).all():
+        if run.agent in out:
+            continue
+        run_contact = (run.input or {}).get("contact_id")
+        if (contact_id or None) != (run_contact or None):
+            continue
+        out[run.agent] = LatestRunOut(
+            agent=run.agent,
+            input=run.input or {},
+            output=run.output or {},
+            created_at=run.created_at.isoformat(),
+            fresh=run.created_at.date() == today,
+        )
+    return out
 
 
 @router.post("/{agent_name}/run", response_model=AgentRunResponse)

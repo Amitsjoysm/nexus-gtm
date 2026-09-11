@@ -362,6 +362,26 @@ function StepTimeline({ steps }: { steps: RunStep[] }) {
   );
 }
 
+/**
+ * One output value, short enough for the collapsed summary line.
+ *
+ * A nested object used to go through `String(v)`, which is "[object Object]" — so a discovery step
+ * read "counts: [object Object]" where it meant "own 1, new 0". A small flat object is spelled out;
+ * anything deeper is summarised by size, and the full value is always in the JSON below.
+ */
+function summarizeValue(v: unknown): string {
+  if (Array.isArray(v)) return `${v.length}`;
+  if (v !== null && typeof v === "object") {
+    const fields = Object.entries(v as Record<string, unknown>);
+    const flat = fields.every(([, x]) => x === null || typeof x !== "object");
+    if (flat && fields.length > 0 && fields.length <= 4) {
+      return fields.map(([k, x]) => `${k} ${String(x)}`).join(", ").slice(0, 40);
+    }
+    return `${fields.length} field${fields.length === 1 ? "" : "s"}`;
+  }
+  return String(v).slice(0, 40);
+}
+
 /** Each AI run's own output, shown separately (collapsed) from the merged blackboard. */
 function StepOutput({ output }: { output: Record<string, unknown> }) {
   const entries = Object.entries(output ?? {}).filter(
@@ -369,7 +389,7 @@ function StepOutput({ output }: { output: Record<string, unknown> }) {
   );
   if (entries.length === 0) return null;
   const summary = entries
-    .map(([k, v]) => `${k}: ${Array.isArray(v) ? `${v.length}` : String(v).slice(0, 40)}`)
+    .map(([k, v]) => `${k}: ${summarizeValue(v)}`)
     .slice(0, 3)
     .join(" · ");
   return (

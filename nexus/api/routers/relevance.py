@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
@@ -177,4 +178,62 @@ async def analyze_website(
     draft = await analyze_website_to_icp(
         body.url, search=get_registry().search, llm=get_llm_provider()
     )
-    return RelevanceProfileIn(**draft)
+    result = RelevanceProfileIn(**draft)
+    # Remembered, so leaving the page before "Save" no longer throws a paid analysis away and
+    # re-running it no longer buys it twice. Recorded as an `AgentRun` — the table that already
+    # holds one row per AI execution — so it needs no migration. Only an analysis that FOUND
+    # something is recorded: a blocked site or a rate-limited model returning an empty draft must not
+    # hide the analysis that worked, which would re-create exactly the problem this solves.
+    if _found_something(result):
+        from nexus.models.intelligence import AgentRun
+
+        ts.add(AgentRun(
+            tenant_id=ts.tenant_id, agent=WEBSITE_ANALYSIS_AGENT, account_id=None,
+            status="completed", input={"url": body.url}, output=result.model_dump(),
+        ))
+        await ts.flush()
+    return result
+
+
+#: The `AgentRun.agent` value a website analysis is recorded under.
+WEBSITE_ANALYSIS_AGENT = "website_icp"
+
+
+def _found_something(draft: RelevanceProfileIn) -> bool:
+    icp = draft.icp or {}
+    return bool(
+        icp.get("industries") or icp.get("buyer_titles") or draft.value_props
+        or (draft.product_context or "").strip()
+    )
+
+
+class LastAnalysisOut(BaseModel):
+    """The last website analysis that found something, or all-null when there has been none."""
+
+    url: str | None = None
+    draft: RelevanceProfileIn | None = None
+    analyzed_at: str | None = None
+
+
+@router.get("/last-analysis", response_model=LastAnalysisOut)
+async def last_website_analysis(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.run_agents)),
+) -> LastAnalysisOut:
+    """What "Draft from website" found last time — so the page can offer it back for free."""
+    from nexus.models.intelligence import AgentRun
+
+    stmt = (
+        ts.select(AgentRun, AgentRun.agent == WEBSITE_ANALYSIS_AGENT,
+                  AgentRun.status == "completed")
+        .order_by(AgentRun.created_at.desc())
+        .limit(1)
+    )
+    run = (await ts.session.scalars(stmt)).first()
+    if run is None:
+        return LastAnalysisOut()
+    return LastAnalysisOut(
+        url=(run.input or {}).get("url"),
+        draft=RelevanceProfileIn(**(run.output or {})),
+        analyzed_at=run.created_at.isoformat(),
+    )

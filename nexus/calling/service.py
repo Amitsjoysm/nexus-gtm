@@ -28,6 +28,16 @@ from nexus.models.calling import (
 )
 
 
+def _written_today(stamp: str | None, now: datetime) -> bool:
+    """Whether an ISO timestamp falls on today's UTC date. Unparseable or missing means no."""
+    if not stamp:
+        return False
+    try:
+        return datetime.fromisoformat(stamp).date() == now.date()
+    except (TypeError, ValueError):
+        return False
+
+
 class CallQueueService:
     async def enqueue(
         self,
@@ -88,15 +98,30 @@ class CallQueueService:
         stmt = ts.select(CallTask, *where).order_by(CallTask.priority.desc()).limit(limit)
         return list((await ts.session.scalars(stmt)).all())
 
-    async def generate_script(self, ts: TenantSession, task: CallTask) -> dict:
-        """Run the call-script agent for the task's account/contact and cache it on the task."""
+    async def generate_script(
+        self, ts: TenantSession, task: CallTask, *, refresh: bool = False
+    ) -> dict:
+        """The call script for this task: today's cached one, or a freshly generated one.
+
+        The cache was WRITTEN on every generation and READ by nothing, so the console regenerated —
+        and paid for — a new script every time a call was opened. It is now reused, but only on the
+        day it was written: a script is spoken live and can say "this week", and one from yesterday
+        would read out days that have moved. A cache with no timestamp predates this and is treated
+        as stale. ``refresh`` is the console's Regenerate button.
+        """
         from nexus.agents.runtime import get_agent_runtime
+
+        cached = task.script_cache or {}
+        if not refresh and cached and _written_today(cached.get("generated_at"), utcnow()):
+            return cached
 
         result = await get_agent_runtime().run(
             "call_script", ts, account_id=task.account_id,
             contact_id=task.contact_id, persist=False,
         )
-        script = (result.output or {}).get("script") or {}
+        script = dict((result.output or {}).get("script") or {})
+        if script:
+            script["generated_at"] = utcnow().isoformat()
         task.script_cache = script
         await ts.flush()
         return script

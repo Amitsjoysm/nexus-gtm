@@ -217,6 +217,8 @@ export interface CallScript {
   objections: { objection: string; response: string }[];
   cta: string;
   voicemail: string;
+  /** When this script was written; a script is reused only on that day. */
+  generated_at?: string | null;
 }
 
 export interface CallBriefContact {
@@ -452,6 +454,24 @@ export interface AgentRunResponse {
   latency_ms: number;
   tokens: number;
   run_id: string | null;
+}
+
+/** The latest COMPLETED run of one agent, as saved — so a page shows it instead of an empty card.
+ *  `fresh` = written today (UTC): drafts propose specific dates, so a stale one is regenerated
+ *  rather than reused. A brief carries no dates and is shown whatever its age. */
+export interface LatestAgentRun {
+  agent: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  created_at: string;
+  fresh: boolean;
+}
+
+/** What "Draft from website" last found, or all-null when nothing has been analysed. */
+export interface LastWebsiteAnalysis {
+  url: string | null;
+  draft: RelevanceProfileInput | null;
+  analyzed_at: string | null;
 }
 
 export interface AnalyticsOverview {

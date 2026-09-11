@@ -12,6 +12,8 @@ import type {
   AccountInput,
   ActivityItem,
   AgentRunResponse,
+  LatestAgentRun,
+  LastWebsiteAnalysis,
   Alert,
   AlertStatus,
   AnalyticsOverview,
@@ -421,8 +423,14 @@ export class ApiClient {
   ) {
     return this.request<CallTask>("/calling/tasks", { method: "POST", body, signal });
   }
-  generateCallScript(taskId: string, signal?: AbortSignal) {
-    return this.request<CallScript>(`/calling/tasks/${taskId}/script`, { method: "POST", signal });
+  /** Today's script for this call — reused if one was written today. `refresh` always writes a new
+   *  one; it is the console's Regenerate button. */
+  generateCallScript(taskId: string, opts: { refresh?: boolean } = {}, signal?: AbortSignal) {
+    return this.request<CallScript>(`/calling/tasks/${taskId}/script`, {
+      method: "POST",
+      query: opts.refresh ? { refresh: "true" } : undefined,
+      signal,
+    });
   }
   callBrief(taskId: string, signal?: AbortSignal) {
     return this.request<CallBrief>(`/calling/tasks/${taskId}/brief`, { signal });
@@ -593,6 +601,14 @@ export class ApiClient {
       signal,
     });
   }
+  /** The latest completed result of each agent for an account (or one contact at it) — every run
+   *  is saved, and this is how a page shows it again instead of paying to regenerate it. */
+  latestAgentRuns(accountId: string, contactId?: string, signal?: AbortSignal) {
+    return this.request<Record<string, LatestAgentRun>>("/agents/runs/latest", {
+      query: { account_id: accountId, contact_id: contactId },
+      signal,
+    });
+  }
   runPipeline(accountId: string, signal?: AbortSignal) {
     return this.request<unknown>(`/agents/pipeline/${accountId}`, { method: "POST", signal });
   }
@@ -635,6 +651,10 @@ export class ApiClient {
       body: { url },
       signal,
     });
+  }
+  /** What "Draft from website" last found — offered back for free rather than re-analysed. */
+  lastWebsiteAnalysis(signal?: AbortSignal) {
+    return this.request<LastWebsiteAnalysis>("/relevance/last-analysis", { signal });
   }
 
   // ---- lists / segments ----
