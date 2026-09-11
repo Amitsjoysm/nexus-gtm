@@ -154,6 +154,146 @@ class DuckDuckGoSearchProvider(SearchProvider):
 
 
 _search: SearchProvider | None = None
+#: True when `_search` was installed by `set_search_provider` — the test seam — rather than memoized
+#: from settings. Explicit installation wins over the strict Exa resolver below, exactly as
+#: `set_alert_channels` wins over a tenant's stored connections: without the distinction the
+#: resolver would either ignore the seam or mistake the settings singleton for an override.
+_search_explicit = False
+
+
+class SearchUnavailable(RuntimeError):
+    """A discovery feature's search backend is unusable, and saying so beats answering badly.
+
+    Deliberately NOT swallowed by the "provider isolation" catch-alls on the discovery paths: those
+    exist so a flaky request cannot take a feature down, and they are exactly how staging turned
+    "Exa is not configured" into lookalikes named "Marketjoy Competitor" and contacts from another
+    company's page. Surfaced as a 503 whose message tells an operator what to fix.
+    """
+
+
+_EXA_NOT_CONFIGURED = (
+    "Exa search is not configured, so this cannot run. A platform admin needs to add an Exa API key "
+    "under Control plane -> Provider keys."
+)
+
+
+class StrictExaSearch(SearchProvider):
+    """Exa, and only Exa, for the discovery features — failing loudly instead of degrading.
+
+    Decided with the product owner 2026-09-10: Find contacts, Lookalikes, Find similar, Orchestrator
+    discovery and Ask AI / research use Exa strictly. Each used to degrade quietly — a keyless Exa
+    became DuckDuckGo, a provider without `search_companies` searched arbitrary web pages, and an
+    exhausted pool returned `[]` — and a degraded answer that LOOKS like a real one is the worst
+    kind, because nobody can tell. Two failures are now errors:
+
+    * **no key anywhere.** Checked at CALL time, after loading the managed pool, so a key added in
+      the Control plane works without a restart. That also fixes a latent bug: `search()` returned
+      `[]` whenever no ENVIRONMENT key existed, before `_post` ever loaded the panel's keys.
+    * **every key rejected** (401/402/403). `ExaSearchProvider` already records this in
+      `last_failure` without raising, deliberately, so the crawl can carry on; here it becomes the
+      error it is. An empty result with healthy keys is still a real answer — a quiet market.
+
+    A thin wrapper rather than a change to `ExaSearchProvider`, whose non-raising contract other
+    callers (best-effort enrichment) rely on.
+    """
+
+    name = "exa"
+    query_dialect = "semantic"
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+
+    async def _ready(self) -> None:
+        refresh = getattr(self.inner, "_refresh_keys", None)
+        if refresh is not None:
+            await refresh()
+        if not getattr(self.inner, "api_keys", None):
+            raise SearchUnavailable(_EXA_NOT_CONFIGURED)
+
+    def _checked(self, hits: list[SearchHit]) -> list[SearchHit]:
+        failure = getattr(self.inner, "last_failure", "")
+        if not hits and failure:
+            raise SearchUnavailable(
+                f"Exa search is unavailable: {failure}. Check the Exa keys under Control plane -> "
+                "Provider keys (402 means the account is out of credits)."
+            )
+        return hits
+
+    async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]:
+        await self._ready()
+        return self._checked(await self.inner.search(query, limit=limit))
+
+    async def search_companies(self, query, *, limit=10, exclude_domains=None) -> list[SearchHit]:
+        await self._ready()
+        return self._checked(
+            await self.inner.search_companies(query, limit=limit, exclude_domains=exclude_domains)
+        )
+
+    async def find_similar(self, url: str, *, limit: int = 10) -> list[SearchHit]:
+        await self._ready()
+        return self._checked(await self.inner.find_similar(url, limit=limit))
+
+    async def search_recent(self, query, *, limit=5, days=90, include_domains=(),
+                            exclude_domains=()) -> list[SearchHit]:
+        await self._ready()
+        return self._checked(await self.inner.search_recent(
+            query, limit=limit, days=days,
+            include_domains=include_domains, exclude_domains=exclude_domains,
+        ))
+
+
+_exa: StrictExaSearch | None = None
+
+
+def explicit_search_provider() -> SearchProvider | None:
+    """The provider a test installed with `set_search_provider`, or None. Every resolver honours it."""
+    return _search if _search_explicit else None
+
+
+def exa_search(*, browser=None) -> SearchProvider:
+    """The search backend for the discovery features: strictly Exa, whatever `search_provider` says.
+
+    In **staging and prod** this is always `StrictExaSearch` — the setting is not consulted, because
+    `search_provider` defaults to "duckduckgo" and a deployment that never set it ran every discovery
+    feature on DuckDuckGo: the most likely cause of staging's junk. The local docker deploy runs as
+    `env="prod"`, so it gets exactly what staging and production get.
+
+    In **local / test** the configured provider is honoured unless it is "exa": that is where the
+    offline doubles live (the stub, and DuckDuckGo over an injected test browser), and the suite has
+    no Exa key. Strictness is a statement about deployments people use, not about the test harness.
+
+    An explicitly installed provider (`set_search_provider`) wins everywhere. One shared strict
+    instance, so key rotation stays sticky across calls as it is inside one `ExaSearchProvider`.
+    """
+    global _exa
+    if _search_explicit and _search is not None:
+        return _search
+    from nexus.core.config import get_settings
+
+    s = get_settings()
+    configured = (s.search_provider or "").strip().lower()
+    if s.env not in ("staging", "prod") and configured != "exa":
+        return build_search_provider(s.search_provider, browser=browser)
+    if _exa is None:
+        from nexus.core.config import get_settings
+        from nexus.integrations.search.engines import ExaSearchProvider
+
+        _exa = StrictExaSearch(ExaSearchProvider(api_keys=get_settings().exa_api_key_list))
+    return _exa
+
+
+def signal_search_choice() -> str:
+    """Which backend the signal pipeline searches with. Never Exa.
+
+    Decided with the product owner 2026-09-10: signals and the daily scan do not use Exa. Empty used
+    to mean "whatever the rest of the app uses" — the global provider, which is Exa — so leaving the
+    setting blank quietly spent Exa credits on every dork. Empty and "exa" both resolve to Firecrawl,
+    which `build_engine` degrades to keyless DuckDuckGo when it has no key.
+    """
+    from nexus.core.config import get_settings
+
+    choice = (get_settings().signal_search_provider or "").strip().lower()
+    return "firecrawl" if choice in ("", "exa") else choice
 
 
 def build_search_provider(name: str, *, browser=None) -> SearchProvider:
@@ -188,85 +328,10 @@ def get_search_provider() -> SearchProvider:
 
 
 def set_search_provider(provider: SearchProvider | None) -> None:
-    global _search
+    global _search, _search_explicit, _exa
     _search = provider
+    _search_explicit = provider is not None
+    # Clearing the seam also drops the memoized strict provider, so a test that changed the Exa
+    # keys in settings gets a provider built from the keys it set.
+    _exa = None
 
-
-def provider_for_task(task: str):
-    """The search provider for ONE task, honouring its per-task override.
-
-    `search_provider` is global, but the tasks behind it have wildly different value per query.
-    Measured on the live deployment: account enrichment alone was 123 of the billed search events
-    across 56 accounts, all on Exa — while `find_similar` (lookalikes) and `search_companies`
-    (ICP/company discovery) are the ONLY capabilities that genuinely need Exa, because every other
-    provider returns `[]` for them. Everything else is a plain query any index answers, so pointing
-    the bulk work somewhere cheaper costs nothing in capability.
-
-    Mirrors how `signal_search_provider` already works, including the important part: this uses
-    ``build_search_provider`` rather than the global singleton, so selecting a provider for one task
-    must not replace the one the rest of the application resolved.
-
-    An empty or unknown setting falls back to the global provider, so a deployment that configures
-    none of these behaves exactly as it did before they existed.
-    """
-    from nexus.core.config import get_settings
-
-    choice = (getattr(get_settings(), f"{task}_search_provider", "") or "").strip()
-    return build_search_provider(choice) if choice else get_search_provider()
-
-
-class ChainedSearchProvider(SearchProvider):
-    """Try each provider in turn; the first with results wins.
-
-    Built for contact discovery, where recall matters more than cost: a missed contact is a rep with
-    nobody to call, and the two indexes genuinely disagree — Exa's semantic matching is better at
-    people queries, while an operator SERP catches pages Exa's index has not embedded.
-
-    Sequential and short-circuiting, NOT a fan-out. Querying every provider on every call would
-    double the bill for the (common) case where the first one already answered, and cost is the
-    reason this split exists at all. The second provider is only paid for when the first found
-    nothing.
-
-    ``query_dialect`` comes from the FIRST provider: the caller builds its query string before
-    calling, so it can only be shaped for one dialect, and the first is the one that usually serves.
-    Capability methods (`find_similar`, `search_companies`) deliberately are NOT chained — they are
-    Exa-only, and a chain that silently returned `[]` from a second provider would look like "no
-    lookalikes exist" rather than "this provider cannot do that".
-    """
-
-    name = "chain"
-
-    def __init__(self, providers: list[SearchProvider]):
-        self.providers = [p for p in providers if p is not None]
-        self.query_dialect = getattr(
-            self.providers[0], "query_dialect", "plain"
-        ) if self.providers else "plain"
-
-    async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]:
-        for provider in self.providers:
-            try:
-                hits = await provider.search(query, limit=limit)
-            except Exception:  # one dead provider must not sink the others
-                continue
-            if hits:
-                return hits
-        return []
-
-def provider_for_task_chain(task: str, *, browser=None) -> SearchProvider:
-    """Like :func:`provider_for_task`, but a comma-separated setting builds a fallback CHAIN.
-
-    ``contact_search_provider = "exa,firecrawl"`` means: ask Exa, and only pay Firecrawl when Exa
-    found nothing. One value behaves exactly like `provider_for_task`; empty falls back to the
-    global provider. So a deployment that configures nothing is unaffected.
-    """
-    from nexus.core.config import get_settings
-
-    raw = (getattr(get_settings(), f"{task}_search_provider", "") or "").strip()
-    names = [n.strip() for n in raw.split(",") if n.strip()]
-    if not names:
-        return get_search_provider()
-    if len(names) == 1:
-        return build_search_provider(names[0], browser=browser)
-    return ChainedSearchProvider(
-        [build_search_provider(n, browser=browser) for n in names]
-    )

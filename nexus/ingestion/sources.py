@@ -667,16 +667,19 @@ class DorkedSearchSource(SignalSource):
         "no results" with nothing in the logs to explain why.
         """
         if self._search is None:
-            from nexus.core.config import get_settings
             from nexus.integrations.search.provider import (
                 build_search_provider,
-                get_search_provider,
+                explicit_search_provider,
+                signal_search_choice,
             )
 
-            choice = (get_settings().signal_search_provider or "").strip()
-            # build_search_provider, not the global singleton: this must not replace the provider
-            # the rest of the app resolved.
-            self._search = build_search_provider(choice) if choice else get_search_provider()
+            # NEVER EXA (decided 2026-09-10: signals and the daily scan do not use it). Empty used to
+            # mean "the global provider", which is Exa, so a blank setting quietly spent Exa credits
+            # on every dork; `signal_search_choice` maps empty and "exa" to Firecrawl. A provider a
+            # test installed explicitly still wins, as it does in every resolver.
+            self._search = explicit_search_provider() or build_search_provider(
+                signal_search_choice()
+            )
         return self._search
 
     async def _run(self, query: str, include: tuple, exclude: tuple) -> list[dict] | None:

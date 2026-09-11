@@ -137,8 +137,14 @@ async def source_account_contacts(
     seen_emails = {(c.email or "").lower() for c in existing if c.email}
     seen_names = {(c.full_name or "").lower() for c in existing if c.full_name}
 
+    from nexus.integrations.search.provider import SearchUnavailable
+
     try:
         candidates = await registry.contact_search(account, icp, limit=limit)
+    except SearchUnavailable:
+        # Not a hiccup. "Find contacts" is strictly Exa, and an empty list would tell the rep this
+        # company has nobody worth calling when the truth is that search is not configured.
+        raise
     except Exception as exc:  # provider hiccup must not break the button
         logger.warning("contact_search failed for %s: %r", account.name, exc)
         return []

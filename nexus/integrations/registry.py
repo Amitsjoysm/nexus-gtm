@@ -38,7 +38,6 @@ from nexus.integrations.search import (
     SearchHit,
     SearchProvider,
     StubSearchProvider,
-    build_search_provider,
 )
 from nexus.research import ResearchProfile, ResearchProvider, build_research_provider
 from nexus.verification import (
@@ -88,8 +87,16 @@ class _Policy:
             return None
         st = self._get(name)
         st.calls += 1
+        from nexus.integrations.search.provider import SearchUnavailable
+
         try:
             result = await coro_factory()
+        except SearchUnavailable:
+            # Not a flaky source: the discovery backend is unusable, and isolating it here is how
+            # staging turned "Exa is not configured" into empty or junk results. It is raised to the
+            # caller, and neither counts against the breaker nor opens it — adding the key must
+            # work on the very next request.
+            raise
         except Exception as exc:  # provider isolation
             st.consecutive_failures += 1
             if st.consecutive_failures >= self.breaker_threshold:
@@ -339,20 +346,19 @@ def build_registry_from_settings(browser=None) -> DataSourceRegistry:
     from nexus.core.config import get_settings
 
     s = get_settings()
-    search = build_search_provider(s.search_provider, browser=browser)
-
-    # Contact discovery gets its OWN provider (or chain). Recall matters more here than cost — a
-    # missed contact is a rep with nobody to call — whereas the bulk paths are plain queries any
-    # index answers. `contact_search_provider = "exa,firecrawl"` asks Exa first and only pays
-    # Firecrawl when Exa found nothing. Empty falls back to `search`, so this is a no-op until an
-    # operator sets it in the Control plane.
+    # STRICTLY EXA for everything this registry searches: company discovery (the orchestrator and
+    # daily ICP discovery), contact discovery ("Find contacts") and find-similar. Decided with the
+    # product owner 2026-09-10 after staging produced junk from exactly the fallbacks this used to
+    # allow: `search_provider` defaults to "duckduckgo", a keyless Exa degraded to DuckDuckGo, and a
+    # provider without `search_companies` searched arbitrary pages. See `exa_search`.
     #
-    # `company_search` deliberately keeps the GLOBAL provider: it calls `search_companies`, which
-    # only Exa implements. Pointing it elsewhere would not make discovery cheaper, it would make it
-    # return nothing.
-    from nexus.integrations.search.provider import provider_for_task_chain
+    # Contact discovery used to take its own provider or chain (`contact_search_provider =
+    # "exa,firecrawl"`). It no longer does: a Firecrawl fallback is a non-Exa search, which is the
+    # thing ruled out, and a chain that "only pays Firecrawl when Exa found nothing" also runs
+    # whenever Exa is DOWN, which is when its answers are least checked.
+    from nexus.integrations.search.provider import exa_search
 
-    contact_search_provider = provider_for_task_chain("contact", browser=browser) or search
+    search = exa_search(browser=browser)
 
     return DataSourceRegistry(
         company_search=_build_company_search(
@@ -362,7 +368,7 @@ def build_registry_from_settings(browser=None) -> DataSourceRegistry:
         research=build_research_provider(s.research_provider),
         email_verify=build_email_verifier(s.email_verify_provider),
         contact_search=_build_contact_search(
-            s.contact_search_source_list, search=contact_search_provider
+            s.contact_search_source_list, search=search
         ),
     )
 

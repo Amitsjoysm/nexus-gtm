@@ -225,61 +225,19 @@ _SPECS: tuple[SettingSpec, ...] = (
 
     # ---- search cost -----------------------------------------------------------------------------
     #
-    # Why these are per-task rather than one global switch. `search_provider` drives every plain
-    # `.search()` in the product, and those tasks have wildly different value per query. Measured on
-    # the live deployment: account enrichment alone was 123 of the billed search events across 56
-    # accounts, all on Exa.
+    # There used to be four per-task search-provider pickers here (enrichment, contact discovery,
+    # website analysis, discovery sweep). REMOVED 2026-09-10, deliberately:
     #
-    # `find_similar` (lookalike accounts) and `search_companies` (ICP/company discovery) are the
-    # ONLY capabilities that genuinely need Exa -- every other provider returns [] for them, so
-    # those features go dark elsewhere. Everything else is a plain query that any index answers, so
-    # pointing the bulk work at a cheaper one costs nothing in capability.
+    # * Decided with the product owner: Find contacts, Lookalikes, Find similar, Orchestrator
+    #   discovery, Ask AI and the enrichment web step use Exa STRICTLY (`exa_search`), after staging
+    #   produced junk from exactly the non-Exa routes these pickers offered. Signals route through
+    #   `signal_search_provider`, which never resolves to Exa; the daily scan does no web search.
+    # * Two of the four — website analysis and discovery sweep — were already read by NOTHING: they
+    #   saved, reported "in effect", and changed no behaviour, which is the trap this catalog's rules
+    #   exist to prevent. Once the other two became strict, all four would have been.
     #
-    # Empty means "use `search_provider`", so a deployment that sets none behaves exactly as before.
-    SettingSpec(
-        key="enrichment_search_provider", label="Enrichment search provider",
-        group="Search cost", kind="str",
-        effect="Which index answers account-firmographic lookups. This is the highest-volume "
-               "search in the product, so it is where a provider change shows up on the bill.",
-        warning="Leave empty to follow the global provider. Exa is not required here -- enrichment "
-                "issues a plain query, and paying Exa rates for it is the single largest avoidable "
-                "cost measured on this deployment.",
-        risk="low", options=("", "firecrawl", "brave", "serper", "exa", "duckduckgo"),
-    ),
-    SettingSpec(
-        key="contact_search_provider", label="Contact discovery search provider",
-        group="Search cost", kind="str",
-        effect="Which index is queried when finding real named people at an account.",
-        warning="Recall matters more here than cost: a missed contact is a rep with nobody to "
-                "call. Exa's semantic matching is genuinely better at people queries, which is why "
-                "this is worth keeping separate from enrichment rather than sharing one setting.",
-        # A comma-separated value is a FALLBACK CHAIN: ask the first, and pay the second only when
-        # the first found nothing. The useful combinations are listed explicitly rather than by
-        # relaxing validation to accept any comma string — a picker that offers them makes the
-        # feature discoverable, and a typo'd provider name in a free-text field would silently
-        # degrade contact discovery to whatever the fallback is.
-        risk="low", options=(
-            "", "exa", "exa,firecrawl", "exa,brave", "firecrawl,exa",
-            "firecrawl", "brave", "serper", "duckduckgo",
-        ),
-    ),
-    SettingSpec(
-        key="website_icp_search_provider", label="Website analysis search provider",
-        group="Search cost", kind="str",
-        effect="Which index gathers the pages used to draft an ICP from a company website.",
-        warning="Two queries per run, and it runs when a user asks rather than on a schedule -- so "
-                "this is a low-volume path where provider choice barely affects the bill.",
-        risk="low", options=("", "firecrawl", "brave", "serper", "exa", "duckduckgo"),
-    ),
-    SettingSpec(
-        key="discovery_search_provider", label="Discovery sweep search provider",
-        group="Search cost", kind="str",
-        effect="Which index answers the plain-query fallback in net-new account sweeps.",
-        warning="This does NOT cover `search_companies`, which only Exa implements -- ICP discovery "
-                "still uses Exa for that call whatever this is set to, and setting a non-Exa "
-                "provider here changes only the fallback path.",
-        risk="low", options=("", "firecrawl", "brave", "serper", "exa", "duckduckgo"),
-    ),
+    # A stored row for any of these keys is skipped rather than applied, because the key has left
+    # the catalog — so removing them here is safe for deployments that set one.
     SettingSpec(
         key="account_enrich_min_interval_days", label="Enrichment re-attempt interval (days)",
         group="Search cost", kind="int", minimum=0, maximum=365,

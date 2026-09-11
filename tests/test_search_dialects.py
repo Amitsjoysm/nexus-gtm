@@ -269,8 +269,11 @@ def test_a_signal_only_provider_does_not_change_the_global_one(monkeypatch):
         set_search_provider(None)
 
 
-def test_signals_default_to_the_shared_provider(monkeypatch):
-    """Empty means "unchanged": nobody who has not opted in sees any difference."""
+def test_an_empty_signal_setting_no_longer_falls_back_to_the_shared_exa(monkeypatch):
+    """REVERSED 2026-09-10. This used to assert that empty meant "the shared provider" — which, with
+    `search_provider=exa`, meant every dork quietly spent Exa credits. Decided with the product
+    owner: signals and the daily scan never use Exa. Empty now resolves to Firecrawl (degrading to
+    keyless DuckDuckGo without a key), never to the global provider."""
     from nexus.core.config import get_settings
     from nexus.integrations.search.provider import get_search_provider, set_search_provider
 
@@ -280,7 +283,9 @@ def test_signals_default_to_the_shared_provider(monkeypatch):
     monkeypatch.setattr(settings, "signal_search_provider", "")
     set_search_provider(None)
     try:
-        assert DorkedSearchSource()._provider() is get_search_provider()
+        provider = DorkedSearchSource()._provider()
+        assert provider is not get_search_provider()
+        assert getattr(provider, "name", "") != "exa"
     finally:
         set_search_provider(None)
 

@@ -25,7 +25,7 @@ from nexus.integrations.company_search import (
     domain_from_url,
     looks_like_company,
 )
-from nexus.integrations.search.provider import get_search_provider
+from nexus.integrations.search.provider import exa_search
 from nexus.lookalike.similarity import company_similarity, prepare_company
 from nexus.models.account import Account
 from nexus.outcomes.service import get_outcome_service
@@ -147,7 +147,10 @@ class LookalikeService:
         query = _similar_query(account)
         if not query:
             return []
-        provider = get_search_provider()
+        # Strictly Exa. A provider without `search_companies` falls back to plain web pages below,
+        # which is how staging named revpue.com "Marketjoy Competitor"; in staging and prod
+        # `exa_search` never hands back such a provider — no key is a 503, not a DuckDuckGo search.
+        provider = exa_search()
         exclude = [seed_domain] if seed_domain else None
         if hasattr(provider, "search_companies"):
             hits = await provider.search_companies(query, limit=max(limit * 3, 15), exclude_domains=exclude)

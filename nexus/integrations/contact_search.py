@@ -120,11 +120,15 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
         if expanded:
             titles = list(dict.fromkeys([*titles, *expanded]))
 
+        from nexus.integrations.search.provider import SearchUnavailable
+
         try:
             hits = await self._gather_hits(account, titles, limit)
             if not hits:
                 return []
             people = await self._extract_people(account, titles, hits, limit)
+        except SearchUnavailable:
+            raise  # the backend is unusable — say so, never "this company has no contacts"
         except Exception as exc:  # provider isolation
             logger.warning("search contact extraction failed for %s: %r",
                            getattr(account, "domain", None), exc)
@@ -189,6 +193,8 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
         return proven[0] if proven else None
 
     async def _gather_hits(self, account: Account, titles: list[str], limit: int) -> list[dict]:
+        from nexus.integrations.search.provider import SearchUnavailable
+
         company = account.name or account.domain or ""
         if not company:
             return []
@@ -203,6 +209,8 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
         for q in queries:
             try:
                 res = await self.search_provider.search(q, limit=max(5, limit))
+            except SearchUnavailable:
+                raise  # not a bad query: every query would fail the same way
             except Exception:  # one bad query shouldn't sink the others
                 res = []
             for h in res:

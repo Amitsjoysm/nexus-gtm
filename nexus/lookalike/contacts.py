@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from nexus.core.tenancy import TenantSession
 from nexus.integrations.registry import get_registry
+from nexus.integrations.search.provider import SearchUnavailable
 from nexus.lookalike.similarity import (
     company_similarity,
     contact_similarity,
@@ -573,6 +574,10 @@ class ContactLookalikeService:
             )
             try:
                 hits = list(await registry.search(query, limit=max(limit * 3, 12)) or [])
+            except SearchUnavailable:
+                # Find similar is strictly Exa. "Exa is not configured" must reach the rep as that,
+                # not as "nobody like this person exists".
+                raise
             except Exception:  # a search backend must never break the page
                 logger.warning("role search failed for contact %s", contact.id, exc_info=True)
                 hits = []
@@ -581,6 +586,8 @@ class ContactLookalikeService:
         if not hits and seed_url:
             try:
                 hits = list(await registry.find_similar(seed_url, limit=max(limit * 2, 10)) or [])
+            except SearchUnavailable:
+                raise
             except Exception:
                 logger.warning("find_similar failed for contact %s", contact.id, exc_info=True)
                 hits = []
@@ -646,6 +653,8 @@ class ContactLookalikeService:
             profile = await get_profile(ts)
             icp = (getattr(profile, "icp", None) or {}) if profile else {}
             cands = list(await registry.contact_search(account, icp, limit=limit) or [])
+        except SearchUnavailable:
+            raise
         except Exception:
             logger.warning("contact_search fallback failed for %s", contact.id, exc_info=True)
             return out

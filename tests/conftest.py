@@ -38,6 +38,11 @@ os.environ["NEXUS_EXA_API_KEY"] = ""
 os.environ["NEXUS_EXA_API_KEYS"] = ""
 os.environ["NEXUS_BRAVE_API_KEY"] = ""
 os.environ["NEXUS_SERPER_API_KEY"] = ""
+# Firecrawl was missing from this list, and it leaked twice: `test_a_task_override_wins` passed
+# locally only because a real key came from the developer's .env (4b982d9), and signals now default
+# to Firecrawl rather than the global provider, which would have sent dork tests to the live API.
+os.environ["NEXUS_FIRECRAWL_API_KEY"] = ""
+os.environ["NEXUS_FIRECRAWL_API_KEYS"] = ""
 os.environ["NEXUS_GROQ_API_KEY"] = ""
 os.environ["NEXUS_GROQ_API_KEYS"] = ""
 # Pin the offline defaults for the provider/automation switches too: a developer's local .env

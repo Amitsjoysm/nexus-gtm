@@ -367,12 +367,14 @@ class Settings(BaseSettings):
     # `search_companies` are the ONLY things that genuinely need Exa, because every other provider
     # returns [] for them. Pointing the bulk work at a cheaper index costs nothing in capability.
     #
-    # Editable from the Control plane (see nexus/runtime_config/catalog.py) so the split can be
-    # tuned against a real bill without a redeploy.
-    enrichment_search_provider: str = ""      # account firmographics — the volume driver
-    contact_search_provider: str = ""         # finding real people at an account
-    website_icp_search_provider: str = ""     # drafting an ICP from a website
-    discovery_search_provider: str = ""       # net-new account sweeps
+    # NO LONGER READ (2026-09-10). Discovery, contacts, find-similar, research and the enrichment web
+    # step are strictly Exa (`exa_search`); these were removed from the Control plane. Kept as fields
+    # only so an existing `.env` that sets one still loads — pydantic-settings rejects unknown keys
+    # read from a dotenv file, and a deploy must not fail over a setting that now does nothing.
+    enrichment_search_provider: str = ""
+    contact_search_provider: str = ""
+    website_icp_search_provider: str = ""
+    discovery_search_provider: str = ""
 
     signal_search_provider: str = ""
     # Web-search backend: duckduckgo|exa|brave|serper|firecrawl. Keyless DuckDuckGo is the

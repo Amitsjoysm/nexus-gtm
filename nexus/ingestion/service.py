@@ -321,9 +321,15 @@ def get_ingestion_service() -> IngestionService:
             # Pace only the keyless backend: it is the one with anti-bot heuristics rather than a
             # contractual rate limit. An operator can override either way.
             pace = settings.signal_dork_pace_s
-            effective = (
-                settings.signal_search_provider or settings.search_provider
-            ).strip().lower()
+            # Judged on the provider that will ACTUALLY run, not on the setting's text: signals never
+            # use the global provider any more, and a keyless Firecrawl degrades to DuckDuckGo, which
+            # is exactly the backend that needs pacing. Construction is cheap and offline.
+            from nexus.integrations.search.provider import (
+                build_search_provider,
+                signal_search_choice,
+            )
+
+            effective = getattr(build_search_provider(signal_search_choice()), "name", "")
             if pace <= 0 and effective in ("duckduckgo", "ddg", ""):
                 pace = 1.5
             sources.append(

@@ -43,7 +43,7 @@ async def handle_process_account(payload: dict) -> dict:
         account = await ts.get(Account, account_id)
         if account is None:
             return {"error": "account_not_found", "account_id": account_id}
-        return await process_account(ts, account)
+        return await process_account(ts, account, scheduled=bool(payload.get("scheduled")))
 
 
 async def handle_run_orchestration(payload: dict) -> dict:
@@ -199,7 +199,8 @@ async def handle_refresh_due_accounts(payload: dict) -> dict:
                     continue
                 account.last_refreshed_at = now
                 account.next_refresh_at = claim_due  # claim — excludes it from the next tick
-                await enqueue_process_account(tid, aid)
+                # The daily scan: enriches from source databases and the B2B actor only, never Exa.
+                await enqueue_process_account(tid, aid, scheduled=True)
                 refreshed += 1
 
     return {"tenants": len(by_tenant), "accounts": refreshed}
@@ -939,12 +940,16 @@ HANDLERS: dict[str, Handler] = {
 
 
 async def enqueue_process_account(
-    tenant_id: str, account_id: str, *, queue: TaskQueue | None = None
+    tenant_id: str, account_id: str, *, scheduled: bool = False, queue: TaskQueue | None = None
 ) -> None:
+    """``scheduled`` marks the refresh sweep's jobs — the daily scan — which enrich without web
+    search. Omitted (a person added the account, or a job serialized before the flag existed)
+    means today's behaviour."""
     queue = queue or get_task_queue()
-    await queue.enqueue(
-        Job(name="process_account", payload={"tenant_id": tenant_id, "account_id": account_id})
-    )
+    payload = {"tenant_id": tenant_id, "account_id": account_id}
+    if scheduled:
+        payload["scheduled"] = True
+    await queue.enqueue(Job(name="process_account", payload=payload))
 
 
 async def enqueue_run_orchestration(

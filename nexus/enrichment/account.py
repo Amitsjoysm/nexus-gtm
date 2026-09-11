@@ -377,6 +377,7 @@ class SearchBackedAccountEnricher:
     async def enrich(
         self, ts, account: Account, *, user_id: str | None = None,
         raise_on_block: bool = False, meter: bool = True, force: bool = False,
+        web_search: bool = True,
     ) -> list[str]:
         """Fill blank firmographics. Source databases first, then the web. Returns fields filled.
 
@@ -439,6 +440,19 @@ class SearchBackedAccountEnricher:
                 # is billed for the firmographics, not for our infrastructure. `cached` is what
                 # keeps the margin visible. Never blocks — the answer is already in hand, and
                 # this mirrors the shared-record hit in `nexus/people/enrich.py`.
+                from nexus.sources.provider import meter_hit
+
+                await meter_hit(ts, ACCOUNT_CAPABILITY, user_id=user_id,
+                                source_name=getattr(hit, "source_name", ""))
+            return filled
+
+        if not web_search:
+            # THE DAILY SCAN STOPS HERE (decided 2026-09-10: signals and the daily scan do not use
+            # Exa). What it keeps is everything above — source databases and the Apify B2B actor —
+            # and what it gives up is the web+LLM path, which is the Exa search. A person pressing
+            # "Enrich from web" still gets it; the refresh sweep, which runs this for every due
+            # account, does not. A source hit is charged exactly as in the branch above.
+            if hit is not None and meter:
                 from nexus.sources.provider import meter_hit
 
                 await meter_hit(ts, ACCOUNT_CAPABILITY, user_id=user_id,
@@ -560,14 +574,17 @@ def get_account_enricher() -> SearchBackedAccountEnricher:
     global _enricher
     if _enricher is None:
         from nexus.agents.llm import get_llm_provider
-        from nexus.integrations.search.provider import provider_for_task
+        from nexus.integrations.search.provider import exa_search
 
-        # The per-task provider, not the global one. Enrichment is the highest-volume search in
-        # the product (measured: 123 of the billed search events across 56 accounts), and it issues
-        # a plain query that any index answers — so it is the one task where paying Exa rates buys
-        # nothing. Empty setting falls back to the global provider, so this is a no-op until an
-        # operator picks one in the Control plane.
-        _enricher = SearchBackedAccountEnricher(provider_for_task("enrichment"), get_llm_provider())
+        # Strictly Exa for the web step. The instruction for enrichment is "the B2B actor first,
+        # and only then Exa", and the per-task picker this replaced let the web step follow the
+        # global `search_provider` — which defaults to DuckDuckGo, so a deployment that never set it
+        # enriched from DuckDuckGo. The old reason for a cheaper index was volume, and the volume
+        # was the daily scan, which no longer web-searches at all (`web_search=False`).
+        #
+        # Enrichment stays best-effort: `fetch` isolates a failing search, so "Exa unavailable"
+        # costs the web step and never the account, a lookalike search or a refresh.
+        _enricher = SearchBackedAccountEnricher(exa_search(), get_llm_provider())
     return _enricher
 
 

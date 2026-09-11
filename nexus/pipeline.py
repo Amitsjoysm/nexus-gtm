@@ -79,7 +79,8 @@ async def _recent_signals(ts, account, limit: int) -> list:
 
 
 async def process_account(
-    ts: TenantSession, account: Account, *, runtime: AgentRuntime | None = None
+    ts: TenantSession, account: Account, *, runtime: AgentRuntime | None = None,
+    scheduled: bool = False,
 ) -> dict:
     runtime = runtime or get_agent_runtime()
 
@@ -126,7 +127,11 @@ async def process_account(
         # `raise_on_block` stays false: an enrichment quota must never take down the refresh it
         # runs inside. A blocked tenant keeps collecting signals and simply stops gaining
         # firmographics, which is a degraded account rather than a dark one.
-        filled = await get_account_enricher().enrich(ts, account)
+        #
+        # `web_search` is off for the SCHEDULED sweep — the daily scan, which by decision
+        # (2026-09-10) never uses Exa — and on when a person added the account or pressed "Run
+        # pipeline", where "B2B actor first, then Exa" still applies.
+        filled = await get_account_enricher().enrich(ts, account, web_search=not scheduled)
         if filled:
             await ts.flush()
 

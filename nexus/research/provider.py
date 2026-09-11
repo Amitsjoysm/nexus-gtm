@@ -116,10 +116,17 @@ class SearchBackedResearchProvider(ResearchProvider):
         label = (company or domain or "").strip()
         if not label:
             return ResearchProfile(source=self.name)
+        from nexus.integrations.search.provider import SearchUnavailable
+
         try:
             hits = await self.search_provider.search(
                 f"{label} company overview products customers news", limit=6
             )
+        except SearchUnavailable:
+            # The brief and "Ask about this account" are strictly Exa. An empty profile here reads
+            # as "nothing is known about this company", which is a claim about the account; the
+            # truth is a claim about our configuration, and it should be said as that.
+            raise
         except Exception as exc:  # provider isolation
             logger.warning("research search failed for %r: %r", label, exc)
             return ResearchProfile(source=self.name)
@@ -176,9 +183,12 @@ def build_research_provider(name: str) -> ResearchProvider:
     key = (name or "").strip().lower()
     if key == "search":
         from nexus.agents.llm import get_llm_provider
-        from nexus.integrations.search.provider import get_search_provider
+        from nexus.integrations.search.provider import exa_search
 
-        return SearchBackedResearchProvider(get_search_provider(), get_llm_provider())
+        # Strictly Exa: the research brief and "Ask about this account" are discovery features, and
+        # a brief grounded in DuckDuckGo noise reads exactly like one grounded in the account. See
+        # `exa_search` for why staging and prod never fall back.
+        return SearchBackedResearchProvider(exa_search(), get_llm_provider())
     if key in ("stub", "", "none"):
         return StubResearchProvider()
     # Scrapegraph / Cloak adapters land here later; fail safe to the offline stub for now.

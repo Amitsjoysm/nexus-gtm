@@ -290,6 +290,11 @@ class SearchBackedCompanySearchProvider(CompanySearchProvider):
             else:
                 hits = await self.search_provider.search(query, limit=limit)
         except Exception as exc:  # provider isolation
+            from nexus.integrations.search.provider import SearchUnavailable
+
+            if isinstance(exc, SearchUnavailable):
+                # The orchestrator's "0 new accounts" must not be what "Exa is down" looks like.
+                raise
             logger.warning("company search via %s failed: %r", self.name, exc)
             return []
 

@@ -274,8 +274,16 @@ async def auto_discover_for_tenant(
     exclude = sorted(tracked)[:_EXCLUDE_CAP] if tracked else None
 
     icp = _profile_to_search_icp(profile)
+    from nexus.integrations.search.provider import SearchUnavailable
+
     try:
         candidates = await search(icp, limit=pool_limit, exclude_domains=exclude)
+    except SearchUnavailable as exc:
+        # Still never crashes the heartbeat — but it says WHY, rather than reporting a day with
+        # nothing new in the market. Discovery is strictly Exa; there is no fallback to try.
+        logger.warning("icp auto-discovery skipped for %s: %s", ts.tenant_id, exc)
+        return {"discovered": 0, "screened": 0, "account_ids": [],
+                "skipped": "search_unavailable", "reason": str(exc)}
     except Exception as exc:  # a search outage must not crash the heartbeat
         logger.warning("icp auto-discovery search failed: %r", exc)
         candidates = []

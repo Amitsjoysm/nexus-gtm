@@ -199,9 +199,14 @@ async def _probe_llm() -> tuple[str, str]:
 async def _probe_search() -> tuple[str, str]:
     from nexus.core.config import get_settings
 
+    from nexus.integrations.search.provider import signal_search_choice
+
     settings = get_settings()
-    configured = settings.signal_search_provider or settings.search_provider
-    return OK, f"provider={configured or 'default'}"
+    # What signals actually search with (never Exa), and what discovery does (strictly Exa in
+    # staging/prod). One line used to report `signal or global`, which after 2026-09-10 would have
+    # claimed signals ran on Exa.
+    discovery = "exa (strict)" if settings.env in ("staging", "prod") else settings.search_provider
+    return OK, f"signals={signal_search_choice()} discovery={discovery}"
 
 
 async def _probe_enforcement() -> tuple[str, str]:

@@ -296,6 +296,21 @@ def create_app() -> FastAPI:
         """
         return JSONResponse(status_code=402, content=exc.to_payload())
 
+    from nexus.integrations.search.provider import SearchUnavailable
+
+    @app.exception_handler(SearchUnavailable)
+    async def _search_unavailable(request: Request, exc: SearchUnavailable) -> JSONResponse:
+        """503 carrying WHY: the discovery features are strictly Exa, and Exa is not usable.
+
+        The alternative this replaces was worse than an error — an empty or junk answer that looked
+        exactly like a real one (lookalikes named "Marketjoy Competitor", "no contacts found"). The
+        message names the fix, so whoever sees it can tell an admin what to do.
+        """
+        return JSONResponse(
+            status_code=503,
+            content={"error": "search_unavailable", "detail": str(exc)},
+        )
+
     @app.exception_handler(BillingThrottled)
     async def _billing_throttled(request: Request, exc: BillingThrottled) -> JSONResponse:
         """429 with Retry-After. A rate limit is not an upsell — the fix is to wait, not pay."""
