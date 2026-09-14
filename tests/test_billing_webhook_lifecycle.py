@@ -559,6 +559,54 @@ async def test_a_subscription_the_webhook_creates_starts_on_the_plan_terms(clien
     assert sub.interval == "year"
 
 
+#: The two events that can reach the creation branch with a plan to create the row on.
+ROW_CREATING_EVENTS = ("checkout.session.completed", "customer.subscription.created")
+
+
+@pytest.mark.parametrize("event_type", ROW_CREATING_EVENTS)
+async def test_a_subscription_the_webhook_creates_receives_the_plan_credits(
+    client, webhook_secret, event_type
+):
+    """A row born on the bought plan has `plan_id` already equal to the plan, so both grant
+    guards — which ask "did the plan change?" — read it as no change and skip the grant. The
+    customer pays for Launch and holds zero credits, the exact failure the grant was added for.
+    Signup's `start_subscription` never raises, so a paying tenant with no row is reachable."""
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.credits import balance
+    from nexus.billing.plans import sync_plans
+    from nexus.billing.rates import sync_rates
+    from tests.conftest import make_tenant, tenant_session
+
+    await sync_catalog()
+    await sync_plans()
+    await sync_rates()
+    slug = f"grantnew{event_type.split('.')[-1]}"
+    tid = await make_tenant(slug=slug, name=slug)
+    launch = await _plan("launch")
+    assert launch.included_credits == 2000, "the ladder moved; update this test"
+    async with tenant_session(tid) as ts:
+        before = await balance(ts)
+
+    purchase = _purchase(event_type, slug=slug, tid=tid, plan_id="launch")
+    r = await _post(client, f"evt_{slug}_1", event_type, purchase)
+    assert r.status_code == 200, r.text
+    assert r.json().get("created") is True
+    async with tenant_session(tid) as ts:
+        after_first = await balance(ts)
+    assert after_first - before == launch.included_credits, (
+        f"a workspace the webhook created a Launch subscription for received "
+        f"{after_first - before} credits, not its {launch.included_credits}"
+    )
+
+    # Providers redeliver under NEW event ids, which the dedupe table does not catch.
+    r = await _post(client, f"evt_{slug}_2", event_type, purchase)
+    assert r.status_code == 200, r.text
+    assert r.json()["duplicate"] is False
+    assert r.json().get("created") is not True           # found the row this time
+    async with tenant_session(tid) as ts:
+        assert await balance(ts) == after_first
+
+
 async def test_an_annual_plan_bought_through_checkout_rolls_yearly(client, webhook_secret):
     """The consequence end to end: when the year is up, the next period is a year, not a month.
     A monthly window here is what re-grants the 24,000-credit allowance every month."""

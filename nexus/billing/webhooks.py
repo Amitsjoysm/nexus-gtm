@@ -391,6 +391,10 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
 
     meta_in = _metadata(obj)
     sub, tenant_id = await _resolve_subscription(session, obj, event)
+    # A row created below is born on the bought plan, so both "did the plan change?" guards would
+    # read it as unchanged and skip the grant: the customer pays and holds no credits. Moving onto
+    # a plan from no row at all IS a change, so both guards count it as one.
+    created = False
 
     if sub is None and tenant_id:
         # A tenant that completed Checkout but somehow has no subscription row (the boot-time
@@ -408,6 +412,7 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
             session.add(sub)
             await session.flush()
             outcome["created"] = True
+            created = True
 
     if sub is None:
         outcome["note"] = "no matching subscription"
@@ -434,7 +439,7 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
             sub.psp_customer_id = psp_cus_id
         plan_id = str(meta_in.get("plan_id") or "")
         if plan_id and (bought := await session.get(BillingPlan, plan_id)) is not None:
-            changed = sub.plan_id != plan_id
+            changed = created or sub.plan_id != plan_id
             # Taking a new plan means taking its terms, interval and currency included — the same
             # rule, through the same function, that change_plan applies.
             take_plan_terms(sub, bought)
@@ -484,7 +489,7 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
         if trial_end is not None:
             sub.trial_end = trial_end
         plan_id = str(meta_in.get("plan_id") or "")
-        if plan_id and plan_id != sub.plan_id:
+        if plan_id and (created or plan_id != sub.plan_id):
             bought = await session.get(BillingPlan, plan_id)
             if bought is not None:
                 take_plan_terms(sub, bought)
