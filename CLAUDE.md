@@ -1165,6 +1165,32 @@ invalid address has its confidence reset first, because the waterfall only repla
 an equally or more confident one. Enrich keeps its 30-day cool-down for a valid address; Re-verify
 has none, since it is the explicit "check again". `tests/test_reverify_one_contact.py` pins it.
 
+## Pay-per-result searches ask first (`preflight`)
+
+Both lookalike endpoints bill per result DELIVERED (`discovery.lookalike_company`,
+`discovery.lookalike_contact` with `mode=new`), so the charge can only come after the Exa search —
+and `routers/accounts.py` `_meter` swallows its own refusal, because by then the customer is holding
+the result. Together that meant a refused plan was never refused. Measured 2026-09-11 on a `free`
+workspace with enforcement on: ten people sourced, `QuotaExceeded: dependency` in the log, no usage
+row, no upsell. `_meter`'s "enforcement applies to the NEXT call" never held — the next call was
+refused and swallowed the same way.
+
+- **`preflight(ts, capability_id, quantity=)`** (`billing/entitlements.py`) answers "would
+  `check_and_meter` refuse this?" and records, burns, locks and counts nothing. It runs the same
+  `_decide` table as the meter; only the credits branch differs (`_can_cover` reads the balance
+  where `_burn_for_usage` burns it), so the two cannot drift. `check_and_meter` itself cannot be
+  asked first: it burns credits as part of deciding.
+- **Asked for the full `limit`**, not for one result. Whatever the search then delivers was
+  affordable, so the charge afterwards is never refused — short of a concurrent spend in between.
+  The price of that: a balance short of the limit is refused even when the search would have
+  returned fewer. Chosen over delivering the overshoot free (repeatable, since a refused burn never
+  moves the balance) and over overdrafting (negative balances left with overage billing).
+- **The meter's mode rules, exactly.** `off` evaluates nothing. `shadow` refuses only a platform
+  switch — so switching off `module.discovery` now stops lookalikes before the search, where before
+  its 402 came after the search and was swallowed. `on` refuses whatever the meter would.
+- `mode=existing` is never asked: it reads the workspace's own contacts, spends nothing, and is not
+  metered.
+
 ## Orchestrator intake (`nexus/orchestration/intake.py`)
 
 **A question is not a launch instruction.** `advance` used to launch on `is_first_turn` alone once

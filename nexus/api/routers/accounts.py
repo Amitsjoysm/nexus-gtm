@@ -349,9 +349,10 @@ async def _meter(ts, capability_id: str, quantity: int, principal) -> None:
     bought, nothing charged" rule the enrichment seam follows.
 
     An empty block after the fact, matching the bulk verifier in `routers/contacts.py`: the size
-    is not knowable up front, so gating beforehand would have to guess. Enforcement therefore
-    applies to the NEXT call, which is the honest behaviour for work whose cost is discovered by
-    doing it.
+    is not knowable up front. It swallows its own refusal, because by then the work is done and the
+    customer is holding the result — which is exactly why it cannot be what enforces. This used to
+    say enforcement "applies to the NEXT call"; it never did, because that call was refused and
+    swallowed the same way. Work that spends our money getting its results asks `_preflight` first.
     """
     from nexus.billing.meter import metered
 
@@ -369,6 +370,25 @@ async def _meter(ts, capability_id: str, quantity: int, principal) -> None:
         logger.warning("metering failed for %s", capability_id, exc_info=True)
 
 
+async def _preflight(ts, capability_id: str, quantity: int) -> None:
+    """Refuse BEFORE the paid work what `_meter` would be refused for after it. 402 (or 429).
+
+    The lookalike searches spend Exa money, and seed and candidate enrichment, before anything can
+    be charged — and `_meter` swallows its refusal. Together that meant a refused plan was never
+    refused. Measured 2026-09-11 on a `free` workspace with enforcement on: ten people sourced,
+    `QuotaExceeded: dependency` in the log, no usage row, no upsell.
+
+    ``quantity`` is the MOST the work can deliver (its ``limit``), so a search this lets through can
+    always pay for what it returns: a balance short of the full limit is refused up front rather
+    than delivered on credit. Charging still happens afterwards, per result delivered, so a search
+    that finds nothing still costs nothing. Shadow and `off` refuse only what the meter would —
+    in shadow, a platform switch.
+    """
+    from nexus.billing.entitlements import preflight
+
+    (await preflight(ts, capability_id, quantity=quantity)).raise_if_blocked()
+
+
 @router.post("/{account_id}/lookalikes", response_model=LookalikeResponse)
 async def find_lookalikes(
     account_id: str,
@@ -384,6 +404,9 @@ async def find_lookalikes(
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
     limit = max(1, min(limit, 50))
+    # Asked FIRST, for every company the search could return: the seed enrichment, the search and
+    # the candidate enrichment inside `find` have all spent by the time a charge can be attempted.
+    await _preflight(ts, "discovery.lookalike_company", limit)
     found = await get_lookalike_service().find(ts, account, limit=limit)
     # Charged on the RESULT, not the request. This is an Exa `find_similar` call — the priciest
     # unit on the discovery card — and a seed with no usable domain returns nothing without
@@ -427,6 +450,8 @@ async def find_contact_lookalikes(
     service = get_contact_lookalike_service()
     limit = max(1, min(limit, 50))
     if mode == "new":
+        # Asked FIRST, for the most the search could return, so a refused plan never reaches Exa.
+        await _preflight(ts, "discovery.lookalike_contact", limit)
         found = await service.source_new(ts, contact, limit=limit)
         # Charged on the RESULT and only in this mode. `existing` runs no external call and
         # returns the customer's own rows, so billing it would charge for sorting a table.

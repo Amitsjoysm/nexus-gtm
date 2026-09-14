@@ -240,16 +240,27 @@ def test_no_second_price_reaches_the_in_flight_charge():
 
     Structural, because the failure is a line of code rather than a behaviour: the moment the
     burn consults it again, one action has two prices depending on where in the period it lands.
+
+    The price lives in `_usage_amount`, which two readers share: `_burn_for_usage` charges it and
+    `_can_cover` is what `preflight` asks before a paid search. A preflight priced differently from
+    the burn would refuse searches the balance could pay for, or admit ones it could not — so the
+    check follows the price into the helper and pins both readers to it.
     """
     import inspect
 
     from nexus.billing import entitlements
 
-    burn = inspect.getsource(entitlements._burn_for_usage)
-    assert "overage_price_credits" not in burn, (
-        "the credit burn reads overage_price_credits again — that is the second price"
-    )
-    assert "credits_per_unit" in burn or "tiered_credits" in burn
+    price = inspect.getsource(entitlements._usage_amount)
+    assert "credits_per_unit" in price or "tiered_credits" in price
+
+    for fn in (entitlements._usage_amount, entitlements._burn_for_usage, entitlements._can_cover):
+        assert "overage_price_credits" not in inspect.getsource(fn), (
+            f"{fn.__name__} reads overage_price_credits again — that is the second price"
+        )
+    for fn in (entitlements._burn_for_usage, entitlements._can_cover):
+        assert "_usage_amount(" in inspect.getsource(fn), (
+            f"{fn.__name__} prices a request without the rate card's `_usage_amount`"
+        )
 
 
 async def test_a_usage_invoice_never_re_bills_a_credit_paid_action(enforcing):

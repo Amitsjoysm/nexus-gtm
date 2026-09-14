@@ -552,6 +552,32 @@ async def _is_gauge(ts: TenantSession, capability_id: str) -> bool:
         return False
 
 
+async def _usage_amount(
+    ts: TenantSession, ent: "ResolvedEntitlement", quantity: float
+) -> float | None:
+    """Credits ``quantity`` units cost at the live rate card; ``None`` when there is no live card.
+
+    Shared by `_burn_for_usage` and `_can_cover`, so the price a preflight checks is the price the
+    meter then charges.
+    """
+    from nexus.models.billing import BillingRateCard
+
+    card = await ts.session.get(BillingRateCard, ent.capability_id)
+    if card is None or not card.active:
+        return None
+
+    if card.tiers:
+        # A volume ladder prices a unit by how many came before it. `rating.rate_period` prices
+        # the whole period in one `tiered_credits` call at close, so an in-flight burn has to
+        # charge the MARGINAL cost of these units at their real position — reading
+        # `credits_per_unit` flat overcharges the moment a ladder exists.
+        from nexus.billing.rating import tiered_credits
+
+        prior = await current_usage(ts, ent.capability_id)
+        return tiered_credits(prior + quantity, card) - tiered_credits(prior, card)
+    return quantity * float(card.credits_per_unit or 0)
+
+
 async def _burn_for_usage(
     ts: TenantSession, ent: "ResolvedEntitlement", quantity: float, key: str
 ) -> bool | None:
@@ -567,7 +593,7 @@ async def _burn_for_usage(
     once. Never raises: a burn failure degrades to "nothing charged" and the caller decides.
     """
     from nexus.billing.credits import burn_credits
-    from nexus.models.billing import BillingCreditLedger, BillingRateCard
+    from nexus.models.billing import BillingCreditLedger
 
     burn_key = f"{key}:burn"
     try:
@@ -577,23 +603,8 @@ async def _burn_for_usage(
         if already is not None:
             return True
 
-        card = await ts.session.get(BillingRateCard, ent.capability_id)
-        if card is None or not card.active:
-            return None
-
-        if card.tiers:
-            # A volume ladder prices a unit by how many came before it. `rating.rate_period` prices
-            # the whole period in one `tiered_credits` call at close, so an in-flight burn has to
-            # charge the MARGINAL cost of these units at their real position — reading
-            # `credits_per_unit` flat overcharges the moment a ladder exists.
-            from nexus.billing.rating import tiered_credits
-
-            prior = await current_usage(ts, ent.capability_id)
-            amount = tiered_credits(prior + quantity, card) - tiered_credits(prior, card)
-        else:
-            amount = quantity * float(card.credits_per_unit or 0)
-
-        if amount <= 0:
+        amount = await _usage_amount(ts, ent, quantity)
+        if amount is None or amount <= 0:
             return None
 
         # `capability_id` is what makes the spend attributable. Without it every burn lands in the
@@ -611,6 +622,27 @@ async def _burn_for_usage(
         )
     except Exception:  # a charge must not break the call it is charging for
         logger.warning("usage burn failed for %s", ent.capability_id, exc_info=True)
+        return None
+
+
+async def _can_cover(
+    ts: TenantSession, ent: "ResolvedEntitlement", quantity: float
+) -> bool | None:
+    """`_burn_for_usage`'s answer without the burn — True, False or None, meaning the same things.
+
+    Compares exactly as `burn_credits` refuses, balance against amount, so a request this calls
+    covered is one the burn after it will not refuse, short of a concurrent spend in between. Never
+    raises: a failure is ``None`` ("nothing to charge"), as the burn's is.
+    """
+    from nexus.billing.credits import balance
+
+    try:
+        amount = await _usage_amount(ts, ent, quantity)
+        if amount is None or amount <= 0:
+            return None
+        return await balance(ts) >= amount
+    except Exception:
+        logger.warning("coverage check failed for %s", ent.capability_id, exc_info=True)
         return None
 
 
@@ -663,6 +695,126 @@ async def _credits_exhausted(ts, ent) -> bool:
         return False
 
 
+async def _decide(
+    ts: TenantSession, ent: ResolvedEntitlement, quantity: float, *, charge_key: str | None
+) -> tuple[str | None, float]:
+    """Why this request is refused (``None`` when it is not), and the usage it was judged against.
+
+    THE decision table. `check_and_meter` runs it to charge and `preflight` runs it to ask, so the
+    two cannot disagree about what a plan allows. ``charge_key`` is the whole difference: with one,
+    a priced request is burned under that key and quota reads are serialized against the write that
+    follows. Without one nothing is written and no lock is taken — `preflight` runs before a paid
+    search in the same transaction, and a transaction-scoped advisory lock taken there would be held
+    for the length of the search, queueing every other request the tenant makes for it.
+    """
+    capability_id = ent.capability_id
+    charging = charge_key is not None
+    blocked_reason: str | None = None
+    used = 0.0
+    if ent.mode == "disabled":
+        if ent.source == "feature_switch":
+            blocked_reason = "feature_switch"
+        elif ent.source == "dependency":
+            blocked_reason = "dependency"
+        else:
+            blocked_reason = "disabled"
+    elif ent.mode in ("shadow", "unlimited"):
+        blocked_reason = None            # observe-only, or a plan class that exists not to gate
+    elif await _is_gauge(ts, capability_id):
+        # GAUGES KEEP HARD CAPS AND ARE NEVER CHARGED.
+        #
+        # `seat.member`, `platform.storage` and `network.persons` resolve to a live count —
+        # members held, GB stored — not to an action somebody performed. Charging them per
+        # request is meaningless (the same seat would be billed on every call that reads it),
+        # and running them on credits would silently lock people out of a workspace they are
+        # paying for the moment the balance ran dry. So they stay outside the credit system and
+        # keep the plan limit they have always had.
+        if ent.quota is not None:
+            if charging:
+                await _lock_capability(ts, capability_id)
+            used = await current_usage(ts, capability_id)
+            limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
+            if used + quantity > limit:
+                blocked_reason = "quota_exhausted"
+    else:
+        # CREDITS ONLY. One price per request, taken from the rate card, paid in credits.
+        #
+        # Two prices used to exist for the same action — the rate card and
+        # `overage_price_credits` — and they disagreed on 11 plan/capability pairs in BOTH
+        # directions: `verify.email` cost 0.25 in plan and 1.00 past the allowance (4x more for
+        # crossing a line the customer cannot see), while `enrich.contact` on `core` cost 4.0
+        # in plan and 2.00 past it, so overflowing your own quota was the rational move.
+        #
+        # Worse, credits were burned ONLY for the portion beyond the quota, so an in-plan
+        # request cost nothing and the balance a customer was sold barely moved. "You have
+        # 2,000 credits" was not the truth about anything.
+        #
+        # Now every metered request burns `credits_per_unit x quantity` whatever side of any
+        # line it falls on, and a balance that cannot cover it stops the call. An unpriced
+        # capability charges nothing and is allowed — no rate card means nothing to run out of.
+        if ent.plan_id is None:
+            # NO SUBSCRIPTION -> allow, and charge nothing. The engine's documented bias, and
+            # the safety net under `start_subscription`, which never raises: a workspace whose
+            # plan attach failed has no balance to spend, so charging it would block every
+            # request and leave the customer with an account that does nothing. Same direction
+            # as unknown-capability and resolve-failure — unknown means allow.
+            blocked_reason = None
+        else:
+            if charging:
+                covered = await _burn_for_usage(ts, ent, float(quantity), charge_key)
+            else:
+                covered = await _can_cover(ts, ent, float(quantity))
+            if covered is False:
+                blocked_reason = "credits_exhausted"
+            elif covered is None and ent.quota is not None:
+                # NO RATE CARD, BUT A QUOTA. Fall back to enforcing the quota.
+                #
+                # Without this a capability nobody has priced becomes completely ungated:
+                # `_burn_for_usage` returns None (nothing to charge), so credits cannot limit
+                # it, and the quota branch no longer runs. The old model at least held the line
+                # at the quota. Found by two existing tests that seed plans WITHOUT rate cards
+                # and expect 999 email drafts against a quota of 20 to be refused — they were
+                # sailing through, which is exactly how an unpriced capability shipped free
+                # once before (`ai.scoring`, 4,090 runs).
+                #
+                # So: priced capabilities are limited by credits, unpriced ones by their quota,
+                # and something is always holding the line.
+                if charging:
+                    await _lock_capability(ts, capability_id)
+                used = await current_usage(ts, capability_id)
+                limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
+                if used + quantity > limit:
+                    blocked_reason = "quota_exhausted"
+
+    # Burst is a separate axis from quota: a tenant well inside its monthly allowance can
+    # still hammer an endpoint. Only queried for capabilities that set a limit, so it costs
+    # nothing on the rest.
+    if blocked_reason is None and ent.burst_limit is not None:
+        if await _over_burst(ts, capability_id, ent.burst_limit):
+            blocked_reason = "throttled"
+    return blocked_reason, used
+
+
+def _enforced(mode: str, blocked_reason: str) -> bool:
+    """Does this block refuse the call, or is it only recorded as a would-block?
+
+    A PLATFORM SWITCH IS ENFORCED WHATEVER THE BILLING MODE — the `off` kill switch is the single
+    exception, and both callers return for it before deciding anything.
+
+    `shadow` is a statement about BILLING rollout: "we are not yet refusing anyone over money." A
+    feature switch is not about money. "Calling is broken, take it offline" and "we have not
+    started enforcing quotas" are unrelated decisions, and production runs `shadow` by default — so
+    riding on it would have made the whole control inert exactly where it matters. The superadmin
+    flips it, the panel reports disabled, every customer keeps using the feature: the "configured
+    and doing nothing" failure this codebase keeps diagnosing.
+
+    `off` still wins because it is documented as a FULL kill switch for the engine. If this engine
+    misbehaves in production, "turn it all off" has to be a complete answer rather than one that
+    strands some blocks for an operator to hunt down under load.
+    """
+    return mode == "on" or blocked_reason == "feature_switch"
+
+
 async def check_and_meter(
     ts: TenantSession,
     *,
@@ -708,100 +860,8 @@ async def check_and_meter(
         # apply or both no-op on a retry. record_usage would otherwise mint its own.
         key = idempotency_key or f"auto:{uuid.uuid4().hex}"
 
-        blocked_reason: str | None = None
-        used = 0.0
-        if ent.mode == "disabled":
-            if ent.source == "feature_switch":
-                blocked_reason = "feature_switch"
-            elif ent.source == "dependency":
-                blocked_reason = "dependency"
-            else:
-                blocked_reason = "disabled"
-        elif ent.mode in ("shadow", "unlimited"):
-            blocked_reason = None            # observe-only, or a plan class that exists not to gate
-        elif await _is_gauge(ts, capability_id):
-            # GAUGES KEEP HARD CAPS AND ARE NEVER CHARGED.
-            #
-            # `seat.member`, `platform.storage` and `network.persons` resolve to a live count —
-            # members held, GB stored — not to an action somebody performed. Charging them per
-            # request is meaningless (the same seat would be billed on every call that reads it),
-            # and running them on credits would silently lock people out of a workspace they are
-            # paying for the moment the balance ran dry. So they stay outside the credit system and
-            # keep the plan limit they have always had.
-            if ent.quota is not None:
-                await _lock_capability(ts, capability_id)
-                used = await current_usage(ts, capability_id)
-                limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
-                if used + quantity > limit:
-                    blocked_reason = "quota_exhausted"
-        else:
-            # CREDITS ONLY. One price per request, taken from the rate card, paid in credits.
-            #
-            # Two prices used to exist for the same action — the rate card and
-            # `overage_price_credits` — and they disagreed on 11 plan/capability pairs in BOTH
-            # directions: `verify.email` cost 0.25 in plan and 1.00 past the allowance (4x more for
-            # crossing a line the customer cannot see), while `enrich.contact` on `core` cost 4.0
-            # in plan and 2.00 past it, so overflowing your own quota was the rational move.
-            #
-            # Worse, credits were burned ONLY for the portion beyond the quota, so an in-plan
-            # request cost nothing and the balance a customer was sold barely moved. "You have
-            # 2,000 credits" was not the truth about anything.
-            #
-            # Now every metered request burns `credits_per_unit x quantity` whatever side of any
-            # line it falls on, and a balance that cannot cover it stops the call. An unpriced
-            # capability charges nothing and is allowed — no rate card means nothing to run out of.
-            if ent.plan_id is None:
-                # NO SUBSCRIPTION -> allow, and charge nothing. The engine's documented bias, and
-                # the safety net under `start_subscription`, which never raises: a workspace whose
-                # plan attach failed has no balance to spend, so charging it would block every
-                # request and leave the customer with an account that does nothing. Same direction
-                # as unknown-capability and resolve-failure — unknown means allow.
-                blocked_reason = None
-            else:
-                covered = await _burn_for_usage(ts, ent, float(quantity), key)
-                if covered is False:
-                    blocked_reason = "credits_exhausted"
-                elif covered is None and ent.quota is not None:
-                    # NO RATE CARD, BUT A QUOTA. Fall back to enforcing the quota.
-                    #
-                    # Without this a capability nobody has priced becomes completely ungated:
-                    # `_burn_for_usage` returns None (nothing to charge), so credits cannot limit
-                    # it, and the quota branch no longer runs. The old model at least held the line
-                    # at the quota. Found by two existing tests that seed plans WITHOUT rate cards
-                    # and expect 999 email drafts against a quota of 20 to be refused — they were
-                    # sailing through, which is exactly how an unpriced capability shipped free
-                    # once before (`ai.scoring`, 4,090 runs).
-                    #
-                    # So: priced capabilities are limited by credits, unpriced ones by their quota,
-                    # and something is always holding the line.
-                    await _lock_capability(ts, capability_id)
-                    used = await current_usage(ts, capability_id)
-                    limit = ent.hard_limit if ent.hard_limit is not None else ent.quota
-                    if used + quantity > limit:
-                        blocked_reason = "quota_exhausted"
-
-        # Burst is a separate axis from quota: a tenant well inside its monthly allowance can
-        # still hammer an endpoint. Only queried for capabilities that set a limit, so it costs
-        # nothing on the rest.
-        if blocked_reason is None and ent.burst_limit is not None:
-            if await _over_burst(ts, capability_id, ent.burst_limit):
-                blocked_reason = "throttled"
-
-        # A PLATFORM SWITCH IS ENFORCED WHATEVER THE BILLING MODE — the `off` kill switch above is
-        # the single exception, and it returned long before this point.
-        #
-        # `shadow` is a statement about BILLING rollout: "we are not yet refusing anyone over
-        # money." A feature switch is not about money. "Calling is broken, take it offline" and "we
-        # have not started enforcing quotas" are unrelated decisions, and production runs `shadow`
-        # by default — so riding on it would have made the whole control inert exactly where it
-        # matters. The superadmin flips it, the panel reports disabled, every customer keeps using
-        # the feature: the "configured and doing nothing" failure this codebase keeps diagnosing.
-        #
-        # `off` still wins because it is documented as a FULL kill switch for the engine. If this
-        # engine misbehaves in production, "turn it all off" has to be a complete answer rather
-        # than one that strands some blocks for an operator to hunt down under load.
-        enforced = mode == "on" or blocked_reason == "feature_switch"
-        allowed = True if not enforced else blocked_reason is None
+        blocked_reason, used = await _decide(ts, ent, quantity, charge_key=key)
+        allowed = blocked_reason is None or not _enforced(mode, blocked_reason)
 
         # The one number that decides whether enforcement can be switched on. In shadow mode the
         # engine computes `blocked_reason` on every call and then discards it, so without this
@@ -834,3 +894,49 @@ async def check_and_meter(
         # exactly like "nobody is hitting a limit" on every other metric.
         metrics.record_billing_decision(capability_id, "error")
         return MeterResult(allowed=True, recorded=False)
+
+
+async def preflight(
+    ts: TenantSession, capability_id: str, *, quantity: float = 1
+) -> MeterResult:
+    """Would `check_and_meter` refuse ``quantity`` units right now? Records nothing, charges nothing.
+
+    For work that spends OUR money before its size is known — a paid search billed per result
+    delivered. `check_and_meter` cannot be asked first, because it burns credits as part of
+    deciding: asking would charge before a single result existed. So the caller asks here, turns a
+    refusal into the same 402 `metered()` raises (`raise_if_blocked`), does the work, and then
+    meters what it actually delivered.
+
+    Ask for the MOST the work can deliver. Whatever it then delivers was affordable when asked, so
+    the charge afterwards is not refused — short of a concurrent spend landing in between, which
+    is bounded to that one race.
+
+    The same decision table and mode rules as the meter: `off` evaluates nothing, `shadow` refuses
+    only a platform switch, `on` refuses whatever the meter would. No usage row, no burn, no
+    advisory lock and no billing-decision metric: the meter that runs after the work records the
+    one decision that actually happened, and counting here too would double `would_block`.
+
+    Never raises; a failure allows, like the seam it mirrors.
+    """
+    from nexus.core.config import get_settings
+
+    mode = get_settings().billing_enforcement
+    if mode == "off":
+        return MeterResult(allowed=True)
+    if not _valid_quantity(quantity):
+        return MeterResult(allowed=True, reason="invalid_quantity")
+    try:
+        ent = await resolve_entitlement(ts, capability_id)
+        blocked_reason, used = await _decide(ts, ent, quantity, charge_key=None)
+        allowed = blocked_reason is None or not _enforced(mode, blocked_reason)
+        return MeterResult(
+            allowed=allowed,
+            reason=blocked_reason if not allowed else None,
+            would_block=blocked_reason is not None,
+            used=used,
+            quota=ent.quota,
+            entitlement=ent,
+        )
+    except Exception:  # asking must never break the product any more than charging may
+        logger.warning("preflight failed for %s", capability_id, exc_info=True)
+        return MeterResult(allowed=True)
