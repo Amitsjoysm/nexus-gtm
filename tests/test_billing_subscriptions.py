@@ -115,6 +115,57 @@ async def test_change_plan_rejects_an_unknown_plan():
         raise AssertionError("change_plan must reject an unknown plan")
 
 
+async def test_change_plan_for_a_tenant_with_no_subscription_starts_on_the_plan_terms():
+    """With no row at all, change_plan creates one. That row used to take the column default
+    "month" and a one-month first period whatever the plan, so an annual plan rolled monthly and
+    `roll_period` granted its annual allowance every month."""
+    from datetime import timedelta
+
+    from nexus.billing.subscriptions import change_plan
+    from nexus.models.billing import BillingSubscription
+
+    await _seed()
+    tid = await make_tenant(slug="cp5", name="CP Five")
+    async with tenant_session(tid) as ts:
+        assert await ts.list(BillingSubscription) == []          # the fallback path
+        sub = await change_plan(ts, "launch-annual", actor="admin@nexus")
+        assert sub.plan_id == "launch-annual"
+        assert sub.interval == "year"
+        length = sub.current_period_end - sub.current_period_start
+
+    assert timedelta(days=365) <= length <= timedelta(days=366), (
+        f"an annual plan started on a {length.days}-day first period"
+    )
+
+
+async def test_a_first_subscription_takes_its_plan_terms():
+    """Every first subscription is created here: signup, the backfill, change_plan's fallback, and
+    the admin endpoints that assign a stock or a custom plan. A custom plan can be yearly and
+    non-USD, so both terms and the length of the first period have to come from the plan."""
+    from datetime import timedelta
+
+    from nexus.billing.subscriptions import ensure_subscription
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.billing import BillingPlan
+
+    await _seed()
+    async with get_sessionmaker()() as s:
+        s.add(BillingPlan(
+            id="custom-cp6", name="CP Six (custom)", plan_class="custom", status="active",
+            currency="EUR", interval="year",
+        ))
+        await s.commit()
+    tid = await make_tenant(slug="cp6", name="CP Six")
+    async with tenant_session(tid) as ts:
+        sub = await ensure_subscription(ts, plan_id="custom-cp6")
+        assert (sub.interval, sub.currency) == ("year", "EUR")
+        length = sub.current_period_end - sub.current_period_start
+
+    assert timedelta(days=365) <= length <= timedelta(days=366), (
+        f"a yearly plan started on a {length.days}-day first period"
+    )
+
+
 async def test_cancel_at_period_end_keeps_service_running():
     """Cancelling is not cutting off — the customer paid through the period."""
     from nexus.billing.subscriptions import cancel_subscription, ensure_subscription

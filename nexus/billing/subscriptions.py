@@ -47,15 +47,27 @@ async def ensure_subscription(
     ts: TenantSession, *, plan_id: str, status: str = "active", grandfathered: bool = False,
 ) -> BillingSubscription | None:
     """Give this tenant a subscription if it has none. Returns the new row, or None if one
-    already existed — never modifies an existing subscription."""
+    already existed — never modifies an existing subscription.
+
+    The new row takes its plan's terms, and its first period is sized by the plan's interval.
+    Every first subscription is created here: signup, the backfill, :func:`change_plan`'s fallback
+    and the admin assign endpoints. A row left on the column defaults put annual and custom yearly
+    plans on "month", so :func:`roll_period` rolled them monthly and granted the annual allowance
+    each time.
+    """
     existing = await ts.list(BillingSubscription, limit=1)
     if existing:
         return None
     now = utcnow()
-    sub = BillingSubscription(
-        plan_id=plan_id, status=status, grandfathered=grandfathered,
-        current_period_start=now, current_period_end=next_period_end(now),
-    )
+    sub = BillingSubscription(plan_id=plan_id, status=status)
+    plan = await ts.session.get(BillingPlan, plan_id)
+    if plan is not None:
+        take_plan_terms(sub, plan)
+    # Set after take_plan_terms, which clears it: the backfill creates grandfathered rows on purpose.
+    sub.grandfathered = grandfathered
+    interval = plan.interval if plan is not None else "month"
+    sub.current_period_start = now
+    sub.current_period_end = next_period_end(now, interval)
     ts.add(sub)
     await ts.flush()
     return sub
@@ -197,10 +209,11 @@ async def _any_subscription(ts: TenantSession) -> BillingSubscription | None:
 def take_plan_terms(sub: BillingSubscription, plan: BillingPlan) -> None:
     """Put ``sub`` on ``plan`` under that plan's terms. Writes nothing else.
 
-    The one definition of what moving onto a plan copies, shared by :func:`change_plan` and the
-    Stripe webhook. The webhook used to keep its own copy, which set the plan and left the
-    interval behind: a workspace that bought `launch-annual` through Checkout stayed on "month",
-    so :func:`roll_period` closed its period monthly and granted the annual allowance each time.
+    The one definition of what moving onto a plan copies, shared by :func:`change_plan`,
+    :func:`ensure_subscription` and the Stripe webhook. The webhook used to keep its own copy,
+    which set the plan and left the interval behind: a workspace that bought `launch-annual`
+    through Checkout stayed on "month", so :func:`roll_period` closed its period monthly and
+    granted the annual allowance each time.
 
     Status, proration and credit grants stay with the callers. The webhook must not prorate a
     provider-owned subscription (see :func:`_proratable`), and each caller has its own rule for
