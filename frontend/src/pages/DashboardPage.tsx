@@ -85,6 +85,8 @@ export function DashboardPage() {
   const { session } = useAuth();
   const { windowDays } = useSignalWindow();
   const canViewAttribution = session ? ROLE_RANK[session.role] >= ROLE_RANK.manager : false;
+  // A rep's overview is their own queue and AI work beside the shared book (the server scopes it).
+  const isRep = session?.role === "rep";
   const [seeding, setSeeding] = useState(false);
 
   const overview = useApi<AnalyticsOverview>((signal) => api.analyticsOverview(signal), []);
@@ -137,7 +139,11 @@ export function DashboardPage() {
     <div>
       <PageHeader
         title="Dashboard"
-        description="Your go-to-market intelligence at a glance."
+        description={
+          isRep
+            ? "Your task queue and the AI work you've run, beside the account book your team shares."
+            : "Your go-to-market intelligence at a glance."
+        }
         actions={
           <>
             <LiveIndicator live={live} lastTick={lastTick} className={styles.live} />
@@ -172,7 +178,12 @@ export function DashboardPage() {
         }
       />
 
-      <ActivationChecklist overview={overview.data} onSeed={seedDemo} seeding={seeding} />
+      {/* Workspace setup (ICP, plays) is not a rep's to do, and they cannot open either page. Reps
+          only ever missed it because their overview used to 403; with a real one it would nag
+          them forever about steps they are not allowed to take. */}
+      {!isRep && (
+        <ActivationChecklist overview={overview.data} onSeed={seedDemo} seeding={seeding} />
+      )}
 
       <DataState
         state={overview}

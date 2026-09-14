@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 
 from nexus.core.db import ensure_aware
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Account, Contact
 from nexus.models.alerts import Alert
+from nexus.models.billing import BillingUsageEvent
 from nexus.models.intelligence import AccountScore, AgentRun
 from nexus.models.signal import SignalEvent
 from nexus.models.workflow import InboxTask, PlayRun
@@ -22,6 +23,27 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # table size, so the endpoint stays cheap to poll even with millions of rows per tenant.
 _ACTIVITY_MAX = 50
 
+#: A usage capability that meters tokens alongside an action rather than being one. Counting it
+#: would report a single research brief as hundreds of "actions".
+_TOKEN_METER = "ai.tokens"
+
+
+def _count(tid: str, model, *where):
+    return (
+        select(func.count())
+        .select_from(model)
+        .where(model.tenant_id == tid, *where)
+        .scalar_subquery()
+    )
+
+
+def _avg_composite(tid: str):
+    return (
+        select(func.avg(AccountScore.composite))
+        .where(AccountScore.tenant_id == tid)
+        .scalar_subquery()
+    )
+
 
 class AnalyticsService:
     async def overview(self, ts: TenantSession) -> dict:
@@ -32,27 +54,15 @@ class AnalyticsService:
         queries — one network round trip and one transaction snapshot instead of eight.
         Portable: bare scalar-subquery SELECTs run identically on SQLite and Postgres."""
         tid = ts.tenant_id
-
-        def _count(model, *where):
-            return (
-                select(func.count())
-                .select_from(model)
-                .where(model.tenant_id == tid, *where)
-                .scalar_subquery()
-            )
-
         stmt = select(
-            _count(Account).label("accounts"),
-            _count(Contact).label("contacts"),
-            _count(SignalEvent).label("signals"),
-            _count(InboxTask, InboxTask.status == "open").label("open_tasks"),
-            _count(AgentRun).label("agent_runs"),
-            _count(AgentRun, AgentRun.status == "failed").label("agent_failures"),
-            _count(PlayRun).label("plays_executed"),
-            select(func.avg(AccountScore.composite))
-            .where(AccountScore.tenant_id == tid)
-            .scalar_subquery()
-            .label("avg_composite"),
+            _count(tid, Account).label("accounts"),
+            _count(tid, Contact).label("contacts"),
+            _count(tid, SignalEvent).label("signals"),
+            _count(tid, InboxTask, InboxTask.status == "open").label("open_tasks"),
+            _count(tid, AgentRun).label("agent_runs"),
+            _count(tid, AgentRun, AgentRun.status == "failed").label("agent_failures"),
+            _count(tid, PlayRun).label("plays_executed"),
+            _avg_composite(tid).label("avg_composite"),
         )
         row = (await ts.session.execute(stmt)).one()
 
@@ -73,6 +83,62 @@ class AnalyticsService:
             "agent_actions": int(row.agent_runs or 0),
             "agent_failures": int(row.agent_failures or 0),
             "plays_executed": int(row.plays_executed or 0),
+            "avg_composite_score": round(float(row.avg_composite), 1) if row.avg_composite else 0.0,
+        }
+
+    async def overview_for_user(self, ts: TenantSession, user_id: str) -> dict:
+        """A rep's dashboard: their own queue and AI work, beside the book they share.
+
+        The overview was manager-only while the dashboard every rep lands on called it anyway, so a
+        rep's first screen was "Role 'rep' lacks view_analytics". This is what a rep can honestly be
+        shown as *theirs* with the attribution that exists today:
+
+        * ``open_tasks`` — tasks assigned to them plus unassigned ones, which is the queue they are
+          expected to work. Assigned-only would read 0 for nearly everyone (plays rarely set an
+          owner) beside an Inbox full of work; the whole workspace would count other reps' queues.
+        * ``my_agent_actions`` — AI actions they ran, from the usage stream: ``AgentRun`` carries no
+          user, and every metered AI call does. Refunded actions net out, since a refund means the
+          action failed; the token meter is excluded because it measures an action rather than
+          being one.
+
+        Accounts, contacts, signals and the average fit are the shared book, and the same numbers
+        the rep can already reach from the Accounts and Signals pages. Team health (agent failures,
+        plays executed) is a manager's question and is left out rather than zeroed.
+        """
+        tid = ts.tenant_id
+        net_actions = (
+            select(func.coalesce(func.sum(case(
+                (BillingUsageEvent.quantity > 0, 1),
+                (BillingUsageEvent.quantity < 0, -1),
+                else_=0,
+            )), 0))
+            .where(
+                BillingUsageEvent.tenant_id == tid,
+                BillingUsageEvent.user_id == user_id,
+                BillingUsageEvent.capability_id.like("ai.%"),
+                BillingUsageEvent.capability_id != _TOKEN_METER,
+            )
+            .scalar_subquery()
+        )
+        stmt = select(
+            _count(tid, Account).label("accounts"),
+            _count(tid, Contact).label("contacts"),
+            _count(tid, SignalEvent).label("signals"),
+            _count(
+                tid, InboxTask,
+                InboxTask.status == "open",
+                or_(InboxTask.owner_user_id == user_id, InboxTask.owner_user_id.is_(None)),
+            ).label("open_tasks"),
+            net_actions.label("my_agent_actions"),
+            _avg_composite(tid).label("avg_composite"),
+        )
+        row = (await ts.session.execute(stmt)).one()
+        return {
+            "accounts": int(row.accounts or 0),
+            "contacts": int(row.contacts or 0),
+            "signals": int(row.signals or 0),
+            "open_tasks": int(row.open_tasks or 0),
+            "my_agent_actions": max(0, int(row.my_agent_actions or 0)),
             "avg_composite_score": round(float(row.avg_composite), 1) if row.avg_composite else 0.0,
         }
 

@@ -17,7 +17,7 @@ from nexus.api.schemas import (
 )
 from nexus.analytics.service import get_analytics_service
 from nexus.core.db import ensure_aware, utcnow
-from nexus.core.rbac import Permission
+from nexus.core.rbac import Permission, has_permission
 from nexus.core.tenancy import TenantSession
 from nexus.inbox.service import get_inbox_service
 from nexus.ingestion.service import get_ingestion_service
@@ -220,9 +220,19 @@ async def ingest_account(
 @router.get("/analytics/overview")
 async def analytics_overview(
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.view_analytics)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> dict:
-    return await get_analytics_service().overview(ts)
+    """The dashboard's KPI tiles. Managers see the workspace; a rep sees their own work.
+
+    Gated on ``manage_accounts`` (every role) and scoped by ``view_analytics`` rather than refused
+    by it: the dashboard is every rep's landing page, and refusing its first request put an error
+    card where their numbers should be. The team surfaces — the activity feed and outcome
+    attribution — keep their manager-only gate.
+    """
+    service = get_analytics_service()
+    if has_permission(principal.role, Permission.view_analytics):
+        return await service.overview(ts)
+    return await service.overview_for_user(ts, principal.user_id)
 
 
 @router.get("/analytics/activity", response_model=list[ActivityItemOut])
