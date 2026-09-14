@@ -19,6 +19,8 @@ export { Avatar } from "./Avatar";
 export type { AvatarProps } from "./Avatar";
 export { Spinner } from "./Spinner";
 export type { SpinnerProps } from "./Spinner";
+export { WorkingIndicator } from "./WorkingIndicator";
+export type { WorkingIndicatorProps } from "./WorkingIndicator";
 export { Skeleton, SkeletonText } from "./Skeleton";
 export type { SkeletonProps } from "./Skeleton";
 export { EmptyState } from "./EmptyState";

@@ -18,6 +18,8 @@ from nexus.api.schemas import (
     ContactOut,
     LookalikeOut,
     LookalikeResponse,
+    SimilarPersonAddedOut,
+    SimilarPersonIn,
 )
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
@@ -441,6 +443,142 @@ async def find_contact_lookalikes(
     )
 
 
+def _profile_key(url: str | None) -> str:
+    """The ``/in/<slug>`` of a LinkedIn person profile, lowercased — or "" for anything else.
+
+    Two spellings of one person's URL differ in scheme, ``www.``, country subdomain, query string
+    and trailing slash; the slug is what they share. It is also the identity the shared people
+    store keys on, so a person is one person here for the same reason they are one person there.
+    """
+    from nexus.contacts.affiliation import canonical_url
+
+    low = canonical_url(url).split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    marker = "linkedin.com/in/"
+    if marker not in low:
+        return ""
+    return low.split(marker, 1)[1].split("/", 1)[0]
+
+
+async def _contact_by_profile(ts: TenantSession, profile: str) -> Contact | None:
+    """This workspace's contact with that LinkedIn profile, deleted ones included."""
+    from sqlalchemy import or_
+
+    esc = profile.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    # Anchored at the slug's end — the URL ends there, or a path or query follows. A bare prefix
+    # match let `/in/jane-peer-42x0`…`x29` fill the capped window and hide `/in/jane-peer-42`,
+    # which then got added a second time. The LIKE narrows; the key comparison is the authority.
+    url = Contact.linkedin_url
+    candidates = await ts.list(
+        Contact,
+        or_(*(url.ilike(f"%/in/{esc}{tail}", escape="\\") for tail in ("", "/%", "?%", "#%"))),
+        limit=25,
+    )
+    return next((c for c in candidates if _profile_key(c.linkedin_url) == profile), None)
+
+
+@router.post(
+    "/contacts/from-lookalike",
+    response_model=SimilarPersonAddedOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_similar_person(
+    body: SimilarPersonIn,
+    response: Response,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> SimilarPersonAddedOut:
+    """Keep a person that "Find similar → Source new people" found. 201 if added, 200 if already here.
+
+    Sourcing returned people with ``is_new`` and nowhere to put them: the row's only action opened
+    their LinkedIn profile, so a rep could look at a good lead and do nothing with it. This writes
+    them as an ordinary contact, after which email, call and enrichment all work as they do for
+    anyone else.
+
+    * **The person is deduped on their LinkedIn profile across the whole workspace**, before the
+      account is even considered — they may already be filed under a different account, and a
+      second row would split their history. A deleted match is restored rather than duplicated.
+      With no profile, the fallback is their name on the target account, the rule "Find contacts"
+      already uses.
+    * **The account is the rep's choice**: an ``account_id``, or a company to find-or-create through
+      ``find_existing_account`` — domain first, and a bare name only against accounts that have no
+      domain either. That contract is the one account creation and import already use, so this
+      endpoint is not the looser path through which duplicates arrive.
+    * **Free.** The search that found this person was charged when its results were delivered;
+      writing the row the rep picked from them is not a second purchase. Finding their email is a
+      separate, metered act the client offers next.
+    """
+    from nexus.accounts.dedupe import find_existing_account, normalise_on_write
+
+    full_name = " ".join(body.full_name.split())
+    profile = _profile_key(body.linkedin_url)
+
+    async def already_here(contact: Contact, account: Account | None = None) -> SimilarPersonAddedOut:
+        if contact.deleted_at is not None:
+            contact.deleted_at = None
+            await ts.flush()
+        account = account or await ts.get(Account, contact.account_id)
+        response.status_code = status.HTTP_200_OK
+        return SimilarPersonAddedOut(
+            contact=_contact_out(contact), account_id=contact.account_id,
+            account_name=account.name if account else "",
+            account_domain=account.domain if account else None,
+            created=False, account_created=False,
+        )
+
+    if profile:
+        existing = await _contact_by_profile(ts, profile)
+        if existing is not None:
+            return await already_here(existing)
+
+    account_created = False
+    if body.account_id:
+        account = await ts.get(Account, body.account_id)
+        if account is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    else:
+        name = (body.new_account_name or body.company or "").strip()
+        if not name:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Choose an account for this person, or name the company they work at.",
+            )
+        domain = (body.new_account_domain or "").strip() or None
+        account = await find_existing_account(ts, domain=domain, name=name)
+        if account is None:
+            account = Account(
+                tenant_id=ts.tenant_id, name=name, domain=normalise_on_write(domain),
+                source="lookalike",
+            )
+            ts.add(account)
+            await ts.flush()
+            account_created = True
+            # Enqueued, never inline — the same rule `create_account` and `add_from_lookalike`
+            # follow, for the same 48-second reason.
+            await _enqueue_first_ingest(ts.tenant_id, account.id)
+        elif account.is_archived:
+            account.set_archived(False)
+            await ts.flush()
+
+    if not profile:
+        wanted = full_name.lower()
+        for c in await ts.list(Contact, Contact.account_id == account.id):
+            if " ".join((c.full_name or "").split()).lower() == wanted:
+                return await already_here(c, account)
+
+    contact = Contact(
+        tenant_id=ts.tenant_id, account_id=account.id, full_name=full_name,
+        title=(body.title or "").strip() or None,
+        linkedin_url=(body.linkedin_url or "").strip() or None,
+        enrichment_source="similar_people",
+    )
+    ts.add(contact)
+    await ts.flush()
+    return SimilarPersonAddedOut(
+        contact=_contact_out(contact), account_id=account.id, account_name=account.name,
+        account_domain=account.domain, created=True, account_created=account_created,
+    )
+
+
 @router.post("/{account_id}/source-contacts", response_model=list[ContactOut])
 async def source_contacts(
     account_id: str,
@@ -606,6 +744,21 @@ async def delete_account(
     return {"id": account_id, "deleted": True, "restorable": True}
 
 
+#: What the account export writes, in order, all read off `AccountOut`.
+#:
+#: It was eight columns — name, domain, industry, size, country, tech, archived, created — while the
+#: Accounts page shows a Fit score on every row and enrichment stores the rest of this list in
+#: `custom_fields`. Measured on a real workspace: 56 accounts, all scored, 45 with a description, 44
+#: with a LinkedIn URL, and none of that in the file. `name` stays first; tests and anyone's
+#: spreadsheet formulas key on it.
+_ACCOUNT_EXPORT_COLUMNS = (
+    "name", "domain", "fit_score", "industry", "sub_industry", "employee_count",
+    "annual_revenue", "revenue", "country", "region", "city", "postal_code",
+    "tech_stack", "keywords", "linkedin_url", "description", "source", "crm_source",
+)
+_EXPORT_SCORE_BATCH = 1000
+
+
 @router.get("/export/csv")
 async def export_accounts(
     include_archived: bool = False,
@@ -632,17 +785,23 @@ async def export_accounts(
     # exactly the customer least able to be surprised by their bill.
     await _meter(ts, "data.export", 1 if rows else 0, principal)
 
+    # In slices: a bind parameter per account, and the driver caps a statement at 32,767 of them.
+    ids = [a.id for a in rows]
+    scores: dict[str, int] = {}
+    for start in range(0, len(ids), _EXPORT_SCORE_BATCH):
+        scores.update(await _latest_fit_scores(ts, ids[start:start + _EXPORT_SCORE_BATCH]))
+
+    def row(a: Account) -> list:
+        # Through `_account_out`, the serializer the list and detail pages read, so a column the
+        # screen shows cannot come out different — or blank — in the file.
+        shown = _account_out(a, fit_score=scores.get(a.id)).model_dump()
+        return [shown[col] for col in _ACCOUNT_EXPORT_COLUMNS] + [
+            "yes" if a.is_archived else "no",
+            csv_timestamp(a.created_at),
+        ]
+
     return csv_response(
         "accounts.csv",
-        ["name", "domain", "industry", "employee_count", "country", "tech_stack",
-         "archived", "created_at"],
-        (
-            [
-                a.name, a.domain or "", a.industry or "", a.employee_count or "",
-                a.country or "", "; ".join(a.tech_stack or []),
-                "yes" if a.is_archived else "no",
-                csv_timestamp(a.created_at),
-            ]
-            for a in rows
-        ),
+        [*_ACCOUNT_EXPORT_COLUMNS, "archived", "created_at"],
+        (row(a) for a in rows),
     )

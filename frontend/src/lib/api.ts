@@ -107,6 +107,8 @@ import type {
   LookalikeResponse,
   ContactLookalikeResponse,
   LookalikeMode,
+  SimilarPersonAdded,
+  SimilarPersonInput,
   CRMConnection,
   CRMConnectionInput,
   CRMConnectionTest,
@@ -289,12 +291,18 @@ export class ApiClient {
    * Goes through `fetch` rather than pointing the browser at the URL: the export endpoints are
    * bearer-authenticated, and a plain link or `window.open` sends no Authorization header, so it
    * would 401. The object URL is revoked on a later task, not immediately — see below.
+   *
+   * Resolves to the number of data rows, from the server's `X-Row-Count`. At zero NO file is
+   * saved: a header-only CSV is valid and looks exactly like a broken download to whoever opens
+   * it, which is what "exports are blank" turned out to be for a workspace with no contacts. The
+   * caller says "nothing to export" instead. `null` means the server sent no count (an older
+   * build), and the file is saved as before.
    */
   private async download(
     path: string,
     filename: string,
     query?: RequestOptions["query"],
-  ): Promise<void> {
+  ): Promise<{ rows: number | null }> {
     const headers: Record<string, string> = {};
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
     let res: Response;
@@ -309,6 +317,9 @@ export class ApiClient {
       const data = text ? safeJsonParse(text) : null;
       throw new ApiError(res.status, errorDetail(data, res.statusText || "Export failed"));
     }
+    const counted = res.headers.get("X-Row-Count");
+    const rows = counted === null || counted.trim() === "" ? null : Number(counted);
+    if (rows === 0) return { rows };
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -330,6 +341,7 @@ export class ApiClient {
     // cost of being marginally too quick is a silently empty export, and the failure gives the
     // user no clue that anything went wrong.
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return { rows: rows !== null && Number.isFinite(rows) ? rows : null };
   }
 
   // ---- auth ----
@@ -569,6 +581,17 @@ export class ApiClient {
       `/accounts/contacts/${contactId}/lookalikes?limit=${limit}&mode=${mode}`,
       { method: "POST", signal },
     );
+  }
+  /**
+   * Keep a person "Source new people" found. Free: the search was charged when it delivered them.
+   * Returns `created: false` (HTTP 200) when that LinkedIn profile is already in the workspace.
+   */
+  addSimilarPerson(body: SimilarPersonInput, signal?: AbortSignal) {
+    return this.request<SimilarPersonAdded>("/accounts/contacts/from-lookalike", {
+      method: "POST",
+      body,
+      signal,
+    });
   }
   /** Source the buying committee for an account; returns the contacts newly added. */
   sourceContacts(accountId: string, limit = 5, signal?: AbortSignal) {

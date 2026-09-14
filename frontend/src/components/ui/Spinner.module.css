@@ -14,8 +14,16 @@
   }
 }
 
+/* A loading indicator is essential motion: stopping it removes the only sign that work is
+   happening, and a still ring reads as a hang. It slows down under reduced motion; it does not stop.
+
+   `!important` is what makes this rule work at all. global.css sets `animation-duration: 0.01ms` and
+   `animation-iteration-count: 1` on `*` with !important, and a normal declaration loses to an
+   important one whatever its specificity — so this rule used to be dead, and the ring froze after
+   one 0.01ms turn. At equal importance the class outranks `*`. */
 @media (prefers-reduced-motion: reduce) {
   .spinner {
-    animation-duration: 1.2s;
+    animation-duration: 1.2s !important;
+    animation-iteration-count: infinite !important;
   }
 }

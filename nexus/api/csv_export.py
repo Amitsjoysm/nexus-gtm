@@ -42,21 +42,45 @@ def csv_timestamp(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M")
 
 
+def csv_cell(value: object) -> object:
+    """One value as a spreadsheet cell: blank for nothing, a list joined with ``; ``.
+
+    The joiner is the one `tech_stack` has always used, so a column that holds a list reads the
+    same whichever list it is.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return "; ".join(str(v) for v in value)
+    return value
+
+
 def csv_response(
     filename: str,
     header: Sequence[str],
     rows: Iterable[Sequence[object]],
 ) -> Response:
-    """Build the download. ``rows`` may be a generator; it is consumed once."""
+    """Build the download. ``rows`` may be a generator; it is consumed once.
+
+    ``X-Row-Count`` carries the number of data rows. A header-only file is valid CSV and looks
+    exactly like a broken download to the person who opens it — that is what "the export is blank"
+    turned out to be for a workspace with no contacts — so the client reads the count and says
+    "nothing to export" instead of saving an empty file.
+    """
     buf = io.StringIO()
     buf.write(_BOM)
     writer = csv.writer(buf)
     writer.writerow(list(header))
+    count = 0
     for row in rows:
-        writer.writerow(["" if cell is None else cell for cell in row])
+        writer.writerow([csv_cell(cell) for cell in row])
+        count += 1
     return Response(
         content=buf.getvalue(),
         # `charset=utf-8` so a browser previewing rather than downloading also decodes it right.
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Row-Count": str(count),
+        },
     )

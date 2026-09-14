@@ -464,6 +464,7 @@ class ContactLookalikeOut(BaseModel):
     title: str | None = None
     seniority: str | None = None
     email: str | None = None
+    email_status: str | None = None
     linkedin_url: str | None = None
     score: int
     reasons: list[str] = Field(default_factory=list)
@@ -481,6 +482,38 @@ class ContactLookalikeResponse(BaseModel):
     # workspace yet" and "we could not find anyone similar on the web" are different answers.
     mode: str = "existing"
     lookalikes: list[ContactLookalikeOut] = Field(default_factory=list)
+
+
+class SimilarPersonIn(BaseModel):
+    """A person from "Source new people" the rep chose to keep.
+
+    Where they go is the rep's call, stated one of two ways: an existing ``account_id``, or a
+    company to find-or-create (``new_account_name``, falling back to the ``company`` the search
+    read off their profile). The server never picks an account by guessing — a name is not an
+    identity, and a person filed under the wrong company is a rep calling a stranger with somebody
+    else's context.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    full_name: str = Field(min_length=1, max_length=200)
+    title: str | None = Field(default=None, max_length=300)
+    linkedin_url: str | None = Field(default=None, max_length=500)
+    company: str = Field(default="", max_length=255)
+    account_id: str | None = None
+    new_account_name: str | None = Field(default=None, max_length=255)
+    new_account_domain: str | None = Field(default=None, max_length=253)
+
+
+class SimilarPersonAddedOut(BaseModel):
+    contact: ContactOut
+    account_id: str
+    account_name: str
+    account_domain: str | None = None
+    # False when this person was already in the workspace (same LinkedIn profile, or same name on
+    # the same account). The client says "already added" rather than claiming a new row.
+    created: bool
+    account_created: bool
 
 
 # ---- outcomes (feedback loop) ----

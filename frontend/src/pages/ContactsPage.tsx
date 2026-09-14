@@ -8,16 +8,18 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
+  IconButton,
   Icons,
   Input,
   Modal,
   Select,
   Skeleton,
-  Spinner,
   useToast,
+  WorkingIndicator,
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
 import { ProviderIcon } from "@/components/ui/providerIcons";
+import { AddSimilarPerson, lookalikeFromAdded } from "@/components/AddSimilarPerson";
 import { CallConsole } from "@/components/CallConsole";
 import { EmailComposer } from "@/components/EmailComposer";
 import { useApi } from "@/hooks/useApi";
@@ -25,8 +27,33 @@ import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { strengthMeta } from "@/lib/display";
 import { timeAgo } from "@/lib/format";
-import type { CallTask, ContactLookalike, LookalikeMode, WorkspaceContact } from "@/lib/types";
+import type {
+  CallTask,
+  ContactLookalike,
+  LookalikeMode,
+  SimilarPersonAdded,
+  WorkspaceContact,
+} from "@/lib/types";
 import styles from "./ContactsPage.module.css";
+
+/** What Email and Call need: a table row, or a similar-people result already in the workspace. */
+type Reachable = Pick<
+  WorkspaceContact,
+  "id" | "account_id" | "account_name" | "full_name" | "email" | "email_status"
+>;
+
+const similarKey = (p: ContactLookalike) => p.contact_id || p.linkedin_url || p.full_name;
+
+function reachableFromLookalike(p: ContactLookalike): Reachable {
+  return {
+    id: p.contact_id,
+    account_id: p.account_id,
+    account_name: p.account_name,
+    full_name: p.full_name,
+    email: p.email,
+    email_status: p.email_status ?? null,
+  };
+}
 
 const ALL = "__all__";
 
@@ -89,7 +116,7 @@ export function ContactsPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [phoneId, setPhoneId] = useState<string | null>(null);
   const [callTask, setCallTask] = useState<CallTask | null>(null);
-  const [emailFor, setEmailFor] = useState<WorkspaceContact | null>(null);
+  const [emailFor, setEmailFor] = useState<Reachable | null>(null);
   const [callingId, setCallingId] = useState<string | null>(null);
   // "Similar people" — opens a modal ranking the workspace's other contacts against this one.
   const [similarFor, setSimilarFor] = useState<WorkspaceContact | null>(null);
@@ -99,12 +126,35 @@ export function ContactsPage() {
    *  nothing is billed — until they pick, because `new` spends a paid search. */
   const [similarMode, setSimilarMode] = useState<LookalikeMode | null>(null);
   const [similarId, setSimilarId] = useState<string | null>(null);
+  /** The sourced person whose "Add" form is open, by `similarKey`. One at a time. */
+  const [addingKey, setAddingKey] = useState<string | null>(null);
 
   /** Open the modal on the choice step. Nothing is fetched until a mode is picked. */
   function findSimilar(c: WorkspaceContact) {
     setSimilarFor(c);
     setSimilarData(null);
     setSimilarMode(null);
+    setAddingKey(null);
+  }
+
+  /** The row becomes an ordinary contact in place, and the table behind picks them up. */
+  function markAdded(key: string, result: SimilarPersonAdded) {
+    setSimilarData((rows) =>
+      rows ? rows.map((p) => (similarKey(p) === key ? lookalikeFromAdded(p, result) : p)) : rows,
+    );
+    setAddingKey(null);
+    contacts.refetch();
+  }
+
+  // Email and Call open their own dialogs, so the results dialog closes first rather than stacking
+  // a second one on top of it.
+  function emailSimilar(p: ContactLookalike) {
+    setSimilarFor(null);
+    setEmailFor(reachableFromLookalike(p));
+  }
+  function callSimilar(p: ContactLookalike) {
+    setSimilarFor(null);
+    void startCall(reachableFromLookalike(p));
   }
 
   /**
@@ -117,6 +167,7 @@ export function ContactsPage() {
     setSimilarId(c.id);
     setSimilarMode(mode);
     setSimilarData(null);
+    setAddingKey(null);
     setSimilarLoading(true);
     try {
       const res = await api.findContactLookalikes(c.id, mode, 10);
@@ -130,7 +181,7 @@ export function ContactsPage() {
     }
   }
 
-  async function startCall(c: WorkspaceContact) {
+  async function startCall(c: Reachable) {
     setCallingId(c.id);
     try {
       setCallTask(
@@ -264,8 +315,18 @@ export function ContactsPage() {
   /** Exports what the search box is currently filtering to, not the whole workspace. */
   async function exportContacts() {
     setExporting(true);
+    const q = query.trim();
     try {
-      await api.exportContacts({ q: query.trim() || undefined });
+      const { rows } = await api.exportContacts({ q: q || undefined });
+      // No file rather than a header-only one: an empty CSV reads as a broken download.
+      if (rows === 0)
+        toast.toast({
+          tone: "info",
+          title: "Nothing to export",
+          description: q
+            ? `No contacts match "${q}". Clear the search to export everyone.`
+            : "This workspace has no contacts yet. Use Find contacts on an account, or import a CSV.",
+        });
     } catch (err) {
       toast.error("Couldn't export", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
@@ -567,11 +628,32 @@ export function ContactsPage() {
           onRowClick={(c) => navigate(`/accounts/${c.account_id}`)}
           caption="Workspace contacts"
           empty={
-            <EmptyState
-              icon={<Icons.UsersIcon />}
-              title="No contacts yet"
-              description="Run a contact discovery (Orchestrator → find contacts) or 'Find contacts' on an account to source real people."
-            />
+            // A filter that matches nobody is not an empty workspace, and telling someone with
+            // seven contacts to go and find some sends them off to do work they have already done.
+            rows.length > 0 ? (
+              <EmptyState
+                icon={<Icons.SearchIcon />}
+                title="No contacts match"
+                description="Nobody fits this search and status filter."
+                action={
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setQuery("");
+                      setStatusFilter(ALL);
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={<Icons.UsersIcon />}
+                title="No contacts yet"
+                description="Run a contact discovery (Orchestrator → find contacts) or 'Find contacts' on an account to source real people."
+              />
+            )
           }
         />
       )}
@@ -612,7 +694,7 @@ export function ContactsPage() {
         title={similarFor ? `People like ${similarFor.full_name}` : "Similar people"}
         description={
           similarMode === "new"
-            ? "Sourced from the web, seeded with this contact's profile."
+            ? "Sourced from the web, seeded with this contact's profile. Add the people worth keeping."
             : "Ranked by role, seniority, function, and how similar their company is."
         }
       >
@@ -638,42 +720,94 @@ export function ContactsPage() {
             </p>
           </div>
         ) : similarLoading ? (
-          <div className={styles.similarLoading}>
-            <Spinner size={16} /> Finding similar people…
-          </div>
+          similarMode === "new" ? (
+            <WorkingIndicator
+              label={`Searching the web for people like ${similarFor?.full_name ?? "this contact"}`}
+              hint="Searches by role and your ICP, then ranks each person. Usually under a minute."
+            />
+          ) : (
+            <WorkingIndicator label="Ranking your contacts" />
+          )
         ) : similarData && similarData.length > 0 ? (
           <ul className={styles.similarList}>
             {similarData.map((p) => {
               const meta = strengthMeta(p.score / 100);
+              const key = similarKey(p);
+              const adding = p.is_new && addingKey === key;
               return (
-                <li key={p.contact_id || p.linkedin_url || p.full_name} className={styles.similarItem}>
-                  <button
-                    type="button"
-                    className={styles.similarRow}
-                    // A net-new person has no account to open. Their profile is the only place to
-                    // go, and a row that navigates nowhere is worse than one that says so.
-                    onClick={() => {
-                      if (p.is_new) {
-                        if (p.linkedin_url) window.open(p.linkedin_url, "_blank", "noopener");
-                        return;
+                <li key={key} className={styles.similarItem}>
+                  <div className={styles.similarTop}>
+                    <button
+                      type="button"
+                      className={styles.similarRow}
+                      // A net-new person has no account to open. Their profile is the only place to
+                      // go, and a row that navigates nowhere is worse than one that says so.
+                      aria-label={
+                        p.is_new
+                          ? `Open ${p.full_name}'s LinkedIn profile`
+                          : `Open ${p.account_name || "their account"}`
                       }
-                      setSimilarFor(null);
-                      navigate(`/accounts/${p.account_id}`);
-                    }}
-                  >
-                    <span className={styles.similarMain}>
-                      <span className={styles.name}>{p.full_name}</span>
-                      <span className={styles.muted}>
-                        {[p.title, p.account_name || p.company].filter(Boolean).join(" · ") || "—"}
+                      onClick={() => {
+                        if (p.is_new) {
+                          if (p.linkedin_url) window.open(p.linkedin_url, "_blank", "noopener");
+                          return;
+                        }
+                        setSimilarFor(null);
+                        navigate(`/accounts/${p.account_id}`);
+                      }}
+                    >
+                      <span className={styles.similarMain}>
+                        <span className={styles.name}>{p.full_name}</span>
+                        <span className={styles.muted}>
+                          {[p.title, p.account_name || p.company].filter(Boolean).join(" · ") ||
+                            "—"}
+                        </span>
+                        {p.reasons.length > 0 && (
+                          <span className={styles.similarWhy}>{p.reasons.join(" · ")}</span>
+                        )}
                       </span>
-                      {p.reasons.length > 0 && (
-                        <span className={styles.similarWhy}>{p.reasons.join(" · ")}</span>
+                      <Badge tone={meta.tone} dot>
+                        Match {p.score}
+                      </Badge>
+                    </button>
+                    <div className={styles.similarActions}>
+                      {p.is_new ? (
+                        <Button
+                          size="sm"
+                          variant={adding ? "ghost" : "secondary"}
+                          iconLeft={<Icons.PlusIcon />}
+                          aria-expanded={adding}
+                          aria-label={`Add ${p.full_name} to your workspace`}
+                          onClick={() => setAddingKey(adding ? null : key)}
+                        >
+                          Add
+                        </Button>
+                      ) : (
+                        <>
+                          <IconButton
+                            size="sm"
+                            label={`Draft an email to ${p.full_name}`}
+                            icon={<Icons.MailIcon />}
+                            onClick={() => emailSimilar(p)}
+                          />
+                          <IconButton
+                            size="sm"
+                            label={`Call ${p.full_name}`}
+                            icon={<Icons.PhoneIcon />}
+                            disabled={callingId === p.contact_id}
+                            onClick={() => callSimilar(p)}
+                          />
+                        </>
                       )}
-                    </span>
-                    <Badge tone={meta.tone} dot>
-                      Match {p.score}
-                    </Badge>
-                  </button>
+                    </div>
+                  </div>
+                  {adding && (
+                    <AddSimilarPerson
+                      person={p}
+                      onCancel={() => setAddingKey(null)}
+                      onAdded={(result) => markAdded(key, result)}
+                    />
+                  )}
                 </li>
               );
             })}

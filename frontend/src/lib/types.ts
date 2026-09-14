@@ -89,6 +89,8 @@ export interface ContactLookalike {
   title: string | null;
   seniority: string | null;
   email: string | null;
+  /** The verifier's verdict on `email` (null when unchecked or for a net-new person). */
+  email_status?: string | null;
   linkedin_url: string | null;
   score: number;
   reasons: string[];
@@ -97,6 +99,27 @@ export interface ContactLookalike {
   is_new: boolean;
   /** Employer as plain text. A net-new person has no Account row, so `account_name` is blank. */
   company: string;
+}
+
+/** Keep a sourced person: file them under an existing account, or find-or-create their company. */
+export interface SimilarPersonInput {
+  full_name: string;
+  title?: string | null;
+  linkedin_url?: string | null;
+  company?: string;
+  account_id?: string;
+  new_account_name?: string;
+  new_account_domain?: string;
+}
+
+export interface SimilarPersonAdded {
+  contact: Contact;
+  account_id: string;
+  account_name: string;
+  account_domain: string | null;
+  /** False when the person was already in the workspace (same LinkedIn profile). */
+  created: boolean;
+  account_created: boolean;
 }
 
 /** Which question "find similar people" is answering. */

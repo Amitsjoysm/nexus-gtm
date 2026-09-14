@@ -116,7 +116,14 @@ export function AccountsPage() {
   async function exportAccounts() {
     setExporting(true);
     try {
-      await api.exportAccounts();
+      const { rows } = await api.exportAccounts();
+      // No file rather than a header-only one: an empty CSV reads as a broken download.
+      if (rows === 0)
+        toast.toast({
+          tone: "info",
+          title: "Nothing to export",
+          description: "This workspace has no accounts yet. Add or import some, then export.",
+        });
     } catch (err) {
       toast.error("Couldn't export", err instanceof ApiError ? err.detail : "Try again.");
     } finally {

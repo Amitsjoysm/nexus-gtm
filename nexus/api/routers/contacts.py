@@ -245,6 +245,10 @@ async def restore_contact(
     return {"id": contact_id, "deleted": False}
 
 
+#: Wire value → the label the Contacts table shows. Only the one that differs.
+_EXPORT_STATUS_LABEL = {"catch_all": "catch-all"}
+
+
 @router.get("/export")
 async def export_contacts(
     q: str | None = None,
@@ -258,7 +262,9 @@ async def export_contacts(
     Streamed through the same query rather than a second code path, so what you export is exactly
     what you were looking at — an export that disagrees with the screen is worse than none.
     """
-    from nexus.api.csv_export import csv_response
+    from datetime import datetime
+
+    from nexus.api.csv_export import csv_response, csv_timestamp
 
     rows = await _query_contacts(
         ts, q=q, account_id=account_id, include_deleted=include_deleted, limit=0, offset=0
@@ -274,15 +280,20 @@ async def export_contacts(
                 pass
         except Exception:
             logger.warning("metering failed for data.export", exc_info=True)
+    def checked(iso: str | None) -> str:
+        return csv_timestamp(datetime.fromisoformat(iso)) if iso else ""
+
     return csv_response(
         "contacts.csv",
-        ["full_name", "title", "seniority", "email", "email_status", "phone",
-         "linkedin_url", "account", "domain"],
+        ["full_name", "title", "seniority", "email", "email_status", "email_checked_at",
+         "email_provider", "phone", "linkedin_url", "account", "domain"],
         (
             [
-                r.full_name, r.title or "", r.seniority or "", r.email or "",
-                r.email_status or "", r.phone or "", r.linkedin_url or "",
-                r.account_name or "", r.account_domain or "",
+                r.full_name, r.title, r.seniority, r.email,
+                # The table labels `catch_all` "catch-all"; the file must not say something else.
+                _EXPORT_STATUS_LABEL.get(r.email_status or "", r.email_status),
+                checked(r.email_checked_at), r.email_provider,
+                r.phone, r.linkedin_url, r.account_name, r.account_domain,
             ]
             for r in rows
         ),

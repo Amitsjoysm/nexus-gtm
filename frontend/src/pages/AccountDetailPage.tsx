@@ -13,13 +13,18 @@ import {
   Modal,
   Select,
   Skeleton,
-  Spinner,
   Tabs,
   TabPanel,
   Textarea,
   useToast,
+  WorkingIndicator,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
+import {
+  AddSimilarPerson,
+  contactFromLookalike,
+  lookalikeFromAdded,
+} from "@/components/AddSimilarPerson";
 import { CallConsole } from "@/components/CallConsole";
 import { EmailComposer } from "@/components/EmailComposer";
 import { useApi } from "@/hooks/useApi";
@@ -39,6 +44,7 @@ import type {
   OutcomeStage,
   Role,
   SignalEvent,
+  SimilarPersonAdded,
   TitleRecommendation,
 } from "@/lib/types";
 import styles from "./AccountDetailPage.module.css";
@@ -131,13 +137,15 @@ export function AccountDetailPage() {
   const [callTask, setCallTask] = useState<CallTask | null>(null);
   const [emailFor, setEmailFor] = useState<Contact | null>(null);
   const [callingId, setCallingId] = useState<string | null>(null);
-  async function startCall(c: Contact) {
+  // The contact's OWN account, not the page's: a similar-people result can work somewhere else,
+  // and a call filed against this page's account would put their history on the wrong company.
+  async function startCall(c: Contact, accountName = account.data?.name ?? "account") {
     setCallingId(c.id);
     try {
       const task = await api.createCallTask({
-        account_id: id,
+        account_id: c.account_id,
         contact_id: c.id,
-        reason: `Outbound call · ${account.data?.name ?? "account"}`,
+        reason: `Outbound call · ${accountName}`,
       });
       setCallTask(task);
     } catch (err) {
@@ -694,6 +702,16 @@ export function AccountDetailPage() {
               </Button>
             </div>
           </div>
+          {findingContacts && (
+            // No duration promised: each person's email is guessed and verified one at a time, and
+            // how long a mail server takes to answer is not something this screen can know.
+            <WorkingIndicator
+              className={styles.findingContacts}
+              label={`Finding decision-makers at ${account.data?.name ?? "this account"}`}
+              hint="Searches the web for people at this company, then finds and verifies each work email, one at a time."
+              slowAfter={60}
+            />
+          )}
           {titleRecs && titleRecs.length > 0 && (
             <Card padding="md" className={styles.titleRecCard}>
               <div className={styles.titleRecHead}>
@@ -848,6 +866,23 @@ export function AccountDetailPage() {
                         hasProfile={Boolean(c.linkedin_url)}
                         onChoose={(m) => runSimilarPeople(c, m)}
                         onOpenAccount={(accountId) => navigate(`/accounts/${accountId}`)}
+                        callingId={callingId}
+                        onEmail={(p) => setEmailFor(contactFromLookalike(p))}
+                        onCall={(p) => void startCall(contactFromLookalike(p), p.account_name)}
+                        onAdded={(p, result) => {
+                          setSimilarPeople((s) =>
+                            s && s.data
+                              ? {
+                                  ...s,
+                                  data: s.data.map((x) =>
+                                    x === p ? lookalikeFromAdded(x, result) : x,
+                                  ),
+                                }
+                              : s,
+                          );
+                          // Filed under this very account: show them in the list above.
+                          if (result.account_id === id) contacts.refetch();
+                        }}
                       />
                     )}
                   </Fragment>
@@ -1093,7 +1128,7 @@ export function AccountDetailPage() {
       >
         {emailFor && (
           <EmailComposer
-            accountId={id}
+            accountId={emailFor.account_id}
             contactId={emailFor.id}
             contactName={emailFor.full_name}
             contactEmail={emailFor.email}
@@ -1176,7 +1211,9 @@ function ActionCard({
           you send it.
         </p>
       )}
-      <AgentResult state={state}>{children}</AgentResult>
+      <AgentResult state={state} label={`Generating ${title.toLowerCase()}`}>
+        {children}
+      </AgentResult>
     </Card>
   );
 }
@@ -1184,18 +1221,19 @@ function ActionCard({
 /** Renders the loading / error / success states for one agent run. */
 function AgentResult({
   state,
+  label = "Generating",
   children,
 }: {
   state: AgentState | undefined;
+  /** What the progress line says while the agent runs, e.g. "Generating research brief". */
+  label?: string;
   children: (output: Record<string, unknown>) => React.ReactNode;
 }) {
   if (!state) return null;
   if (state.loading && !state.result) {
-    return (
-      <div className={styles.agentLoading}>
-        <Spinner size={16} /> Generating…
-      </div>
-    );
+    // No duration promised: research briefs have three measured runs, too few to call typical.
+    // The elapsed counter and the moving bar say "still going" instead.
+    return <WorkingIndicator label={label} slowAfter={30} />;
   }
   if (state.error) {
     return (
@@ -1219,10 +1257,13 @@ function LookalikeResult({
   addingKey: string | null;
 }) {
   if (state.loading) {
+    // "Under a minute" is the service's own ceiling: seed enrichment is capped at 12s and candidate
+    // enrichment at 20s, on top of one company search (nexus/lookalike/service.py).
     return (
-      <div className={styles.agentLoading}>
-        <Spinner size={16} /> Searching for similar companies…
-      </div>
+      <WorkingIndicator
+        label="Searching for similar companies"
+        hint="Fills in this account's profile if needed, searches the web for companies like it, then ranks them against your ICP. Usually under a minute."
+      />
     );
   }
   if (state.error) {
@@ -1303,6 +1344,10 @@ function SimilarPeoplePanel({
   hasProfile,
   onChoose,
   onOpenAccount,
+  callingId,
+  onEmail,
+  onCall,
+  onAdded,
 }: {
   seedName: string;
   mode: LookalikeMode | null;
@@ -1311,7 +1356,15 @@ function SimilarPeoplePanel({
   hasProfile: boolean;
   onChoose: (mode: LookalikeMode) => void;
   onOpenAccount: (accountId: string) => void;
+  callingId: string | null;
+  onEmail: (person: ContactLookalike) => void;
+  onCall: (person: ContactLookalike) => void;
+  onAdded: (person: ContactLookalike, result: SimilarPersonAdded) => void;
 }) {
+  // The sourced person whose "Add" form is open. Reset whenever the results change underneath it.
+  const [adding, setAdding] = useState<ContactLookalike | null>(null);
+  useEffect(() => setAdding(null), [people]);
+
   if (mode === null) {
     return (
       <div className={styles.similarPanel}>
@@ -1338,9 +1391,16 @@ function SimilarPeoplePanel({
   if (loading || people === null) {
     return (
       <div className={styles.similarPanel}>
-        <p className={styles.agentNote}>
-          {mode === "new" ? "Searching for new people…" : "Ranking your contacts…"}
-        </p>
+        {/* This was a line of static text with no spinner at all, for a web search that runs
+            tens of seconds: the plainest possible "stuck". */}
+        {mode === "new" ? (
+          <WorkingIndicator
+            label={`Searching the web for people like ${seedName}`}
+            hint="Searches by role and your ICP, then ranks each person. Usually under a minute."
+          />
+        ) : (
+          <WorkingIndicator label="Ranking your contacts" />
+        )}
       </div>
     );
   }
@@ -1390,19 +1450,64 @@ function SimilarPeoplePanel({
                         Profile
                       </Button>
                     )}
-                    {p.account_id && (
+                    {p.is_new ? (
                       <Button
                         size="sm"
-                        variant="ghost"
-                        onClick={() => onOpenAccount(p.account_id)}
+                        variant={adding === p ? "ghost" : "secondary"}
+                        iconLeft={<Icons.PlusIcon />}
+                        aria-expanded={adding === p}
+                        aria-label={`Add ${p.full_name} to your workspace`}
+                        onClick={() => setAdding(adding === p ? null : p)}
                       >
-                        View account
+                        Add
                       </Button>
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          iconLeft={<Icons.MailIcon />}
+                          aria-label={`Draft an email to ${p.full_name}`}
+                          onClick={() => onEmail(p)}
+                        >
+                          Email
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          iconLeft={<Icons.PhoneIcon />}
+                          loading={callingId === p.contact_id}
+                          aria-label={`Call ${p.full_name}`}
+                          onClick={() => onCall(p)}
+                        >
+                          Call
+                        </Button>
+                        {p.account_id && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => onOpenAccount(p.account_id)}
+                          >
+                            View account
+                          </Button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
                 {p.reasons.length > 0 && (
                   <p className={styles.recWhy}>{p.reasons.join(" · ")}</p>
+                )}
+                {adding === p && (
+                  <AddSimilarPerson
+                    person={p}
+                    className={styles.recForm}
+                    onCancel={() => setAdding(null)}
+                    onAdded={(result) => {
+                      setAdding(null);
+                      onAdded(p, result);
+                    }}
+                  />
                 )}
               </li>
             );

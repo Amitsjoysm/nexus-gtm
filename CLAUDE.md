@@ -1079,6 +1079,16 @@ shipping every step's `output` blob to render one "3/5" label is not worth it �
 `steps: []` and the UI computed "0/0 steps" for runs that had completed. When steps *are* supplied
 the counts derive from them, so list and detail cannot disagree.
 
+**`/analytics/overview` is gated on `manage_accounts` and SCOPED by `view_analytics`, not refused
+by it.** It was manager-only while the dashboard every rep lands on called it, so a rep's first
+screen was "Role 'rep' lacks view_analytics". Managers+ get the workspace overview unchanged; a rep
+gets `overview_for_user`. That shows `open_tasks`, which is tasks assigned to them plus unassigned
+ones (the queue they work), and `my_agent_actions`. The second comes from the usage stream, because
+`AgentRun` carries no user; refunds net out and `ai.tokens` is excluded. Next to those sit the
+shared-book counts a rep can already browse. Agent failures and plays executed are left out rather
+than zeroed. The activity feed and outcome attribution keep their manager-only gate.
+`test_rep_dashboard.py` pins both halves.
+
 ## Feature switches (`nexus/features/switches.py`) — superadmin, platform-wide
 
 A superadmin takes a feature offline for **every** workspace, with a message, without a deploy.
@@ -1551,6 +1561,17 @@ Grounding docs for the design skills:
   loading/disabled/empty/error states). Screens compose primitives — never re-style ad hoc.
 - Accessibility is non-negotiable: semantic HTML, labelled controls, keyboard support,
   visible focus, `aria-*` where needed, reduced-motion fallbacks.
+- **A loading indicator is essential motion: under reduced motion it slows, it never stops.**
+  `global.css` sets `animation-duration: 0.01ms` and `animation-iteration-count: 1` on `*` with
+  `!important`, which froze every spinner into a still ring after one tick. That was reported as
+  "spinners get stuck", and measured in Chromium as a `1e-05s x 1` animation the browser drops.
+  `Spinner.module.css` and `WorkingIndicator.module.css` override it with `!important`. At equal
+  importance a class outranks `*`; without `!important` the override is dead code. Keep both.
+  `tests/test_loading_indicators.py` pins this.
+- Long actions (lookalikes, similar people, find contacts, AI actions) use `WorkingIndicator`, not a
+  bare `Spinner`. It shows a moving bar, elapsed seconds, and one line about the work. Any duration
+  it states must be measured (drafts: p90 5s over 30 days) or a service ceiling. It never shows step
+  names on a timer, because the server does not report stages.
 - Every data view handles **loading (skeletons), empty, and error** states explicitly.
 - Build output (`frontend/dist`) is served by FastAPI as static with SPA fallback.
 

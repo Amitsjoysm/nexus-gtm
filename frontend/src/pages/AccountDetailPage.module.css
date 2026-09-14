@@ -228,12 +228,9 @@
 .askForm > :first-child {
   flex: 1;
 }
-.agentLoading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  color: var(--text-muted);
+/* Progress for "Find contacts", between the section header and the results it will add to. */
+.findingContacts {
+  margin-block-end: var(--space-3);
 }
 .agentError {
   font-size: var(--text-sm);
@@ -361,9 +358,16 @@
 }
 .recBadges {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-2);
   flex-shrink: 0;
+}
+/* The "Add" form bleeds to the result's edges so it reads as part of this person, not a card
+   nested inside theirs. Undoes `.rec`'s padding on three sides. */
+.recForm {
+  margin: var(--space-1) calc(var(--space-3) * -1) calc(var(--space-3) * -1);
 }
 .recWhy {
   font-size: var(--text-xs);

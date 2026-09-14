@@ -416,6 +416,9 @@ class ContactLookalike:
     title: str | None = None
     seniority: str | None = None
     email: str | None = None
+    #: The verifier's verdict on ``email``, so "Email" from a result warns about a risky address
+    #: exactly as it does from the contact's own row.
+    email_status: str | None = None
     linkedin_url: str | None = None
     score: int = 0
     reasons: list[str] = field(default_factory=list)
@@ -438,6 +441,7 @@ class ContactLookalike:
             "title": self.title,
             "seniority": self.seniority,
             "email": self.email,
+            "email_status": self.email_status,
             "linkedin_url": self.linkedin_url,
             "score": self.score,
             "reasons": list(self.reasons),
@@ -498,6 +502,7 @@ class ContactLookalikeService:
                     title=cand.title,
                     seniority=cand.seniority,
                     email=cand.email,
+                    email_status=cand.email_status,
                     linkedin_url=cand.linkedin_url,
                     score=sim.score,
                     reasons=sim.reasons[:5],

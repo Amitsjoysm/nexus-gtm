@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Badge, Button, Icons, Spinner, useToast } from "@/components/ui";
+import { Badge, Button, Icons, useToast, WorkingIndicator } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import styles from "./EmailComposer.module.css";
@@ -195,7 +195,12 @@ export function EmailComposer({
   if (loading) {
     return (
       <div className={styles.loading}>
-        <Spinner size={18} /> Writing a personalized email for {contactName}…
+        {/* Measured over the last 30 days of drafts: p90 5s, slowest 13s. */}
+        <WorkingIndicator
+          label={`Writing a personalized email for ${contactName}`}
+          hint="Usually under 15 seconds."
+          slowAfter={20}
+        />
       </div>
     );
   }
