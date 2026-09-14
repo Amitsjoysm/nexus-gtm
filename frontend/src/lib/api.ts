@@ -81,6 +81,7 @@ import type {
   Mailbox,
   WorkspaceContact,
   ReverifyResult,
+  ContactReverifyResult,
   CallTask,
   CallScript,
   CallActivity,
@@ -419,6 +420,14 @@ export class ApiClient {
     return this.request<ReverifyResult>("/contacts/reverify", {
       method: "POST",
       query: { only_unverified: String(onlyUnverified) },
+      signal,
+    });
+  }
+  /** Re-verify ONE contact: re-check the saved address, and search the email patterns only if it
+   *  fails. Charged once, as an email check or as an enrichment, never both. */
+  reverifyContact(contactId: string, signal?: AbortSignal) {
+    return this.request<ContactReverifyResult>(`/accounts/contacts/${contactId}/reverify`, {
+      method: "POST",
       signal,
     });
   }

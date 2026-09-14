@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Awaitable, Callable
 
@@ -21,7 +22,7 @@ from sqlalchemy import or_, select
 from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Contact
-from nexus.verification import STATUS_UNKNOWN, STATUS_VALID, EmailVerification
+from nexus.verification import STATUS_INVALID, STATUS_UNKNOWN, STATUS_VALID, EmailVerification
 
 logger = logging.getLogger("nexus.enrichment.reverify")
 
@@ -55,6 +56,15 @@ async def reverify_contact(contact: Contact, verify: Verify) -> bool:
     verdict = await verify(email)
     if not verdict or not verdict.status:
         return False
+    return apply_verdict(contact, verdict)
+
+
+def apply_verdict(contact: Contact, verdict: EmailVerification) -> bool:
+    """Persist a verdict about ``contact.email``. Returns True if anything changed.
+
+    Only *raises* the stored confidence, and only on a confirmed ``valid``: a catch-all verdict must
+    not clobber a high web-sourced confidence that the address is the right one.
+    """
     changed = verdict.status != contact.email_status
     contact.email_status = verdict.status
     # Stamp the check time even when the verdict didn't move (unknown→unknown): the SDR sees
@@ -125,3 +135,67 @@ async def reverify_contacts(
         key = c.email_status or "none"
         tally[key] = tally.get(key, 0) + 1
     return {"checked": len(contacts), "updated": sum(1 for r in results if r), "statuses": tally}
+
+
+#: Re-check verdicts that send a single-contact re-verify on to the pattern search. `risky` and
+#: `catch_all` are answers about the saved address and keep it. `invalid` proves it wrong, `unknown`
+#: means the verifier could not say, and in both the search is the only route to a better address.
+_SEARCH_AGAIN = frozenset({STATUS_INVALID, STATUS_UNKNOWN})
+
+
+@dataclass(slots=True)
+class ReverifyOutcome:
+    #: "rechecked": the saved address held up and was kept. "searched": the pattern search ran.
+    action: str
+    previous_email: str | None
+    previous_status: str | None
+
+
+async def reverify_or_find(
+    ts: TenantSession,
+    contact: Contact,
+    *,
+    user_id: str | None = None,
+    verify: Verify | None = None,
+    enricher=None,
+) -> ReverifyOutcome:
+    """A person asked to re-verify one contact. Charged ONCE, for whichever it turned out to be.
+
+    Decided with the product owner 2026-09-14. Re-check the saved address against the live verifier.
+    If it holds up, keep it and charge one email check (`verify.email`). If it is invalid or unknown,
+    or there is no address, run the pattern search (first.last, then first, ... stopping at the first
+    valid) and charge one contact enrichment (`enrich.contact`) INSTEAD. The search is what the user
+    received; charging the re-check as well would bill one click twice.
+
+    The re-check verdict is written only inside the meter, so a refused charge (402) leaves the
+    contact exactly as it was. Always a fresh verifier, never the registry cache: the user is asking
+    for a new answer.
+    """
+    # Imported here, not at module level: `metered` is the seam tests record, and the waterfall
+    # pulls in every enrichment provider.
+    from nexus.billing.meter import metered
+    from nexus.enrichment.waterfall import get_enricher
+
+    previous_email = contact.email or None
+    previous_status = contact.email_status
+    email = (contact.email or "").strip()
+    verdict = await (verify or fresh_verify())(email) if email else None
+
+    if verdict is not None and verdict.status and verdict.status not in _SEARCH_AGAIN:
+        async with metered(
+            ts, "verify.email", quantity=1, user_id=user_id, attrs={"single": True},
+        ):
+            apply_verdict(contact, verdict)
+        await ts.flush()
+        return ReverifyOutcome("rechecked", previous_email, previous_status)
+
+    if verdict is not None and verdict.status == STATUS_INVALID:
+        # Proven wrong. Its old confidence must not outrank what the search finds, or the waterfall
+        # (which only replaces an address with an equally or more confident one) keeps the dead one.
+        contact.email_status = STATUS_INVALID
+        contact.email_checked_at = utcnow()
+        contact.email_confidence = 0.0
+    await (enricher or get_enricher()).enrich_contact(
+        ts, contact, user_id=user_id, raise_on_block=True
+    )
+    return ReverifyOutcome("searched", previous_email, previous_status)

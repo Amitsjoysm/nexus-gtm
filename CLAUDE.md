@@ -1069,6 +1069,16 @@ breaker, which closes after a cooldown; spend is metered by `enrich.contact`, no
 send gate holds `risky` unless the campaign opts in, and SENDS `unknown` for real (non-sourced)
 contacts — so the relabel widens who gets bulk-sent. `tests/test_email_verify_registry.py` pins this.
 
+**Re-verifying one contact is charged once, for whichever it turned out to be** (decided with the
+product owner 2026-09-14; `enrichment/reverify.reverify_or_find`, `POST /accounts/contacts/{id}/reverify`).
+It re-checks the saved address with a fresh verifier (never the registry cache). Valid, risky or
+catch-all keeps the address and charges one `verify.email`. Invalid, unknown or no address runs the
+pattern search (first.last, first, ... stopping at the first valid) and charges one `enrich.contact`
+INSTEAD. The verdict is written only inside the meter, so a 402 changes nothing on the contact; an
+invalid address has its confidence reset first, because the waterfall only replaces an address with
+an equally or more confident one. Enrich keeps its 30-day cool-down for a valid address; Re-verify
+has none, since it is the explicit "check again". `tests/test_reverify_one_contact.py` pins it.
+
 ## Orchestrator intake (`nexus/orchestration/intake.py`)
 
 **A question is not a launch instruction.** `advance` used to launch on `is_first_turn` alone once

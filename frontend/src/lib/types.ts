@@ -215,6 +215,16 @@ export interface ReverifyResult {
   statuses: Record<string, number>;
 }
 
+/** Re-verifying ONE contact. `rechecked`: the saved address held up and was kept (charged as an
+ *  email check). `searched`: it failed or was missing, so the pattern search ran (charged as a
+ *  contact enrichment instead). */
+export interface ContactReverifyResult {
+  action: "rechecked" | "searched";
+  previous_email: string | null;
+  previous_status: string | null;
+  contact: Contact;
+}
+
 // ---- Cold calling --------------------------------------------------------------------------
 export interface CallTask {
   id: string;

@@ -33,6 +33,7 @@ import { useSignalWindow } from "@/app/SignalWindowContext";
 import { ApiError } from "@/lib/api";
 import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
 import { emailStatusMeta, signalSourceMeta, strengthMeta } from "@/lib/display";
+import { describeReverify } from "@/lib/reverify";
 import type {
   AgentRunResponse,
   Account,
@@ -178,6 +179,33 @@ export function AccountDetailPage() {
       );
     } finally {
       setEnriching((p) => {
+        const next = { ...p };
+        delete next[c.id];
+        return next;
+      });
+    }
+  }
+
+  // Re-verify one contact: re-check the saved address, and search the email patterns only if it
+  // fails. Charged once server-side, as an email check or as an enrichment.
+  const [reverifying, setReverifying] = useState<Record<string, boolean>>({});
+  async function reverifyOne(c: Contact) {
+    setReverifying((p) => ({ ...p, [c.id]: true }));
+    try {
+      const res = await api.reverifyContact(c.id);
+      contacts.setData((prev) =>
+        (prev ?? []).map((x) => (x.id === res.contact.id ? res.contact : x)),
+      );
+      const { found, title, body } = describeReverify(res);
+      if (found) toast.success(title, body);
+      else toast.toast({ tone: "info", title, description: body });
+    } catch (err) {
+      toast.error(
+        "Couldn't re-verify",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setReverifying((p) => {
         const next = { ...p };
         delete next[c.id];
         return next;
@@ -826,6 +854,18 @@ export function AccountDetailPage() {
                       >
                         Enrich
                       </Button>
+                      {c.email && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          loading={reverifying[c.id]}
+                          onClick={() => reverifyOne(c)}
+                          title="Re-check this address, and search the common patterns if it fails"
+                          aria-label={`Re-verify ${c.full_name}'s email`}
+                        >
+                          Re-verify
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="ghost"

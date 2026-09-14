@@ -16,6 +16,7 @@ from nexus.api.schemas import (
     ContactLookalikeOut,
     ContactLookalikeResponse,
     ContactOut,
+    ContactReverifyOut,
     LookalikeOut,
     LookalikeResponse,
     SimilarPersonAddedOut,
@@ -684,6 +685,30 @@ async def enrich_contact(
 
     await refresh_person_insights(ts, contact)
     return _contact_out(contact)
+
+
+@router.post("/contacts/{contact_id}/reverify", response_model=ContactReverifyOut)
+async def reverify_one_contact(
+    contact_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> ContactReverifyOut:
+    """Re-verify one contact: re-check the saved address, and search the email patterns only if it
+    fails. Charged once — as an email check when the address holds up, as a contact enrichment when
+    the search runs — never both. No cool-down: this is the explicit "check again", unlike Enrich.
+    Over quota it is a 402 carrying the upsell, and nothing on the contact changes."""
+    contact = await ts.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    from nexus.enrichment.reverify import reverify_or_find
+
+    outcome = await reverify_or_find(ts, contact, user_id=principal.user_id)
+    return ContactReverifyOut(
+        action=outcome.action,
+        previous_email=outcome.previous_email,
+        previous_status=outcome.previous_status,
+        contact=_contact_out(contact),
+    )
 
 
 @router.post("/{account_id}/enrich", response_model=AccountOut)

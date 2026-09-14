@@ -294,6 +294,17 @@ class ReverifyResult(BaseModel):
     statuses: dict[str, int] = Field(default_factory=dict)
 
 
+class ContactReverifyOut(BaseModel):
+    """What re-verifying ONE contact did. ``rechecked``: the saved address held up and was kept
+    (charged as an email check). ``searched``: it failed or was missing, so the pattern search ran
+    (charged as a contact enrichment instead)."""
+
+    action: str
+    previous_email: str | None = None
+    previous_status: str | None = None
+    contact: ContactOut
+
+
 # ---- Cold calling --------------------------------------------------------------------------
 class CallTaskOut(BaseModel):
     """A queued call with its account/contact context, for the call power-list."""

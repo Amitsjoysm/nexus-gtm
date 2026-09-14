@@ -26,6 +26,7 @@ import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { strengthMeta } from "@/lib/display";
+import { describeReverify } from "@/lib/reverify";
 import { timeAgo } from "@/lib/format";
 import type {
   CallTask,
@@ -98,10 +99,6 @@ const verifiedFresh = (c: WorkspaceContact): boolean =>
   c.email_status === "valid" &&
   !!c.email_checked_at &&
   Date.now() - Date.parse(c.email_checked_at) < REVERIFY_COOLDOWN_DAYS * 86_400_000;
-const reverifyDueDate = (c: WorkspaceContact): string =>
-  new Date(
-    Date.parse(c.email_checked_at as string) + REVERIFY_COOLDOWN_DAYS * 86_400_000,
-  ).toLocaleDateString();
 
 export function ContactsPage() {
   const api = useApiClient();
@@ -231,14 +228,18 @@ export function ContactsPage() {
     [rows],
   );
 
+  /** Re-verify one contact: re-check the saved address, and search the email patterns only if it
+   *  fails. Charged once server-side, as an email check or as an enrichment. */
   async function verify(c: WorkspaceContact) {
     setBusyId(c.id);
     try {
-      await api.enrichContact(c.id);
-      toast.success("Verifying…", `Re-checked ${c.full_name}'s email.`);
+      const res = await api.reverifyContact(c.id);
+      const { found, title, body } = describeReverify(res);
+      if (found) toast.success(title, body);
+      else toast.toast({ tone: "info", title, description: body });
       contacts.refetch();
     } catch (err) {
-      toast.error("Verify failed", err instanceof ApiError ? err.detail : "Try again.");
+      toast.error("Re-verify failed", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
       setBusyId(null);
     }
@@ -479,14 +480,15 @@ export function ContactsPage() {
               variant="ghost"
               iconLeft={<Icons.ShieldCheckIcon />}
               loading={busyId === c.id}
-              disabled={verifiedFresh(c)}
               title={
                 verifiedFresh(c)
-                  ? `Verified valid ${timeAgo(c.email_checked_at as string)} — re-verification opens ${reverifyDueDate(c)}`
-                  : "Verify email"
+                  ? `Verified valid ${timeAgo(c.email_checked_at as string)}. Re-verify to check it again.`
+                  : c.email
+                    ? "Re-verify: re-check this address, and search the common patterns if it fails"
+                    : "Find and verify an email address"
               }
               onClick={() => verify(c)}
-              aria-label={`Verify ${c.full_name}'s email`}
+              aria-label={`Re-verify ${c.full_name}'s email`}
             />
             <Button
               size="sm"
