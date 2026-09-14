@@ -1047,6 +1047,28 @@ five call sites remembering to agree.
 - On today's default `NEXUS_BILLING_ENFORCEMENT=shadow` this records and never blocks, so the
   `would_block` counter is what says what flipping enforcement on would cost each tenant.
 
+## Email verification through the registry (`DataSourceRegistry.verify_email`)
+
+**Verification is exempt from the registry's budget, breaker and lifetime cache.** Those three exist
+so a paid search source cannot run away on cost, but `get_registry()` is a process-wide singleton,
+so each became a lifetime limit. Found 2026-09-14 on marketjoy.com: the live Reacher answered
+`curtis.bent@` invalid and `curtis@` valid, while the product showed `curtis.bent@` risky/unknown.
+
+- 64 checks per process is about six people through the finder (10 patterns each). After that
+  every check answered `unknown` without calling the verifier, so the finder kept first.last.
+- A breaker that opened after three errors never closed.
+- The cache kept `unknown` and the DNS fallback's `risky`. When Reacher cannot answer, DNS grades
+  every address on an MX domain `risky` 0.5, every pattern ties, the finder keeps first.last — and
+  that verdict was then replayed for the life of the process, so retrying changed nothing.
+
+Now only a conclusive verdict (`valid`, `invalid`, `catch_all`) is reused, for `VERIFY_CACHE_TTL_S`
+(1h). A raising verifier degrades to `unknown` and is asked again next time; Reacher keeps its own
+breaker, which closes after a cooldown; spend is metered by `enrich.contact`, not here.
+
+**Do not relabel a DNS-fallback `risky` as `unknown` to make it look "unverified".** The campaign
+send gate holds `risky` unless the campaign opts in, and SENDS `unknown` for real (non-sourced)
+contacts — so the relabel widens who gets bulk-sent. `tests/test_email_verify_registry.py` pins this.
+
 ## Orchestrator intake (`nexus/orchestration/intake.py`)
 
 **A question is not a launch instruction.** `advance` used to launch on `is_first_turn` alone once

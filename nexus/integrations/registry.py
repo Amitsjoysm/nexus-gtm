@@ -11,6 +11,11 @@ Apify) and applies three cross-cutting policies uniformly:
   * **Caching** — results are memoized by ``(capability, normalized query)`` within the registry's
     lifetime, so the same ICP asked twice in a run hits the network once.
 
+**Email verification is exempt from all three** — see :meth:`DataSourceRegistry.verify_email`. The
+registry is a process-wide singleton, so each of these became a lifetime limit, and for verification
+that turned one Reacher blip, or six people through the email finder, into "risky"/"unknown" on
+every address until the next deploy.
+
 Results from multiple sources are merged with per-field provenance (:mod:`nexus.integrations.
 provenance`): the highest-priority source anchors a record and lower-priority sources fill only
 the gaps. Every provider call is isolated — a raising provider is logged and skipped, never
@@ -21,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 
 from nexus.integrations.company_search import (
@@ -41,12 +47,28 @@ from nexus.integrations.search import (
 )
 from nexus.research import ResearchProfile, ResearchProvider, build_research_provider
 from nexus.verification import (
+    STATUS_CATCH_ALL,
+    STATUS_INVALID,
+    STATUS_VALID,
     EmailVerification,
     EmailVerificationProvider,
     build_email_verifier,
 )
 
 logger = logging.getLogger("nexus.integrations.registry")
+
+#: How long a conclusive verdict is reused. Long enough that one lookup run never probes the same
+#: mailbox twice; short enough that somebody who left the company is asked about again the same day.
+VERIFY_CACHE_TTL_S = 3600.0
+
+#: Verdicts worth reusing. `unknown` means the verifier could not answer and `risky` is what the DNS
+#: fallback says about EVERY address on a domain with MX records, so keeping either pins a
+#: non-answer on the address long after the mailbox verifier could have given a real one.
+_CONCLUSIVE_VERDICTS = frozenset({STATUS_VALID, STATUS_INVALID, STATUS_CATCH_ALL})
+
+#: Monotonic clock for cache expiry. A module attribute so a test can move time without patching
+#: `time.monotonic`, which the event loop also reads.
+_clock = time.monotonic
 
 
 @dataclass
@@ -247,16 +269,42 @@ class DataSourceRegistry:
 
     # ------------------------------------------------------------ verify_email
     async def verify_email(self, email: str) -> EmailVerification:
+        """Grade one address — outside the budget, the breaker and the lifetime cache.
+
+        Those three exist so a paid search source cannot run away on cost, and on a process-wide
+        registry each became a lifetime limit. Measured 2026-09-14 on marketjoy.com, where the live
+        Reacher answered `curtis.bent@` invalid and `curtis@` valid while the product showed
+        `curtis.bent@` as risky or unknown:
+
+        * 64 checks per process is about six people through the email finder. After that every check
+          answered `unknown` without asking, and the finder fell back to first.last.
+        * A breaker that opened after three errors never closed again.
+        * The cache kept `unknown` and the DNS fallback's `risky`, so one verifier blip stayed on
+          those addresses until the next deploy — retrying a lookup changed nothing.
+
+        What covers the same ground instead: every verifier adapter already fails safe, Reacher has
+        its own breaker that closes after a cooldown, and what a customer spends is metered by
+        `enrich.contact` rather than here. Only a conclusive verdict is reused, and only for
+        `VERIFY_CACHE_TTL_S`.
+        """
         if self.email_verifier is None:
             return EmailVerification(email=email)
         key = _norm_key("verify_email", self.email_verifier.name, email)
-        if self._cache_enabled and key in self._cache:
-            return self._cache[key]  # type: ignore[return-value]
-        verdict = await self._policy.call(
-            self.email_verifier.name, lambda: self.email_verifier.verify_one(email)
-        ) or EmailVerification(email=email)
         if self._cache_enabled:
-            self._cache[key] = verdict
+            cached = self._cache.get(key)
+            if cached is not None:
+                expires_at, verdict = cached  # type: ignore[misc]
+                if _clock() < expires_at:
+                    return verdict
+                self._cache.pop(key, None)
+        try:
+            verdict = await self.email_verifier.verify_one(email)
+        except Exception as exc:  # provider isolation: a raising verifier degrades, never breaks
+            logger.warning("email verifier %s failed: %r", self.email_verifier.name, exc)
+            verdict = None
+        verdict = verdict or EmailVerification(email=email)
+        if self._cache_enabled and verdict.status in _CONCLUSIVE_VERDICTS:
+            self._cache[key] = (_clock() + VERIFY_CACHE_TTL_S, verdict)
         return verdict
 
     # ----------------------------------------------------------- contact_search
