@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from functools import cached_property
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -28,14 +30,38 @@ logging.basicConfig(level=logging.INFO)
 # The compiled React SPA (Vite build output). See frontend/vite.config.ts.
 _DIST_DIR = Path(__file__).parent / "web" / "dist"
 
+# Cache policy for the SPA — the same rules deploy/Caddyfile applies at the edge, which production
+# does not run behind (it answers `server: uvicorn`). With no Cache-Control a browser applies
+# heuristic freshness, so an index.html fetched hours after a build can be reused without
+# revalidating and the tab keeps loading the previous release's bundles. Vite names every file under
+# assets/ by content hash (guarded by tests/test_spa_cache_headers.py), so those never change and
+# can be cached for good. Everything else — the shell and the public/ files at the root — keeps its
+# name across releases and must revalidate: no-cache, not no-store, so an unchanged file is a 304.
+_IMMUTABLE = "public, max-age=31536000, immutable"
+_REVALIDATE = "no-cache"
+
 
 class SPAStaticFiles(StaticFiles):
     """Static files with single-page-app fallback.
 
     Serves hashed build assets directly; for any unmatched path that is not an
     API call, returns ``index.html`` so the client-side router can handle deep
-    links (e.g. ``/accounts/123``) on a hard refresh.
+    links (e.g. ``/accounts/123``) on a hard refresh. Every file carries an
+    explicit ``Cache-Control`` (see ``_IMMUTABLE`` / ``_REVALIDATE``).
     """
+
+    def file_response(self, full_path, stat_result, scope, status_code: int = 200) -> Response:
+        # Every file goes out through here — the directory index, the fallback below, and the 304
+        # standing in for either — so the policy follows the file actually sent, not the URL asked.
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        in_assets = os.path.commonpath([full_path, self._assets_dir]) == self._assets_dir
+        response.headers["Cache-Control"] = _IMMUTABLE if in_assets else _REVALIDATE
+        return response
+
+    @cached_property
+    def _assets_dir(self) -> str:
+        # lookup_path hands file_response a realpath, so compare like with like.
+        return os.path.realpath(os.path.join(self.directory, "assets"))
 
     async def get_response(self, path: str, scope) -> Response:
         try:
