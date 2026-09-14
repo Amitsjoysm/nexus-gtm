@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 
 from nexus.core.tenancy import TenantSession
-from nexus.models.billing import BillingSubscription
+from nexus.models.billing import BillingPlan, BillingSubscription
 
 logger = logging.getLogger("nexus.billing.reconcile")
 
@@ -27,6 +27,30 @@ logger = logging.getLogger("nexus.billing.reconcile")
 # operators to ignore this job entirely.
 COMPARED = ("status", "plan_id")
 
+# A subscription's own terms, compared with its PLAN rather than the provider. The Stripe webhook
+# once moved subscriptions onto a plan without copying these, and `roll_period` sizes the next
+# period from `interval`: an annual plan on a "month" row re-grants its annual allowance monthly.
+PLAN_TERMS = ("interval", "currency")
+
+
+async def _plan_terms_drift(ts: TenantSession, sub: BillingSubscription) -> dict:
+    """Where ``sub``'s terms disagree with its own plan's. Empty when they agree.
+
+    Both sides are local, so this needs nothing from the provider. Grandfathered rows are skipped:
+    frozen terms are what grandfathering means, and reporting them would flag our own design.
+    """
+    if sub.grandfathered:
+        return {}
+    plan = await ts.session.get(BillingPlan, sub.plan_id)
+    if plan is None:
+        return {}
+    terms = {
+        field: {"local": getattr(sub, field), "plan": getattr(plan, field)}
+        for field in PLAN_TERMS
+        if str(getattr(sub, field) or "").upper() != str(getattr(plan, field) or "").upper()
+    }
+    return {"plan_terms": terms} if terms else {}
+
 
 async def compare_subscription(ts: TenantSession, sub: BillingSubscription) -> dict:
     """Compare one local subscription against the provider. Returns a drift report.
@@ -34,6 +58,9 @@ async def compare_subscription(ts: TenantSession, sub: BillingSubscription) -> d
     ``drift`` is empty when the two agree. A subscription with no ``psp_subscription_id`` is
     skipped, not reported: enterprise deals are administered locally and never had a provider
     object, so flagging them would bury real findings in noise.
+
+    Also reports ``plan_terms`` — the row's interval or currency disagreeing with its own plan —
+    whether or not the provider answers, because that comparison never needed the provider.
     """
     from nexus.billing.payments import resolve_payment_provider
     from nexus.billing.webhooks import STRIPE_SUBSCRIPTION_STATUS
@@ -41,6 +68,7 @@ async def compare_subscription(ts: TenantSession, sub: BillingSubscription) -> d
     if not sub.psp_subscription_id:
         return {"tenant_id": sub.tenant_id, "skipped": "not_provider_managed"}
 
+    terms = await _plan_terms_drift(ts, sub)
     remote = await (await resolve_payment_provider()).get_subscription(
         subscription_id=sub.psp_subscription_id
     )
@@ -49,14 +77,14 @@ async def compare_subscription(ts: TenantSession, sub: BillingSubscription) -> d
         return {
             "tenant_id": sub.tenant_id,
             "subscription_id": sub.psp_subscription_id,
-            "drift": {"remote": "missing", "local_status": sub.status},
+            "drift": {"remote": "missing", "local_status": sub.status, **terms},
         }
 
     raw_status = str(remote.get("status") or "")
     mapped = STRIPE_SUBSCRIPTION_STATUS.get(raw_status)
     remote_plan = str(((remote.get("metadata") or {}).get("plan_id")) or "")
 
-    drift: dict = {}
+    drift: dict = dict(terms)
     # An unmapped remote status is not drift — webhooks deliberately leave those alone, so
     # reporting it would flag our own intentional behaviour as a defect.
     if mapped is not None and mapped != sub.status:

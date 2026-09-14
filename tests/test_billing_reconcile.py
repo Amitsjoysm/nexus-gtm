@@ -7,10 +7,14 @@ until a customer complains about being billed for a plan they cancelled.
 """
 from __future__ import annotations
 
+import pytest
+
 from tests.conftest import make_tenant, tenant_session
 
 
-async def _tenant_with_remote_sub(slug: str, *, local_status="active", plan_id="growth"):
+async def _tenant_with_remote_sub(
+    slug: str, *, local_status="active", plan_id="growth", **fields
+):
     from nexus.billing.catalog import sync_catalog
     from nexus.billing.plans import sync_plans
     from nexus.models.billing import BillingSubscription
@@ -21,7 +25,7 @@ async def _tenant_with_remote_sub(slug: str, *, local_status="active", plan_id="
     async with tenant_session(tid) as ts:
         ts.add(BillingSubscription(
             plan_id=plan_id, status=local_status,
-            psp_customer_id="cus_x", psp_subscription_id=f"sub_{slug}",
+            psp_customer_id="cus_x", psp_subscription_id=f"sub_{slug}", **fields,
         ))
         await ts.flush()
     return tid
@@ -174,5 +178,56 @@ async def test_the_sweep_handler_runs_over_every_tenant():
         res = await handle_billing_reconcile({})
         assert res["tenants"] >= 1
         assert res["checked"] >= 1
+    finally:
+        set_payment_provider(None)
+
+
+@pytest.mark.parametrize("remote_known", [True, False])
+async def test_terms_that_disagree_with_the_plan_are_reported_not_repaired(remote_known):
+    """An annual plan on a monthly subscription closes its period, and grants the annual
+    allowance, every month. The Stripe webhook used to leave rows in exactly this state, and a row
+    written before that was fixed stays so until somebody looks; this is where they look. Both
+    sides of the comparison are ours, so the finding does not depend on reaching the provider."""
+    from nexus.billing.payments import NoopPaymentProvider, set_payment_provider
+    from nexus.billing.reconcile import reconcile_tenant
+    from nexus.models.billing import BillingSubscription
+
+    slug = f"rec9{'known' if remote_known else 'missing'}"
+    provider = NoopPaymentProvider()
+    if remote_known:
+        provider.subscriptions[f"sub_{slug}"] = {
+            "status": "active", "metadata": {"plan_id": "launch-annual"},
+        }
+    set_payment_provider(provider)
+    try:
+        tid = await _tenant_with_remote_sub(slug, plan_id="launch-annual", interval="month")
+        async with tenant_session(tid) as ts:
+            res = await reconcile_tenant(ts)
+            assert (await ts.first(BillingSubscription)).interval == "month"   # not repaired
+        assert res["drifted"] == 1
+        assert res["findings"][0]["drift"]["plan_terms"] == {
+            "interval": {"local": "month", "plan": "year"},
+        }
+    finally:
+        set_payment_provider(None)
+
+
+async def test_grandfathered_terms_are_not_drift():
+    """Frozen terms are what grandfathering means. Reporting them would flag our own design."""
+    from nexus.billing.payments import NoopPaymentProvider, set_payment_provider
+    from nexus.billing.reconcile import reconcile_tenant
+
+    provider = NoopPaymentProvider()
+    provider.subscriptions["sub_rec10"] = {
+        "status": "active", "metadata": {"plan_id": "launch-annual"},
+    }
+    set_payment_provider(provider)
+    try:
+        tid = await _tenant_with_remote_sub(
+            "rec10", plan_id="launch-annual", interval="month", grandfathered=True,
+        )
+        async with tenant_session(tid) as ts:
+            res = await reconcile_tenant(ts)
+        assert res["drifted"] == 0
     finally:
         set_payment_provider(None)
