@@ -25,8 +25,15 @@ pool:
   vmImage: ubuntu-latest
 
 variables:
+  # APP_NAME / RESOURCE_GROUP, so the image sweep can scan what production is RUNNING. Same group
+  # the CI and CD pipelines use; ADO asks once to authorise this pipeline for it.
+  - group: gtm-deploy
   - name: IMAGE_REPO
     value: nexus-gtm
+  # The production interpreter (deploy/Dockerfile: python:3.11-slim). An audit on another
+  # interpreter can resolve different wheels than production ships.
+  - name: PYTHON_VERSION
+    value: "3.11"
 
 jobs:
   - job: audit
@@ -37,15 +44,20 @@ jobs:
         fetchDepth: 1
 
       - task: UsePythonVersion@0
-        inputs: { versionSpec: "3.10" }
+        inputs: { versionSpec: $(PYTHON_VERSION) }
 
+      # Audit the dependency set the IMAGE ships: the same extras deploy/Dockerfile installs, under
+      # the same constraints.txt pins. A bare `-e .` audited neither — no asyncpg/redis/alembic/
+      # metrics, and floating versions production never runs. A clean venv keeps pip-audit's own
+      # dependencies out of the list being audited.
       - bash: |
           set -uo pipefail
+          python -m venv /tmp/prod-deps
+          /tmp/prod-deps/bin/pip install --quiet -c constraints.txt ".[postgres,redis,migrate,metrics]"
+          /tmp/prod-deps/bin/pip freeze --exclude nexus-gtm > /tmp/frozen.txt
           pip install --quiet pip-audit
-          pip install --quiet -e . >/dev/null 2>&1
-          pip freeze > /tmp/frozen.txt
           pip-audit -r /tmp/frozen.txt || true
-        displayName: Python dependency audit (pip-audit)
+        displayName: Python dependency audit (pip-audit, production pins)
         continueOnError: true
 
       - task: NodeTool@0
@@ -61,8 +73,14 @@ jobs:
       # Full sweep, including CVEs with no fix available. The CI gate deliberately uses
       # --ignore-unfixed so it stays actionable; this is the wider picture you review weekly,
       # because "unfixable today" becomes "fixable next month" without any code change.
+      #
+      # It scans the image production is RUNNING, read from the container app. `latest` is the
+      # newest MASTER build — usually not what is live. And it runs the scanner's own pinned image,
+      # as the CI gate does: contrib/install.sh exits 1 after resolving the version (recorded in
+      # .github/workflows/ci.yml), and behind `|| true` that used to finish green having scanned
+      # nothing. A scanner that fails now fails the step, which continueOnError surfaces as a warning.
       - task: AzureCLI@2
-        displayName: Trivy full sweep on the live image
+        displayName: Trivy full sweep on the image production is running
         continueOnError: true
         inputs:
           azureSubscription: $(AZURE_SUBSCRIPTION)
@@ -70,11 +88,20 @@ jobs:
           scriptLocation: inlineScript
           inlineScript: |
             set -uo pipefail
+            LIVE=$(az containerapp show --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+              --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+            if [ -z "${LIVE}" ] || [ "${LIVE}" = "None" ]; then
+              LIVE="$(ACR_NAME).azurecr.io/$(IMAGE_REPO):latest"
+              echo "##[warning]Could not read the production image; scanning ${LIVE}, which may not be what is live."
+            fi
+            echo "Scanning ${LIVE}"
             az acr login --name "$(ACR_NAME)"
-            curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-              | sh -s -- -b /tmp v0.55.2
-            /tmp/trivy image --severity MEDIUM,HIGH,CRITICAL --no-progress \
-              "$(ACR_NAME).azurecr.io/$(IMAGE_REPO):latest" || true
+            docker run --rm \
+              -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
+              aquasec/trivy:0.65.0 image \
+              --severity MEDIUM,HIGH,CRITICAL --no-progress \
+              "${LIVE}" \
+              || { echo "##[error]Trivy did not complete — this week's image sweep has no result."; exit 1; }
 
   # The migration chain must replay onto an empty database — CLAUDE.md treats this as an
   # invariant and tests/test_migrations_replay.py enforces it. It is checked here rather than
@@ -88,10 +115,10 @@ jobs:
       - checkout: self
         fetchDepth: 1
       - task: UsePythonVersion@0
-        inputs: { versionSpec: "3.10" }
+        inputs: { versionSpec: $(PYTHON_VERSION) }
       - bash: |
           set -euo pipefail
-          pip install --quiet -e ".[dev,migrate,postgres,redis]"
+          pip install --quiet -c constraints.txt -e ".[dev,migrate,postgres,redis]"
           pytest tests/test_migrations_replay.py -p no:cacheprovider -q
         env:
           NEXUS_TEST_POSTGRES_URL: postgresql+asyncpg://nexus:nexus@localhost:5432/nexus

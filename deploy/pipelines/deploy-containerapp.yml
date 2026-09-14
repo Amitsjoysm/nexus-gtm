@@ -10,6 +10,11 @@
 # this pipeline exists to prevent completely untested.
 #
 # So both stages call this file. Divergence becomes a parameter you can see, not a drift you cannot.
+#
+# OUTPUT VARIABLES ARE A CONTRACT WITH THE PRODUCTION ROLLBACK STAGE (azure-pipelines-cd.yml).
+# It reads recordPrev.prevImage / recordPrev.prevRevision (what to restore) and updateApp.newImage /
+# updateApp.deployStarted (whether production was touched at all) by STEP NAME. Rename a step or a
+# variable here without changing that stage and nothing errors — the rollback just never runs.
 
 parameters:
   - name: envName # display only — appears in step names so the log says which estate was touched
@@ -35,8 +40,13 @@ steps:
   # ---------------------------------------------------------------------------------------------
   # Capture the rollback target BEFORE changing anything. After the update it is gone from
   # `properties.latestRevisionName`, and a rollback with no recorded target is a guess.
+  #
+  # OUTPUT variables (isOutput=true), because the consumer is a later STAGE: a plain setvariable
+  # dies with this job. Recorded here, in a step that finishes before anything is changed, the value
+  # is trustworthy even when a later step fails — that is what makes it a safe rollback target.
   # ---------------------------------------------------------------------------------------------
   - task: AzureCLI@2
+    name: recordPrev
     displayName: "[${{ parameters.envName }}] Record current revision (rollback target)"
     inputs:
       azureSubscription: ${{ parameters.azureSubscription }}
@@ -51,13 +61,17 @@ steps:
           --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
           --query "properties.latestReadyRevisionName" -o tsv)
         echo "Rollback target: revision=${PREV_REV} image=${PREV_IMAGE}"
-        echo "##vso[task.setvariable variable=prevImage]${PREV_IMAGE}"
-        echo "##vso[task.setvariable variable=prevRevision]${PREV_REV}"
+        if [ -z "${PREV_IMAGE}" ] || [ "${PREV_IMAGE}" = "None" ]; then
+          echo "##[warning]Could not read the running image. If this deploy fails, a rollback has to reconstruct the target from revision history."
+        fi
+        echo "##vso[task.setvariable variable=prevImage;isOutput=true]${PREV_IMAGE}"
+        echo "##vso[task.setvariable variable=prevRevision;isOutput=true]${PREV_REV}"
 
   # ---------------------------------------------------------------------------------------------
   # APP FIRST — it runs the migrations. See the header.
   # ---------------------------------------------------------------------------------------------
   - task: AzureCLI@2
+    name: updateApp
     displayName: "[${{ parameters.envName }}] Update app (runs migrations + RLS on boot)"
     inputs:
       azureSubscription: ${{ parameters.azureSubscription }}
@@ -67,6 +81,13 @@ steps:
         set -euo pipefail
         IMAGE="${{ parameters.acrName }}.azurecr.io/${{ parameters.imageRepo }}:${{ parameters.imageSha }}"
         echo "Deploying ${IMAGE} to ${{ parameters.appName }}"
+        # FROM HERE ON THE ESTATE MAY BE CHANGED, so the marker goes out BEFORE the update, not after:
+        # an update that errors or times out may still have been accepted by ARM, so "the call
+        # failed" does not mean "nothing changed". Everything that can fail earlier — a rejected
+        # approval (no step runs at all), recording the rollback target — leaves the marker unset,
+        # and the production Rollback stage does nothing without it.
+        echo "##vso[task.setvariable variable=newImage;isOutput=true]${IMAGE}"
+        echo "##vso[task.setvariable variable=deployStarted;isOutput=true]true"
         az containerapp update \
           --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
           --image "${IMAGE}" \

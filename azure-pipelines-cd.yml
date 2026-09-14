@@ -8,7 +8,9 @@
 #  1. DEPLOY THE TESTED ARTIFACT. This pipeline never builds. CI already built and Trivy-scanned
 #     `<repo>:<sha>` on ACR; a rebuild here would produce a different image (new base-image
 #     layers, new transitive wheels) than the one that passed the gates. So CD RESOLVES the tag
-#     to its commit SHA and REFUSES TO DEPLOY if that image is not in the registry.
+#     to its commit SHA and REFUSES TO DEPLOY if that image is not in the registry. CI creates
+#     the `<sha>` tag only AFTER Trivy passes (azure-pipelines-ci.yml, Package stage), so its
+#     existence is the evidence, and CI tests on production's Python and dependency pins.
 #
 #  2. STAGING BEFORE PRODUCTION, AND THE SAME SHA IN BOTH. The identical image digest is deployed
 #     to staging, validated, and only then promoted. Nothing is rebuilt in between — promotion is
@@ -23,7 +25,25 @@
 #  4. THE SMOKE TEST GATES THE RELEASE, and it hits /ready — not /health. Readiness gates on the
 #     database being reachable, so a replica that is up but cannot serve is never called good.
 #
-# Rollback is a revision pin, captured BEFORE the update. See the Rollback stage.
+# Rollback restores the image recorded BEFORE the update, and only when production was actually
+# touched. See the Rollback stage.
+#
+# PRODUCTION CHECKS LIVE IN THE ADO UI, NOT HERE (Pipelines > Environments > production >
+# Approvals and checks). YAML cannot declare them.
+#
+#  - Approvals — the manual gate. Rejecting is SAFE: a rejection fails DeployProduction before any
+#    step runs, and Rollback acts only on a deploy that got as far as changing production. An
+#    approval that times out marks the stage Skipped instead; Rollback ignores that too.
+#
+#  - Exclusive lock — RECOMMENDED. Under the default lockBehavior (runLatest; nothing to add here)
+#    production deploys are serialized and, when runs contend for production at the same time, the
+#    older ones are canceled rather than deployed: approving a stale v1.4.0 while v1.4.1 is queued
+#    or deploying cannot roll production backwards. Its limits: it is evaluated AFTER the approval,
+#    and it is only documented to arbitrate between runs that contend at the same time — do not
+#    count on it to stop an older run approved after a newer one has already FINISHED. Reject stale
+#    runs rather than leaving them pending. Put it on the ENVIRONMENT, not as a stage-level
+#    lockBehavior: a stage-level runLatest lock only supersedes runs of the same branch, and every
+#    release here is a different tag.
 
 name: $(Build.SourceBranchName)-$(Rev:r)
 
@@ -158,7 +178,11 @@ stages:
 
   # ============================================================================
   # Stage 4 — PRODUCTION. `environment: production` is the manual approval gate;
-  # configure required approvers in ADO under Pipelines > Environments.
+  # configure required approvers (and the Exclusive lock — see the header) in ADO
+  # under Pipelines > Environments.
+  #
+  # The job name `deploy_production` is part of the Rollback stage's output-variable
+  # keys. Renaming it silently disables the rollback.
   #
   # dependsOn ValidateStaging, NOT DeployStaging: deploying to staging is not the
   # gate, PASSING there is. Depending on the deploy stage would let a broken
@@ -199,19 +223,50 @@ stages:
                   condition: always()
 
   # ============================================================================
-  # Stage 5 — Automatic rollback if the PRODUCTION deploy failed.
+  # Stage 5 — Automatic rollback if the PRODUCTION deploy failed after it began
+  # changing production.
   #
   # Container Apps is in Single revision mode (see deploy/cloud/azure/container_apps.tf), so
   # rollback is a redeploy of the previous IMAGE rather than an instant traffic shift. That is
   # a real limitation and it is why this stage exists rather than a one-line traffic weight.
   #
   # Deliberately NOT wired to a staging failure: a broken staging deploy has harmed nothing, and
-  # rolling it back would destroy the evidence needed to diagnose why the artifact was bad.
+  # rolling it back would destroy the evidence needed to diagnose why the artifact was bad. This
+  # stage depends on DeployProduction alone, which a staging failure leaves Skipped — never Failed.
+  #
+  # WHY NOT `condition: failed()`. Rejecting the approval FAILS DeployProduction before a single
+  # step runs, so failed() cannot tell "the reviewer said no" from "the deploy broke production" —
+  # and a rollback to an older image after a rejection would downgrade a production nothing had
+  # touched. So the gate is two facts, both required:
+  #   1. DeployProduction's result is Failed. Not Skipped (an approval timeout, or a staging
+  #      failure), and not Canceled: a human cancel is never answered with an automatic
+  #      production change — hence also not(canceled()).
+  #   2. The deploy set `deployStarted`, which the template emits on the line before the app's
+  #      `az containerapp update`. Nothing that fails earlier can set it.
+  #
+  # Output keys of a runOnce deployment job carry the job name as their first segment, and a
+  # stage CONDITION adds it once more in front (deploy_production twice below; once in the
+  # variables). Both forms: learn.microsoft.com/azure/devops/pipelines/process/expressions
+  # #deployment-job-output-variables. A wrong key resolves to empty, which fails SAFE here:
+  # no marker, no rollback.
+  #
+  # The target is the image the deploy RECORDED before it changed anything. Revision history is
+  # only the fallback, because in Single revision mode `revision list` without --all returns the
+  # one active revision and never an earlier image.
   # ============================================================================
   - stage: Rollback
     displayName: Rollback production on failure
     dependsOn: DeployProduction
-    condition: failed()
+    condition: |
+      and(
+        not(canceled()),
+        eq(dependencies.DeployProduction.result, 'Failed'),
+        eq(dependencies.DeployProduction.outputs['deploy_production.deploy_production.updateApp.deployStarted'], 'true')
+      )
+    variables:
+      ROLLBACK_PREV_IMAGE: $[ stageDependencies.DeployProduction.deploy_production.outputs['deploy_production.recordPrev.prevImage'] ]
+      ROLLBACK_PREV_REVISION: $[ stageDependencies.DeployProduction.deploy_production.outputs['deploy_production.recordPrev.prevRevision'] ]
+      ROLLBACK_NEW_IMAGE: $[ stageDependencies.DeployProduction.deploy_production.outputs['deploy_production.updateApp.newImage'] ]
     jobs:
       - job: rollback
         displayName: Restore previous image
@@ -225,21 +280,53 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 set -euo pipefail
-                # Read the last known-good image straight from the platform rather than trusting
-                # a variable from a stage that failed partway through.
-                PREV=$(az containerapp revision list \
-                  --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
-                  --query "sort_by([?properties.healthState=='Healthy'], &properties.createdTime)[-2].properties.template.containers[0].image" \
-                  -o tsv)
-                if [ -z "${PREV}" ] || [ "${PREV}" = "None" ]; then
-                  echo "##[error]No previous healthy revision found. MANUAL INTERVENTION REQUIRED."
-                  echo "##[error]Inspect: az containerapp revision list -n $(APP_NAME) -g $(RESOURCE_GROUP) -o table"
+                # The ROLLBACK_* values are read from the ENVIRONMENT, never through ADO macro syntax:
+                # a macro whose variable is empty is left in the script as literal text, which bash
+                # then runs as a command substitution — in exactly the empty case the fallback below
+                # exists for. (No macro spelled out here: ADO expands macros inside comments too.)
+                PREV="${ROLLBACK_PREV_IMAGE:-}"
+                NEW="${ROLLBACK_NEW_IMAGE:-}"
+                [ "${PREV}" != "None" ] || PREV=""
+                echo "Failed release: ${NEW:-<unknown>}"
+                echo "Recorded before the deploy: revision=${ROLLBACK_PREV_REVISION:-<none>} image=${PREV:-<none>}"
+
+                if [ -z "${PREV}" ]; then
+                  if [ -z "${NEW}" ]; then
+                    echo "##[error]Neither the previous image nor the failed release's image was recorded, so history cannot be read safely."
+                    echo "##[error]MANUAL INTERVENTION REQUIRED. Inspect: az containerapp revision list --all -n $(APP_NAME) -g $(RESOURCE_GROUP) -o table"
+                    exit 1
+                  fi
+                  echo "##[warning]No rollback target was recorded; reconstructing it from revision history."
+                  # --all includes INACTIVE revisions — in Single revision mode, every earlier one.
+                  # Newest revision that is not the failed release and not known-unhealthy. By
+                  # exclusion rather than by position: whether the failed release created a revision
+                  # at all depends on how far it got, so "[-2]" can land one release too far back.
+                  PREV=$(az containerapp revision list --all \
+                    --name "$(APP_NAME)" --resource-group "$(RESOURCE_GROUP)" \
+                    --query "sort_by([?properties.template.containers[0].image!='${NEW}' && properties.healthState!='Unhealthy'], &properties.createdTime)[-1].properties.template.containers[0].image" \
+                    -o tsv)
+                  [ "${PREV}" != "None" ] || PREV=""
+                fi
+
+                if [ -z "${PREV}" ]; then
+                  echo "##[error]No earlier image found in revision history. MANUAL INTERVENTION REQUIRED."
+                  echo "##[error]Inspect: az containerapp revision list --all -n $(APP_NAME) -g $(RESOURCE_GROUP) -o table"
+                  exit 1
+                fi
+                if [ "${PREV}" = "${NEW}" ]; then
+                  # Production already ran this image before the deploy began (a re-run of a live
+                  # tag, or a retry after a rollback that itself failed). "Rolling back" to it would
+                  # change nothing and report success.
+                  echo "##[error]Production was already running ${NEW} before this deploy; this run has no earlier state to restore."
+                  echo "##[error]MANUAL INTERVENTION REQUIRED. Inspect: az containerapp revision list --all -n $(APP_NAME) -g $(RESOURCE_GROUP) -o table"
                   exit 1
                 fi
                 echo "Rolling back to ${PREV}"
                 az containerapp update -n "$(APP_NAME)"    -g "$(RESOURCE_GROUP)" --image "${PREV}" --output none
                 az containerapp update -n "$(WORKER_NAME)" -g "$(RESOURCE_GROUP)" --image "${PREV}" --output none
                 echo "##[warning]Rolled back to ${PREV}. The failed release was NOT deployed."
-                echo "##[warning]NOTE: a rollback does NOT revert database migrations. Migrations in"
-                echo "##[warning]this repo are additive-only (see CLAUDE.md), so the previous image"
-                echo "##[warning]runs correctly against the newer schema — but verify before assuming."
+                echo "##[warning]NOTE: a rollback does NOT revert database migrations. The schema stays"
+                echo "##[warning]compatible (migrations are additive-only), but if the failed release APPLIED a"
+                echo "##[warning]migration, this older image's boot-time 'alembic upgrade head' does not know that"
+                echo "##[warning]revision (scripts/bootstrap_db.py fails on it) and the app may not start. Verify:"
+                echo "##[warning]  az containerapp revision list -n $(APP_NAME) -g $(RESOURCE_GROUP) -o table"
