@@ -1,6 +1,7 @@
 /* A price list is one of the few places in a product UI where cards are the right answer: each
-   tier is a self-contained, comparable unit and the user is choosing BETWEEN them. Auto-fit so the
-   ladder reflows from five columns to one without a breakpoint. */
+   tier is a self-contained, comparable unit and the user is choosing BETWEEN them. One card per
+   tier, whichever intervals it is sold on; auto-fit reflows the ladder to one column without a
+   breakpoint. */
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
@@ -8,6 +9,64 @@
   margin: var(--space-4) 0 0;
   padding: 0;
   list-style: none;
+}
+
+/* The Annual | Monthly switch and the saving it unlocks, above the cards it controls. The hint
+   wraps under the switch on a narrow screen rather than squeezing the segments. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+}
+
+/* A segmented control: a recessed track holding one raised segment. The chosen segment is marked
+   by surface, border and shadow together, and by `aria-checked`, never by colour alone. Weight is
+   deliberately NOT part of it: a bolder label is wider, and the switch would twitch on every flip. */
+.switch {
+  display: inline-flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.segment {
+  /* 44px: the touch target DESIGN.md commits to. */
+  min-height: calc(var(--space-10) + var(--space-1));
+  padding: 0 var(--space-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.segment:hover:not(.segmentOn) {
+  color: var(--text);
+}
+
+.segmentOn {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+}
+
+/* Text, not a badge: green carries the word "Save" and is never the only thing saying it. */
+.saveHint {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--success-text);
 }
 
 /* Bordered, not filled. Two reasons, and they happen to be the same fix: a tinted panel inside a
@@ -43,6 +102,12 @@
   color: var(--text-default);
 }
 
+.priceBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
 .price {
   display: flex;
   align-items: baseline;
@@ -62,12 +127,54 @@
   color: var(--text-muted);
 }
 
+/* What is actually charged, stated at the same size as the rest of the card's detail rather than
+   as fine print under a friendlier number. */
+.billed {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .desc {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--text-sm);
   line-height: 1.5;
   text-wrap: pretty;
+}
+
+.benefits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-default);
+  font-variant-numeric: tabular-nums;
+}
+
+.benefits li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+/* One line tall and one em wide, so the tick stays on the first line of a benefit that wraps. */
+.benefitIcon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: calc(var(--leading) * 1em);
+  color: var(--success-text);
+}
+
+.benefitIcon svg {
+  width: 1em;
+  height: 1em;
 }
 
 .facts {
@@ -123,16 +230,26 @@
   text-decoration-thickness: 1px;
 }
 
-/* Pushes the button to the bottom so a row of cards with different list lengths still lines its
-   actions up. */
+/* Pushes the action to the bottom so a row of cards with different list lengths still lines its
+   buttons up. A note about the current plan sits directly above the button it explains. */
 .action {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   margin-top: auto;
   padding-top: var(--space-3);
 }
 
 .action > * {
   width: 100%;
+}
+
+.note {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-default);
+  text-wrap: pretty;
 }
 
 .contract {

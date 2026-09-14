@@ -1401,6 +1401,13 @@ export interface SellablePlan {
   /** Module names, resolved against THIS plan — not against what the caller currently has. */
   includes: string[];
   excludes: string[];
+  /**
+   * The tier this plan belongs to, shared by its monthly and annual rows. Decided by the server
+   * (`interval_pairs`), so the picker groups on it instead of guessing pairs from ids or names.
+   */
+  family: string;
+  /** The same tier billed on the other interval, or null when this plan is sold on one only. */
+  counterpart_id: string | null;
 }
 
 /** A redirect to the payment provider. Nothing is written until the webhook comes back. */

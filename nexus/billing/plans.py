@@ -11,6 +11,8 @@ the platform ships with zero behavioral change (docs/billing/15-Migration-Strate
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
+from typing import NamedTuple
 
 from sqlalchemy import select
 
@@ -279,6 +281,53 @@ def _seat_from_entitlements(spec: dict) -> int | None:
         if cap_id == "seat.member":
             return quota
     return None
+
+
+# ---- one card per tier: which listed plans are the same tier on two intervals ----------------
+# An annual plan is a separate ROW (`interval` lives on the plan), so nothing in the schema says
+# `launch-annual` is Launch billed yearly. The customer-side picker needs exactly that to show one
+# card per tier behind an Annual | Monthly switch, and guessing it in the browser from ids or names
+# would put a pricing rule where no test can reach it.
+#
+# Derived on READ rather than seeded as a column or a `meta` key: `sync_plans` never mutates an
+# existing row, so a new seed field would reach fresh installs and never the deployments that
+# already sell these plans.
+ANNUAL_ID_SUFFIX = "-annual"
+
+
+class IntervalPair(NamedTuple):
+    family: str
+    counterpart_id: str | None
+
+
+def interval_pairs(plans: Iterable) -> dict[str, IntervalPair]:
+    """Group plans into tiers sold monthly and yearly. Keyed by plan id; covers every plan given.
+
+    The rule, and all of it:
+
+    * ``X`` pairs with ``X-annual`` when ``X`` bills monthly, ``X-annual`` bills yearly, and both
+      are in ``plans`` in the same currency. The seed names its annuals this way, and so does an
+      admin authoring ``scale`` beside ``scale-annual``. Both rows get ``family = X``.
+    * **Anything else is its own family with no counterpart**: ``free``, a yearly-only plan such as
+      ``yr-lite``, a monthly tier with no annual. The picker still lists it in both views, at the
+      only interval it is sold on, rather than making a tier vanish when the switch flips.
+    * **Pass only what is on sale.** Pairing is computed over the rows the price list shows, so a
+      held or retired monthly tier leaves its annual unpaired instead of pointing a card at a plan
+      checkout would refuse.
+    """
+    listed = {p.id: p for p in plans}
+    pairs = {plan_id: IntervalPair(plan_id, None) for plan_id in listed}
+    for annual in listed.values():
+        if annual.interval != "year" or not annual.id.endswith(ANNUAL_ID_SUFFIX):
+            continue
+        monthly = listed.get(annual.id[: -len(ANNUAL_ID_SUFFIX)])
+        if monthly is None or monthly.interval != "month":
+            continue
+        if (monthly.currency or "").upper() != (annual.currency or "").upper():
+            continue  # a saving across two currencies is not a number anyone can state
+        pairs[monthly.id] = IntervalPair(monthly.id, annual.id)
+        pairs[annual.id] = IntervalPair(monthly.id, monthly.id)
+    return pairs
 
 
 async def sync_plans() -> dict:

@@ -387,6 +387,11 @@ class SellablePlanOut(BaseModel):
     # Module names, so the picker can say what the plan is rather than only what it costs.
     includes: list[str]
     excludes: list[str]
+    # The tier this row belongs to (shared by its monthly and annual rows) and the same tier on the
+    # other interval, or None when it is sold on one only. Decided here by `interval_pairs`, so the
+    # picker renders one card per tier without guessing pairs from ids or names.
+    family: str
+    counterpart_id: str | None
 
 
 @router.get("/plans", response_model=list[SellablePlanOut])
@@ -414,6 +419,7 @@ async def list_sellable_plans(
     Non-active plans are omitted too, which is how a plan is retired: set `status` in Admin and it
     leaves the price list without any code change.
     """
+    from nexus.billing.plans import interval_pairs
     from nexus.models.billing import BillingCapability
 
     sub = await _current_subscription(ts)
@@ -464,6 +470,10 @@ async def list_sellable_plans(
         if e.mode
     }
 
+    # Over the listed rows only, so a held monthly tier cannot pair an annual with a plan checkout
+    # would refuse.
+    pairs = interval_pairs(rows)
+
     out: list[SellablePlanOut] = []
     for plan in rows:
         includes: list[str] = []
@@ -481,6 +491,7 @@ async def list_sellable_plans(
                 max_seats=plan.max_seats, trial_days=plan.trial_days,
                 sort_order=plan.sort_order, current=plan.id == current_plan_id,
                 includes=includes, excludes=excludes,
+                family=pairs[plan.id].family, counterpart_id=pairs[plan.id].counterpart_id,
             )
         )
     return out

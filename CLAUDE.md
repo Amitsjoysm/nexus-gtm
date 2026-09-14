@@ -376,6 +376,25 @@ Two things that were wrong and are now pinned by tests:
   2.48–4.75c, so overflowing was two to five times cheaper than upgrading — a customer acting
   rationally would sit on the smallest plan forever.
 
+**One card per tier, and the pairing is the server's.** An annual plan is its own row, so nothing in
+the schema said `launch-annual` is Launch billed yearly, and `PlanPicker` rendered five cards for
+three tiers. `GET /billing/plans` now returns `family` and `counterpart_id`, derived **on read** by
+`plans.interval_pairs` (a seeded column would never reach an established deployment, because
+`sync_plans` never mutates a row). The rule: `X` (month) pairs with `X-annual` (year) when both are
+listed in one currency. Anything else is its own family and shows in both views at the one interval
+it sells, labelled as such; pairing runs over listed rows only, so a held monthly tier leaves its
+annual unpaired rather than pointing a card at a plan checkout would refuse.
+
+- The picker opens on **Annual**, except for a workspace already paying for a paired tier, which
+  opens on the interval it pays so its Current card shows the price it is actually charged.
+- Savings, extra seats and extra credits are computed from plan fields in `planFamilies.ts`, never
+  written down; `tests/test_plan_picker_ui.py` refuses price literals. Credits per month are equal
+  on both intervals, so no "more credits" line appears unless an admin makes it true.
+- **Nothing says when annual credits are granted.** The purchase grant delivers the whole
+  allowance, but the Stripe webhook moves `plan_id` without setting `sub.interval` (only
+  `change_plan` does), and `roll_period` renews on `sub.interval`. Renewal cadence for a self-serve
+  annual is therefore not a claim the price list can back.
+
 ## Authoring a capability (`nexus/billing/capability_authoring.py`)
 
 `CAPABILITY_SEED` in `catalog.py` was the **only** write path to `billing_capabilities` — the table
