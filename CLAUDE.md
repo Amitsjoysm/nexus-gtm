@@ -200,7 +200,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0055_feature_switches`. The chain is
+Alembic under `migrations/versions/`. Head: `0056_alert_routing`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -210,7 +210,8 @@ Alembic under `migrations/versions/`. Head: `0055_feature_switches`. The chain i
 `0044`–`0046` (`provider_keys`, `provider_settings`, `payment_credentials`) → `0047`–`0049`
 (`crm_connections`, `audit_log`, `integration_connections`) -> `0050` (`runtime_settings`) ->
 `0051`-`0054` (account geo/revenue, signal preferences, `users.token_version`, indexed invoice
-PSP references) -> `0055` (`feature_switches`). Every tenant-scoped table gets RLS via
+PSP references) -> `0055` (`feature_switches`) -> `0056` (`accounts.owner_user_id`,
+`notification_preferences.scope`, `alert_channel_rules`). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -1803,6 +1804,46 @@ adding the table mutes nobody. Quiet hours are stored as minutes from local midn
 overnight wrap (22:00 → 07:00) is arithmetic rather than a special case; a naive `start <= now < end`
 silently disables quiet hours for exactly the people who set them overnight. Critical alerts override
 quiet hours by default, and the user owns that trade.
+
+## Alert routing and account ownership (migration `0056`)
+
+An alert did not know whose account it was on, and a shared Slack received nothing unless somebody
+routed their own alerts there. Three additive pieces fix that:
+
+- **`accounts.owner_user_id`** is whoever adds the account: create, lookalike add, a similar-person
+  add that creates the account, and both CSV imports. NULL is unowned, and every account from before
+  this is unowned, because nothing can infer an owner for an old row. A rep may claim an unowned
+  account or release their own (`PUT /accounts/{id}/owner`). Anything else needs `assign_accounts`
+  (manager+), and the target must be a member of the workspace (422). `transfer_ownership` in
+  `accounts/merge.py` moves owned accounts too, and a merge fills a blank owner from the other row.
+- **`notification_preferences.scope`** is `all` or `mine`. The server default is `all`, because that
+  is what every row saved before it meant. `PUT /notifications` treats an omitted scope as "keep what
+  is saved", so a client that predates the field cannot change a route's reach by editing its timing.
+  `mine` means the alert's account is owned by that member, and an unowned account is nobody's.
+- **`alert_channel_rules`** are a manager's rule that a shared channel receives a category for the
+  whole team (`PUT /alert-connections/{kind}/rules`; the list replaces what was saved). Nobody's
+  personal `off` or quiet hours mute a rule, because it is a decision about a shared channel. A rule is
+  also the only way an alert on an unowned account reaches a channel. `fanout.channels_for` unions
+  rules and personal routes and posts **once per channel**.
+
+Connecting a channel moved from `manage_workspace` to `manage_alert_channels` (manager+). A team lead
+setting up the Slack their team works from is normal; a rep replacing the one workspace Slack would
+redirect everybody's alerts, which is why it stopped at manager.
+
+**Alert settings is its own page, `/alerts/settings`, gated like Alerts (`module.signals`) rather
+than like Settings.** Settings is admin-only, so the rep-level routes API had a screen no rep or
+manager could open. Settings keeps a card pointing to the new page, and the team-channel editor on it
+renders for manager+ only.
+
+**The frontend reads the signed-in user's id from the token's `sub` claim**
+(`app/useCurrentUserId.ts`). The login response carries no user id, and a restored session has only
+the token. That id drives "You", the "My accounts" filter and Claim/Release, and the server re-checks
+every one of them. `/workspace/members/directory` (manager+) is the assignee list, separate from the
+admin-only members screen. `PageHeader` renders a non-string description in a `<div>`, because the
+owner control is a `<select>` and a `<p>` may only hold phrasing content.
+
+Pinned by `tests/test_account_owner.py`, `test_alert_routing_api.py`,
+`test_alert_routing_delivery.py` and `test_alert_routing_ui.py`.
 
 ## Frontend skills — USE THESE for any UI work
 

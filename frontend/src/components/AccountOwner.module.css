@@ -1,0 +1,33 @@
+.owner {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.icon {
+  display: inline-flex;
+  color: var(--text-subtle);
+}
+
+.icon :global(svg) {
+  inline-size: 14px;
+  block-size: 14px;
+}
+
+.name {
+  font-weight: var(--weight-medium);
+  color: var(--text-default);
+}
+
+.label {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.select {
+  inline-size: auto;
+  min-inline-size: 11rem;
+}

@@ -60,9 +60,16 @@ export interface Account {
   /** CRM trust signals: where this record syncs and when it last did. */
   crm_source?: string | null;
   crm_synced_at?: string | null;
+  /** Who works this account. `null` is unowned, not "everyone's". */
+  owner_user_id?: string | null;
+  /** The owner's name. `null` when unowned, or when the owner has since left the workspace. */
+  owner_name?: string | null;
 }
 
-export type AccountInput = Omit<Account, "id" | "crm_source" | "crm_synced_at">;
+export type AccountInput = Omit<
+  Account,
+  "id" | "crm_source" | "crm_synced_at" | "owner_user_id" | "owner_name"
+>;
 
 export interface Lookalike {
   name: string;
@@ -2083,6 +2090,9 @@ export interface SignalPreference {
 // ---- alert delivery preferences ----
 export type AlertMode = "immediate" | "digest" | "off";
 
+/** Which accounts a personal route covers: every account, or only the ones this member owns. */
+export type AlertScope = "all" | "mine";
+
 export interface NotificationPreference {
   category: string;
   channel: string;
@@ -2093,6 +2103,7 @@ export interface NotificationPreference {
   quiet_to_min: number | null;
   utc_offset_min: number;
   quiet_hours_allow_critical: boolean;
+  scope: AlertScope;
 }
 
 export interface NotificationPreferences {
@@ -2102,6 +2113,7 @@ export interface NotificationPreferences {
   categories: string[];
   channels: string[];
   modes: AlertMode[];
+  scopes: AlertScope[];
 }
 
 // ---- alert channel connections ----
@@ -2128,10 +2140,18 @@ export interface AlertChannelConnection {
   last_error: string;
   /** Which fields the connect form must collect. Server-driven so the form cannot drift. */
   fields: string[];
+  /** Alert types this shared channel receives for the whole team. Empty: none go there by rule. */
+  categories: string[];
 }
 
 export interface AlertChannelConnections {
   channels: AlertChannelConnection[];
+}
+
+/** What `PUT /alert-connections/{kind}/rules` saved: the whole set, sorted. */
+export interface AlertChannelRules {
+  kind: AlertChannelKind;
+  categories: string[];
 }
 
 /** Only the fields the chosen channel declares are sent; the rest stay absent. */

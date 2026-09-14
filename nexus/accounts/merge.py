@@ -80,7 +80,11 @@ async def merge_accounts(ts, *, winner_id: str, loser_id: str) -> MergeReport:
     await ts.flush()
 
     # 2. Fill blanks on the winner. Never overwrite: a merge must not undo a rep's corrections.
-    for attr in ("domain", "industry", "employee_count", "country", "description", "crm_id"):
+    #    The owner is a blank like any other: an unowned winner takes the loser's owner, so folding a
+    #    duplicate in never leaves nobody responsible for the account that survives.
+    for attr in (
+        "domain", "industry", "employee_count", "country", "description", "crm_id", "owner_user_id",
+    ):
         loser_value = getattr(loser, attr, None)
         if loser_value and not getattr(winner, attr, None):
             setattr(winner, attr, loser_value)
@@ -118,22 +122,26 @@ def _load(module_path: str, class_name: str):
 
 
 async def transfer_ownership(ts, *, from_user_id: str, to_user_id: str) -> dict:
-    """Move one person's open work to another.
+    """Move one person's open work, and the accounts they own, to another.
 
     The case this exists for: somebody leaves. Their queue must not become work nobody is
     accountable for, and reassigning it one task at a time through the UI is how half a book gets
     missed.
 
-    Work is owned at the **inbox task**, not the account — accounts are workspace-wide and have no
-    owner column. Only OPEN tasks move: reassigning someone's completed history would rewrite who
-    did what, which is the audit trail, not a queue.
+    Only OPEN tasks move: reassigning someone's completed history would rewrite who did what, which
+    is the audit trail, not a queue. **All** of their accounts move, archived ones included, since
+    accounts gained an owner (migration 0056): ownership is not history, it is who to ask today. An
+    account left owned by somebody who has gone is one whose "only my accounts" alerts reach nobody,
+    with a name on the page pointing at a person who is not there.
 
-    Idempotent, and a no-op when the two are the same person.
+    Idempotent, and a no-op when the two are the same person. ``moved`` still counts tasks, so
+    existing callers read the same number they always did; accounts are ``accounts_moved``.
     """
+    from nexus.models.account import Account
     from nexus.models.workflow import InboxTask
 
     if from_user_id == to_user_id:
-        return {"moved": 0, "reason": "same_user"}
+        return {"moved": 0, "accounts_moved": 0, "reason": "same_user"}
 
     open_tasks = await ts.list(
         InboxTask,
@@ -143,7 +151,14 @@ async def transfer_ownership(ts, *, from_user_id: str, to_user_id: str) -> dict:
     )
     for task in open_tasks:
         task.owner_user_id = to_user_id
+
+    owned = await ts.list(Account, Account.owner_user_id == from_user_id, limit=100_000)
+    for account in owned:
+        account.owner_user_id = to_user_id
     await ts.flush()
-    logger.info("transferred %d open tasks from %s to %s",
-                len(open_tasks), from_user_id, to_user_id)
-    return {"moved": len(open_tasks), "from_user_id": from_user_id, "to_user_id": to_user_id}
+    logger.info("transferred %d open tasks and %d accounts from %s to %s",
+                len(open_tasks), len(owned), from_user_id, to_user_id)
+    return {
+        "moved": len(open_tasks), "accounts_moved": len(owned),
+        "from_user_id": from_user_id, "to_user_id": to_user_id,
+    }

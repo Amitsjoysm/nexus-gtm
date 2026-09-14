@@ -96,13 +96,22 @@ export function AlertsPage() {
         title="Alerts"
         description="Time-sensitive notifications routed from your most important signals."
         actions={
-          <Button
-            variant="secondary"
-            iconLeft={<Icons.RefreshIcon />}
-            onClick={alerts.refetch}
-          >
-            Refresh
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              iconLeft={<Icons.SettingsIcon />}
+              onClick={() => navigate("/alerts/settings")}
+            >
+              Alert settings
+            </Button>
+            <Button
+              variant="secondary"
+              iconLeft={<Icons.RefreshIcon />}
+              onClick={alerts.refetch}
+            >
+              Refresh
+            </Button>
+          </>
         }
       />
 

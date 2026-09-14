@@ -262,8 +262,15 @@ def _apply_account(account: Account, fields: dict, extras: dict) -> None:
         account.custom_fields = {**(account.custom_fields or {}), **extras}
 
 
-async def import_accounts_csv(ts, *, content: bytes, mapping: dict[str, str]) -> dict:
-    """Create or update accounts from CSV. ``mapping`` is ``{csv_column: account_field}``."""
+async def import_accounts_csv(
+    ts, *, content: bytes, mapping: dict[str, str], owner_user_id: str | None = None
+) -> dict:
+    """Create or update accounts from CSV. ``mapping`` is ``{csv_column: account_field}``.
+
+    ``owner_user_id`` owns the accounts this import CREATES: a person uploading a list is adding
+    those accounts, the same as typing them in. Accounts it only updates keep their owner — an
+    import is not a way to take a colleague's book.
+    """
     created = updated = skipped = 0
     errors: list[str] = []
     rows = _rows(content)
@@ -296,7 +303,8 @@ async def import_accounts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
             async with ts.session.begin_nested():
                 if existing is None:
                     account = Account(
-                        tenant_id=ts.tenant_id, name=name or domain, source="csv_import"
+                        tenant_id=ts.tenant_id, name=name or domain, source="csv_import",
+                        owner_user_id=owner_user_id,
                     )
                     _apply_account(account, fields, extras)
                     ts.add(account)
@@ -316,12 +324,15 @@ async def import_accounts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
     }
 
 
-async def import_contacts_csv(ts, *, content: bytes, mapping: dict[str, str]) -> dict:
+async def import_contacts_csv(
+    ts, *, content: bytes, mapping: dict[str, str], owner_user_id: str | None = None
+) -> dict:
     """Create or update contacts from CSV. Identity is the normalised email within the tenant.
 
     A contact whose company is not in the book yet **creates** the account. Refusing would make the
     two imports order-dependent for a reason invisible from the upload screen, and a contact with no
-    account cannot be actioned at all.
+    account cannot be actioned at all. An account created that way is owned by ``owner_user_id``,
+    the person who ran the import, exactly as ``import_accounts_csv`` does.
     """
     created = updated = skipped = 0
     errors: list[str] = []
@@ -353,6 +364,7 @@ async def import_contacts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
                         tenant_id=ts.tenant_id,
                         name=fields.get("account_name") or domain or (full_name or email),
                         source="csv_import",
+                        owner_user_id=owner_user_id,
                     )
                     if domain:
                         account.domain = domain

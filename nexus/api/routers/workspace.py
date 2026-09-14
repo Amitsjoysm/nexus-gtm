@@ -664,6 +664,18 @@ async def list_members(
     return [_member_out(m) for m in await ts.list(Membership)]
 
 
+@router.get("/members/directory", response_model=list[MemberOut])
+async def member_directory(
+    ts: TenantSession = Depends(get_tenant_session),
+    # Manager and up: the people a manager can make an account's owner. Read-only, and separate
+    # from `/members` so that list keeps its admin gate for the verbs beside it. Not rep-level: a
+    # rep sees the owner's NAME on each account, which is all "who do I talk to" needs.
+    _: Principal = Depends(require(Permission.assign_accounts)),
+) -> list[MemberOut]:
+    """This workspace's members, for choosing who owns an account."""
+    return [_member_out(m) for m in await ts.list(Membership)]
+
+
 async def _check_seat_available(ts: TenantSession) -> None:
     """Refuse a new member when the plan's seats are full. Raises 402 with the upsell.
 

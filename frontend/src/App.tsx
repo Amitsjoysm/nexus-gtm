@@ -49,6 +49,10 @@ const NetworkPage = lazyPage(() => import("@/pages/NetworkPage"), "NetworkPage")
 const CallsPage = lazyPage(() => import("@/pages/CallsPage"), "CallsPage");
 const SignalsPage = lazyPage(() => import("@/pages/SignalsPage"), "SignalsPage");
 const AlertsPage = lazyPage(() => import("@/pages/AlertsPage"), "AlertsPage");
+const AlertSettingsPage = lazyPage(
+  () => import("@/pages/AlertSettingsPage"),
+  "AlertSettingsPage",
+);
 const ListsPage = lazyPage(() => import("@/pages/ListsPage"), "ListsPage");
 const PlaysPage = lazyPage(() => import("@/pages/PlaysPage"), "PlaysPage");
 const RelevancePage = lazyPage(() => import("@/pages/RelevancePage"), "RelevancePage");
@@ -245,6 +249,16 @@ export function App() {
                   element={
                     <RequireCapability capability="module.signals" name="Alerts">
                       <AlertsPage />
+                    </RequireCapability>
+                  }
+                />
+                {/* Every member, like Alerts itself: choosing where your own alerts go is rep-level.
+                    The team-channel half of the page checks the role inside. */}
+                <Route
+                  path="/alerts/settings"
+                  element={
+                    <RequireCapability capability="module.signals" name="Alert settings">
+                      <AlertSettingsPage />
                     </RequireCapability>
                   }
                 />

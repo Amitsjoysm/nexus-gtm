@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { AlertDelivery } from "./settings/AlertDelivery";
 import {
   Badge,
   Button,
@@ -35,6 +35,7 @@ import styles from "./SettingsPage.module.css";
 export function SettingsPage() {
   const api = useApiClient();
   const toast = useToast();
+  const navigate = useNavigate();
   const automation = useApi<AutomationSettings>((signal) => api.getAutomation(signal), []);
   const crm = useApi<CRMSyncStatus>((signal) => api.crmSyncStatus(signal), []);
   const [saving, setSaving] = useState(false);
@@ -67,9 +68,27 @@ export function SettingsPage() {
       />
 
       <div className={styles.stack}>
-        {/* First: it is the only thing on this page a REP can change for themselves, and the
-            page is otherwise workspace administration. */}
-        <AlertDelivery />
+        {/* Alert delivery moved beside Alerts. This page is admin-only, so the one setting on it
+            that belonged to every member was out of reach for all of them. The card stays so an
+            admin who remembers it here finds where it went. */}
+        <Card padding="lg">
+          <div className={styles.control}>
+            <div className={styles.controlText}>
+              <span className={styles.controlLabel}>Alert delivery</span>
+              <span className={styles.controlHint}>
+                Where each member's alerts go, and which alert types the team's shared channels
+                receive, are now set under Alerts, where every member can reach them.
+              </span>
+            </div>
+            <Button
+              variant="secondary"
+              iconRight={<Icons.ChevronRightIcon />}
+              onClick={() => navigate("/alerts/settings")}
+            >
+              Open alert settings
+            </Button>
+          </div>
+        </Card>
 
         <Card padding="lg">
           <CardHeader

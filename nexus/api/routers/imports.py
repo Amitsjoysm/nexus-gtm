@@ -219,7 +219,8 @@ async def upload_accounts_csv(
 ) -> ImportResult:
     allowed = await _allowed_targets(ts, "account", ACCOUNT_FIELDS)
     result = await import_accounts_csv(
-        ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, allowed)
+        ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, allowed),
+        owner_user_id=principal.user_id,
     )
     await _meter_import(ts, result, user_id=principal.user_id, kind="accounts")
     await ts.commit()
@@ -235,7 +236,8 @@ async def upload_contacts_csv(
 ) -> ImportResult:
     allowed = await _allowed_targets(ts, "contact", CONTACT_FIELDS)
     result = await import_contacts_csv(
-        ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, allowed)
+        ts, content=await _read_upload(file), mapping=_parse_mapping(mapping, allowed),
+        owner_user_id=principal.user_id,
     )
     await _meter_import(ts, result, user_id=principal.user_id, kind="contacts")
     await ts.commit()

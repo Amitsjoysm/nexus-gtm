@@ -18,7 +18,14 @@ export function PageHeader({ title, description, actions, eyebrow, className }: 
       <div className={styles.text}>
         {eyebrow && <div className={styles.eyebrow}>{eyebrow}</div>}
         <h2 className={styles.title}>{title}</h2>
-        {description && <p className={styles.desc}>{description}</p>}
+        {description &&
+          (typeof description === "string" ? (
+            <p className={styles.desc}>{description}</p>
+          ) : (
+            // A rich description carries badges and controls, and a <p> may only hold phrasing
+            // content: a <select> wrapper inside one is invalid markup.
+            <div className={styles.desc}>{description}</div>
+          ))}
       </div>
       {actions && <div className={styles.actions}>{actions}</div>}
     </div>

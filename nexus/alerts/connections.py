@@ -83,6 +83,7 @@ async def connection_states(ts: TenantSession) -> dict[str, dict]:
     "reconnect" rather than showing a tick.
     """
     out: dict[str, dict] = {}
+    rules = await channel_rules(ts)
     for kind in ALERT_CHANNEL_KINDS:
         row = await connections.get_connection(ts, kind)
         fields = CHANNEL_FIELDS.get(kind, ())
@@ -97,8 +98,51 @@ async def connection_states(ts: TenantSession) -> dict[str, dict]:
             "verified_at": row.verified_at.isoformat() if row is not None and row.verified_at else None,
             "last_error": (row.last_error if row is not None else None) or "",
             "fields": list(fields),
+            "categories": rules.get(kind, []),
         }
     return out
+
+
+async def channel_rules(ts: TenantSession) -> dict[str, list[str]]:
+    """Workspace rules by channel: which alert categories each shared channel receives, sorted."""
+    from nexus.models.alerts import AlertChannelRule
+
+    by_channel: dict[str, set[str]] = {}
+    for rule in await ts.list(AlertChannelRule, limit=1000):
+        by_channel.setdefault(rule.channel, set()).add(rule.category)
+    return {channel: sorted(categories) for channel, categories in by_channel.items()}
+
+
+async def replace_channel_rules(
+    ts: TenantSession,
+    *,
+    kind: str,
+    categories: list[str],
+    actor_user_id: str | None = None,
+) -> list[str]:
+    """Make ``categories`` exactly the set this channel receives. Returns the saved set, sorted.
+
+    Replace, not merge: the form posts the whole set, so unticking a box must remove its rule, and
+    saving the same set twice must not add a second copy of any of them — the unique constraint
+    would refuse it, and before that a duplicate would post one alert twice.
+    """
+    from nexus.models.alerts import AlertChannelRule
+
+    if kind not in ALERT_CHANNEL_KINDS:
+        raise ValueError(f"{kind} is not an alert channel")
+    wanted = set(categories)
+    existing = await ts.list(AlertChannelRule, AlertChannelRule.channel == kind, limit=1000)
+    for rule in existing:
+        if rule.category not in wanted:
+            await ts.session.delete(rule)
+    have = {rule.category for rule in existing}
+    for category in sorted(wanted - have):
+        ts.add(AlertChannelRule(
+            tenant_id=ts.tenant_id, channel=kind, category=category,
+            created_by_user_id=actor_user_id,
+        ))
+    await ts.flush()
+    return sorted(wanted)
 
 
 async def resolve_alert_channels(ts: TenantSession):

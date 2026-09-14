@@ -196,6 +196,11 @@
   min-inline-size: 11rem;
 }
 
+.routeScope {
+  inline-size: auto;
+  min-inline-size: 9.5rem;
+}
+
 /* ---- quiet hours ------------------------------------------------------------------------- */
 .quiet {
   padding-block-start: var(--space-5);
@@ -274,7 +279,12 @@
     flex-wrap: wrap;
   }
 
-  .routeMode {
-    flex: 1 1 100%;
+  .routeText {
+    flex-basis: 100%;
+  }
+
+  .routeMode,
+  .routeScope {
+    flex: 1 1 9rem;
   }
 }

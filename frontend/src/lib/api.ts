@@ -26,9 +26,11 @@ import type {
   CostRateResult,
   AdminSubscription,
   AlertMode,
+  AlertScope,
   AlertChannelConnection,
   AlertChannelConnections,
   AlertChannelKind,
+  AlertChannelRules,
   AlertChannelSecret,
   BillingCredits,
   NotificationPreference,
@@ -535,6 +537,15 @@ export class ApiClient {
   restoreAccount(accountId: string, signal?: AbortSignal) {
     return this.request<Account>(`/accounts/${accountId}/unarchive`, { method: "POST", signal });
   }
+  /** Set who owns an account; `null` leaves it unowned. A rep may only claim an unowned account
+   *  or release their own (403 otherwise); a manager and up may assign anyone in the workspace. */
+  setAccountOwner(accountId: string, userId: string | null, signal?: AbortSignal) {
+    return this.request<Account>(`/accounts/${encodeURIComponent(accountId)}/owner`, {
+      method: "PUT",
+      body: { user_id: userId },
+      signal,
+    });
+  }
   exportAccounts(includeArchived = false) {
     return this.download("/accounts/export/csv", "accounts.csv", {
       include_archived: includeArchived || undefined,
@@ -903,6 +914,10 @@ export class ApiClient {
   listMembers(signal?: AbortSignal) {
     return this.request<Member[]>("/workspace/members", { signal });
   }
+  /** Who an account can be assigned to. Manager and up, unlike the members admin screen. */
+  memberDirectory(signal?: AbortSignal) {
+    return this.request<Member[]>("/workspace/members/directory", { signal });
+  }
   inviteMember(
     body: { email: string; full_name: string; password: string; role: Role },
     signal?: AbortSignal,
@@ -972,6 +987,8 @@ export class ApiClient {
     quiet_to_min?: number | null;
     utc_offset_min?: number;
     quiet_hours_allow_critical?: boolean;
+    /** Omitted keeps what is saved ("all" for a new route). */
+    scope?: AlertScope;
   }) {
     return this.request<NotificationPreference>("/notifications", { method: "PUT", body });
   }
@@ -1038,6 +1055,14 @@ export class ApiClient {
     return this.request<void>(`/alert-connections/${encodeURIComponent(kind)}`, {
       method: "DELETE",
     });
+  }
+  /** Replace which alert types this shared channel receives for the whole team. Manager and up.
+   *  The list is the whole set: a category left out stops going there. */
+  setAlertChannelRules(kind: AlertChannelKind, categories: string[]) {
+    return this.request<AlertChannelRules>(
+      `/alert-connections/${encodeURIComponent(kind)}/rules`,
+      { method: "PUT", body: { categories } },
+    );
   }
 
   billingUsage(signal?: AbortSignal) {

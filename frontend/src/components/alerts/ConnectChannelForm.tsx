@@ -29,8 +29,8 @@ export function ConnectChannelForm({
   autoFocus,
 }: {
   channel: AlertChannelConnection;
-  /** Connecting is `manage_workspace`. A rep sees what is needed and who to ask, not a form that
-   *  403s on submit. */
+  /** Connecting is `manage_alert_channels`, manager and up. A rep sees what is needed and who to
+   *  ask, not a form that 403s on submit. */
   canManage: boolean;
   onConnected: (next: AlertChannelConnection) => void;
   onCancel?: () => void;
@@ -49,8 +49,8 @@ export function ConnectChannelForm({
   if (!canManage) {
     return (
       <p className={styles.locked} role="status">
-        {name} has not been connected yet, and only a workspace owner or admin can connect it. Ask
-        one of them to add it under Integrations, then choose it here.
+        {name} is not connected yet. Connecting a channel is up to a manager, admin or owner in this
+        workspace, so ask one of them to connect it, then choose it here.
       </p>
     );
   }

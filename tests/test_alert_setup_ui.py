@@ -150,18 +150,31 @@ def test_a_failed_connections_read_does_not_block_routing():
     )
 
 
-def test_connecting_is_admin_gated_in_the_ui_as_well_as_the_server():
-    """`PUT /alert-connections/{kind}` is `manage_workspace`. A rep handed the form gets a 403 on
-    submit and no idea who to ask, so the UI shows what is missing and who can fix it instead."""
+def test_connecting_is_manager_gated_in_the_ui_as_well_as_the_server():
+    """Connecting a channel is MANAGER and up, decided with the product owner on 2026-09-10: a
+    workspace has one Slack, so a rep replacing the webhook would redirect the whole team's alerts,
+    while a team lead doing it is normal. It was admin-only, which left managers unable to set up
+    the channel their own team works from.
+
+    The UI must agree with the server in both directions. A rep handed the form gets a 403 on submit
+    and no idea who to ask; a manager told to "ask an admin" is sent to somebody they do not need.
+    """
     from nexus.api.routers import alert_connections as router_mod
+    from nexus.core.rbac import _MIN_ROLE, Permission, Role
 
     src = _read(pathlib.Path(router_mod.__file__))
-    assert "Permission.manage_workspace" in src, "connecting is no longer workspace-admin gated"
+    assert "Permission.manage_alert_channels" in src, "connecting is not gated on the channel permission"
+    assert "Permission.manage_workspace" not in src, "a channel verb is still admin-only"
+    assert _MIN_ROLE[Permission.manage_alert_channels] is Role.manager
 
     form = _read(FORM)
     assert "canManage" in form and "if (!canManage)" in form, (
-        "the connect form no longer has a non-admin branch"
+        "the connect form no longer has a branch for members who cannot connect"
     )
+    assert "owner or admin" not in form, "the form still tells a manager to ask an admin"
+
+    hook = _read(FRONTEND / "components/alerts/useCanConnect.ts")
+    assert "ROLE_RANK.manager" in hook, "the UI still hides the connect form from managers"
 
 
 # ---- the vocabulary --------------------------------------------------------------------------------

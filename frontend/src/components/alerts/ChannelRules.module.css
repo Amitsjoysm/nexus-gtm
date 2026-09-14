@@ -1,0 +1,104 @@
+/* Rows divided by rules rather than boxed: they already sit inside a Card, and a card of cards
+   reads as nesting where there is none. Same rhythm as the routes list in AlertDelivery. */
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  padding-block: var(--space-5);
+  border-block-end: 1px solid var(--border);
+}
+
+.row:first-child {
+  padding-block-start: 0;
+}
+
+.row:last-child {
+  padding-block-end: 0;
+  border-block-end: 0;
+}
+
+.fieldset {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  inline-size: 100%;
+  margin-block-end: var(--space-3);
+  padding: 0;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.channelName {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-default);
+}
+
+.note {
+  margin: 0;
+  max-inline-size: 68ch;
+  font-size: var(--text-xs);
+  line-height: var(--leading);
+  color: var(--text-muted);
+}
+
+.categories {
+  display: grid;
+  gap: 0 var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: 36px;
+  font-size: var(--text-sm);
+  color: var(--text-default);
+  cursor: pointer;
+}
+
+.check input {
+  flex: none;
+  inline-size: 16px;
+  block-size: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: inherit;
+}
+
+.check input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.fieldset:disabled .check {
+  cursor: progress;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (pointer: coarse) {
+  .check {
+    min-block-size: 44px;
+  }
+}

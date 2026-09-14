@@ -115,14 +115,30 @@ async def test_preferences_are_per_user_not_per_workspace(client):
 
 # ---- the client surface --------------------------------------------------------------------------
 
-def test_settings_exposes_alert_delivery():
+def test_every_member_can_reach_alert_delivery():
     """The whole point: before this there was no way for a user to choose where alerts go. A
-    reachable API with no screen would be the same defect one layer up."""
+    reachable API with no screen would be the same defect one layer up.
+
+    It used to live on Settings, which is admin-only in both the nav and the route guard, so the
+    rep-level API sat behind a screen no rep or manager could open. It is its own page now, gated
+    like Alerts rather than like workspace administration, and Settings points to it.
+    """
     import pathlib
+    import re
 
     root = pathlib.Path(__file__).resolve().parents[1] / "frontend" / "src"
+    page = (root / "pages" / "AlertSettingsPage.tsx").read_text(encoding="utf-8")
+    assert "<AlertDelivery" in page, "the alert settings page does not render alert delivery"
+
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    route = re.search(r'path="/alerts/settings"(.*?)/>\s*\n', app, re.S)
+    assert route, "no /alerts/settings route"
+    assert 'minRole="admin"' not in route.group(1) and 'minRole="manager"' not in route.group(1), (
+        "alert delivery is behind a role a rep does not have"
+    )
+
     settings = (root / "pages" / "SettingsPage.tsx").read_text(encoding="utf-8")
-    assert "AlertDelivery" in settings, "Settings does not render the alert delivery section"
+    assert "/alerts/settings" in settings, "Settings no longer points to where alert delivery went"
 
     panel = (root / "pages" / "settings" / "AlertDelivery.tsx").read_text(encoding="utf-8")
     # Teams is why this was built now. The channel NAMES moved into a shared vocabulary module when

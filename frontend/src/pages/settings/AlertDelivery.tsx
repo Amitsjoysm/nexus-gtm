@@ -20,6 +20,8 @@ import type {
   AlertChannelConnection,
   AlertChannelConnections,
   AlertMode,
+  AlertScope,
+  NotificationPreference,
   NotificationPreferences,
 } from "@/lib/types";
 import styles from "./AlertDelivery.module.css";
@@ -38,8 +40,12 @@ import styles from "./AlertDelivery.module.css";
  *
  * **Per user, not per workspace.** A rep muting funding alerts must not mute them for the team,
  * which is why the preference endpoint is rep-level. The CHANNEL underneath is a workspace
- * decision, so connecting one is admin-only and a rep is told who to ask instead of being handed a
- * form that fails on submit.
+ * decision, so connecting one is manager and up, and a rep is told who to ask instead of being
+ * handed a form that fails on submit.
+ *
+ * **Scope.** A route covers every account, or only the accounts this person owns. "Only mine" is
+ * how a rep sends their own book to their phone without hearing about everyone else's. An alert on
+ * an account nobody owns never qualifies for it; that reaches a shared channel only by a team rule.
  */
 
 const MODE_LABEL: Record<AlertMode, string> = {
@@ -53,6 +59,17 @@ const MODE_SHORT: Record<AlertMode, string> = {
   immediate: "Straight away",
   digest: "Daily digest",
   off: "Never",
+};
+
+const SCOPE_LABEL: Record<AlertScope, string> = {
+  all: "All accounts",
+  mine: "Only accounts I own",
+};
+
+/** The routes list is narrow, and "I" reads oddly in a row that already names the category. */
+const SCOPE_SHORT: Record<AlertScope, string> = {
+  all: "All accounts",
+  mine: "My accounts",
 };
 
 export function AlertDelivery() {
@@ -113,12 +130,16 @@ function GuidedSetup({
   const [category, setCategory] = useState("");
   const [channel, setChannel] = useState("");
   const [mode, setMode] = useState<AlertMode>("immediate");
+  const [scope, setScope] = useState<AlertScope>("all");
   const [saving, setSaving] = useState(false);
   /** The route just saved. Holding it is what lets the panel say "these are ready" about a
    *  specific thing rather than flashing a toast that is gone before it is read. */
-  const [done, setDone] = useState<{ category: string; channel: string; mode: AlertMode } | null>(
-    null,
-  );
+  const [done, setDone] = useState<{
+    category: string;
+    channel: string;
+    mode: AlertMode;
+    scope: AlertScope;
+  } | null>(null);
 
   const utcOffsetMin = useMemo(() => -new Date().getTimezoneOffset(), []);
   const quiet = data.preferences.find((p) => p.quiet_from_min !== null) ?? null;
@@ -133,10 +154,25 @@ function GuidedSetup({
     (p) => p.category === category && p.channel === channel,
   );
 
+  /** Choosing a pair that is already routed starts from what is saved. Starting from the defaults
+   *  would widen an "only my accounts" route back to every account on a save that changed nothing. */
+  function choose(nextCategory: string, nextChannel: string) {
+    setCategory(nextCategory);
+    setChannel(nextChannel);
+    const saved = data.preferences.find(
+      (p) => p.category === nextCategory && p.channel === nextChannel,
+    );
+    if (saved) {
+      setMode(saved.mode === "off" ? "immediate" : saved.mode);
+      setScope(saved.scope);
+    }
+  }
+
   function reset() {
     setCategory("");
     setChannel("");
     setMode("immediate");
+    setScope("all");
     setDone(null);
   }
 
@@ -147,13 +183,14 @@ function GuidedSetup({
         category,
         channel,
         mode,
+        scope,
         // Carry the existing window through, or saving a route silently clears quiet hours.
         quiet_from_min: quiet?.quiet_from_min ?? null,
         quiet_to_min: quiet?.quiet_to_min ?? null,
         utc_offset_min: utcOffsetMin,
         quiet_hours_allow_critical: quiet?.quiet_hours_allow_critical ?? true,
       });
-      setDone({ category, channel, mode });
+      setDone({ category, channel, mode, scope });
       onSaved();
     } catch (err) {
       toast.error(
@@ -176,6 +213,7 @@ function GuidedSetup({
           <p className={styles.readyBody}>
             {label(CATEGORY_LABEL, done.category)} will reach you on{" "}
             {label(CHANNEL_LABEL, done.channel)}
+            {done.scope === "mine" ? " for the accounts you own" : ""}
             {done.mode === "digest" ? " in your daily digest" : ""}
             {done.mode === "off" ? ", and nothing will be sent" : ""}. The next matching signal is
             the first one you will get.
@@ -199,7 +237,7 @@ function GuidedSetup({
             <Select
               value={category}
               placeholder="Choose an alert type"
-              onChange={(e) => setCategory(e.target.value)}
+              onChange={(e) => choose(e.target.value, channel)}
               options={data.categories.map((c) => ({
                 value: c,
                 label: label(CATEGORY_LABEL, c),
@@ -215,7 +253,7 @@ function GuidedSetup({
               <Select
                 value={channel}
                 placeholder="Choose a channel"
-                onChange={(e) => setChannel(e.target.value)}
+                onChange={(e) => choose(category, e.target.value)}
                 options={data.channels.map((ch) => ({
                   value: ch,
                   label: channelOptionLabel(ch, connections),
@@ -253,7 +291,7 @@ function GuidedSetup({
         )}
 
         {category && channel && !needsConnection && (
-          <Step n={3} title="How should it arrive?">
+          <Step n={3} title="When, and for which accounts?">
             <Field label="Delivery timing" hideLabel>
               <Select
                 value={mode}
@@ -265,12 +303,24 @@ function GuidedSetup({
                   .map((m) => ({ value: m, label: MODE_LABEL[m] ?? m }))}
               />
             </Field>
+            <Field label="Which accounts" hideLabel>
+              <Select
+                value={scope}
+                onChange={(e) => setScope(e.target.value as AlertScope)}
+                options={data.scopes.map((s) => ({ value: s, label: SCOPE_LABEL[s] ?? s }))}
+              />
+            </Field>
+            <p className={styles.blurb}>
+              {scope === "mine"
+                ? "Only accounts where you are the owner. An alert on an account nobody owns will not reach you on this route."
+                : "Every account in the workspace, including accounts nobody owns."}
+            </p>
             {existing && (
               <p className={styles.blurb}>
                 You already route {label(CATEGORY_LABEL, category).toLowerCase()} here
-                {existing.mode === mode
+                {existing.mode === mode && existing.scope === scope
                   ? "."
-                  : ` as "${MODE_SHORT[existing.mode]}". Saving changes it.`}
+                  : ` as "${MODE_SHORT[existing.mode]}, ${SCOPE_SHORT[existing.scope].toLowerCase()}". Saving changes it.`}
               </p>
             )}
             <div className={styles.saveRow}>
@@ -354,19 +404,25 @@ function RoutesList({
     [data.preferences],
   );
 
-  async function change(category: string, channel: string, next: AlertMode | null) {
-    const key = `${category}|${channel}`;
+  /** Change one route. `mode: null` removes it; whatever is left out is carried from the saved row,
+   *  so changing the timing never widens a route that was scoped to my accounts. */
+  async function update(
+    p: NotificationPreference,
+    next: { mode?: AlertMode | null; scope?: AlertScope },
+  ) {
+    const key = `${p.category}|${p.channel}`;
     setBusy(key);
     try {
-      if (next === null) {
+      if (next.mode === null) {
         // Removing a route is NOT setting it to "never". Never means never send me this; no route
         // means whatever the workspace decides, and this is the only way back to that.
-        await api.clearNotificationPreference(category, channel);
+        await api.clearNotificationPreference(p.category, p.channel);
       } else {
         await api.setNotificationPreference({
-          category,
-          channel,
-          mode: next,
+          category: p.category,
+          channel: p.channel,
+          mode: next.mode ?? p.mode,
+          scope: next.scope ?? p.scope,
           quiet_from_min: quiet?.quiet_from_min ?? null,
           quiet_to_min: quiet?.quiet_to_min ?? null,
           utc_offset_min: utcOffsetMin,
@@ -419,6 +475,17 @@ function RoutesList({
                     Muted
                   </Badge>
                 )}
+                <Select
+                  className={styles.routeScope}
+                  value={p.scope}
+                  disabled={busy === key}
+                  aria-label={`Accounts for ${label(CATEGORY_LABEL, p.category)} on ${label(
+                    CHANNEL_LABEL,
+                    p.channel,
+                  )}`}
+                  onChange={(e) => update(p, { scope: e.target.value as AlertScope })}
+                  options={data.scopes.map((s) => ({ value: s, label: SCOPE_SHORT[s] ?? s }))}
+                />
                 {/* One control, not a dropdown beside a delete button, because "Workspace default"
                     and "remove this route" are the SAME act and offering both invites the reading
                     that they differ. Choosing it deletes the row, which is not the same as "Never":
@@ -433,7 +500,7 @@ function RoutesList({
                     p.channel,
                   )}`}
                   onChange={(e) =>
-                    change(p.category, p.channel, (e.target.value || null) as AlertMode | null)
+                    update(p, { mode: (e.target.value || null) as AlertMode | null })
                   }
                   options={[
                     ...data.modes.map((m) => ({ value: m, label: MODE_SHORT[m] ?? m })),
@@ -510,6 +577,7 @@ function QuietHoursSection({
           category: p.category,
           channel: p.channel,
           mode: p.mode,
+          scope: p.scope,
           quiet_from_min: from,
           quiet_to_min: to,
           utc_offset_min: utcOffsetMin,

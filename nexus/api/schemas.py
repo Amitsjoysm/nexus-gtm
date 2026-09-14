@@ -242,6 +242,11 @@ class AccountOut(AccountIn):
     # ("Synced to Salesforce · 2m ago") so reps can trust the data they act on.
     crm_source: str | None = None
     crm_synced_at: str | None = None
+    # Who works this account: whoever added it, claimable when unowned, reassignable by a manager.
+    # None is unowned, not "everyone's". The name rides along so a rep can see who to talk to
+    # without being allowed to list the workspace's members.
+    owner_user_id: str | None = None
+    owner_name: str | None = None
 
 
 class ContactIn(BaseModel):

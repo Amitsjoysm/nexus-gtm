@@ -22,7 +22,7 @@ from nexus.api.schemas import (
     SimilarPersonAddedOut,
     SimilarPersonIn,
 )
-from nexus.core.rbac import Permission
+from nexus.core.rbac import Permission, has_permission
 from nexus.core.tenancy import TenantSession
 from nexus.enrichment.waterfall import get_enricher
 from nexus.integrations.company_search import domain_from_url
@@ -35,7 +35,9 @@ logger = logging.getLogger("nexus.api.accounts")
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 
-def _account_out(a: Account, *, fit_score: int | None = None) -> AccountOut:
+def _account_out(
+    a: Account, *, fit_score: int | None = None, owner_name: str | None = None
+) -> AccountOut:
     cf = a.custom_fields or {}
     return AccountOut(
         id=a.id,
@@ -65,6 +67,39 @@ def _account_out(a: Account, *, fit_score: int | None = None) -> AccountOut:
         source=a.source,
         crm_source=a.crm_source,
         crm_synced_at=a.crm_synced_at.isoformat() if a.crm_synced_at else None,
+        owner_user_id=a.owner_user_id,
+        # Only beside an owner id: a name with no owner behind it would be a stale label.
+        owner_name=owner_name if a.owner_user_id else None,
+    )
+
+
+async def _owner_names(ts: TenantSession, accounts) -> dict[str, str]:
+    """Display names for the owners of these accounts, in ONE query.
+
+    Resolved through this workspace's memberships, so somebody who has since left shows no name
+    rather than whatever their global user row still says. Their id stays on the account until a
+    manager reassigns it, and the client can say "former member" instead of implying they are here.
+    """
+    owner_ids = {a.owner_user_id for a in accounts if a.owner_user_id}
+    if not owner_ids:
+        return {}
+    from nexus.models.identity import Membership, User
+
+    rows = (await ts.session.execute(
+        select(User.id, User.full_name)
+        .join(Membership, Membership.user_id == User.id)
+        .where(Membership.tenant_id == ts.tenant_id, User.id.in_(owner_ids))
+    )).all()
+    return {user_id: name for user_id, name in rows}
+
+
+async def _one_out(ts: TenantSession, account: Account, *, with_score: bool = True) -> AccountOut:
+    """One account as the client sees it, with its fit score and its owner's name."""
+    scores = await _latest_fit_scores(ts, [account.id]) if with_score else {}
+    names = await _owner_names(ts, [account])
+    return _account_out(
+        account, fit_score=scores.get(account.id),
+        owner_name=names.get(account.owner_user_id or ""),
     )
 
 
@@ -91,7 +126,7 @@ def _contact_out(c: Contact) -> ContactOut:
 async def create_account(
     body: AccountIn,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> AccountOut:
     from nexus.accounts.dedupe import find_existing_account, normalise_on_write
 
@@ -123,6 +158,9 @@ async def create_account(
         employee_count=body.employee_count,
         country=body.country,
         tech_stack=body.tech_stack,
+        # Whoever adds an account owns it. Their "only my accounts" alerts fire for it from the
+        # first signal, rather than after somebody remembers to claim it.
+        owner_user_id=principal.user_id,
     )
     ts.add(account)
     await ts.flush()
@@ -133,7 +171,7 @@ async def create_account(
     # Enqueued, never inline: ingestion makes ~10 outbound HTTP calls, and a POST that blocks on a
     # live crawl would take tens of seconds and fail whenever a provider is slow.
     await _enqueue_first_ingest(ts.tenant_id, account.id)
-    return _account_out(account)
+    return await _one_out(ts, account, with_score=False)
 
 
 async def _enqueue_first_ingest(tenant_id: str, account_id: str) -> None:
@@ -198,7 +236,11 @@ async def list_accounts(
     stmt = active.order_by(Account.created_at.desc()).limit(limit).offset(offset)
     rows = list((await ts.session.scalars(stmt)).all())
     scores = await _latest_fit_scores(ts, [a.id for a in rows])
-    return [_account_out(a, fit_score=scores.get(a.id)) for a in rows]
+    names = await _owner_names(ts, rows)
+    return [
+        _account_out(a, fit_score=scores.get(a.id), owner_name=names.get(a.owner_user_id or ""))
+        for a in rows
+    ]
 
 
 @router.get("/{account_id}", response_model=AccountOut)
@@ -210,8 +252,7 @@ async def get_account(
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
-    scores = await _latest_fit_scores(ts, [account.id])
-    return _account_out(account, fit_score=scores.get(account.id))
+    return await _one_out(ts, account)
 
 
 async def _set_archived(ts: TenantSession, account_id: str, archived: bool) -> AccountOut:
@@ -220,8 +261,7 @@ async def _set_archived(ts: TenantSession, account_id: str, archived: bool) -> A
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
     account.set_archived(archived)  # dual-writes archived_at column + legacy JSON mirror
     await ts.flush()
-    scores = await _latest_fit_scores(ts, [account.id])
-    return _account_out(account, fit_score=scores.get(account.id))
+    return await _one_out(ts, account)
 
 
 @router.post("/{account_id}/archive", response_model=AccountOut)
@@ -278,7 +318,8 @@ async def transfer_account_ownership(
     # Reassigning somebody else's queue is an admin act.
     _: Principal = Depends(require(Permission.manage_workspace)),
 ) -> dict:
-    """Move one person's open inbox tasks to another. For when somebody leaves.
+    """Move one person's open inbox tasks, and every account they own, to another. For when
+    somebody leaves.
 
     Only open work moves. Reassigning completed history would rewrite who did what, which is the
     audit trail rather than a queue.
@@ -288,6 +329,60 @@ async def transfer_account_ownership(
     return await transfer_ownership(
         ts, from_user_id=body.from_user_id, to_user_id=body.to_user_id
     )
+
+
+class OwnerIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    #: The member who should own this account, or null to leave it unowned.
+    user_id: str | None = None
+
+
+@router.put("/{account_id}/owner", response_model=AccountOut)
+async def set_account_owner(
+    account_id: str,
+    body: OwnerIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> AccountOut:
+    """Claim, release or reassign who works this account.
+
+    * **A rep** may claim an UNOWNED account for themselves, or release one they own. Taking a
+      colleague's account, or handing any account to somebody else, is refused (403): the owner
+      decides whose "only my accounts" alerts fire, so a rep moving it would redirect a teammate's
+      alerts without that teammate choosing it.
+    * **A manager and up** (``assign_accounts``) may set any member of this workspace, or clear it.
+    * The new owner must be a member of THIS workspace (422 otherwise). A user id from another
+      workspace would route this tenant's alerts to somebody outside it, and a mistyped id would
+      route them to nobody while the account read as owned.
+    """
+    account = await ts.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    target = (body.user_id or "").strip() or None
+
+    if not has_permission(principal.role, Permission.assign_accounts):
+        claiming = target == principal.user_id and account.owner_user_id in (None, principal.user_id)
+        releasing = target is None and account.owner_user_id == principal.user_id
+        if not (claiming or releasing):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "You can claim an unowned account or release your own. Ask a manager to move an "
+                "account between people.",
+            )
+
+    if target is not None:
+        from nexus.models.identity import Membership
+
+        if await ts.first(Membership, Membership.user_id == target) is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "That person is not a member of this workspace.",
+            )
+
+    account.owner_user_id = target
+    await ts.flush()
+    return await _one_out(ts, account)
 
 
 @router.post("/{account_id}/unarchive", response_model=AccountOut)
@@ -511,7 +606,7 @@ async def add_similar_person(
     body: SimilarPersonIn,
     response: Response,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> SimilarPersonAddedOut:
     """Keep a person that "Find similar → Source new people" found. 201 if added, 200 if already here.
 
@@ -528,7 +623,8 @@ async def add_similar_person(
     * **The account is the rep's choice**: an ``account_id``, or a company to find-or-create through
       ``find_existing_account`` — domain first, and a bare name only against accounts that have no
       domain either. That contract is the one account creation and import already use, so this
-      endpoint is not the looser path through which duplicates arrive.
+      endpoint is not the looser path through which duplicates arrive. A company it creates is
+      owned by the rep who added the person, like any other account a person adds.
     * **Free.** The search that found this person was charged when its results were delivered;
       writing the row the rep picked from them is not a second purchase. Finding their email is a
       separate, metered act the client offers next.
@@ -573,7 +669,7 @@ async def add_similar_person(
         if account is None:
             account = Account(
                 tenant_id=ts.tenant_id, name=name, domain=normalise_on_write(domain),
-                source="lookalike",
+                source="lookalike", owner_user_id=principal.user_id,
             )
             ts.add(account)
             await ts.flush()
@@ -627,10 +723,10 @@ async def source_contacts(
 async def add_from_lookalike(
     body: AccountIn,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> AccountOut:
     """Add a lookalike to the tracked accounts and score it against the ICP in one step. Deduped
-    by domain (returns the existing account if already tracked)."""
+    by domain (returns the existing account if already tracked, owner untouched)."""
     dom = domain_from_url(body.domain) if body.domain else None
     if dom:
         # Narrow to candidate rows in SQL (domain contains the registrable domain) instead of
@@ -645,12 +741,11 @@ async def add_from_lookalike(
                 if a.is_archived:
                     a.set_archived(False)  # clears archived_at + legacy JSON mirror
                     await ts.flush()
-                scores = await _latest_fit_scores(ts, [a.id])
-                return _account_out(a, fit_score=scores.get(a.id))
+                return await _one_out(ts, a)
     account = Account(
         tenant_id=ts.tenant_id, name=body.name, domain=body.domain, industry=body.industry,
         employee_count=body.employee_count, country=body.country, tech_stack=body.tech_stack,
-        source="lookalike",
+        source="lookalike", owner_user_id=principal.user_id,
     )
     ts.add(account)
     await ts.flush()
@@ -667,8 +762,7 @@ async def add_from_lookalike(
     # it on the next tick whether or not the enqueue below succeeds. Deferring loses nothing except
     # the Fit score in this response, and the caller already renders that as optional.
     await _enqueue_first_ingest(ts.tenant_id, account.id)
-    scores = await _latest_fit_scores(ts, [account.id])
-    return _account_out(account, fit_score=scores.get(account.id))
+    return await _one_out(ts, account)
 
 
 @router.post("/contacts/{contact_id}/enrich", response_model=ContactOut)
@@ -766,7 +860,9 @@ async def enrich_account(
     )
     await ts.flush()
     response.headers["X-Enriched-Fields"] = ",".join(filled)
-    return _account_out(account)
+    # The owner's name rides along, or a client that replaces its copy with this response would
+    # show the account as owned by nobody until the page reloads.
+    return await _one_out(ts, account, with_score=False)
 
 
 @router.delete("/{account_id}")

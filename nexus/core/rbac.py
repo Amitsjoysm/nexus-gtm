@@ -25,6 +25,13 @@ class Permission(str, enum.Enum):
     run_orchestration = "run_orchestration"    # manager+ (authors multi-agent runs)
     approve_outreach = "approve_outreach"      # manager+ (decides the outbound gate)
     manage_campaigns = "manage_campaigns"      # manager+ (launches segment campaigns)
+    # manager+: connects the workspace's shared alert channels and decides what they receive. Its
+    # own permission rather than `manage_workspace`, because a team lead setting up the Slack their
+    # team works from is normal, and that is not the same act as administering the workspace.
+    manage_alert_channels = "manage_alert_channels"
+    # manager+: says who owns an account. A rep may claim an unowned one or release their own; taking
+    # a colleague's, or handing one over, decides whose "only my accounts" alerts fire.
+    assign_accounts = "assign_accounts"
 
 
 _MIN_ROLE: dict[Permission, Role] = {
@@ -37,6 +44,8 @@ _MIN_ROLE: dict[Permission, Role] = {
     Permission.run_orchestration: Role.manager,
     Permission.approve_outreach: Role.manager,
     Permission.manage_campaigns: Role.manager,
+    Permission.manage_alert_channels: Role.manager,
+    Permission.assign_accounts: Role.manager,
 }
 
 

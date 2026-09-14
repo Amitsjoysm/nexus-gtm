@@ -44,14 +44,31 @@ def _channels() -> list[str]:
     return sorted(getattr(reg, "_channels", {}).keys())
 
 
+#: Which alerts a personal route covers: every alert of its category, or only those on accounts this
+#: member owns. An unowned account is nobody's, so it never qualifies for "mine" — workspace rules
+#: are how alerts on unowned accounts reach a shared channel.
+SCOPES = ("all", "mine")
+
+
 class PreferenceOut(BaseModel):
     category: str
     channel: str
     mode: str
+    scope: str = "all"
     quiet_from_min: int | None = None
     quiet_to_min: int | None = None
     utc_offset_min: int = 0
     quiet_hours_allow_critical: bool = True
+
+
+def _preference_out(row: NotificationPreference) -> PreferenceOut:
+    """The one place a stored route becomes JSON, so GET and PUT cannot disagree about a field."""
+    return PreferenceOut(
+        category=row.category, channel=row.channel, mode=row.mode, scope=row.scope or "all",
+        quiet_from_min=row.quiet_from_min, quiet_to_min=row.quiet_to_min,
+        utc_offset_min=row.utc_offset_min,
+        quiet_hours_allow_critical=row.quiet_hours_allow_critical,
+    )
 
 
 class PreferencesOut(BaseModel):
@@ -63,6 +80,7 @@ class PreferencesOut(BaseModel):
     categories: list[str] = Field(default_factory=list)
     channels: list[str] = Field(default_factory=list)
     modes: list[str] = Field(default_factory=list)
+    scopes: list[str] = Field(default_factory=list)
 
 
 class PreferenceIn(BaseModel):
@@ -71,6 +89,10 @@ class PreferenceIn(BaseModel):
     category: str
     channel: str = "in_app"
     mode: str = "immediate"
+    #: Omitted means "leave it as it is": "all" for a new route, the saved scope for an existing
+    #: one. A client written before scope existed posts every other field on each save, and treating
+    #: the missing field as "all" would silently widen "only my accounts" back to everything.
+    scope: str | None = None
     # Minutes from local midnight. Stored this way so the overnight wrap (22:00 -> 07:00) is
     # arithmetic rather than a special case — a naive `start <= now < end` disables quiet hours for
     # exactly the people who set them overnight.
@@ -92,18 +114,11 @@ async def get_preferences(
         NotificationPreference, NotificationPreference.user_id == principal.user_id, limit=200
     )
     return PreferencesOut(
-        preferences=[
-            PreferenceOut(
-                category=r.category, channel=r.channel, mode=r.mode,
-                quiet_from_min=r.quiet_from_min, quiet_to_min=r.quiet_to_min,
-                utc_offset_min=r.utc_offset_min,
-                quiet_hours_allow_critical=r.quiet_hours_allow_critical,
-            )
-            for r in rows
-        ],
+        preferences=[_preference_out(r) for r in rows],
         categories=sorted(ALERT_CATEGORIES),
         channels=_channels(),
         modes=list(MODES),
+        scopes=list(SCOPES),
     )
 
 
@@ -138,6 +153,11 @@ async def set_preference(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"mode must be one of {', '.join(MODES)}",
         )
+    if body.scope is not None and body.scope not in SCOPES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"scope must be one of {', '.join(SCOPES)}",
+        )
     # Half a quiet-hours window is not a window. Accepting one would silently disable the feature
     # for someone who believes they configured it.
     if (body.quiet_from_min is None) != (body.quiet_to_min is None):
@@ -159,18 +179,15 @@ async def set_preference(
         )
         ts.add(row)
     row.mode = body.mode
+    # Omitted keeps what was saved (and "all" for a new route) — see `PreferenceIn.scope`.
+    row.scope = body.scope if body.scope is not None else (row.scope or "all")
     row.quiet_from_min = body.quiet_from_min
     row.quiet_to_min = body.quiet_to_min
     row.utc_offset_min = body.utc_offset_min
     row.quiet_hours_allow_critical = body.quiet_hours_allow_critical
     await ts.flush()
 
-    return PreferenceOut(
-        category=row.category, channel=row.channel, mode=row.mode,
-        quiet_from_min=row.quiet_from_min, quiet_to_min=row.quiet_to_min,
-        utc_offset_min=row.utc_offset_min,
-        quiet_hours_allow_critical=row.quiet_hours_allow_critical,
-    )
+    return _preference_out(row)
 
 
 @router.delete("/{category}/{channel}", status_code=status.HTTP_204_NO_CONTENT,

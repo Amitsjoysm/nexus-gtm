@@ -1,13 +1,19 @@
 # nexus/api/routers/alert_connections.py
-"""Connect a workspace's own Slack, Teams, Telegram or alert inbox.
+"""Connect a workspace's own Slack, Teams, Telegram or alert inbox, and say what each one receives.
 
 Until this existed the channels were deployment env vars, so a customer could not connect theirs —
 and an operator who set one to help a single customer would have routed every tenant's alerts into
 it. See ``nexus/alerts/connections.py`` for why that is the CRM credential bug in a new place.
 
-Workspace-admin level (`manage_workspace`), not rep-level. A workspace has ONE Slack per
-``uq_integration_connection_tenant_kind``, so connecting is a workspace decision; choosing which of
-your own alerts go there is the rep-level thing, and that lives in ``routers/notifications.py``.
+**Manager and up** (`manage_alert_channels`), decided with the product owner on 2026-09-10. A
+workspace has ONE Slack per ``uq_integration_connection_tenant_kind``, so a rep replacing the webhook
+would redirect every teammate's alerts; a team lead setting up the channel their team works from is
+normal, and sending them to an admin was the friction that left channels unconnected. Choosing which
+of your OWN alerts go there stays rep-level, in ``routers/notifications.py``.
+
+This router owns the team half of routing: a **workspace rule** (``PUT /{kind}/rules``) says a
+shared channel receives a category for everyone. Nobody's personal "off" or quiet hours mutes it, and
+it is the only way an alert on an unowned account reaches a channel.
 
 **The secret is in no response model.** `ChannelOut` is the single place connection state becomes
 JSON, which is what makes "the webhook URL never leaves the server" checkable rather than asserted
@@ -22,6 +28,7 @@ from nexus.alerts.connections import (
     CHANNEL_FIELDS,
     clear_connection,
     connection_states,
+    replace_channel_rules,
     save_connection,
 )
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -46,6 +53,9 @@ class ChannelOut(BaseModel):
     last_error: str = ""
     #: Which fields the connect form must collect for this channel.
     fields: list[str] = Field(default_factory=list)
+    #: Alert categories a workspace rule sends here for everyone. Empty means no rule: the channel
+    #: receives only what members route to it themselves.
+    categories: list[str] = Field(default_factory=list)
 
 
 class ChannelsOut(BaseModel):
@@ -64,6 +74,18 @@ class ConnectIn(BaseModel):
     to: str = ""
 
 
+class RulesIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    #: The whole set this channel should receive. It replaces what was saved, so unticking removes.
+    categories: list[str] = Field(default_factory=list, max_length=50)
+
+
+class RulesOut(BaseModel):
+    kind: str
+    categories: list[str] = Field(default_factory=list)
+
+
 def _require_kind(kind: str) -> str:
     if kind not in ALERT_CHANNEL_KINDS:
         raise HTTPException(
@@ -75,11 +97,12 @@ def _require_kind(kind: str) -> str:
 @router.get("", response_model=ChannelsOut)
 async def list_connections(
     ts: TenantSession = Depends(get_tenant_session),
-    # Rep-level READ: the notification screen shows every rep whether Slack is connected, because
-    # "route this to Slack" is meaningless without knowing whether Slack exists yet.
+    # Rep-level READ: the notification screen shows every rep whether Slack is connected, and what
+    # the team already sends there, because "route this to Slack" is meaningless without knowing
+    # whether Slack exists yet or already receives it.
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> ChannelsOut:
-    """Which channels this workspace has connected."""
+    """Which channels this workspace has connected, and what each receives by workspace rule."""
     states = await connection_states(ts)
     return ChannelsOut(channels=[ChannelOut(**states[k]) for k in ALERT_CHANNEL_KINDS])
 
@@ -89,7 +112,7 @@ async def connect(
     kind: str,
     body: ConnectIn,
     ts: TenantSession = Depends(get_tenant_session),
-    principal: Principal = Depends(require(Permission.manage_workspace)),
+    principal: Principal = Depends(require(Permission.manage_alert_channels)),
 ) -> ChannelOut:
     """Connect (or replace) this workspace's credential for one channel.
 
@@ -130,7 +153,7 @@ async def connect(
 async def test_connection(
     kind: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_workspace)),
+    _: Principal = Depends(require(Permission.manage_alert_channels)),
 ) -> ChannelOut:
     """Send a real message on this channel and record whether it arrived.
 
@@ -179,13 +202,44 @@ async def test_connection(
 async def disconnect(
     kind: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_workspace)),
+    _: Principal = Depends(require(Permission.manage_alert_channels)),
 ) -> Response:
     """Disconnect, falling back to the deployment default.
 
     Never refused. During an incident "stop sending our alerts there" must not be blocked by a
-    state machine — the same rule as deactivating a payment credential or a provider key.
+    state machine — the same rule as deactivating a payment credential or a provider key. The
+    channel's workspace rules are kept, so reconnecting does not silently start from nothing.
     """
     _require_kind(kind)
     await clear_connection(ts, kind)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/{kind}/rules", response_model=RulesOut)
+async def set_rules(
+    kind: str,
+    body: RulesIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_alert_channels)),
+) -> RulesOut:
+    """Set which alert categories this channel receives for the whole workspace.
+
+    Allowed before the channel is connected, and kept when its credential is replaced or removed:
+    a rule is a decision about the team's channel, not about one webhook, and making a manager
+    re-tick every box after swapping a Slack webhook is how a channel quietly stops receiving.
+
+    Every category must be one the alert rules can emit. A rule for an alert type that never fires is
+    silence a manager believes is a setting — the same check ``PUT /notifications`` applies.
+    """
+    _require_kind(kind)
+    from nexus.alerts.rules import ALERT_CATEGORIES
+
+    unknown = sorted({c for c in body.categories if c not in ALERT_CATEGORIES})
+    if unknown:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"unknown alert type: {', '.join(unknown)}"
+        )
+    saved = await replace_channel_rules(
+        ts, kind=kind, categories=body.categories, actor_user_id=principal.user_id
+    )
+    return RulesOut(kind=kind, categories=saved)

@@ -19,6 +19,7 @@ import type { Column } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
+import { useCurrentUserId } from "@/app/useCurrentUserId";
 import { ApiError } from "@/lib/api";
 import { RecordImportModal } from "@/components/imports/RecordImportModal";
 import { formatNumber } from "@/lib/format";
@@ -33,6 +34,8 @@ function fitTone(score: number | null | undefined): "success" | "warning" | "dan
 }
 
 const ALL = "__all__";
+const MINE = "__mine__";
+const UNOWNED = "__unowned__";
 
 const EMPTY_FORM = {
   name: "",
@@ -54,6 +57,8 @@ export function AccountsPage() {
   const [country, setCountry] = useState(ALL);
   const [source, setSource] = useState(ALL);
   const [minFit, setMinFit] = useState(0);
+  const [ownerFilter, setOwnerFilter] = useState(ALL);
+  const me = useCurrentUserId();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -152,6 +157,20 @@ export function AccountsPage() {
           ),
       },
       {
+        key: "owner",
+        header: "Owner",
+        hideOnMobile: true,
+        sortValue: (a) => (a.owner_user_id ? (a.owner_name ?? "") : null),
+        render: (a) =>
+          !a.owner_user_id ? (
+            <span className={styles.muted}>Unowned</span>
+          ) : a.owner_user_id === me ? (
+            "You"
+          ) : (
+            (a.owner_name ?? <span className={styles.muted}>Former member</span>)
+          ),
+      },
+      {
         key: "industry",
         header: "Industry",
         hideOnMobile: true,
@@ -231,7 +250,7 @@ export function AccountsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId],
+    [busyId, me],
   );
 
   function filtered(rows: Account[]): Account[] {
@@ -243,6 +262,8 @@ export function AccountsPage() {
       if (country !== ALL && a.country !== country) return false;
       if (source !== ALL && (a.source ?? "") !== source) return false;
       if (minFit > 0 && (a.fit_score ?? -1) < minFit) return false;
+      if (ownerFilter === MINE && (me === null || a.owner_user_id !== me)) return false;
+      if (ownerFilter === UNOWNED && a.owner_user_id) return false;
       return true;
     });
   }
@@ -374,6 +395,16 @@ export function AccountsPage() {
                       { value: "40", label: "Fit ≥ 40" },
                       { value: "60", label: "Fit ≥ 60" },
                       { value: "80", label: "Fit ≥ 80" },
+                    ]}
+                  />
+                  <Select
+                    aria-label="Owner"
+                    value={ownerFilter}
+                    onChange={(e) => setOwnerFilter(e.target.value)}
+                    options={[
+                      { value: ALL, label: "Any owner" },
+                      { value: MINE, label: "My accounts" },
+                      { value: UNOWNED, label: "Unowned" },
                     ]}
                   />
                 </div>

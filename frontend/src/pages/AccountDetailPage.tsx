@@ -20,6 +20,7 @@ import {
   WorkingIndicator,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
+import { AccountOwner } from "@/components/AccountOwner";
 import {
   AddSimilarPerson,
   contactFromLookalike,
@@ -552,7 +553,7 @@ export function AccountDetailPage() {
             }
             title={acc.name}
             description={
-              <span className={styles.headMeta}>
+              <div className={styles.headMeta}>
                 {acc.domain && <span>{acc.domain}</span>}
                 {acc.crm_synced_at ? (
                   <Badge tone="success" dot>
@@ -563,7 +564,8 @@ export function AccountDetailPage() {
                     From {humanize(acc.crm_source)} · not pushed yet
                   </Badge>
                 ) : null}
-              </span>
+                <AccountOwner account={acc} onChange={(next) => account.setData(next)} />
+              </div>
             }
             actions={
               <>
