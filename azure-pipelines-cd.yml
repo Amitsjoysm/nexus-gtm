@@ -253,6 +253,11 @@ stages:
   # The target is the image the deploy RECORDED before it changed anything. Revision history is
   # only the fallback, because in Single revision mode `revision list` without --all returns the
   # one active revision and never an earlier image.
+  #
+  # A rollback is only REPORTED once the restored app passes the same gate as a deploy (a running,
+  # ready revision, then /health and /ready — deploy/pipelines/deploy-containerapp.yml). An
+  # `az containerapp update` that returns means a revision exists, not that it serves: without this
+  # gate, a restored image that crash-loops on boot is still announced as "Rolled back".
   # ============================================================================
   - stage: Rollback
     displayName: Rollback production on failure
@@ -270,7 +275,7 @@ stages:
     jobs:
       - job: rollback
         displayName: Restore previous image
-        timeoutInMinutes: 30
+        timeoutInMinutes: 45 # the deploy job's budget: it is the same update + wait + smoke test
         steps:
           - task: AzureCLI@2
             displayName: Roll app and worker back
@@ -324,9 +329,70 @@ stages:
                 echo "Rolling back to ${PREV}"
                 az containerapp update -n "$(APP_NAME)"    -g "$(RESOURCE_GROUP)" --image "${PREV}" --output none
                 az containerapp update -n "$(WORKER_NAME)" -g "$(RESOURCE_GROUP)" --image "${PREV}" --output none
-                echo "##[warning]Rolled back to ${PREV}. The failed release was NOT deployed."
-                echo "##[warning]NOTE: a rollback does NOT revert database migrations. The schema stays"
-                echo "##[warning]compatible (migrations are additive-only), but if the failed release APPLIED a"
-                echo "##[warning]migration, this older image's boot-time 'alembic upgrade head' does not know that"
-                echo "##[warning]revision (scripts/bootstrap_db.py fails on it) and the app may not start. Verify:"
-                echo "##[warning]  az containerapp revision list -n $(APP_NAME) -g $(RESOURCE_GROUP) -o table"
+                # Not "rolled back" yet — the next two steps decide that. See the stage header.
+                echo "Restore of ${PREV} requested; waiting for it to serve."
+                echo "##vso[task.setvariable variable=rollbackImage]${PREV}"
+
+          # Mirrors the deploy template's wait, plus one condition: the READY revision must be the
+          # NEWEST one. After a failed deploy, latestReadyRevisionName can still name an earlier
+          # revision, which would satisfy "non-empty" before the restored one has started at all.
+          - task: AzureCLI@2
+            displayName: Wait for the restored app revision to become healthy
+            inputs:
+              azureSubscription: $(AZURE_SUBSCRIPTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                for i in $(seq 1 60); do
+                  STATE=$(az containerapp show -n "$(APP_NAME)" -g "$(RESOURCE_GROUP)" \
+                    --query "properties.runningStatus" -o tsv 2>/dev/null || echo "Unknown")
+                  READY=$(az containerapp show -n "$(APP_NAME)" -g "$(RESOURCE_GROUP)" \
+                    --query "properties.latestReadyRevisionName" -o tsv 2>/dev/null || echo "")
+                  LATEST=$(az containerapp show -n "$(APP_NAME)" -g "$(RESOURCE_GROUP)" \
+                    --query "properties.latestRevisionName" -o tsv 2>/dev/null || echo "")
+                  echo "[$i/60] runningStatus=${STATE} latestReady=${READY} latest=${LATEST}"
+                  if [ "${STATE}" = "Running" ] && [ -n "${READY}" ] && [ "${READY}" = "${LATEST}" ]; then
+                    echo "Restored app is running and its newest revision is ready."
+                    exit 0
+                  fi
+                  sleep 10
+                done
+                echo "##[error]The restored app did not reach a healthy revision within 10 minutes."
+                echo "##[error]Production is NOT confirmed restored. MANUAL INTERVENTION REQUIRED."
+                az containerapp logs show -n "$(APP_NAME)" -g "$(RESOURCE_GROUP)" --tail 100 || true
+                exit 1
+
+          # /ready, not /health alone — readiness includes database reachability. Same loop as the
+          # deploy template's gate, except `|| true`: an app that never answers (the crash-loop case)
+          # makes curl exit non-zero, and under `set -e` that would skip the error message below.
+          - bash: |
+              set -euo pipefail
+              for p in /health /ready; do
+                code=$(curl -s -o /dev/null -w '%{http_code}' \
+                  --max-time 10 --retry 6 --retry-delay 5 --retry-all-errors \
+                  "$(APP_URL)${p}" || true)
+                echo "GET ${p} -> ${code}"
+                if [ "$code" != "200" ]; then
+                  echo "##[error]Rollback smoke test failed on ${p} (HTTP ${code})."
+                  echo "##[error]Production is NOT confirmed restored. MANUAL INTERVENTION REQUIRED."
+                  exit 1
+                fi
+              done
+            displayName: Smoke test the restored app (gates the rollback)
+
+          # Runs only when both checks above passed (the default succeeded() condition).
+          - bash: |
+              echo "##[warning]Rolled back to ${ROLLBACK_IMAGE}: running, and passing /health and /ready."
+              echo "##[warning]The failed release was NOT deployed."
+              echo "##[warning]NOTE: a rollback does NOT revert database migrations. If the failed release"
+              echo "##[warning]applied one, the database stays at that newer revision. This older image does not"
+              echo "##[warning]know it, so its bootstrap logs 'database is at a newer revision than this image;"
+              echo "##[warning]skipping upgrade' and starts without migrating — expected. The older code runs on"
+              echo "##[warning]the newer schema only because migrations are additive-only (CLAUDE.md), and"
+              echo "##[warning]/ready proves it reaches the database, not that every code path works."
+            displayName: Report rollback outcome
+            env:
+              # Via env, not inline: an unset macro is left as literal text, which bash would then
+              # run as a command substitution. As an env value it is only ever inert text.
+              ROLLBACK_IMAGE: $(rollbackImage)

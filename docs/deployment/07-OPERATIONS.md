@@ -79,7 +79,9 @@ terraform apply -var "name_suffix=$SFX" -var "alarm_email=ops@example.com" \
 **A rollback does not revert database migrations.** Migrations in this repo are additive-only
 (see `CLAUDE.md`), so the previous image runs correctly against the newer schema — but verify
 rather than assume, especially if the release you are backing out added a column the old code
-does not know about.
+does not know about. If that release applied a migration, the restored app logs `[bootstrap]
+WARNING: database is at a newer revision than this image; skipping upgrade` and starts without
+migrating — expected (`scripts/bootstrap_db.py`), not a failure.
 
 ## Changing a secret or API key
 

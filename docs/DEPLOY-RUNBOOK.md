@@ -162,7 +162,8 @@ directly to the internet, do **not** rely on it — a client can set that header
 ## Rollback
 
 Migrations are additive only, so the previous image runs against the new schema. Roll the image
-back and leave the database alone:
+back and leave the database alone. If the release you are backing out applied a migration, the app
+logs `database is at a newer revision than this image; skipping upgrade` on boot — expected:
 
 ```bash
 docker compose -f deploy/docker-compose.prod.yml up -d --no-deps app worker
