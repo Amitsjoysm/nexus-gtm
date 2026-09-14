@@ -452,3 +452,138 @@ async def test_lifecycle_events_never_cross_tenants(client, webhook_secret):
 
     assert (await _subscription(a)).status == "canceled"
     assert (await _subscription(b)).status == "active"      # untouched
+
+
+# ---- a plan bought through the provider takes that plan's terms -------------------------------
+
+#: Every branch of `_apply_subscription_event` that can move a workspace onto a bought plan.
+PLAN_CARRYING_EVENTS = (
+    "checkout.session.completed",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+)
+
+
+def _purchase(event_type: str, *, slug: str, tid: str, plan_id: str) -> dict:
+    """The provider object each event carries when a customer buys ``plan_id``."""
+    meta = {"tenant_id": tid, "plan_id": plan_id}
+    if event_type == "checkout.session.completed":
+        return {
+            "id": f"cs_{slug}", "customer": f"cus_{slug}", "subscription": f"sub_{slug}",
+            "payment_status": "paid", "mode": "subscription", "metadata": meta,
+        }
+    return {"id": f"sub_{slug}", "customer": f"cus_{slug}", "status": "active", "metadata": meta}
+
+
+async def _tenant_on_free(slug: str) -> str:
+    """A workspace exactly as signup leaves it: on `free`, monthly, holding the free grant."""
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from nexus.billing.rates import sync_rates
+    from nexus.billing.subscriptions import start_subscription
+    from tests.conftest import make_tenant, tenant_session
+
+    await sync_catalog()
+    await sync_plans()
+    await sync_rates()
+    tid = await make_tenant(slug=slug, name=slug)
+    async with tenant_session(tid) as ts:
+        await start_subscription(ts, plan_id="free")
+    return tid
+
+
+async def _plan(plan_id: str):
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingPlan
+
+    async with get_platform_sessionmaker()() as session:
+        return await session.get(BillingPlan, plan_id)
+
+
+@pytest.mark.parametrize("event_type", PLAN_CARRYING_EVENTS)
+async def test_buying_an_annual_plan_makes_the_subscription_annual(
+    client, webhook_secret, event_type
+):
+    """`free` is monthly and `launch-annual` is not. The period roll reads `sub.interval`, so a
+    subscription left on "month" rolls every month and grants the ANNUAL allowance each time.
+    `change_plan` has always copied the interval; the webhook did not."""
+    slug = f"annual{event_type.split('.')[-1]}"
+    tid = await _tenant_on_free(slug)
+    assert (await _subscription(tid)).interval == "month"       # the starting point
+
+    r = await _post(client, f"evt_{slug}", event_type,
+                    _purchase(event_type, slug=slug, tid=tid, plan_id="launch-annual"))
+    assert r.status_code == 200, r.text
+
+    sub = await _subscription(tid)
+    assert sub.plan_id == "launch-annual"
+    assert sub.interval == "year"
+
+
+@pytest.mark.parametrize("event_type", PLAN_CARRYING_EVENTS)
+async def test_buying_a_plan_takes_its_currency(client, webhook_secret, event_type):
+    """The other term `change_plan` copies. Every seeded plan is USD, so the defect is only
+    visible on a row that already carries a different currency."""
+    slug = f"ccy{event_type.split('.')[-1]}"
+    tid = await _tenant_with_subscription(slug=slug, plan_id="free", currency="EUR")
+    plan = await _plan("launch-annual")
+    assert plan.currency != "EUR"
+
+    r = await _post(client, f"evt_{slug}", event_type,
+                    _purchase(event_type, slug=slug, tid=tid, plan_id="launch-annual"))
+    assert r.status_code == 200, r.text
+
+    assert (await _subscription(tid)).currency == plan.currency
+
+
+async def test_a_subscription_the_webhook_creates_starts_on_the_plan_terms(client, webhook_secret):
+    """The branch that creates a row for a tenant holding none. A row born on the column default
+    ("month") is the same defect, and the subscription.* branch only copies terms when the plan
+    CHANGES, so no later event for that same plan would ever correct it."""
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.plans import sync_plans
+    from tests.conftest import make_tenant
+
+    await sync_catalog()
+    await sync_plans()
+    tid = await make_tenant(slug="annualnew", name="annualnew")
+    event = "customer.subscription.created"
+
+    r = await _post(client, "evt_annualnew", event,
+                    _purchase(event, slug="annualnew", tid=tid, plan_id="launch-annual"))
+    assert r.status_code == 200, r.text
+    assert r.json().get("created") is True
+
+    sub = await _subscription(tid)
+    assert sub.plan_id == "launch-annual"
+    assert sub.interval == "year"
+
+
+async def test_an_annual_plan_bought_through_checkout_rolls_yearly(client, webhook_secret):
+    """The consequence end to end: when the year is up, the next period is a year, not a month.
+    A monthly window here is what re-grants the 24,000-credit allowance every month."""
+    from datetime import timedelta
+
+    from nexus.billing.subscriptions import roll_period
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingSubscription
+    from tests.conftest import tenant_session
+
+    tid = await _tenant_on_free("annualroll")
+    event = "checkout.session.completed"
+    r = await _post(client, "evt_annualroll", event,
+                    _purchase(event, slug="annualroll", tid=tid, plan_id="launch-annual"))
+    assert r.status_code == 200, r.text
+
+    async with tenant_session(tid) as ts:
+        sub = await ts.first(BillingSubscription)
+        sub.current_period_end = utcnow() - timedelta(minutes=1)    # the year is up
+        await ts.flush()
+
+        assert await roll_period(ts) is True
+        sub = await ts.first(BillingSubscription)
+        length = sub.current_period_end - sub.current_period_start
+
+    assert timedelta(days=365) <= length <= timedelta(days=366), (
+        f"an annual subscription rolled onto a {length.days}-day period"
+    )

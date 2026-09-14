@@ -194,6 +194,25 @@ async def _any_subscription(ts: TenantSession) -> BillingSubscription | None:
     return subs.first()
 
 
+def take_plan_terms(sub: BillingSubscription, plan: BillingPlan) -> None:
+    """Put ``sub`` on ``plan`` under that plan's terms. Writes nothing else.
+
+    The one definition of what moving onto a plan copies, shared by :func:`change_plan` and the
+    Stripe webhook. The webhook used to keep its own copy, which set the plan and left the
+    interval behind: a workspace that bought `launch-annual` through Checkout stayed on "month",
+    so :func:`roll_period` closed its period monthly and granted the annual allowance each time.
+
+    Status, proration and credit grants stay with the callers. The webhook must not prorate a
+    provider-owned subscription (see :func:`_proratable`), and each caller has its own rule for
+    when a grant is due. Every write is an absolute assignment, so re-applying a plan is a no-op.
+    """
+    sub.plan_id = plan.id
+    sub.interval = plan.interval
+    sub.currency = plan.currency
+    # Grandfathered terms are frozen legacy pricing; taking a new plan means taking its terms.
+    sub.grandfathered = False
+
+
 async def change_plan(ts: TenantSession, plan_id: str, *, actor: str = "system"):
     """Move a tenant to another plan, in place.
 
@@ -219,12 +238,8 @@ async def change_plan(ts: TenantSession, plan_id: str, *, actor: str = "system")
 
     previous = sub.plan_id
     adjustments = await _record_proration(ts, sub, old_plan_id=previous, new_plan=plan, actor=actor)
-    sub.plan_id = plan_id
+    take_plan_terms(sub, plan)
     sub.status = "active"
-    sub.currency = plan.currency
-    sub.interval = plan.interval
-    # Grandfathered terms are frozen legacy pricing; taking a new plan means taking its terms.
-    sub.grandfathered = False
     sub.cancel_at_period_end = False
     sub.meta = {
         **(sub.meta or {}),

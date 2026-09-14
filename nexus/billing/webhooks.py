@@ -384,6 +384,7 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
     instead of accumulating. That is what makes replay a genuine no-op rather than a no-op only
     because the event-id primary key happened to catch it first.
     """
+    from nexus.billing.subscriptions import take_plan_terms
     from nexus.core.db import utcnow
     from nexus.core.tenancy import apply_rls
     from nexus.models.billing import BillingPlan, BillingSubscription
@@ -397,9 +398,13 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
         # one we actually know: a subscription pointing at a plan that does not exist would
         # break the entitlement chain for that workspace.
         plan_id = str(meta_in.get("plan_id") or "")
-        if plan_id and await session.get(BillingPlan, plan_id) is not None:
+        if plan_id and (plan := await session.get(BillingPlan, plan_id)) is not None:
             await apply_rls(session, tenant_id)
-            sub = BillingSubscription(tenant_id=tenant_id, plan_id=plan_id, status="active")
+            sub = BillingSubscription(tenant_id=tenant_id, status="active")
+            # Born on the plan's terms, not the column defaults. The subscription.* branch below
+            # only copies terms when the plan CHANGES, so nothing later would correct a row that
+            # started on "month" under an annual plan.
+            take_plan_terms(sub, plan)
             session.add(sub)
             await session.flush()
             outcome["created"] = True
@@ -430,9 +435,9 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
         plan_id = str(meta_in.get("plan_id") or "")
         if plan_id and (bought := await session.get(BillingPlan, plan_id)) is not None:
             changed = sub.plan_id != plan_id
-            sub.plan_id = plan_id
-            # Taking a new plan means taking its terms — the same rule change_plan applies.
-            sub.grandfathered = False
+            # Taking a new plan means taking its terms, interval and currency included — the same
+            # rule, through the same function, that change_plan applies.
+            take_plan_terms(sub, bought)
             if changed:
                 # The plan the customer just PAID FOR arrives with the credits it is sold with.
                 # Without this the subscription flips to Launch and the balance stays on whatever
@@ -482,8 +487,7 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
         if plan_id and plan_id != sub.plan_id:
             bought = await session.get(BillingPlan, plan_id)
             if bought is not None:
-                sub.plan_id = plan_id
-                sub.grandfathered = False
+                take_plan_terms(sub, bought)
                 # Same reasoning as the Checkout branch above. Stripe can deliver the plan on
                 # either event depending on how the subscription was created, so both grant —
                 # and the grant is keyed per plan per period, so whichever arrives second is a
