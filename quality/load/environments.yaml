@@ -1,0 +1,94 @@
+# Where load tests may run, and the hard limits the runner enforces there.
+#
+# Read by scripts/load/run.py (and nothing else). Caps are HARD: the runner refuses a run whose
+# profile would exceed them, clamps nothing silently, and has no CLI flag to raise them. Raising a
+# cap is a reviewed change to this file, which is the point — "just this once" on a shared staging
+# is how an evening deploy smoke test meets a 200-VU breakpoint run.
+#
+# Production is not an environment here and cannot become one by passing a URL: every target host
+# must be in its environment's `allowed_hosts`, and `forbidden_hosts` is checked first.
+
+version: 1
+
+# Run windows are evaluated in this zone. The team works Indian hours; staging is shared with them.
+timezone: Asia/Kolkata
+
+# Refused no matter which environment or flag names them.
+forbidden_hosts:
+  - gtm.infojoy.com
+  - www.gtm.infojoy.com
+  - gtm-prod-app # any Container Apps FQDN starting with this (checked as a prefix)
+
+environments:
+  local:
+    description: The Docker Compose stack on a developer machine (compose project `nexus-gtm`).
+    # Addressed from INSIDE the compose network, so the tool containers skip Caddy and the
+    # host port proxy. The runner's own pre-flight and canary go through Caddy on `host_url`,
+    # whose certificate is the local self-signed CA — hence `insecure_tls`, for this env only.
+    base_url: http://app:8000
+    host_url: https://localhost
+    insecure_tls: true
+    docker_network: nexus-gtm_default
+    allowed_hosts: [app, localhost, 127.0.0.1, host.docker.internal]
+    window:
+      enforce: false
+    caps:
+      max_vus: 100
+      max_duration_s: 3600
+      max_rps: 200
+      max_users_per_sec: 10
+    guards:
+      error_rate_pct: 10
+      p95_ms: 5000
+      min_requests: 50
+      window_s: 60
+      canary_interval_s: 10
+      canary_window: 6
+      canary_fail_ratio: 0.5
+    worker_probe:
+      # The compose stack runs Prometheus on 127.0.0.1:9090 scraping worker:9100.
+      source: prometheus
+      url: http://localhost:9090
+
+  staging:
+    description: >-
+      Azure Container Apps, East US 2 (gtm-staging-rg). App 1..2 replicas x 1 uvicorn worker,
+      Postgres Flexible Server B_Standard_B1ms (50 max / 35 user connections).
+    base_url: https://gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io
+    host_url: https://gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io
+    allowed_hosts:
+      - gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io
+      - staging-gtm.infojoy.com
+    window:
+      enforce: true
+      # Blocked = Indian working hours, Monday to Saturday. Sunday is open all day. A run must
+      # START and END outside the blocked span: a 45-minute run started at 07:30 is refused.
+      blocked:
+        days: [mon, tue, wed, thu, fri, sat]
+        start: "08:00"
+        end: "21:00"
+    caps:
+      # Sized to the B1ms budget (docs/quality/load-capacity.md): past ~50 concurrent users the
+      # second replica's pool pushes Postgres over its 35 user connections, and staging is down
+      # for everyone until the load stops. The guards below stop a run before that is sustained.
+      max_vus: 60
+      max_duration_s: 3600
+      max_rps: 60
+      max_users_per_sec: 5
+    guards:
+      # A guard is not an SLO. SLOs grade a run; guards protect staging from it.
+      error_rate_pct: 5
+      p95_ms: 3000
+      min_requests: 50
+      window_s: 60
+      canary_interval_s: 10
+      canary_window: 6
+      canary_fail_ratio: 0.5
+    worker_probe:
+      # The staging worker has no ingress, so :9100 is unreachable from outside the environment.
+      # Queue depth is read from Grafana Cloud once the Operations task ships metrics there;
+      # until then the probe records "unmeasured" — never 0.
+      source: grafana_prometheus
+      url_env: LT_GRAFANA_PROM_URL
+      user_env: LT_GRAFANA_PROM_USER
+      token_env: LT_GRAFANA_PROM_TOKEN

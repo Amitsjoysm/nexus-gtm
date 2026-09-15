@@ -1,0 +1,2424 @@
+{
+  "auth": {
+    "login_path": "/api/auth/login",
+    "login_rate_limit": {
+      "max": 10,
+      "window_s": 60
+    },
+    "refresh_after_s": 2400,
+    "refresh_spread_s": 900,
+    "token_ttl_s": 3600
+  },
+  "default_plans": {
+    "breakpoint": {
+      "abort_is_result": true,
+      "envelope": {
+        "duration_s": 915,
+        "est_peak_rps": 13.7,
+        "paid_calls_max": 0,
+        "peak_users_per_sec": 2.0,
+        "peak_vus": 34
+      },
+      "gate": false,
+      "journeys": {
+        "admin_settings": {
+          "open": [
+            {
+              "increment": 0.02,
+              "level_s": 90,
+              "levels": 8,
+              "ramp_s": 15,
+              "start": 0.02,
+              "type": "stairs"
+            }
+          ]
+        },
+        "manager_review": {
+          "open": [
+            {
+              "increment": 0.0375,
+              "level_s": 90,
+              "levels": 8,
+              "ramp_s": 15,
+              "start": 0.0375,
+              "type": "stairs"
+            }
+          ]
+        },
+        "platform_customers": {
+          "open": [
+            {
+              "increment": 0.005,
+              "level_s": 90,
+              "levels": 8,
+              "ramp_s": 15,
+              "start": 0.005,
+              "type": "stairs"
+            }
+          ]
+        },
+        "rep_daily": {
+          "open": [
+            {
+              "increment": 0.1375,
+              "level_s": 90,
+              "levels": 8,
+              "ramp_s": 15,
+              "start": 0.1375,
+              "type": "stairs"
+            }
+          ]
+        },
+        "rep_landing": {
+          "open": [
+            {
+              "increment": 0.05,
+              "level_s": 90,
+              "levels": 8,
+              "ramp_s": 15,
+              "start": 0.05,
+              "type": "stairs"
+            }
+          ]
+        }
+      },
+      "kind": "open",
+      "max_duration_s": 915,
+      "overrides": {},
+      "paid": {},
+      "personas": [
+        "admin",
+        "manager",
+        "platform_admin",
+        "rep"
+      ],
+      "profile": "breakpoint",
+      "relogin": false,
+      "schema": "nexus.load.plan/v1",
+      "think_time_scale": 1.0,
+      "tool": "gatling"
+    },
+    "capacity": {
+      "abort_is_result": false,
+      "envelope": {
+        "duration_s": 1320,
+        "est_peak_rps": 14.5,
+        "paid_calls_max": 0,
+        "peak_users_per_sec": 2.661,
+        "peak_vus": 30
+      },
+      "gate": false,
+      "journeys": {
+        "admin_settings": {
+          "closed": [
+            {
+              "increment": 1,
+              "level_s": 180,
+              "levels": 6,
+              "ramp_s": 30,
+              "start": 1,
+              "type": "stairs_concurrent"
+            }
+          ]
+        },
+        "manager_review": {
+          "closed": [
+            {
+              "increment": 1,
+              "level_s": 180,
+              "levels": 6,
+              "ramp_s": 30,
+              "start": 1,
+              "type": "stairs_concurrent"
+            }
+          ]
+        },
+        "platform_customers": {
+          "closed": [
+            {
+              "increment": 1,
+              "level_s": 180,
+              "levels": 6,
+              "ramp_s": 30,
+              "start": 1,
+              "type": "stairs_concurrent"
+            }
+          ]
+        },
+        "rep_daily": {
+          "closed": [
+            {
+              "increment": 1,
+              "level_s": 180,
+              "levels": 6,
+              "ramp_s": 30,
+              "start": 1,
+              "type": "stairs_concurrent"
+            }
+          ]
+        },
+        "rep_landing": {
+          "closed": [
+            {
+              "increment": 1,
+              "level_s": 180,
+              "levels": 6,
+              "ramp_s": 30,
+              "start": 1,
+              "type": "stairs_concurrent"
+            }
+          ]
+        }
+      },
+      "kind": "closed",
+      "max_duration_s": 1320,
+      "overrides": {},
+      "paid": {},
+      "personas": [
+        "admin",
+        "manager",
+        "platform_admin",
+        "rep"
+      ],
+      "profile": "capacity",
+      "relogin": false,
+      "schema": "nexus.load.plan/v1",
+      "think_time_scale": 1.0,
+      "tool": "gatling"
+    },
+    "load": {
+      "abort_is_result": false,
+      "envelope": {
+        "duration_s": 420,
+        "est_peak_rps": 9.9,
+        "paid_calls_max": 0,
+        "peak_users_per_sec": 0.0,
+        "peak_vus": 20
+      },
+      "gate": true,
+      "journeys": {
+        "admin_settings": {
+          "executor": "ramping-vus",
+          "gracefulRampDown": "30s",
+          "gracefulStop": "30s",
+          "stages": [
+            {
+              "duration": "60s",
+              "target": 1
+            },
+            {
+              "duration": "60s",
+              "target": 2
+            },
+            {
+              "duration": "180s",
+              "target": 2
+            },
+            {
+              "duration": "30s",
+              "target": 0
+            }
+          ],
+          "startVUs": 0
+        },
+        "manager_review": {
+          "executor": "ramping-vus",
+          "gracefulRampDown": "30s",
+          "gracefulStop": "30s",
+          "stages": [
+            {
+              "duration": "60s",
+              "target": 2
+            },
+            {
+              "duration": "60s",
+              "target": 3
+            },
+            {
+              "duration": "180s",
+              "target": 3
+            },
+            {
+              "duration": "30s",
+              "target": 0
+            }
+          ],
+          "startVUs": 0
+        },
+        "platform_customers": {
+          "executor": "ramping-vus",
+          "gracefulRampDown": "30s",
+          "gracefulStop": "30s",
+          "stages": [
+            {
+              "duration": "60s",
+              "target": 1
+            },
+            {
+              "duration": "60s",
+              "target": 2
+            },
+            {
+              "duration": "180s",
+              "target": 2
+            },
+            {
+              "duration": "30s",
+              "target": 0
+            }
+          ],
+          "startVUs": 0
+        },
+        "rep_daily": {
+          "executor": "ramping-vus",
+          "gracefulRampDown": "30s",
+          "gracefulStop": "30s",
+          "stages": [
+            {
+              "duration": "60s",
+              "target": 4
+            },
+            {
+              "duration": "60s",
+              "target": 9
+            },
+            {
+              "duration": "180s",
+              "target": 9
+            },
+            {
+              "duration": "30s",
+              "target": 0
+            }
+          ],
+          "startVUs": 0
+        },
+        "rep_landing": {
+          "executor": "ramping-vus",
+          "gracefulRampDown": "30s",
+          "gracefulStop": "30s",
+          "stages": [
+            {
+              "duration": "60s",
+              "target": 2
+            },
+            {
+              "duration": "60s",
+              "target": 4
+            },
+            {
+              "duration": "180s",
+              "target": 4
+            },
+            {
+              "duration": "30s",
+              "target": 0
+            }
+          ],
+          "startVUs": 0
+        }
+      },
+      "kind": "ramping_vus",
+      "max_duration_s": 420,
+      "overrides": {},
+      "paid": {},
+      "personas": [
+        "admin",
+        "manager",
+        "platform_admin",
+        "rep"
+      ],
+      "profile": "load",
+      "relogin": false,
+      "schema": "nexus.load.plan/v1",
+      "think_time_scale": 1.0,
+      "tool": "k6"
+    },
+    "smoke": {
+      "abort_is_result": false,
+      "envelope": {
+        "duration_s": 240,
+        "est_peak_rps": 28.9,
+        "paid_calls_max": 0,
+        "peak_users_per_sec": 0.0,
+        "peak_vus": 5
+      },
+      "gate": true,
+      "journeys": {
+        "admin_settings": {
+          "executor": "per-vu-iterations",
+          "iterations": 1,
+          "maxDuration": "180s",
+          "vus": 1
+        },
+        "manager_review": {
+          "executor": "per-vu-iterations",
+          "iterations": 1,
+          "maxDuration": "180s",
+          "vus": 1
+        },
+        "platform_customers": {
+          "executor": "per-vu-iterations",
+          "iterations": 1,
+          "maxDuration": "180s",
+          "vus": 1
+        },
+        "rep_daily": {
+          "executor": "per-vu-iterations",
+          "iterations": 1,
+          "maxDuration": "180s",
+          "vus": 1
+        },
+        "rep_landing": {
+          "executor": "per-vu-iterations",
+          "iterations": 1,
+          "maxDuration": "180s",
+          "vus": 1
+        }
+      },
+      "kind": "iterations",
+      "max_duration_s": 240,
+      "overrides": {},
+      "paid": {},
+      "personas": [
+        "admin",
+        "manager",
+        "platform_admin",
+        "rep"
+      ],
+      "profile": "smoke",
+      "relogin": false,
+      "schema": "nexus.load.plan/v1",
+      "think_time_scale": 0.0,
+      "tool": "k6"
+    },
+    "soak": {
+      "abort_is_result": false,
+      "envelope": {
+        "duration_s": 1890,
+        "est_peak_rps": 4.9,
+        "paid_calls_max": 0,
+        "peak_users_per_sec": 0.0,
+        "peak_vus": 10
+      },
+      "gate": true,
+      "journeys": {
+        "admin_settings": {
+          "duration": "1800s",
+          "executor": "constant-vus",
+          "gracefulStop": "30s",
+          "vus": 1
+        },
+        "manager_review": {
+          "duration": "1800s",
+          "executor": "constant-vus",
+          "gracefulStop": "30s",
+          "vus": 2
+        },
+        "platform_customers": {
+          "duration": "1800s",
+          "executor": "constant-vus",
+          "gracefulStop": "30s",
+          "vus": 1
+        },
+        "rep_daily": {
+          "duration": "1800s",
+          "executor": "constant-vus",
+          "gracefulStop": "30s",
+          "vus": 4
+        },
+        "rep_landing": {
+          "duration": "1800s",
+          "executor": "constant-vus",
+          "gracefulStop": "30s",
+          "vus": 2
+        }
+      },
+      "kind": "constant_vus",
+      "max_duration_s": 1890,
+      "overrides": {},
+      "paid": {},
+      "personas": [
+        "admin",
+        "manager",
+        "platform_admin",
+        "rep"
+      ],
+      "profile": "soak",
+      "relogin": false,
+      "schema": "nexus.load.plan/v1",
+      "think_time_scale": 1.0,
+      "tool": "k6"
+    },
+    "spike": {
+      "abort_is_result": false,
+      "envelope": {
+        "duration_s": 470,
+        "est_peak_rps": 13.7,
+        "paid_calls_max": 0,
+        "peak_users_per_sec": 2.0,
+        "peak_vus": 34
+      },
+      "gate": false,
+      "journeys": {
+        "admin_settings": {
+          "open": [
+            {
+              "duration_s": 120,
+              "rate": 0.016,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 0.016,
+              "to": 0.16,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 60,
+              "rate": 0.16,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 0.16,
+              "to": 0.016,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 180,
+              "rate": 0.016,
+              "type": "constant"
+            }
+          ]
+        },
+        "manager_review": {
+          "open": [
+            {
+              "duration_s": 120,
+              "rate": 0.03,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 0.03,
+              "to": 0.3,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 60,
+              "rate": 0.3,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 0.3,
+              "to": 0.03,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 180,
+              "rate": 0.03,
+              "type": "constant"
+            }
+          ]
+        },
+        "platform_customers": {
+          "open": [
+            {
+              "duration_s": 120,
+              "rate": 0.004,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 0.004,
+              "to": 0.04,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 60,
+              "rate": 0.04,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 0.04,
+              "to": 0.004,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 180,
+              "rate": 0.004,
+              "type": "constant"
+            }
+          ]
+        },
+        "rep_daily": {
+          "open": [
+            {
+              "duration_s": 120,
+              "rate": 0.11,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 0.11,
+              "to": 1.1,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 60,
+              "rate": 1.1,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 1.1,
+              "to": 0.11,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 180,
+              "rate": 0.11,
+              "type": "constant"
+            }
+          ]
+        },
+        "rep_landing": {
+          "open": [
+            {
+              "duration_s": 120,
+              "rate": 0.04,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 0.04,
+              "to": 0.4,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 60,
+              "rate": 0.4,
+              "type": "constant"
+            },
+            {
+              "duration_s": 10,
+              "from": 0.4,
+              "to": 0.04,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 180,
+              "rate": 0.04,
+              "type": "constant"
+            }
+          ]
+        }
+      },
+      "kind": "open",
+      "max_duration_s": 470,
+      "overrides": {},
+      "paid": {},
+      "personas": [
+        "admin",
+        "manager",
+        "platform_admin",
+        "rep"
+      ],
+      "profile": "spike",
+      "relogin": false,
+      "schema": "nexus.load.plan/v1",
+      "think_time_scale": 1.0,
+      "tool": "gatling"
+    },
+    "stress": {
+      "abort_is_result": false,
+      "envelope": {
+        "duration_s": 600,
+        "est_peak_rps": 6.9,
+        "paid_calls_max": 0,
+        "peak_users_per_sec": 1.0,
+        "peak_vus": 17
+      },
+      "gate": false,
+      "journeys": {
+        "admin_settings": {
+          "open": [
+            {
+              "duration_s": 60,
+              "from": 0.0,
+              "to": 0.04,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 120,
+              "rate": 0.04,
+              "type": "constant"
+            },
+            {
+              "duration_s": 60,
+              "from": 0.04,
+              "to": 0.08,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 240,
+              "rate": 0.08,
+              "type": "constant"
+            },
+            {
+              "duration_s": 30,
+              "from": 0.08,
+              "to": 0.0,
+              "type": "ramp"
+            }
+          ]
+        },
+        "manager_review": {
+          "open": [
+            {
+              "duration_s": 60,
+              "from": 0.0,
+              "to": 0.075,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 120,
+              "rate": 0.075,
+              "type": "constant"
+            },
+            {
+              "duration_s": 60,
+              "from": 0.075,
+              "to": 0.15,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 240,
+              "rate": 0.15,
+              "type": "constant"
+            },
+            {
+              "duration_s": 30,
+              "from": 0.15,
+              "to": 0.0,
+              "type": "ramp"
+            }
+          ]
+        },
+        "platform_customers": {
+          "open": [
+            {
+              "duration_s": 60,
+              "from": 0.0,
+              "to": 0.01,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 120,
+              "rate": 0.01,
+              "type": "constant"
+            },
+            {
+              "duration_s": 60,
+              "from": 0.01,
+              "to": 0.02,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 240,
+              "rate": 0.02,
+              "type": "constant"
+            },
+            {
+              "duration_s": 30,
+              "from": 0.02,
+              "to": 0.0,
+              "type": "ramp"
+            }
+          ]
+        },
+        "rep_daily": {
+          "open": [
+            {
+              "duration_s": 60,
+              "from": 0.0,
+              "to": 0.275,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 120,
+              "rate": 0.275,
+              "type": "constant"
+            },
+            {
+              "duration_s": 60,
+              "from": 0.275,
+              "to": 0.55,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 240,
+              "rate": 0.55,
+              "type": "constant"
+            },
+            {
+              "duration_s": 30,
+              "from": 0.55,
+              "to": 0.0,
+              "type": "ramp"
+            }
+          ]
+        },
+        "rep_landing": {
+          "open": [
+            {
+              "duration_s": 60,
+              "from": 0.0,
+              "to": 0.1,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 120,
+              "rate": 0.1,
+              "type": "constant"
+            },
+            {
+              "duration_s": 60,
+              "from": 0.1,
+              "to": 0.2,
+              "type": "ramp"
+            },
+            {
+              "duration_s": 240,
+              "rate": 0.2,
+              "type": "constant"
+            },
+            {
+              "duration_s": 30,
+              "from": 0.2,
+              "to": 0.0,
+              "type": "ramp"
+            }
+          ]
+        }
+      },
+      "kind": "open",
+      "max_duration_s": 600,
+      "overrides": {},
+      "paid": {},
+      "personas": [
+        "admin",
+        "manager",
+        "platform_admin",
+        "rep"
+      ],
+      "profile": "stress",
+      "relogin": false,
+      "schema": "nexus.load.plan/v1",
+      "think_time_scale": 1.0,
+      "tool": "gatling"
+    }
+  },
+  "defaults": {
+    "expect_status": [
+      200
+    ],
+    "think_time_s": {
+      "max": 6,
+      "min": 2
+    }
+  },
+  "environments": {
+    "local": {
+      "allowed_hosts": [
+        "app",
+        "localhost",
+        "127.0.0.1",
+        "host.docker.internal"
+      ],
+      "base_url": "http://app:8000",
+      "caps": {
+        "max_duration_s": 3600,
+        "max_rps": 200,
+        "max_users_per_sec": 10,
+        "max_vus": 100
+      },
+      "docker_network": "nexus-gtm_default",
+      "guards": {
+        "canary_fail_ratio": 0.5,
+        "canary_interval_s": 10,
+        "canary_window": 6,
+        "error_rate_pct": 10,
+        "min_requests": 50,
+        "p95_ms": 5000,
+        "window_s": 60
+      },
+      "host_url": "https://localhost",
+      "insecure_tls": true,
+      "name": "local",
+      "window": {
+        "enforce": false
+      },
+      "worker_probe": {
+        "source": "prometheus",
+        "url": "http://localhost:9090"
+      }
+    },
+    "staging": {
+      "allowed_hosts": [
+        "gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io",
+        "staging-gtm.infojoy.com"
+      ],
+      "base_url": "https://gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io",
+      "caps": {
+        "max_duration_s": 3600,
+        "max_rps": 60,
+        "max_users_per_sec": 5,
+        "max_vus": 60
+      },
+      "docker_network": null,
+      "guards": {
+        "canary_fail_ratio": 0.5,
+        "canary_interval_s": 10,
+        "canary_window": 6,
+        "error_rate_pct": 5,
+        "min_requests": 50,
+        "p95_ms": 3000,
+        "window_s": 60
+      },
+      "host_url": "https://gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io",
+      "insecure_tls": false,
+      "name": "staging",
+      "window": {
+        "blocked": {
+          "days": [
+            "mon",
+            "tue",
+            "wed",
+            "thu",
+            "fri",
+            "sat"
+          ],
+          "end": "21:00",
+          "start": "08:00"
+        },
+        "enforce": true
+      },
+      "worker_probe": {
+        "source": "grafana_prometheus",
+        "token_env": "LT_GRAFANA_PROM_TOKEN",
+        "url_env": "LT_GRAFANA_PROM_URL",
+        "user_env": "LT_GRAFANA_PROM_USER"
+      }
+    }
+  },
+  "forbidden_hosts": [
+    "gtm.infojoy.com",
+    "www.gtm.infojoy.com",
+    "gtm-prod-app"
+  ],
+  "forbidden_providers": [
+    "stripe"
+  ],
+  "journeys": {
+    "admin_settings": {
+      "description": "A workspace admin on Members, Billing and Settings (Configuration). All reads — the Billing page's checkout/portal buttons create Stripe sessions and are never part of a journey.",
+      "features": [
+        "login",
+        "method:GET",
+        "parallel",
+        "think_time"
+      ],
+      "id": "admin_settings",
+      "persona": "admin",
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "method:GET"
+          ],
+          "id": "app_shell",
+          "login": false,
+          "page": "(every page)",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/billing/entitlements",
+              "paid": false,
+              "path": "/api/billing/entitlements",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "method:GET",
+            "think_time"
+          ],
+          "id": "members",
+          "login": false,
+          "page": "/members",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/workspace/members",
+              "paid": false,
+              "path": "/api/workspace/members",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": true
+        },
+        {
+          "features": [
+            "method:GET",
+            "parallel",
+            "think_time"
+          ],
+          "id": "billing",
+          "login": false,
+          "page": "/settings/billing",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/billing/usage",
+              "paid": false,
+              "path": "/api/billing/usage",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/billing/credits",
+              "paid": false,
+              "path": "/api/billing/credits",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/billing/invoices",
+              "paid": false,
+              "path": "/api/billing/invoices",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/billing/plans",
+              "paid": false,
+              "path": "/api/billing/plans",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": true
+        },
+        {
+          "features": [
+            "method:GET",
+            "parallel",
+            "think_time"
+          ],
+          "id": "configuration",
+          "login": false,
+          "page": "/settings",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/workspace/automation",
+              "paid": false,
+              "path": "/api/workspace/automation",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/signals/preferences",
+              "paid": false,
+              "path": "/api/signals/preferences",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/workspace/email/accounts",
+              "paid": false,
+              "path": "/api/workspace/email/accounts",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/integrations/crm/sync-status",
+              "paid": false,
+              "path": "/api/integrations/crm/sync-status",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 10,
+        "min": 3
+      },
+      "weight": 8
+    },
+    "manager_review": {
+      "description": "A manager checking team analytics and saved lists.",
+      "features": [
+        "login",
+        "method:GET",
+        "parallel",
+        "query",
+        "think_time"
+      ],
+      "id": "manager_review",
+      "persona": "manager",
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "method:GET"
+          ],
+          "id": "app_shell",
+          "login": false,
+          "page": "(every page)",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/billing/entitlements",
+              "paid": false,
+              "path": "/api/billing/entitlements",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "method:GET",
+            "parallel",
+            "query",
+            "think_time"
+          ],
+          "id": "analytics",
+          "login": false,
+          "page": "/dashboard",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/analytics/overview",
+              "paid": false,
+              "path": "/api/analytics/overview",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/analytics/activity",
+              "paid": false,
+              "path": "/api/analytics/activity",
+              "query": {
+                "limit": "24"
+              }
+            }
+          ],
+          "requires": [],
+          "think": true
+        },
+        {
+          "features": [
+            "method:GET",
+            "think_time"
+          ],
+          "id": "lists",
+          "login": false,
+          "page": "/lists",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/lists",
+              "paid": false,
+              "path": "/api/lists",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 8,
+        "min": 3
+      },
+      "weight": 15
+    },
+    "platform_customers": {
+      "description": "Platform staff looking a customer up in the directory (/admin/billing/customers).",
+      "features": [
+        "extract:random",
+        "login",
+        "method:GET",
+        "path_vars",
+        "query",
+        "requires",
+        "think_time"
+      ],
+      "id": "platform_customers",
+      "persona": "platform_admin",
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "method:GET"
+          ],
+          "id": "whoami",
+          "login": false,
+          "page": "/admin",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/admin/billing/whoami",
+              "paid": false,
+              "path": "/api/admin/billing/whoami",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "extract:random",
+            "method:GET",
+            "query",
+            "think_time"
+          ],
+          "id": "customers",
+          "login": false,
+          "page": "/admin/billing (Customers tab)",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "extract": {
+                "json_field": "tenant_id",
+                "pick": "random",
+                "var": "tenant_id"
+              },
+              "method": "GET",
+              "name": "GET /api/admin/billing/customers",
+              "paid": false,
+              "path": "/api/admin/billing/customers",
+              "query": {
+                "q": ""
+              }
+            }
+          ],
+          "requires": [],
+          "think": true
+        },
+        {
+          "features": [
+            "method:GET",
+            "path_vars",
+            "requires",
+            "think_time"
+          ],
+          "id": "customer_usage",
+          "login": false,
+          "page": "/admin/billing (customer row)",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/admin/billing/customers/:tenant_id/usage",
+              "paid": false,
+              "path": "/api/admin/billing/customers/{tenant_id}/usage",
+              "query": {}
+            }
+          ],
+          "requires": [
+            "tenant_id"
+          ],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 15,
+        "min": 5
+      },
+      "weight": 2
+    },
+    "rep_daily": {
+      "description": "A rep working the queue: Inbox, the account list, one account, the signal feed, contacts.",
+      "features": [
+        "extract:random",
+        "login",
+        "method:GET",
+        "parallel",
+        "path_vars",
+        "query",
+        "query_vars",
+        "requires",
+        "think_time"
+      ],
+      "id": "rep_daily",
+      "persona": "rep",
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "method:GET"
+          ],
+          "id": "app_shell",
+          "login": false,
+          "page": "(every page)",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/billing/entitlements",
+              "paid": false,
+              "path": "/api/billing/entitlements",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "method:GET",
+            "query",
+            "think_time"
+          ],
+          "id": "inbox",
+          "login": false,
+          "page": "/inbox",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/inbox",
+              "paid": false,
+              "path": "/api/inbox",
+              "query": {
+                "status": "open"
+              }
+            }
+          ],
+          "requires": [],
+          "think": true
+        },
+        {
+          "features": [
+            "extract:random",
+            "method:GET",
+            "think_time"
+          ],
+          "id": "accounts_list",
+          "login": false,
+          "page": "/accounts",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "extract": {
+                "json_field": "id",
+                "pick": "random",
+                "var": "account_id"
+              },
+              "method": "GET",
+              "name": "GET /api/accounts",
+              "paid": false,
+              "path": "/api/accounts",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": true
+        },
+        {
+          "features": [
+            "method:GET",
+            "parallel",
+            "path_vars",
+            "query",
+            "query_vars",
+            "requires",
+            "think_time"
+          ],
+          "id": "account_detail",
+          "login": false,
+          "page": "/accounts/:id",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/accounts/:account_id",
+              "paid": false,
+              "path": "/api/accounts/{account_id}",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/accounts/:account_id/contacts",
+              "paid": false,
+              "path": "/api/accounts/{account_id}/contacts",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/signals",
+              "paid": false,
+              "path": "/api/signals",
+              "query": {
+                "account_id": "{account_id}",
+                "limit": "50"
+              }
+            }
+          ],
+          "requires": [
+            "account_id"
+          ],
+          "think": true
+        },
+        {
+          "features": [
+            "method:GET",
+            "query",
+            "think_time"
+          ],
+          "id": "signals",
+          "login": false,
+          "page": "/signals",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/signals",
+              "paid": false,
+              "path": "/api/signals",
+              "query": {
+                "limit": "100",
+                "min_strength": "0.5"
+              }
+            }
+          ],
+          "requires": [],
+          "think": true
+        },
+        {
+          "features": [
+            "method:GET",
+            "think_time"
+          ],
+          "id": "contacts",
+          "login": false,
+          "page": "/contacts",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/contacts",
+              "paid": false,
+              "path": "/api/contacts",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 6,
+        "min": 2
+      },
+      "weight": 55
+    },
+    "rep_landing": {
+      "description": "The rep's landing page. Since 3c7adbe a rep may read /analytics/overview (scoped to their own work) because the dashboard is every rep's first request.",
+      "features": [
+        "login",
+        "method:GET",
+        "parallel",
+        "query",
+        "think_time"
+      ],
+      "id": "rep_landing",
+      "persona": "rep",
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "method:GET"
+          ],
+          "id": "app_shell",
+          "login": false,
+          "page": "(every page)",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/billing/entitlements",
+              "paid": false,
+              "path": "/api/billing/entitlements",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "method:GET",
+            "parallel",
+            "query",
+            "think_time"
+          ],
+          "id": "dashboard",
+          "login": false,
+          "page": "/dashboard",
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/analytics/overview",
+              "paid": false,
+              "path": "/api/analytics/overview",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/inbox",
+              "paid": false,
+              "path": "/api/inbox",
+              "query": {}
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/alerts",
+              "paid": false,
+              "path": "/api/alerts",
+              "query": {
+                "status": "open"
+              }
+            },
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "GET",
+              "name": "GET /api/signals",
+              "paid": false,
+              "path": "/api/signals",
+              "query": {
+                "limit": "6"
+              }
+            }
+          ],
+          "requires": [],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 6,
+        "min": 2
+      },
+      "weight": 20
+    }
+  },
+  "paid_journeys": {
+    "email_draft": {
+      "description": "Draft outreach for one account (the \"messaging\" agent, capability ai.email_draft).",
+      "features": [
+        "extract:random",
+        "json_body",
+        "login",
+        "method:GET",
+        "method:POST",
+        "paid",
+        "requires",
+        "think_time"
+      ],
+      "id": "email_draft",
+      "max_paid_calls": 3,
+      "paid_requests_per_iteration": 1,
+      "persona": "rep",
+      "providers": [
+        "groq"
+      ],
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "extract:random",
+            "method:GET"
+          ],
+          "id": "accounts_list",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "extract": {
+                "json_field": "id",
+                "pick": "random",
+                "var": "account_id"
+              },
+              "method": "GET",
+              "name": "GET /api/accounts",
+              "paid": false,
+              "path": "/api/accounts",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "json_body",
+            "method:POST",
+            "paid",
+            "requires",
+            "think_time"
+          ],
+          "id": "draft",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "json": {
+                "account_id": "{account_id}",
+                "inputs": {}
+              },
+              "method": "POST",
+              "name": "POST /api/agents/messaging/run",
+              "paid": true,
+              "path": "/api/agents/messaging/run",
+              "query": {}
+            }
+          ],
+          "requires": [
+            "account_id"
+          ],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 6,
+        "min": 2
+      }
+    },
+    "find_contacts": {
+      "description": "Source the buying committee for one account (Exa search, Apify, Reacher verification).",
+      "features": [
+        "extract:random",
+        "login",
+        "method:GET",
+        "method:POST",
+        "paid",
+        "path_vars",
+        "query",
+        "requires",
+        "think_time"
+      ],
+      "id": "find_contacts",
+      "max_paid_calls": 1,
+      "paid_requests_per_iteration": 1,
+      "persona": "rep",
+      "providers": [
+        "apify",
+        "exa",
+        "reacher"
+      ],
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "extract:random",
+            "method:GET"
+          ],
+          "id": "accounts_list",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "extract": {
+                "json_field": "id",
+                "pick": "random",
+                "var": "account_id"
+              },
+              "method": "GET",
+              "name": "GET /api/accounts",
+              "paid": false,
+              "path": "/api/accounts",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "method:POST",
+            "paid",
+            "path_vars",
+            "query",
+            "requires",
+            "think_time"
+          ],
+          "id": "source_contacts",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "POST",
+              "name": "POST /api/accounts/:account_id/source-contacts",
+              "paid": true,
+              "path": "/api/accounts/{account_id}/source-contacts",
+              "query": {
+                "limit": "1"
+              }
+            }
+          ],
+          "requires": [
+            "account_id"
+          ],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 6,
+        "min": 2
+      }
+    },
+    "lookalikes": {
+      "description": "Find companies similar to one account (Exa).",
+      "features": [
+        "extract:random",
+        "login",
+        "method:GET",
+        "method:POST",
+        "paid",
+        "path_vars",
+        "query",
+        "requires",
+        "think_time"
+      ],
+      "id": "lookalikes",
+      "max_paid_calls": 2,
+      "paid_requests_per_iteration": 1,
+      "persona": "rep",
+      "providers": [
+        "exa"
+      ],
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "extract:random",
+            "method:GET"
+          ],
+          "id": "accounts_list",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "extract": {
+                "json_field": "id",
+                "pick": "random",
+                "var": "account_id"
+              },
+              "method": "GET",
+              "name": "GET /api/accounts",
+              "paid": false,
+              "path": "/api/accounts",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "method:POST",
+            "paid",
+            "path_vars",
+            "query",
+            "requires",
+            "think_time"
+          ],
+          "id": "lookalikes",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "POST",
+              "name": "POST /api/accounts/:account_id/lookalikes",
+              "paid": true,
+              "path": "/api/accounts/{account_id}/lookalikes",
+              "query": {
+                "limit": "3"
+              }
+            }
+          ],
+          "requires": [
+            "account_id"
+          ],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 6,
+        "min": 2
+      }
+    },
+    "research_brief": {
+      "description": "Research brief for one account (the \"research\" agent, capability ai.research_brief). The agent also runs web search through the configured browser provider.",
+      "features": [
+        "extract:random",
+        "json_body",
+        "login",
+        "method:GET",
+        "method:POST",
+        "paid",
+        "requires",
+        "think_time"
+      ],
+      "id": "research_brief",
+      "max_paid_calls": 3,
+      "paid_requests_per_iteration": 1,
+      "persona": "rep",
+      "providers": [
+        "brave",
+        "exa",
+        "groq",
+        "serper"
+      ],
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "extract:random",
+            "method:GET"
+          ],
+          "id": "accounts_list",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "extract": {
+                "json_field": "id",
+                "pick": "random",
+                "var": "account_id"
+              },
+              "method": "GET",
+              "name": "GET /api/accounts",
+              "paid": false,
+              "path": "/api/accounts",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "json_body",
+            "method:POST",
+            "paid",
+            "requires",
+            "think_time"
+          ],
+          "id": "research",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "json": {
+                "account_id": "{account_id}",
+                "inputs": {}
+              },
+              "method": "POST",
+              "name": "POST /api/agents/research/run",
+              "paid": true,
+              "path": "/api/agents/research/run",
+              "query": {}
+            }
+          ],
+          "requires": [
+            "account_id"
+          ],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 6,
+        "min": 2
+      }
+    },
+    "signal_ingest": {
+      "description": "Run every signal source for one account now (Firecrawl, web search, LLM scoring).",
+      "features": [
+        "extract:random",
+        "login",
+        "method:GET",
+        "method:POST",
+        "paid",
+        "path_vars",
+        "requires",
+        "think_time"
+      ],
+      "id": "signal_ingest",
+      "max_paid_calls": 1,
+      "paid_requests_per_iteration": 1,
+      "persona": "rep",
+      "providers": [
+        "brave",
+        "firecrawl",
+        "groq",
+        "serper"
+      ],
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "extract:random",
+            "method:GET"
+          ],
+          "id": "accounts_list",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "extract": {
+                "json_field": "id",
+                "pick": "random",
+                "var": "account_id"
+              },
+              "method": "GET",
+              "name": "GET /api/accounts",
+              "paid": false,
+              "path": "/api/accounts",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "method:POST",
+            "paid",
+            "path_vars",
+            "requires",
+            "think_time"
+          ],
+          "id": "ingest",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "POST",
+              "name": "POST /api/ingest/:account_id",
+              "paid": true,
+              "path": "/api/ingest/{account_id}",
+              "query": {}
+            }
+          ],
+          "requires": [
+            "account_id"
+          ],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 6,
+        "min": 2
+      }
+    },
+    "verify_contact": {
+      "description": "Re-verify one saved contact's email (Reacher).",
+      "features": [
+        "extract:random",
+        "login",
+        "method:GET",
+        "method:POST",
+        "paid",
+        "path_vars",
+        "requires",
+        "think_time"
+      ],
+      "id": "verify_contact",
+      "max_paid_calls": 3,
+      "paid_requests_per_iteration": 1,
+      "persona": "rep",
+      "providers": [
+        "reacher"
+      ],
+      "steps": [
+        {
+          "features": [
+            "login"
+          ],
+          "id": "login",
+          "login": true
+        },
+        {
+          "features": [
+            "extract:random",
+            "method:GET"
+          ],
+          "id": "accounts_list",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "extract": {
+                "json_field": "id",
+                "pick": "random",
+                "var": "account_id"
+              },
+              "method": "GET",
+              "name": "GET /api/accounts",
+              "paid": false,
+              "path": "/api/accounts",
+              "query": {}
+            }
+          ],
+          "requires": [],
+          "think": false
+        },
+        {
+          "features": [
+            "extract:random",
+            "method:GET",
+            "path_vars",
+            "requires"
+          ],
+          "id": "account_contacts",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "extract": {
+                "json_field": "id",
+                "pick": "random",
+                "var": "contact_id"
+              },
+              "method": "GET",
+              "name": "GET /api/accounts/:account_id/contacts",
+              "paid": false,
+              "path": "/api/accounts/{account_id}/contacts",
+              "query": {}
+            }
+          ],
+          "requires": [
+            "account_id"
+          ],
+          "think": false
+        },
+        {
+          "features": [
+            "method:POST",
+            "paid",
+            "path_vars",
+            "requires",
+            "think_time"
+          ],
+          "id": "reverify",
+          "login": false,
+          "page": null,
+          "requests": [
+            {
+              "expect_status": [
+                200
+              ],
+              "method": "POST",
+              "name": "POST /api/accounts/contacts/:contact_id/reverify",
+              "paid": true,
+              "path": "/api/accounts/contacts/{contact_id}/reverify",
+              "query": {}
+            }
+          ],
+          "requires": [
+            "contact_id"
+          ],
+          "think": true
+        }
+      ],
+      "think_time_s": {
+        "max": 6,
+        "min": 2
+      }
+    }
+  },
+  "personas": {
+    "admin": {
+      "env_prefix": "LT_ADMIN",
+      "id": "admin",
+      "platform": false,
+      "role": "admin"
+    },
+    "manager": {
+      "env_prefix": "LT_MANAGER",
+      "id": "manager",
+      "platform": false,
+      "role": "manager"
+    },
+    "platform_admin": {
+      "env_prefix": "LT_PLATFORM_ADMIN",
+      "id": "platform_admin",
+      "platform": true,
+      "role": "platform_admin"
+    },
+    "rep": {
+      "env_prefix": "LT_REP",
+      "id": "rep",
+      "platform": false,
+      "role": "rep"
+    }
+  },
+  "probes": {
+    "worker_health": {
+      "description": "Queue depth, dead letters and job outcomes from the worker's Prometheus gauges.",
+      "interval_s": 60,
+      "metrics": [
+        "nexus_queue_depth",
+        "nexus_dead_letter_jobs",
+        "nexus_jobs_total"
+      ]
+    }
+  },
+  "profiles": {
+    "breakpoint": {
+      "abort_is_result": true,
+      "description": "Arrival-rate stairs until a guard trips or the environment cap is reached.",
+      "gate": false,
+      "kind": "open",
+      "name": "breakpoint",
+      "stairs": {
+        "increment": 0.25,
+        "level_duration_s": 90,
+        "levels": 8,
+        "ramp_s": 15,
+        "start": 0.25
+      },
+      "think_time_scale": 1.0,
+      "tool": "gatling"
+    },
+    "capacity": {
+      "abort_is_result": false,
+      "description": "Closed-model concurrency stairs, to read sustainable throughput per level.",
+      "gate": false,
+      "kind": "closed",
+      "name": "capacity",
+      "stairs": {
+        "increment": 5,
+        "level_duration_s": 180,
+        "levels": 6,
+        "ramp_s": 30,
+        "start": 5
+      },
+      "think_time_scale": 1.0,
+      "tool": "gatling"
+    },
+    "load": {
+      "abort_is_result": false,
+      "description": "Ramp to the expected busy-hour concurrency and hold; fails the release on SLO breach.",
+      "gate": true,
+      "kind": "ramping_vus",
+      "name": "load",
+      "stages": [
+        {
+          "duration_s": 60,
+          "target": 0.5
+        },
+        {
+          "duration_s": 60,
+          "target": 1.0
+        },
+        {
+          "duration_s": 180,
+          "target": 1.0
+        },
+        {
+          "duration_s": 30,
+          "target": 0.0
+        }
+      ],
+      "target_vus": 20,
+      "think_time_scale": 1.0,
+      "tool": "k6"
+    },
+    "smoke": {
+      "abort_is_result": false,
+      "description": "One pass of every journey, no think time. Proves the catalogue still matches the API.",
+      "gate": true,
+      "iterations": 1,
+      "kind": "iterations",
+      "max_duration_s": 180,
+      "name": "smoke",
+      "think_time_scale": 0.0,
+      "tool": "k6"
+    },
+    "soak": {
+      "abort_is_result": false,
+      "description": "Modest constant load held long enough to surface leaks, drift and token expiry.",
+      "duration_s": 1800,
+      "gate": true,
+      "kind": "constant_vus",
+      "name": "soak",
+      "target_vus": 10,
+      "think_time_scale": 1.0,
+      "tool": "k6"
+    },
+    "spike": {
+      "abort_is_result": false,
+      "description": "A sudden 10x burst of arrivals and the recovery after it.",
+      "gate": false,
+      "kind": "open",
+      "name": "spike",
+      "peak_users_per_sec": 2.0,
+      "stages": [
+        {
+          "duration_s": 120,
+          "hold": 0.1
+        },
+        {
+          "duration_s": 10,
+          "ramp_to": 1.0
+        },
+        {
+          "duration_s": 60,
+          "hold": 1.0
+        },
+        {
+          "duration_s": 10,
+          "ramp_to": 0.1
+        },
+        {
+          "duration_s": 180,
+          "hold": 0.1
+        }
+      ],
+      "think_time_scale": 1.0,
+      "tool": "gatling"
+    },
+    "stress": {
+      "abort_is_result": false,
+      "description": "Open-model arrivals stepped past busy-hour to see how latency degrades.",
+      "gate": false,
+      "kind": "open",
+      "name": "stress",
+      "peak_users_per_sec": 1.0,
+      "stages": [
+        {
+          "duration_s": 60,
+          "ramp_to": 0.5
+        },
+        {
+          "duration_s": 120,
+          "hold": 0.5
+        },
+        {
+          "duration_s": 60,
+          "ramp_to": 1.0
+        },
+        {
+          "duration_s": 240,
+          "hold": 1.0
+        },
+        {
+          "duration_s": 30,
+          "ramp_to": 0.0
+        }
+      ],
+      "think_time_scale": 1.0,
+      "tool": "gatling"
+    }
+  },
+  "run_header": "X-Load-Test",
+  "schema": "nexus.load.catalogue/v1",
+  "sources": [
+    "quality/load/scenarios.yaml",
+    "quality/load/environments.yaml"
+  ],
+  "timezone": "Asia/Kolkata"
+}

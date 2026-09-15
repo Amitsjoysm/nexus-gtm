@@ -1,0 +1,3 @@
+# Per-run working directories written by scripts/load/run.py (tool logs, raw summaries, Gatling
+# HTML reports). Staging results worth keeping are summarised into docs/quality/load-results/.
+.runs/

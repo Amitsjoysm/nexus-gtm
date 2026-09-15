@@ -1,0 +1,22 @@
+{
+  "name": "nexus-loadtest-gatling",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gatling (JavaScript/TypeScript SDK) stress, spike, breakpoint and capacity simulations for NEXUS, driven entirely by quality/load/generated/catalogue.json.",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "gatling build --typescript",
+    "stress": "gatling run --typescript --simulation stress",
+    "spike": "gatling run --typescript --simulation spike",
+    "breakpoint": "gatling run --typescript --simulation breakpoint",
+    "capacity": "gatling run --typescript --simulation capacity"
+  },
+  "dependencies": {
+    "@gatling.io/core": "3.15.105",
+    "@gatling.io/http": "3.15.105"
+  },
+  "devDependencies": {
+    "@gatling.io/cli": "3.15.105",
+    "typescript": "5.5.4"
+  }
+}

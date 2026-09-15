@@ -1,42 +1,39 @@
 # Load & Soak testing (O-3)
 
-k6 scripts that establish a performance baseline and catch regressions before they reach users.
-
 Two independent things are worth load-testing here, and they fail for different reasons:
 
-* **The API read path** — what a rep hits all day. Measured by these k6 scripts.
-* **The automation heartbeat** — the account-refresh pipeline. k6 cannot see it at all (it is
-  off-request), and it is the one that does not scale. See "Heartbeat throughput" below.
+* **The API read path** — what reps, managers and admins hit all day. Measured by the k6 and
+  Gatling framework in `k6/` and `gatling/`.
+* **The automation heartbeat** — the account-refresh pipeline. HTTP load cannot see it at all (it
+  is off-request), and it is the one that did not scale. See "Heartbeat throughput" below and
+  `bench_heartbeat.py`.
 
 ## Run
 
-k6 runs in a container — no local install needed. Join the compose network and address the app
-service directly, which avoids the `host.docker.internal` hop and the broken Caddy TLS:
+**The framework is documented in [docs/quality/load.md](../../docs/quality/load.md)**:
+
+- the scenario catalogue (`quality/load/scenarios.yaml`) both tools execute;
+- k6 for the release gate (`smoke`, `load`, `soak`), Gatling for `stress`, `spike`,
+  `breakpoint` and `capacity`;
+- staging caps, run windows and guards;
+- synthetic test data, and results with their trend table.
+
+The capacity model is in [docs/quality/load-capacity.md](../../docs/quality/load-capacity.md).
 
 ```bash
-docker run --rm --network nexus-gtm_default -e BASE_URL=http://app:8000 -e LOADTEST_EMAIL=sdr@example.com -e LOADTEST_PASSWORD=... -v "$PWD/deploy/loadtest:/scripts" grafana/k6 run /scripts/load.js
+python scripts/load/run.py --profile smoke --env local --data existing --exclude-journey platform_customers
 ```
 
-```bash
-docker run --rm --network nexus-gtm_default -e BASE_URL=http://app:8000 -e SOAK_VUS=30 -e SOAK_DURATION=30m -e LOADTEST_EMAIL=sdr@example.com -e LOADTEST_PASSWORD=... -v "$PWD/deploy/loadtest:/scripts" grafana/k6 run /scripts/soak.js
-```
+The earlier stand-alone `load.js` / `soak.js` / `auth.js` were replaced by `k6/` on 2026-09-15.
+Their lessons carried over into `k6/lib/auth.js`:
 
-(On Windows PowerShell use `-v "${PWD}\deploy\loadtest:/scripts"`.)
-
-### Auth: why these scripts log in rather than sign up
-
-They used to call `/api/auth/signup` in `setup()`. That endpoint now returns **403 "Email
-verification required"**, so `setup()` got no token and every authed read 401ed — reported as an
-**80% error rate against the app** when the truth was a broken harness. `auth.js` logs in instead.
-
-`/api/analytics/overview` is **manager+**; a `rep` token gets 403 on it. Supply
-`LOADTEST_MGR_EMAIL` / `LOADTEST_MGR_PASSWORD` to include it, otherwise it is skipped rather than
-counted as an error. An MFA-enrolled account fails fast with a clear message — its login returns a
-challenge token that authorizes only `/auth/mfa/verify`, and quietly using that as a bearer token
-would produce a run of 401s instead of a stop.
-
-Access tokens expire after **1 hour**, so a soak longer than that needs a re-login inside the
-iteration; today's scripts acquire the token once in `setup()`.
+- **Log in, never sign up.** `/api/auth/signup` returns 403 "Email verification required", which
+  once read as an 80% error rate against the app.
+- **MFA personas fail fast.** Their login returns a challenge token, not a bearer token.
+- **Long soaks re-login** before the 1-hour token expiry, each VU at a staggered offset. Login is
+  rate-limited to 10 per minute per client IP, and every VU on one generator shares that IP.
+- **`/api/analytics/overview` is scoped, not refused, for a rep** since `3c7adbe`. A rep's
+  dashboard reads its own numbers; the manager journey reads the workspace.
 
 ## Measured — 2026-08-04, single laptop, Docker Desktop
 

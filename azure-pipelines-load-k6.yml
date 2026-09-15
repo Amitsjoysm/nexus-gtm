@@ -1,0 +1,122 @@
+# NEXUS GTM — k6 load test against STAGING. Manual only; the per-release regression gate.
+#
+# Create this pipeline in Azure DevOps, then set it to DISABLED (pipeline ... > Settings >
+# Disabled) until a release needs it. It has no trigger, no PR trigger and no schedule on purpose:
+# a load test is an event on shared infrastructure, never a side effect of a push.
+#
+# Everything that protects staging lives in scripts/load/run.py, not here — hard caps, the run
+# window (outside Indian working hours), pre-flight, guards, the "staging is under load" notice and
+# test-data cleanup — so a run from this pipeline and a run from a laptop are equally safe.
+#
+# Free tier: Microsoft-hosted jobs stop at 60 minutes. Every default k6 profile fits (soak: 31.5
+# min). A longer soak needs the self-hosted agent VM, which is a separate task.
+
+name: load-k6-$(Date:yyyyMMdd)-$(Rev:r)
+
+trigger: none
+pr: none
+
+parameters:
+  - name: profile
+    displayName: k6 profile
+    type: string
+    default: smoke
+    values: [smoke, load, soak]
+  - name: data
+    displayName: Test data (synth needs scripts/testdata/synth.py merged + LT_SYNTH_COMMAND)
+    type: string
+    default: existing
+    values: [existing, synth]
+  - name: durationScale
+    displayName: Duration scale (1 = full profile; smaller shortens every stage)
+    type: string
+    default: "1"
+  - name: budget
+    displayName: "Paid journeys, e.g. lookalikes=1 (empty = none; spends real money)"
+    type: string
+    default: ""
+  - name: confirmStaging
+    displayName: I am loading STAGING outside Indian working hours and have told the team
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Secrets: LT_REP_EMAIL / LT_REP_PASSWORD, LT_MANAGER_*, LT_ADMIN_*, LT_PLATFORM_ADMIN_*.
+  # Optional: LT_NOTICE_WEBHOOK, LT_GRAFANA_URL / LT_GRAFANA_TOKEN, LT_PROM_RW_URL / _USER / _TOKEN,
+  # LT_GRAFANA_PROM_URL / _USER / _TOKEN, LT_SYNTH_COMMAND.
+  - group: gtm-loadtest
+  - name: PYTHON_VERSION
+    value: "3.11"
+
+jobs:
+  - job: k6
+    displayName: k6 ${{ parameters.profile }} on staging
+    timeoutInMinutes: 60
+    steps:
+      - checkout: self
+        fetchDepth: 1
+
+      - bash: |
+          if [ "${{ parameters.confirmStaging }}" != "True" ]; then
+            echo "##[error]Tick 'confirmStaging' to load staging. Nothing was sent."
+            exit 1
+          fi
+        displayName: Operator confirmed a staging load
+
+      - task: UsePythonVersion@0
+        inputs: { versionSpec: $(PYTHON_VERSION) }
+
+      - bash: pip install --quiet "pyyaml==6.0.3"
+        displayName: Runner dependency (PyYAML)
+
+      - bash: python scripts/load/catalogue.py check
+        displayName: Catalogue, generated JSON and both tools are in sync
+
+      - bash: |
+          set -euo pipefail
+          BUDGET=()
+          if [ -n "${{ parameters.budget }}" ]; then BUDGET=(--budget "${{ parameters.budget }}"); fi
+          SCALE=()
+          if [ "${{ parameters.durationScale }}" != "1" ]; then SCALE=(--duration-scale "${{ parameters.durationScale }}"); fi
+          python scripts/load/run.py --profile "${{ parameters.profile }}" --env staging \
+            --data "${{ parameters.data }}" --yes "${BUDGET[@]}" "${SCALE[@]}"
+        displayName: Run k6 ${{ parameters.profile }} (capped, windowed, guarded)
+        env:
+          # Secret variables are not exposed to scripts unless mapped explicitly.
+          LT_REP_EMAIL: $(LT_REP_EMAIL)
+          LT_REP_PASSWORD: $(LT_REP_PASSWORD)
+          LT_MANAGER_EMAIL: $(LT_MANAGER_EMAIL)
+          LT_MANAGER_PASSWORD: $(LT_MANAGER_PASSWORD)
+          LT_ADMIN_EMAIL: $(LT_ADMIN_EMAIL)
+          LT_ADMIN_PASSWORD: $(LT_ADMIN_PASSWORD)
+          LT_PLATFORM_ADMIN_EMAIL: $(LT_PLATFORM_ADMIN_EMAIL)
+          LT_PLATFORM_ADMIN_PASSWORD: $(LT_PLATFORM_ADMIN_PASSWORD)
+          LT_NOTICE_WEBHOOK: $(LT_NOTICE_WEBHOOK)
+          LT_GRAFANA_URL: $(LT_GRAFANA_URL)
+          LT_GRAFANA_TOKEN: $(LT_GRAFANA_TOKEN)
+          LT_PROM_RW_URL: $(LT_PROM_RW_URL)
+          LT_PROM_RW_USER: $(LT_PROM_RW_USER)
+          LT_PROM_RW_TOKEN: $(LT_PROM_RW_TOKEN)
+          LT_GRAFANA_PROM_URL: $(LT_GRAFANA_PROM_URL)
+          LT_GRAFANA_PROM_USER: $(LT_GRAFANA_PROM_USER)
+          LT_GRAFANA_PROM_TOKEN: $(LT_GRAFANA_PROM_TOKEN)
+          LT_SYNTH_COMMAND: $(LT_SYNTH_COMMAND)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish run directory (summary, k6 summary export, log)
+        condition: always()
+        inputs:
+          targetPath: deploy/loadtest/.runs
+          artifact: k6-run
+        continueOnError: true
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish result JSON + trend table (commit them from a laptop to keep history)
+        condition: always()
+        inputs:
+          targetPath: docs/quality
+          artifact: load-result
+        continueOnError: true

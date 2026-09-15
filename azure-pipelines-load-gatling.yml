@@ -1,0 +1,108 @@
+# NEXUS GTM — Gatling stress / spike / breakpoint / capacity against STAGING. Manual only.
+#
+# Create this pipeline in Azure DevOps, then set it to DISABLED (pipeline ... > Settings >
+# Disabled). No trigger, no PR trigger, no schedule: exploration runs are planned events.
+#
+# Safety (caps, window, pre-flight, guards, notice, cleanup) is enforced by scripts/load/run.py.
+# A failed Gatling assertion is a FINDING for these profiles and does not fail the job; a guard
+# abort does (exit 3) — except for `breakpoint`, where the guard tripping is the result.
+#
+# Free tier: 60-minute jobs. The longest default (capacity) is ~22 min plus ~10 min first-run setup
+# (Gatling runtime bundle + npm ci) on a fresh Microsoft-hosted agent.
+
+name: load-gatling-$(Date:yyyyMMdd)-$(Rev:r)
+
+trigger: none
+pr: none
+
+parameters:
+  - name: profile
+    displayName: Gatling profile
+    type: string
+    default: stress
+    values: [stress, spike, breakpoint, capacity]
+  - name: data
+    displayName: Test data (synth needs scripts/testdata/synth.py merged + LT_SYNTH_COMMAND)
+    type: string
+    default: existing
+    values: [existing, synth]
+  - name: durationScale
+    displayName: Duration scale (1 = full profile; smaller shortens every stage)
+    type: string
+    default: "1"
+  - name: confirmStaging
+    displayName: I am loading STAGING outside Indian working hours and have told the team
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: gtm-loadtest
+  - name: PYTHON_VERSION
+    value: "3.11"
+
+jobs:
+  - job: gatling
+    displayName: Gatling ${{ parameters.profile }} on staging
+    timeoutInMinutes: 60
+    steps:
+      - checkout: self
+        fetchDepth: 1
+
+      - bash: |
+          if [ "${{ parameters.confirmStaging }}" != "True" ]; then
+            echo "##[error]Tick 'confirmStaging' to load staging. Nothing was sent."
+            exit 1
+          fi
+        displayName: Operator confirmed a staging load
+
+      - task: UsePythonVersion@0
+        inputs: { versionSpec: $(PYTHON_VERSION) }
+
+      - bash: pip install --quiet "pyyaml==6.0.3"
+        displayName: Runner dependency (PyYAML)
+
+      - bash: python scripts/load/catalogue.py check
+        displayName: Catalogue, generated JSON and both tools are in sync
+
+      - bash: |
+          set -euo pipefail
+          SCALE=()
+          if [ "${{ parameters.durationScale }}" != "1" ]; then SCALE=(--duration-scale "${{ parameters.durationScale }}"); fi
+          python scripts/load/run.py --profile "${{ parameters.profile }}" --env staging \
+            --data "${{ parameters.data }}" --yes "${SCALE[@]}"
+        displayName: Run Gatling ${{ parameters.profile }} (capped, windowed, guarded)
+        env:
+          LT_REP_EMAIL: $(LT_REP_EMAIL)
+          LT_REP_PASSWORD: $(LT_REP_PASSWORD)
+          LT_MANAGER_EMAIL: $(LT_MANAGER_EMAIL)
+          LT_MANAGER_PASSWORD: $(LT_MANAGER_PASSWORD)
+          LT_ADMIN_EMAIL: $(LT_ADMIN_EMAIL)
+          LT_ADMIN_PASSWORD: $(LT_ADMIN_PASSWORD)
+          LT_PLATFORM_ADMIN_EMAIL: $(LT_PLATFORM_ADMIN_EMAIL)
+          LT_PLATFORM_ADMIN_PASSWORD: $(LT_PLATFORM_ADMIN_PASSWORD)
+          LT_NOTICE_WEBHOOK: $(LT_NOTICE_WEBHOOK)
+          LT_GRAFANA_URL: $(LT_GRAFANA_URL)
+          LT_GRAFANA_TOKEN: $(LT_GRAFANA_TOKEN)
+          LT_GRAFANA_PROM_URL: $(LT_GRAFANA_PROM_URL)
+          LT_GRAFANA_PROM_USER: $(LT_GRAFANA_PROM_USER)
+          LT_GRAFANA_PROM_TOKEN: $(LT_GRAFANA_PROM_TOKEN)
+          LT_SYNTH_COMMAND: $(LT_SYNTH_COMMAND)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish Gatling HTML report + run directory
+        condition: always()
+        inputs:
+          targetPath: deploy/loadtest/.runs
+          artifact: gatling-report
+        continueOnError: true
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish result JSON + trend table (commit them from a laptop to keep history)
+        condition: always()
+        inputs:
+          targetPath: docs/quality
+          artifact: load-result
+        continueOnError: true

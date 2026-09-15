@@ -1,0 +1,37 @@
+# FIXTURE — stands in for quality/slo.yaml until the Quality foundation task merges.
+#
+# Same schema as the foundation's contract (profile, profiles.<name>.api.*, availability_pct,
+# queue_lag_minutes, alert_window, optional routes."<METHOD> <path>" overrides), so the load
+# framework reads the real file with no code change the day it lands: scripts/load/slo.py prefers
+# quality/slo.yaml when it exists and marks every export `is_fixture: true` while it does not.
+#
+# Values are the owner's decisions of 2026-09-15, not measurements. Do not tune them here; tune
+# the real file.
+
+profile: baseline
+
+profiles:
+  baseline:
+    api:
+      p95_ms: 500
+      p99_ms: 1500
+      error_rate_pct: 1.0
+    availability_pct: 99.5
+    queue_lag_minutes: 10
+    alert_window:
+      bucket: 1m
+      consecutive: 5
+  strict:
+    api:
+      p95_ms: 300
+      p99_ms: 1000
+      error_rate_pct: 0.5
+    availability_pct: 99.9
+    queue_lag_minutes: 5
+    alert_window:
+      bucket: 1m
+      consecutive: 3
+
+# Per-route overrides, keyed "<METHOD> <path template>" as the API declares it. Empty on purpose:
+# no route has a measured reason to differ from the profile yet.
+routes: {}

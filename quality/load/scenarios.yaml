@@ -1,0 +1,390 @@
+# NEXUS load-test scenario catalogue — the ONE place journeys, weights and think times live.
+#
+# Neither tool carries its own copy of a journey. `python scripts/load/catalogue.py generate`
+# resolves this file (plus environments.yaml) into quality/load/generated/catalogue.json, and both
+# interpreters — deploy/loadtest/k6/lib/journey.js and deploy/loadtest/gatling/src/lib/journey.ts —
+# execute whatever that JSON says. `catalogue.py check` fails when the JSON is stale, when an
+# interpreter lacks a feature a journey uses, or when a journey id is hard-coded into either tool.
+#
+# Every request path below was read off frontend/src/lib/api.ts and the page that calls it, so a
+# journey replays what the SPA actually sends when that page loads — including the requests a
+# page fires in parallel.
+#
+# DEFAULT JOURNEYS ARE READ-ONLY (GET after login) and call no paid provider. `catalogue.py` rejects
+# a non-GET request in `journeys`. Anything that spends money lives under `paid_journeys`, runs only
+# with `--budget <journey>=<calls>`, and is capped by `max_paid_calls`.
+
+version: 1
+
+auth:
+  login_path: /api/auth/login
+  # nexus/core/config.py access_token_ttl_min=60. A run longer than refresh_after_s re-logs in, each
+  # virtual user at its own offset within refresh_spread_s, so re-logins trickle instead of burst.
+  token_ttl_s: 3600
+  refresh_after_s: 2400
+  refresh_spread_s: 900
+  # nexus/core/ratelimit.py: 10 logins per 60 s per client IP, shared across replicas via Valkey.
+  # Every virtual user on one load generator shares ONE IP, so personas log in once and share
+  # tokens; the runner spaces logins to stay under this.
+  login_rate_limit:
+    max: 10
+    window_s: 60
+
+# Sent on every request as `X-Load-Test: <run-id>`.
+run_header: X-Load-Test
+
+defaults:
+  think_time_s: {min: 2, max: 6}
+  expect_status: [200]
+
+personas:
+  rep: {role: rep, env_prefix: LT_REP}
+  manager: {role: manager, env_prefix: LT_MANAGER}
+  admin: {role: admin, env_prefix: LT_ADMIN}
+  # Platform staff are not tenant members: /api/admin/* 404s for anyone else, and 403s from an
+  # address outside the runtime `admin_ip_allowlist` (nexus/api/deps_ip.py).
+  platform_admin: {role: platform_admin, env_prefix: LT_PLATFORM_ADMIN, platform: true}
+
+journeys:
+  rep_daily:
+    description: >-
+      A rep working the queue: Inbox, the account list, one account, the signal feed, contacts.
+    persona: rep
+    weight: 55
+    think_time_s: {min: 2, max: 6}
+    steps:
+      - id: login
+        login: true
+      - id: app_shell
+        page: (every page)
+        think: false
+        requests:
+          - {method: GET, path: /api/billing/entitlements} # EntitlementsContext, gates the nav
+      - id: inbox
+        page: /inbox
+        requests:
+          - {method: GET, path: /api/inbox, query: {status: open}}
+      - id: accounts_list
+        page: /accounts
+        requests:
+          - method: GET
+            path: /api/accounts
+            extract: {var: account_id, json_field: id, pick: random}
+      - id: account_detail
+        page: /accounts/:id
+        requires: [account_id]
+        requests: # AccountDetailPage fires these three together
+          - {method: GET, path: "/api/accounts/{account_id}"}
+          - {method: GET, path: "/api/accounts/{account_id}/contacts"}
+          - {method: GET, path: /api/signals, query: {account_id: "{account_id}", limit: 50}}
+      - id: signals
+        page: /signals
+        requests:
+          - {method: GET, path: /api/signals, query: {limit: 100, min_strength: 0.5}}
+      - id: contacts
+        page: /contacts
+        requests:
+          - {method: GET, path: /api/contacts}
+
+  rep_landing:
+    description: >-
+      The rep's landing page. Since 3c7adbe a rep may read /analytics/overview (scoped to their own
+      work) because the dashboard is every rep's first request.
+    persona: rep
+    weight: 20
+    steps:
+      - id: login
+        login: true
+      - id: app_shell
+        page: (every page)
+        think: false
+        requests:
+          - {method: GET, path: /api/billing/entitlements}
+      - id: dashboard
+        page: /dashboard
+        requests:
+          - {method: GET, path: /api/analytics/overview}
+          - {method: GET, path: /api/inbox}
+          - {method: GET, path: /api/alerts, query: {status: open}}
+          - {method: GET, path: /api/signals, query: {limit: 6}}
+
+  manager_review:
+    description: A manager checking team analytics and saved lists.
+    persona: manager
+    weight: 15
+    think_time_s: {min: 3, max: 8}
+    steps:
+      - id: login
+        login: true
+      - id: app_shell
+        page: (every page)
+        think: false
+        requests:
+          - {method: GET, path: /api/billing/entitlements}
+      - id: analytics
+        page: /dashboard
+        requests:
+          - {method: GET, path: /api/analytics/overview}
+          - {method: GET, path: /api/analytics/activity, query: {limit: 24}}
+      - id: lists
+        page: /lists
+        requests:
+          - {method: GET, path: /api/lists}
+
+  admin_settings:
+    description: >-
+      A workspace admin on Members, Billing and Settings (Configuration). All reads — the Billing
+      page's checkout/portal buttons create Stripe sessions and are never part of a journey.
+    persona: admin
+    weight: 8
+    think_time_s: {min: 3, max: 10}
+    steps:
+      - id: login
+        login: true
+      - id: app_shell
+        page: (every page)
+        think: false
+        requests:
+          - {method: GET, path: /api/billing/entitlements}
+      - id: members
+        page: /members
+        requests:
+          - {method: GET, path: /api/workspace/members}
+      - id: billing
+        page: /settings/billing
+        requests:
+          - {method: GET, path: /api/billing/usage}
+          - {method: GET, path: /api/billing/credits}
+          - {method: GET, path: /api/billing/invoices}
+          - {method: GET, path: /api/billing/plans}
+      - id: configuration
+        page: /settings
+        requests:
+          - {method: GET, path: /api/workspace/automation}
+          - {method: GET, path: /api/signals/preferences}
+          - {method: GET, path: /api/workspace/email/accounts}
+          - {method: GET, path: /api/integrations/crm/sync-status}
+
+  platform_customers:
+    description: Platform staff looking a customer up in the directory (/admin/billing/customers).
+    persona: platform_admin
+    weight: 2
+    think_time_s: {min: 5, max: 15}
+    steps:
+      - id: login
+        login: true
+      - id: whoami
+        page: /admin
+        think: false
+        requests:
+          - {method: GET, path: /api/admin/billing/whoami}
+      - id: customers
+        page: /admin/billing (Customers tab)
+        requests:
+          - method: GET
+            path: /api/admin/billing/customers
+            query: {q: ""}
+            extract: {var: tenant_id, json_field: tenant_id, pick: random}
+      - id: customer_usage
+        page: /admin/billing (customer row)
+        requires: [tenant_id]
+        requests:
+          - {method: GET, path: "/api/admin/billing/customers/{tenant_id}/usage"}
+
+# OFF by default. Each needs `--budget <id>=<paid calls>` and never runs as part of a load shape:
+# it is one virtual user doing exactly the budgeted number of paid calls, then stopping.
+paid_journeys:
+  research_brief:
+    description: >-
+      Research brief for one account (the "research" agent, capability ai.research_brief). The
+      agent also runs web search through the configured browser provider.
+    persona: rep
+    providers: [groq, exa, brave, serper]
+    max_paid_calls: 3
+    steps:
+      - {id: login, login: true}
+      - id: accounts_list
+        think: false
+        requests:
+          - {method: GET, path: /api/accounts, extract: {var: account_id, json_field: id, pick: random}}
+      - id: research
+        requires: [account_id]
+        requests:
+          - {method: POST, path: /api/agents/research/run, paid: true,
+             json: {account_id: "{account_id}", inputs: {}}}
+
+  email_draft:
+    description: Draft outreach for one account (the "messaging" agent, capability ai.email_draft).
+    persona: rep
+    providers: [groq]
+    max_paid_calls: 3
+    steps:
+      - {id: login, login: true}
+      - id: accounts_list
+        think: false
+        requests:
+          - {method: GET, path: /api/accounts, extract: {var: account_id, json_field: id, pick: random}}
+      - id: draft
+        requires: [account_id]
+        requests:
+          - {method: POST, path: /api/agents/messaging/run, paid: true,
+             json: {account_id: "{account_id}", inputs: {}}}
+
+  lookalikes:
+    description: Find companies similar to one account (Exa).
+    persona: rep
+    providers: [exa]
+    max_paid_calls: 2
+    steps:
+      - {id: login, login: true}
+      - id: accounts_list
+        think: false
+        requests:
+          - {method: GET, path: /api/accounts, extract: {var: account_id, json_field: id, pick: random}}
+      - id: lookalikes
+        requires: [account_id]
+        requests:
+          - {method: POST, path: "/api/accounts/{account_id}/lookalikes", query: {limit: 3}, paid: true}
+
+  find_contacts:
+    description: Source the buying committee for one account (Exa search, Apify, Reacher verification).
+    persona: rep
+    providers: [exa, apify, reacher]
+    max_paid_calls: 1
+    steps:
+      - {id: login, login: true}
+      - id: accounts_list
+        think: false
+        requests:
+          - {method: GET, path: /api/accounts, extract: {var: account_id, json_field: id, pick: random}}
+      - id: source_contacts
+        requires: [account_id]
+        requests:
+          - {method: POST, path: "/api/accounts/{account_id}/source-contacts", query: {limit: 1}, paid: true}
+
+  verify_contact:
+    description: Re-verify one saved contact's email (Reacher).
+    persona: rep
+    providers: [reacher]
+    max_paid_calls: 3
+    steps:
+      - {id: login, login: true}
+      - id: accounts_list
+        think: false
+        requests:
+          - {method: GET, path: /api/accounts, extract: {var: account_id, json_field: id, pick: random}}
+      - id: account_contacts
+        think: false
+        requires: [account_id]
+        requests:
+          - {method: GET, path: "/api/accounts/{account_id}/contacts",
+             extract: {var: contact_id, json_field: id, pick: random}}
+      - id: reverify
+        requires: [contact_id]
+        requests:
+          - {method: POST, path: "/api/accounts/contacts/{contact_id}/reverify", paid: true}
+
+  signal_ingest:
+    description: Run every signal source for one account now (Firecrawl, web search, LLM scoring).
+    persona: rep
+    providers: [firecrawl, brave, serper, groq]
+    max_paid_calls: 1
+    steps:
+      - {id: login, login: true}
+      - id: accounts_list
+        think: false
+        requests:
+          - {method: GET, path: /api/accounts, extract: {var: account_id, json_field: id, pick: random}}
+      - id: ingest
+        requires: [account_id]
+        requests:
+          - {method: POST, path: "/api/ingest/{account_id}", paid: true}
+
+# No journey may declare these, budget or not. Stripe checkout/portal create real sessions against
+# the configured account; there is nothing to learn from load that its own test mode does not show.
+forbidden_providers: [stripe]
+
+# Background probes: sampled by the runner during a run, NOT load. The worker has no ingress and
+# does its work off-request, so HTTP load cannot measure it; deploy/loadtest/bench_heartbeat.py
+# measures its throughput separately.
+probes:
+  worker_health:
+    description: Queue depth, dead letters and job outcomes from the worker's Prometheus gauges.
+    interval_s: 60
+    metrics:
+      - nexus_queue_depth
+      - nexus_dead_letter_jobs
+      - nexus_jobs_total
+
+# Load shapes. `tool` is fixed per profile — k6 owns the per-release gate, Gatling owns exploration.
+# Relative targets (0..1) scale the profile's peak, so an environment cap applies to one number.
+profiles:
+  smoke:
+    tool: k6
+    gate: true
+    description: One pass of every journey, no think time. Proves the catalogue still matches the API.
+    kind: iterations
+    iterations: 1
+    max_duration_s: 180
+    think_time_scale: 0
+
+  load:
+    tool: k6
+    gate: true
+    description: Ramp to the expected busy-hour concurrency and hold; fails the release on SLO breach.
+    kind: ramping_vus
+    target_vus: 20
+    stages:
+      - {duration_s: 60, target: 0.5}
+      - {duration_s: 60, target: 1.0}
+      - {duration_s: 180, target: 1.0}
+      - {duration_s: 30, target: 0.0}
+
+  soak:
+    tool: k6
+    gate: true
+    description: Modest constant load held long enough to surface leaks, drift and token expiry.
+    kind: constant_vus
+    target_vus: 10
+    duration_s: 1800
+
+  stress:
+    tool: gatling
+    gate: false
+    description: Open-model arrivals stepped past busy-hour to see how latency degrades.
+    kind: open
+    peak_users_per_sec: 1.0
+    stages:
+      - {ramp_to: 0.5, duration_s: 60}
+      - {hold: 0.5, duration_s: 120}
+      - {ramp_to: 1.0, duration_s: 60}
+      - {hold: 1.0, duration_s: 240}
+      - {ramp_to: 0.0, duration_s: 30}
+
+  spike:
+    tool: gatling
+    gate: false
+    description: A sudden 10x burst of arrivals and the recovery after it.
+    kind: open
+    peak_users_per_sec: 2.0
+    stages:
+      - {hold: 0.1, duration_s: 120}
+      - {ramp_to: 1.0, duration_s: 10}
+      - {hold: 1.0, duration_s: 60}
+      - {ramp_to: 0.1, duration_s: 10}
+      - {hold: 0.1, duration_s: 180}
+
+  breakpoint:
+    tool: gatling
+    gate: false
+    abort_is_result: true # the guard tripping IS the finding: that level is the knee
+    description: Arrival-rate stairs until a guard trips or the environment cap is reached.
+    kind: open
+    stairs: {start: 0.25, increment: 0.25, levels: 8, level_duration_s: 90, ramp_s: 15}
+
+  capacity:
+    tool: gatling
+    gate: false
+    description: Closed-model concurrency stairs, to read sustainable throughput per level.
+    kind: closed
+    stairs: {start: 5, increment: 5, levels: 6, level_duration_s: 180, ramp_s: 30}

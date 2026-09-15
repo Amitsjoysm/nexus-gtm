@@ -685,6 +685,20 @@ deployment blind to queue lag, 402 rates and dunning depth is not operable.
   those configs existed but nothing ran them, and the app job pointed at a service name that does
   not exist — every rule evaluated against no data, which reads as "all clear".
 
+## Load testing (`quality/load/`, `deploy/loadtest/`, `scripts/load/`)
+
+k6 is the release gate (`smoke`/`load`/`soak`); Gatling's TypeScript SDK explores (`stress`/`spike`/
+`breakpoint`/`capacity`). Both execute ONE catalogue, `quality/load/scenarios.yaml`, through
+`generated/catalogue.json` — never edit journeys in tool code. `python scripts/load/catalogue.py check`
+fails on drift. Run everything via `scripts/load/run.py`: it enforces hard caps, the IST run window,
+pre-flight, guards and test-data cleanup. Staging only, never production. Details:
+`docs/quality/load.md`; connection budget: `docs/quality/load-capacity.md`.
+
+- Default journeys are GET-only: no paid providers. Paid paths need `--budget <journey>=<calls>`.
+- Login is rate-limited per client IP (10/min): personas log in once and share tokens.
+- B1ms has **35 user connections** (50 − 15 reserved), not ~50. `NEXUS_DB_POOL_SIZE` is shared with
+  the worker via `common_env`, so shrinking it also cuts worker concurrency.
+
 ## Signal sources (`nexus/ingestion/`) — M16
 
 **`signal_sources` defaults to `web,rss`, not `demo`.** It was `demo`, so an out-of-the-box

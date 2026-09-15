@@ -1,0 +1,18 @@
+{
+  "alert_window": {
+    "bucket": "1m",
+    "consecutive": 5
+  },
+  "api": {
+    "error_rate_pct": 1.0,
+    "p95_ms": 500,
+    "p99_ms": 1500
+  },
+  "availability_pct": 99.5,
+  "is_fixture": true,
+  "profile": "baseline",
+  "queue_lag_minutes": 10,
+  "routes": {},
+  "schema": "nexus.slo.export/v1",
+  "source": "quality/load/slo.fixture.yaml"
+}
