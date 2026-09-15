@@ -166,7 +166,43 @@ In order. The first two are configuration; neither touches application code.
 ## 5. Validation on staging
 
 <!-- load-capacity-validation:begin -->
-**Pending.** One capped run of each tool on staging (k6 `load`, Gatling `breakpoint`) is waiting
-for the operator to approve the caps, duration and run window. Results land here and in
-[load-results/](load-results/).
+**Pending — no staging run yet.** On 2026-09-15 the product owner deferred the first runs and will
+start them personally. The framework was rehearsed end to end against the local Docker stack only
+(k6 `smoke`, a shortened Gatling `stress`), which proves the tooling, not staging capacity.
+
+The two validation runs, outside 08:00–21:00 IST (Mon–Sat), from a machine with Docker:
+
+1. Point the runner at a persona file **outside the repository** (`rep`, `manager`, `admin`; no
+   MFA) and, optionally, a notice webhook:
+
+   ```bash
+   export LT_PERSONAS_FILE="$HOME/.nexus-loadtest/staging-personas.json"
+   ```
+
+   ```bash
+   export LT_NOTICE_WEBHOOK="<Slack or Teams incoming webhook URL>"
+   ```
+
+2. Run k6 `load`: ≤ 20 VUs, ~7 min.
+
+   ```bash
+   python scripts/load/run.py --profile load --env staging --data existing --exclude-journey platform_customers --yes
+   ```
+
+3. Run Gatling `breakpoint` at half length: stairs to 2 new users/s, ~8 min plus setup. A guard
+   stopping it marks the knee.
+
+   ```bash
+   python scripts/load/run.py --profile breakpoint --env staging --data existing --exclude-journey platform_customers --duration-scale 0.5 --yes
+   ```
+
+4. Commit the two new files in [load-results/](load-results/) and the regenerated trend table in
+   [load.md](load.md). Then replace this section with:
+   - the knee (the level where the guard tripped, or p95 crossed 500 ms);
+   - peak Postgres `active_connections` and `cpu_credits_remaining` from Azure Monitor for the
+     same minutes;
+   - whether the second replica started, and whether the §2 hypothesis held.
+
+The same runs are available as the manual `azure-pipelines-load-k6.yml` /
+`azure-pipelines-load-gatling.yml` pipelines, once the `gtm-loadtest` variable group exists.
 <!-- load-capacity-validation:end -->
