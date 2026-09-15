@@ -189,6 +189,17 @@ async def run_worker(
 async def _main() -> None:
     logging.basicConfig(level=logging.INFO)
     await init_db()
+    # Apply runtime overrides now rather than on the first dispatched job, so the verifier check
+    # below looks at the URL in force and not the environment one. Never raises.
+    from nexus.runtime_config.service import refresh_if_stale
+
+    await refresh_if_stale(force=True)
+    try:
+        from nexus.verification.health import schedule_verifier_warning
+
+        schedule_verifier_warning(logger)
+    except Exception:
+        logger.warning("could not schedule the email verifier check", exc_info=True)
     from nexus.ingestion.crm_sync import register_crm_sync_subscribers
     from nexus.workers.state_metrics import run_state_metrics, serve_worker_metrics
 

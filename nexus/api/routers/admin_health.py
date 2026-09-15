@@ -144,6 +144,19 @@ async def _probe_payments() -> tuple[str, str]:
         return OK, ", ".join(notes)
 
 
+async def _actor_permission(http, key: str, actor_id: str) -> tuple[int, str]:
+    """(HTTP status, actorPermissionLevel) for one Apify actor, read with one key.
+
+    A valid key is not the same as a usable actor: the FULL_PERMISSIONS actors 403 until approved
+    per ACCOUNT, which is invisible from the key alone.
+    """
+    meta = await http.get(f"https://api.apify.com/v2/acts/{actor_id}",
+                          headers={"Authorization": f"Bearer {key}"})
+    if meta.status_code != 200:
+        return meta.status_code, ""
+    return 200, str((meta.json().get("data") or {}).get("actorPermissionLevel") or "")
+
+
 async def _probe_apify() -> tuple[str, str]:
     import httpx
 
@@ -160,16 +173,13 @@ async def _probe_apify() -> tuple[str, str]:
         if me.status_code != 200:
             return ERROR, f"Apify rejected the key ({me.status_code})"
         user = (me.json().get("data") or {}).get("username", "?")
-        # A valid key is not the same as a usable actor: the FULL_PERMISSIONS actors 403 until
-        # approved per ACCOUNT, which is invisible from the key alone.
         blocked = []
         for name, actor_id in ACTORS.items():
-            meta = await http.get(f"https://api.apify.com/v2/acts/{actor_id}",
-                                  headers={"Authorization": f"Bearer {key}"})
-            if meta.status_code != 200:
+            code, level = await _actor_permission(http, key, actor_id)
+            if code != 200:
                 blocked.append(f"{name}(unreachable)")
                 continue
-            if (meta.json().get("data") or {}).get("actorPermissionLevel") == "FULL_PERMISSIONS":
+            if level == "FULL_PERMISSIONS":
                 blocked.append(name)
         if blocked:
             return DEGRADED, (
@@ -224,6 +234,42 @@ async def _probe_enforcement() -> tuple[str, str]:
     return DEGRADED, "enforcement=off — billing is a full kill switch right now"
 
 
+async def _probe_email_verifier() -> tuple[str, str]:
+    """Whether Reacher answers. When it does not, nothing fails: addresses silently grade risky
+    (DNS fallback) or unknown, which staging did for days with this console reporting all clear."""
+    from nexus.verification.health import check_email_verifier
+
+    check = await check_email_verifier()
+    where = f" (url={check.url})" if check.url else ""
+    return check.status, f"provider={check.provider or 'stub'}: {check.detail}{where}"
+
+
+async def _probe_phone_lookup() -> tuple[str, str]:
+    import httpx
+
+    from nexus.core.config import get_settings
+    from nexus.integrations.apify import ACTORS, get_apify_client
+
+    if (get_settings().phone_lookup_provider or "").strip().lower() == "off":
+        return UNCONFIGURED, (
+            "turned off in Runtime settings; shared records and source databases still answer, "
+            "nothing is bought"
+        )
+    client = get_apify_client()
+    if not client.configured:
+        return UNCONFIGURED, "no Apify key; lookups return not configured"
+    async with httpx.AsyncClient(timeout=15) as http:
+        code, level = await _actor_permission(http, client.api_keys[0], ACTORS["phone_finder"])
+    if code != 200:
+        return ERROR, f"the phone_finder actor could not be read with the first key (HTTP {code})"
+    if level == "FULL_PERMISSIONS":
+        return DEGRADED, (
+            "phone_finder needs full-permission approval on this Apify account; lookups 403 until "
+            "someone approves it in the Apify console"
+        )
+    return OK, "Apify phone_finder reachable"
+
+
 _PROBES: tuple[tuple[str, Any], ...] = (
     ("database", _probe_database),
     ("queue", _probe_queue),
@@ -232,6 +278,8 @@ _PROBES: tuple[tuple[str, Any], ...] = (
     ("llm", _probe_llm),
     ("search", _probe_search),
     ("billing enforcement", _probe_enforcement),
+    ("email verifier", _probe_email_verifier),
+    ("phone lookup", _probe_phone_lookup),
 )
 
 

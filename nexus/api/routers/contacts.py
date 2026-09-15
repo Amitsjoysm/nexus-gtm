@@ -213,6 +213,13 @@ async def enrich_contact_phone(
             status.HTTP_400_BAD_REQUEST,
             "Phone lookup is not configured. Set NEXUS_APIFY_API_KEY.",
         )
+    if result.status == "disabled":
+        # Its own message. "Not configured, set the key" would send an operator to add an Apify key
+        # that is already there.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Phone lookup is turned off in Runtime settings (phone_lookup_provider).",
+        )
 
     # Write the number onto the tenant's own contact row: the shared record is the cache, this is
     # the workspace's copy, and a rep must be able to correct it without editing what other

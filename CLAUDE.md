@@ -479,6 +479,48 @@ Validation runs **before** the row is written: `coerce` only checks the declared
 string is no check at all, and a committed-then-rejected value is an override the panel reports as
 active and nothing ever applies.
 
+**Two structural guards against "saved, applied nothing"** (`tests/test_runtime_control_plane.py`),
+both added 2026-09-15:
+
+- **Every catalog key is read outside `config.py`**, directly or through a `Settings` property. It
+  found `phone_enrich_auto` and `calling_enabled` on its first run: both switches had been in the
+  panel, reporting "in effect", with nothing reading either. They were removed (the calling module is
+  gated by `module.calling` under Feature switches). A value copied once into a long-lived object
+  counts as read and still does nothing, so it also needs an `_ON_CHANGE` hook or a per-call reader:
+  `DorkedSearchSource` now reads `signal_dork_max_queries` on each fetch for that reason.
+- **Every free-text setting has a validator in `_VALIDATORS`**, run before the row is written.
+  `email_verify_url` refuses non-http(s), no host, a bad port, and (outside local/test) any host
+  resolving private, loopback or link-local, plus metadata names always: the verifier POSTs there
+  and Check connection reports how it answered, which is a port scanner otherwise.
+  `billing_dunning_schedule_days` exists because `dunning._schedule` silently falls back to the
+  default on a bad value.
+
+**Grouping lives on the server.** `catalog.GROUP_ORDER` orders the groups and `_SPECS` declaration
+order is the reading order inside one; `current_values()` sorts by both and the panel never re-sorts.
+`option_labels` and `placeholder` ride on each row. The panel's input follows `kind`: it used to draw
+a number box for every non-switch setting without options, so the IP allowlist and `apify` could not
+be typed at all.
+
+**Email verifier health** (`nexus/verification/health.py`) is one check used three ways: the
+`email verifier` row on Platform health, a WARNING in the API lifespan and worker boot log
+(`EMAIL VERIFIER UNREACHABLE`, scheduled in the background, never blocking), and
+`POST /admin/runtime/email-verifier/check` behind the panel's Check connection. It POSTs an EMPTY body,
+so no mailbox is probed. What proves Reacher answered is the SHAPE, not the status: the live instance
+(158.69.113.104:8080, measured 2026-09-15) defaults the missing `to_email` to "" and answers **200**
+with a full verdict (`is_reachable: "invalid"`, failed syntax, no MX lookup); other versions answer
+400/422. A 200 without `is_reachable` is something else on that URL and reads degraded. The first
+version treated every 200 as "not Reacher", which would have flagged the working verifier. When Reacher cannot
+answer nothing fails; addresses grade DNS-risky or unknown, which staging did for days. The worker now
+applies overrides at boot (`refresh_if_stale(force=True)`) so the check sees the URL in force.
+`email_verify_auth_header` is `FORBIDDEN` because the panel returns values in plaintext.
+
+**`phone_lookup_provider`** (`apify` | `off`, default `apify`; only the exact word `off` disables).
+`find_phone` returns `disabled` after the shared record and source database and BEFORE the actor, and
+records nothing: a recorded `not_found` is never re-purchased, so recording one while off would blank
+that person's number for every tenant. Nothing bought, nothing metered; answers already bought are
+still served and charged as today. The `phone lookup` health row reports off, unkeyed, or an actor
+needing per-account approval.
+
 `GET /admin/runtime/webhook` shows what to paste into Stripe and which events to select; the URL is
 not ours to set and nothing here can set it. `POST .../webhook/test` posts a correctly signed event
 at our own endpoint — it proves the signing secret verifies and the route is live, and deliberately

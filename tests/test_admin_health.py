@@ -59,6 +59,7 @@ async def test_it_inventories_every_route_and_probes_dependencies(client, monkey
     assert body["summary"]["routes_total"] > 100
     assert {d["name"] for d in body["dependencies"]} >= {
         "database", "queue", "payments (stripe)", "apify", "llm", "billing enforcement",
+        "email verifier", "phone lookup",
     }
     # The database is genuinely reachable in the suite, so this is a real probe result.
     db = next(d for d in body["dependencies"] if d["name"] == "database")

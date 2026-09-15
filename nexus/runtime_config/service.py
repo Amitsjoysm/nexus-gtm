@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from nexus.core.db import get_platform_sessionmaker
 from nexus.models.runtime_setting import RuntimeSetting
-from nexus.runtime_config.catalog import CATALOG, FORBIDDEN, coerce
+from nexus.runtime_config.catalog import CATALOG, FORBIDDEN, GROUP_ORDER, coerce
 
 logger = logging.getLogger("nexus.runtime_config")
 
@@ -57,6 +57,53 @@ def _validate_allowlist(value) -> None:
     parse_allowlist(str(value))
 
 
+def _validate_verify_url(value) -> None:
+    """The verifier POSTs to this URL and Check connection reports how it answered.
+
+    Pointed inside the network, that is a port scanner driven from a web form, so it gets the same
+    host guard as alert webhooks and source databases. `http` is allowed, unlike a webhook: the
+    self-hosted Reacher this exists for has no TLS, and refusing it would leave a deployment unable
+    to point at the verifier it actually runs. The health check flags it instead.
+    """
+    from urllib.parse import urlparse
+
+    from nexus.core.config import get_settings
+    from nexus.sources.safety import _is_blocked_host
+
+    raw = str(value or "").strip()
+    parsed = urlparse(raw)
+    if (parsed.scheme or "").lower() not in ("http", "https"):
+        raise ValueError("the verifier URL must start with http:// or https://")
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError("the verifier URL has no host")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError(f"the verifier URL has an invalid port: {exc}") from exc
+    # A private address is a real verifier on a local stack (`http://reacher:8080`) and an SSRF
+    # target anywhere else. Metadata endpoints are refused whatever the environment.
+    local = get_settings().env in ("local", "test")
+    blocked, why = _is_blocked_host(host, allow_private=local)
+    if blocked:
+        raise ValueError(f"refusing this verifier host: {why}")
+
+
+def _validate_dunning_schedule(value) -> None:
+    """`dunning._schedule` falls back to its default on a value it cannot parse, quietly, so an
+    unchecked typo would read as saved while the old schedule kept running."""
+    parts = [p.strip() for p in str(value or "").split(",")]
+    if not any(parts):
+        raise ValueError("the dunning schedule needs at least one number of days, like 1,3,7")
+    if len(parts) > 10:
+        raise ValueError("the dunning schedule takes at most 10 retries")
+    for part in parts:
+        if not part.isdigit() or not 1 <= int(part) <= 60:
+            raise ValueError(
+                f"'{part}' is not a whole number of days from 1 to 60; write it like 1,3,7"
+            )
+
+
 # Settings whose value does NOT live on the `Settings` object. Pydantic refuses an attribute it has
 # not declared, so anything `config.py` does not know about needs somewhere else to live and its own
 # reader. Keep this small: a growing list means the override mechanism is being worked around
@@ -64,10 +111,15 @@ def _validate_allowlist(value) -> None:
 _EXTERNAL_SINKS = {"admin_ip_allowlist": _set_allowlist}
 _EXTERNAL_READERS = {"admin_ip_allowlist": _get_allowlist}
 # Run BEFORE the row is written. `coerce` only checks the declared kind, and for a string setting
-# that is no check at all — the real constraints live in the sink. Without this the row commits and
-# then the sink rejects it, leaving a stored override the panel reports as active and
-# `apply_overrides` silently skips forever.
-_EXTERNAL_VALIDATORS = {"admin_ip_allowlist": _validate_allowlist}
+# that is no check at all. Without this the row commits and then the value is rejected (by a sink)
+# or silently ignored (by a reader that falls back to a default), leaving a stored override the
+# panel reports as active and nothing applies. Every free-text setting needs one;
+# `test_a_free_text_setting_is_validated_before_it_is_stored` enforces it.
+_VALIDATORS = {
+    "admin_ip_allowlist": _validate_allowlist,
+    "email_verify_url": _validate_verify_url,
+    "billing_dunning_schedule_days": _validate_dunning_schedule,
+}
 
 
 #: Keys this process applied from a stored row. One that later has NO row was cleared — possibly by
@@ -108,10 +160,11 @@ def _reset_providers() -> None:
 #: Settings read ONCE into a cached object. Changing one must drop the cache, or the panel reports it
 #: "in effect" while nothing changes until a restart — the trap this catalog exists to prevent.
 #: `signal_search_provider` is absent on purpose: the dork source re-reads it on every crawl.
+#: The verifier URL and timeout are here because `ReacherEmailVerifier` copies both at construction.
 _ON_CHANGE = {
     key: _reset_providers
     for key in ("llm_provider", "contact_search_sources", "research_provider",
-                "email_verify_provider")
+                "email_verify_provider", "email_verify_url", "email_verify_timeout_s")
 }
 
 
@@ -240,7 +293,7 @@ async def set_override(key: str, raw_value, *, note: str = "", user_id: str = ""
     typed = coerce(spec, raw_value)
     # Validate before writing. A value the sink will reject must never reach the table, or the
     # panel shows an override that is stored, reported as set, and applied by nothing.
-    validator = _EXTERNAL_VALIDATORS.get(key)
+    validator = _VALIDATORS.get(key)
     if validator is not None:
         validator(typed)
 
@@ -346,6 +399,15 @@ async def current_values() -> list[dict]:
             "overridden": spec.key in raw,
             "in_effect": in_effect,
             "note": row.note if row is not None else "",
+            "option_labels": dict(spec.option_labels),
+            "placeholder": spec.placeholder,
         })
-    out.sort(key=lambda x: (x["group"], x["label"]))
+    # Group order is the server's, and inside a group the catalog's declaration order is the reading
+    # order: the switch that decides whether anything happens, then the dials that tune it.
+    # Alphabetical put "Accounts claimed per tick" above "Autonomous heartbeat".
+    declared = {key: index for index, key in enumerate(CATALOG)}
+    out.sort(key=lambda x: (
+        GROUP_ORDER.index(x["group"]) if x["group"] in GROUP_ORDER else len(GROUP_ORDER),
+        declared[x["key"]],
+    ))
     return out

@@ -60,7 +60,8 @@ It reads the live `get_settings()`, so it checks what is in force, overrides inc
 | Answer | Status | Detail says |
 |---|---|---|
 | 400 or 422 | ok | Reacher answered and rejected the empty request, as expected |
-| 200 | degraded | answered 200 to an empty request, so this does not look like Reacher's `/v0/check_email` |
+| 200 with a JSON body carrying `is_reachable` | ok | Reacher answered (a verdict for an empty address, no mailbox probed). Added during implementation: the live instance answers exactly this, measured 2026-09-15 |
+| 200 without that shape | degraded | answered 200 without a Reacher verdict, so this does not look like Reacher's `/v0/check_email` |
 | 401 or 403 | error | refused (HTTP n): the endpoint wants an Authorization header we do not send |
 | 404 | error | not a Reacher endpoint (HTTP 404): check the path ends `/v0/check_email` |
 | 405 | error | answers but not with POST (HTTP 405): a proxy is in front that does not forward to Reacher |

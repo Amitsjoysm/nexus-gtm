@@ -1451,6 +1451,19 @@ export interface RuntimeSetting {
    */
   in_effect: boolean;
   note: string;
+  /** What each option is called on screen. The stored value stays the raw option. */
+  option_labels: Record<string, string>;
+  placeholder: string;
+}
+
+/** `POST /admin/runtime/email-verifier/check`: whether the verifier in force answers. */
+export interface EmailVerifierCheck {
+  status: "ok" | "degraded" | "unconfigured" | "error";
+  /** Never contains the Authorization header. */
+  detail: string;
+  provider: string;
+  /** Empty when no Reacher key is configured. */
+  url: string;
 }
 
 export interface WebhookInfo {

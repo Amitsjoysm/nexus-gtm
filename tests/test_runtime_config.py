@@ -226,14 +226,17 @@ async def test_changing_a_setting_is_audited_with_before_and_after(client, monke
     from nexus.core.db import get_platform_sessionmaker
     from nexus.models.billing import BillingAuditLog
 
+    from nexus.core.config import get_settings
+
     token = await _superadmin(client, monkeypatch, slug="rc11", email="boss@rc11.com")
-    await client.put("/api/admin/runtime/settings/phone_enrich_auto", headers=auth(token),
+    monkeypatch.setattr(get_settings(), "cadence_enabled", False)
+    await client.put("/api/admin/runtime/settings/cadence_enabled", headers=auth(token),
                      json={"value": True, "note": "approved by finance for the Q4 push"})
 
     async with get_platform_sessionmaker()() as s:
         rows = list((await s.scalars(select(BillingAuditLog))).all())
     entry = next(r for r in rows if r.action == "runtime_setting.set")
-    assert entry.target == "phone_enrich_auto"
+    assert entry.target == "cadence_enabled"
     assert "approved by finance" in (entry.note or "")
     assert (entry.before or {}).get("value") is False
     assert (entry.after or {}).get("value") is True

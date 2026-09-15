@@ -566,6 +566,11 @@ class Settings(BaseSettings):
     # rep clicks the contact they are about to call. Flipping this on enables a bulk/background
     # path; it stays off until someone decides that spend deliberately.
     phone_enrich_auto: bool = False
+    # Where a rep's phone lookup goes after the shared person record and any source database:
+    # "apify" (the paid phone_finder actor) or "off". Only the exact word "off" turns buying off, so
+    # a typo keeps today's behaviour instead of silently stopping every rep's lookups. Changeable
+    # from the Superadmin panel.
+    phone_lookup_provider: str = "apify"
 
     # Contact details in the shared people store are Fernet-sealed at rest. Separate from
     # `mfa_secret_enc_key` and `network_token_enc_key` so the three rotate independently —

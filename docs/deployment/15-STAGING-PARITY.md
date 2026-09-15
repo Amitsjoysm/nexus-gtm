@@ -67,11 +67,21 @@ Most of §1's degrading defaults can be **fixed live from here — no redeploy**
 effect within 30 seconds in every process (the cached provider is rebuilt; clearing an override
 restores the environment value everywhere):
 
-* **Providers** card: `llm_provider`, `contact_search_sources`, `research_provider`,
-  `email_verify_provider`, `signal_search_provider`. Each shows what it does, a warning, and a risk
-  badge; high-risk changes need a stated reason.
-* **Automation / Billing / Access** cards: personalisation provider and posts, account enrichment,
-  ICP discovery, automation, billing enforcement, cadences, CRM sync, OTP sign-up.
+Settings are grouped (since 2026-09-15), with a search box, a "Changed only" filter and a section
+index. Each shows what it does, a warning and a risk badge; high-risk changes need a stated reason.
+
+* **Email finding & verification**: `email_verify_provider`, **`email_verify_url`** and
+  `email_verify_timeout_s` (no redeploy needed to repoint Reacher), patterns tried per person,
+  re-check interval. After changing the URL press **Check connection**: it says whether Reacher
+  answered, and if not, why (unreachable, wrong path, a proxy that does not forward, refused).
+  Platform health shows the same as the `email verifier` row, and the API and worker boot logs say
+  `EMAIL VERIFIER UNREACHABLE` when it cannot be reached.
+* **Contacts & enrichment**: `contact_search_sources`, sourcing, firmographic enrichment, look-alike
+  enrichment, **`phone_lookup_provider`** (Apify phone finder or Off).
+* **Personalization**: provider (Apify or Off), recent posts, posts per contact.
+* **AI & research**, **Signals & alerts**, **Automation & schedules** (refresh intervals, batch
+  sizes, ICP discovery), **Outreach & CRM**, **Billing** (with the Stripe webhook), **Access &
+  security** (IP allowlist), **Reliability**.
 * **Not changeable here, on purpose:** `search_provider` (discovery is strictly Exa in staging and
   prod and reads nothing else), `payment_provider` (use the Payment credentials screen — switching to
   "noop" would silently stop collecting money), `demo_signals_enabled` (fabricated signals in a real

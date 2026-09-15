@@ -60,6 +60,7 @@ import type {
   SubscriptionPatch,
   ProviderModels,
   RuntimeSetting,
+  EmailVerifierCheck,
   SendEmailResult,
   SharedCrawlCompany,
   SharedCrawlSummary,
@@ -1100,6 +1101,12 @@ export class ApiClient {
   testWebhook(baseUrl: string) {
     return this.request<WebhookTestResult>("/admin/runtime/webhook/test", {
       method: "POST", body: { base_url: baseUrl },
+    });
+  }
+  /** Asks the verifier in force whether it answers. An empty request: no mailbox is probed. */
+  checkEmailVerifier() {
+    return this.request<EmailVerifierCheck>("/admin/runtime/email-verifier/check", {
+      method: "POST",
     });
   }
 

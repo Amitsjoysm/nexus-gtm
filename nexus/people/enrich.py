@@ -288,7 +288,16 @@ async def find_phone(
             await _meter_lookup(ts, user_id=user_id, cached=True, provider="source_db")
             return from_source
 
-        # 3. Buy it. No database transaction is open across the actor run.
+        # 3. Buy it, unless an operator turned buying off in the Superadmin panel. Returned before
+        #    step 4 on purpose: a recorded `not_found` is never re-purchased, so recording one here
+        #    would blank this person's number for every tenant long after the switch is back on.
+        #    Nothing was bought, so nothing is metered either.
+        from nexus.core.config import get_settings
+
+        if (get_settings().phone_lookup_provider or "").strip().lower() == "off":
+            return PhoneResult(status="disabled")
+
+        # No database transaction is open across the actor run.
         result = await _run_phone_actor(
             linkedin_url=stored_linkedin, country=country, account_country=account_country,
         )

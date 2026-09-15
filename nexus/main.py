@@ -165,6 +165,18 @@ async def lifespan(app: FastAPI):
             "could not apply runtime overrides at startup", exc_info=True
         )
 
+    # Say in the boot log whether the email verifier answers. When it does not, nothing fails:
+    # every address grades risky or unknown, and staging ran that way for days. After the overrides
+    # above, so it checks the URL in force. In the background, so a dead verifier never delays boot.
+    try:
+        from nexus.verification.health import schedule_verifier_warning
+
+        schedule_verifier_warning(logging.getLogger("nexus.main"))
+    except Exception:
+        logging.getLogger("nexus.main").warning(
+            "could not schedule the email verifier check", exc_info=True
+        )
+
     # Billing catalog/plan seed: idempotent, additive, and non-fatal. A seed failure must never
     # stop the API from serving (docs/billing/15-Migration-Strategy.md).
     if get_settings().billing_seed_on_startup:

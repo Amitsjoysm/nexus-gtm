@@ -612,7 +612,7 @@ class DorkedSearchSource(SignalSource):
 
     name = "dork"
 
-    def __init__(self, search=None, *, max_queries: int = 4, per_query: int = 4,
+    def __init__(self, search=None, *, max_queries: int | None = None, per_query: int = 4,
                  recency_days: int = 120, max_signals: int = 6, pace_s: float = 0.0) -> None:
         # Injectable so the whole thing runs offline against canned hits. An injected provider is
         # never re-resolved; a resolved one is rebuilt when `signal_search_provider` changes.
@@ -621,7 +621,10 @@ class DorkedSearchSource(SignalSource):
         self._search_choice: str | None = None
         # The budget that matters: each dork is one billed search call, so this multiplies the cost
         # of every account refresh. Four is enough for funding + hiring + exec + one event class.
-        self._max_queries = max_queries
+        # None reads `signal_dork_max_queries` on every fetch: this source lives inside the
+        # process-wide ingestion service, so a cap copied here would ignore the Superadmin panel
+        # until a restart. An explicit value (tests, benchmarks) still wins.
+        self._explicit_max_queries = max_queries
         self._per_query = per_query
         self._recency_days = recency_days
         self._max_signals = max_signals
@@ -654,9 +657,23 @@ class DorkedSearchSource(SignalSource):
         # request can exceed. Sources run CONCURRENTLY, so the per-account crawl is bounded by the
         # slowest of them — this lands at 32s against siblings already declaring 25-30s, so it
         # costs the crawl a couple of seconds in the worst case rather than setting a new ceiling.
-        self.timeout_s = max(20.0, (max_queries * 8.0) + (max(0, max_queries - 1) * pace_s))
+        #
+        # `timeout_s` below computes it from the cap in force, so a changed cap moves the budget.
         # Read by IngestionService after each fetch and stored on the crawl-history row.
         self.last_provenance: dict = {}
+
+    @property
+    def _max_queries(self) -> int:
+        if self._explicit_max_queries is not None:
+            return self._explicit_max_queries
+        from nexus.core.config import get_settings
+
+        return int(get_settings().signal_dork_max_queries)
+
+    @property
+    def timeout_s(self) -> float:
+        queries = self._max_queries
+        return max(20.0, (queries * 8.0) + (max(0, queries - 1) * self._pace_s))
 
     def _provider(self):
         """The backend this source searches with.

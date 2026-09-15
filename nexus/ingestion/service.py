@@ -332,11 +332,8 @@ def get_ingestion_service() -> IngestionService:
             effective = getattr(build_search_provider(signal_search_choice()), "name", "")
             if pace <= 0 and effective in ("duckduckgo", "ddg", ""):
                 pace = 1.5
-            sources.append(
-                DorkedSearchSource(
-                    max_queries=settings.signal_dork_max_queries, pace_s=pace
-                )
-            )
+            # No cap passed: the source reads it per fetch, so the panel reaches this singleton.
+            sources.append(DorkedSearchSource(pace_s=pace))
         # The account's own ATS board (M17). Keyless and first-party — the strongest hiring
         # evidence there is — so it is on by default; `no_ats` opts out for a deployment that
         # does not want the careers-page crawl.

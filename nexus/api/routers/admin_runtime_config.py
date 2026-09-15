@@ -98,6 +98,23 @@ async def clear_runtime_setting(
             "note": "The environment value applies again from the next refresh."}
 
 
+@router.post("/email-verifier/check", response_model=dict)
+async def check_email_verifier_now(
+    _: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> dict:
+    """Ask the verifier in force whether it answers, right after an operator changed it.
+
+    A POST, although it changes nothing, so Platform health's route inventory never calls it on its
+    own (it probes GETs only). Sends an empty body: no mailbox is probed. Not audited, since it
+    writes nothing.
+    """
+    from nexus.verification.health import check_email_verifier
+
+    check = await check_email_verifier()
+    return {"status": check.status, "detail": check.detail,
+            "provider": check.provider, "url": check.url}
+
+
 # ---- the payment webhook ---------------------------------------------------------------------
 # The URL is not ours to set — it is pasted into the Stripe dashboard, and nothing in this
 # application can do that for you. What the panel CAN do is stop you guessing it: show the exact
