@@ -1129,7 +1129,17 @@ export interface EmailAccount {
   username: string;
   from_email: string;
   from_name: string;
+  /** STARTTLS on a plain connection. `use_ssl` is implicit TLS from the first byte — not both. */
   use_tls: boolean;
+  use_ssl: boolean;
+  /** Stored, not resolved: blank means "use the provider preset". See `server_summary`. */
+  imap_host: string;
+  imap_port: number;
+  drafts_folder: string;
+  /** What this mailbox will really use, preset and overrides merged, computed on the server. */
+  server_summary: string;
+  /** Whether a draft can be saved to this mailbox (it needs an IMAP host and credentials). */
+  supports_drafts: boolean;
   enabled: boolean;
   default: boolean;
   has_password: boolean;
@@ -1154,6 +1164,10 @@ export interface EmailAccountInput {
   from_email?: string;
   from_name?: string;
   use_tls?: boolean;
+  use_ssl?: boolean;
+  imap_host?: string;
+  imap_port?: number;
+  drafts_folder?: string;
   enabled: boolean;
   signature?: string;
 }

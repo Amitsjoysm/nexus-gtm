@@ -995,6 +995,14 @@ export class ApiClient {
       { method: "POST", body },
     );
   }
+  /** Put the drafted email in the caller's own Drafts folder instead of sending it. Same mailbox
+   *  and signature as a send; 409 when they have no mailbox, 422 when it cannot hold drafts. */
+  saveEmailDraft(contactId: string, body: { subject: string; body: string }) {
+    return this.request<SendEmailResult>(
+      `/contacts/${encodeURIComponent(contactId)}/save-draft`,
+      { method: "POST", body },
+    );
+  }
   /** Take ownership of a mailbox nobody owns, so you can send from it. */
   claimEmailAccount(accountId: string) {
     return this.request<EmailAccount>(

@@ -35,19 +35,31 @@ class SendResult:
 
 
 def resolve_smtp(settings: dict | None) -> dict:
-    """Merge the provider preset with explicit overrides into a concrete SMTP config."""
+    """Merge the provider preset with explicit overrides into a concrete SMTP config.
+
+    An override always wins over the preset, and that is what makes `provider: "smtp"` usable at
+    all: it has no preset, so every field has to come from what the workspace typed.
+    """
     s = dict(settings or {})
     preset = PROVIDER_PRESETS.get((s.get("provider") or "").strip().lower(), {})
     username = (s.get("username") or "").strip()
+    port = int(s.get("port") or preset.get("port") or 587)
     return {
         "host": (s.get("host") or preset.get("host") or "").strip(),
-        "port": int(s.get("port") or preset.get("port") or 587),
+        "port": port,
+        # STARTTLS on a plain connection (587) vs. implicit TLS from the first byte (465) are
+        # different protocols, and which one a server speaks is not derivable from the port: a
+        # self-hosted box can offer implicit TLS on 8465. It defaults to `port == 465` because that
+        # is the rule this module applied when the port was the only thing it could read, so every
+        # mailbox stored before the field existed keeps behaving exactly as it did.
+        "use_ssl": bool(s.get("use_ssl", port == 465)),
         "use_tls": bool(s.get("use_tls", preset.get("use_tls", True))),
         "username": username,
         "password": s.get("password") or "",
         "from_email": (s.get("from_email") or username).strip(),
         "from_name": (s.get("from_name") or "").strip(),
         "imap_host": (s.get("imap_host") or preset.get("imap_host") or "").strip(),
+        "imap_port": int(s.get("imap_port") or preset.get("imap_port") or 993),
         "drafts_folder": (s.get("drafts_folder") or preset.get("drafts_folder") or "Drafts").strip(),
     }
 
@@ -142,7 +154,7 @@ def _build_message(
 
 def _send_blocking(cfg: dict, to: str, subject: str, body: str, html: str | None = None) -> None:
     msg = _build_message(cfg, to, subject, body, html)
-    if cfg["port"] == 465:  # implicit TLS
+    if cfg["use_ssl"]:  # implicit TLS, conventionally port 465
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context, timeout=30) as srv:
             if cfg["username"]:
@@ -183,7 +195,7 @@ def _verify_blocking(cfg: dict) -> tuple[bool, str]:
     places, and a generic "not connected" sends them nowhere.
     """
     try:
-        if cfg["port"] == 465:  # implicit TLS
+        if cfg["use_ssl"]:  # implicit TLS, conventionally port 465
             context = ssl.create_default_context()
             with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context, timeout=20) as srv:
                 srv.login(cfg["username"], cfg["password"])
@@ -229,7 +241,7 @@ def _save_draft_blocking(cfg: dict, to: str, subject: str, body: str) -> None:
 
     msg = _build_message(cfg, to, subject, body)
     context = ssl.create_default_context()
-    imap = imaplib.IMAP4_SSL(cfg["imap_host"], 993, ssl_context=context)
+    imap = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context)
     try:
         imap.login(cfg["username"], cfg["password"])
         imap.append(

@@ -186,6 +186,69 @@ async def send_to_contact(
     )
 
 
+async def draft_for_contact(
+    ts,
+    *,
+    contact,
+    subject: str,
+    body: str,
+    user_id: str,
+) -> SendOutcome:
+    """Put the draft in the rep's own Drafts folder instead of sending it.
+
+    Same mailbox, same signature, same message — it just stops one step short. `save_to_drafts`
+    (IMAP APPEND) has existed since the sender did and was reachable from the orchestrator's tool
+    alone, so a rep reading a draft on screen had one button that did anything with it.
+
+    Two deliberate differences from `send_to_contact`:
+
+    * **Nothing is metered.** `outreach.email_send` prices a message that left the building, and
+      charging for a draft would bill a customer for pressing save.
+    * **A doubtful address does not block it.** The message goes into the rep's own mailbox for them
+      to look at; refusing that protects nobody, and the send path still refuses on its own.
+    """
+    from nexus.integrations.email_sender import has_drafts_support, save_to_drafts
+    from nexus.models.identity import Tenant
+
+    to = (getattr(contact, "email", "") or "").strip()
+    if not to:
+        raise SendRefused("This contact has no email address.")
+    if not (body or "").strip():
+        raise SendRefused("The draft is empty. Generate or write a body before saving it.")
+
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    mailbox = resolve_rep_mailbox(tenant, user_id)
+    if not has_drafts_support(mailbox):
+        # "Saved" for something nobody can find is worse than a refusal naming the missing field.
+        # Only the known providers carry an IMAP host in their preset; a custom SMTP mailbox has
+        # one only if somebody typed it under Settings -> Sending mailboxes -> Server settings.
+        raise SendRefused(
+            "This mailbox has no IMAP host, so it cannot hold drafts. Add one under Settings -> "
+            "Sending mailboxes -> Server settings, or send the email directly."
+        )
+
+    from nexus.outreach.signature import append_signature, resolve_signature
+
+    signed = append_signature(body, resolve_signature(tenant.email_settings, mailbox))
+
+    # THE MAILBOX ITSELF, for the reason spelled out in `send_to_contact`: `resolve_smtp` reads the
+    # host, username and password off the TOP LEVEL of what it is handed.
+    result = await save_to_drafts(mailbox, to=to, subject=(subject or "").strip(), body=signed)
+    ok = bool(getattr(result, "ok", False))
+    detail = str(getattr(result, "detail", "") or ("saved to drafts" if ok else "could not save"))
+    if not ok:
+        logger.warning("draft for %s could not be saved: %s", to, detail)
+
+    return SendOutcome(
+        ok=ok,
+        detail=detail,
+        mailbox_id=str(mailbox.get("id", "")),
+        from_email=str(mailbox.get("from_email") or mailbox.get("username") or ""),
+        to=to,
+        email_status=(getattr(contact, "email_status", "") or "").strip().lower(),
+    )
+
+
 async def _meter_send(ts, *, user_id: str) -> None:
     """Charge one `outreach.email_send`. Never raises.
 

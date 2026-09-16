@@ -86,6 +86,9 @@ export function EmailComposer({
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
+  /** Saving to Drafts is its own action with its own spinner: it is not a send in progress. */
+  const [saving, setSaving] = useState(false);
+  const [draftedIn, setDraftedIn] = useState<string | null>(null);
   /** Set when the server refused an invalid address; the retry carries the acknowledgement. */
   const [needsRiskyConfirm, setNeedsRiskyConfirm] = useState(false);
   /** When the draft on screen was written — shown so a reused one is visibly today's. */
@@ -95,6 +98,7 @@ export function EmailComposer({
     setLoading(true);
     setError(null);
     setSentTo(null);
+    setDraftedIn(null);
     setNeedsRiskyConfirm(false);
     setDraftedAt(null);
     try {
@@ -128,6 +132,7 @@ export function EmailComposer({
     setLoading(true);
     setError(null);
     setSentTo(null);
+    setDraftedIn(null);
     setNeedsRiskyConfirm(false);
     try {
       const saved = (await api.latestAgentRuns(accountId, contactId)).messaging;
@@ -172,6 +177,7 @@ export function EmailComposer({
       const res = await api.sendEmailToContact(contactId, { subject, body, allow_risky: allowRisky });
       if (res.ok) {
         setSentTo(res.to);
+        setDraftedIn(null);  // it has left; "saved in Drafts" would be the wrong thing to still say
         setNeedsRiskyConfirm(false);
         toast.success(`Sent to ${res.to}`, `From ${res.from_email}.`);
       } else {
@@ -192,6 +198,34 @@ export function EmailComposer({
     }
   }
 
+  /**
+   * Keep it instead of sending it: the same mailbox, the same signature, written into the rep's own
+   * Drafts folder over IMAP so the last read happens in the mail client they live in.
+   *
+   * Never charged — `outreach.email_send` prices a message that left the building.
+   */
+  async function saveDraft() {
+    setSaving(true);
+    try {
+      const res = await api.saveEmailDraft(contactId, { subject, body });
+      if (res.ok) {
+        setDraftedIn(res.from_email || "your mailbox");
+        toast.success("Saved to Drafts", `In ${res.from_email}. Send it from your mail client.`);
+      } else {
+        // The IMAP server's own words: "authentication failed" and "no such folder" send a rep to
+        // two different places.
+        toast.error("The mail server refused it", res.detail);
+      }
+    } catch (err) {
+      toast.error(
+        "Not saved",
+        err instanceof ApiError ? explainFailure(err) : "Couldn't save the draft.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className={styles.loading}>
@@ -206,7 +240,8 @@ export function EmailComposer({
   }
 
   const chip = statusChip(emailStatus || "");
-  const canSend = Boolean(contactEmail) && body.trim().length > 0 && !sending;
+  const busy = sending || saving;
+  const canSend = Boolean(contactEmail) && body.trim().length > 0 && !busy;
 
   return (
     <div className={styles.composer}>
@@ -217,6 +252,13 @@ export function EmailComposer({
           <Icons.CheckIcon aria-hidden />
           <span>
             Sent to <strong>{sentTo}</strong>. Regenerate to write another.
+          </span>
+        </div>
+      ) : draftedIn ? (
+        <div className={styles.sent} role="status">
+          <Icons.CheckIcon aria-hidden />
+          <span>
+            Saved in the Drafts folder of <strong>{draftedIn}</strong>. Nothing has been sent.
           </span>
         </div>
       ) : (
@@ -282,8 +324,19 @@ export function EmailComposer({
         <Button variant="secondary" onClick={copy}>
           Copy
         </Button>
+        {/* The other half of the choice: keep it for a last read in the mail client the rep lives
+            in. Same mailbox, same signature, nothing sent and nothing charged. Refused with a
+            reason when the mailbox has no IMAP host (Settings → Sending mailboxes). */}
+        <Button
+          variant="secondary"
+          loading={saving}
+          disabled={!canSend}
+          onClick={saveDraft}
+        >
+          Save to Drafts
+        </Button>
         {needsRiskyConfirm ? (
-          <Button variant="danger" loading={sending} onClick={() => send(true)}>
+          <Button variant="danger" loading={sending} disabled={saving} onClick={() => send(true)}>
             Send anyway
           </Button>
         ) : (

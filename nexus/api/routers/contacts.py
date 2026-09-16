@@ -380,3 +380,57 @@ async def send_email_to_contact(
         from_email=outcome.from_email,
         email_status=outcome.email_status,
     )
+
+
+class SaveDraftIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    subject: str = Field(default="", max_length=300)
+    body: str = Field(min_length=1)
+
+
+@router.post("/{contact_id}/save-draft", response_model=SendEmailOut)
+async def save_draft_for_contact(
+    contact_id: str,
+    body: SaveDraftIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> SendEmailOut:
+    """Put the drafted email in the CALLER'S OWN Drafts folder rather than sending it.
+
+    The other half of the choice a rep actually has: send it now, or keep it for a last read in the
+    mail client they live in. Same mailbox resolution and the same signature, so what they open in
+    Gmail is exactly what would have gone out.
+
+    No `allow_risky`: nothing leaves, so there is no bounce to protect the sending domain from, and
+    a rep who wants to correct the address by hand needs the draft to exist first.
+
+    An IMAP refusal returns **200 with `ok: false`** and the server's own words, like the send path —
+    "authentication failed" and "no such folder" send a rep to two different places.
+    """
+    from nexus.outreach.send import MailboxNotConnected, SendRefused, draft_for_contact
+
+    contact = await ts.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+
+    try:
+        outcome = await draft_for_contact(
+            ts,
+            contact=contact,
+            subject=body.subject,
+            body=body.body,
+            user_id=principal.user_id,
+        )
+    except MailboxNotConnected as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except SendRefused as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    return SendEmailOut(
+        ok=outcome.ok,
+        detail=outcome.detail,
+        to=outcome.to,
+        from_email=outcome.from_email,
+        email_status=outcome.email_status,
+    )

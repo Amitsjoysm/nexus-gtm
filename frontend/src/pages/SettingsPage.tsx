@@ -163,6 +163,14 @@ const EMPTY_MAILBOX = {
   from_name: "",
   enabled: true,
   signature: "",
+  // Server settings. Blank means "use the provider's preset", which is why they are strings rather
+  // than numbers: an empty port box must post nothing, not 0.
+  host: "",
+  port: "",
+  security: "starttls" as "starttls" | "ssl" | "none",
+  imap_host: "",
+  imap_port: "",
+  drafts_folder: "",
 };
 
 /**
@@ -515,10 +523,22 @@ function MailboxModal({
           from_name: account.from_name,
           enabled: account.enabled,
           signature: account.signature ?? "",
+          // The STORED values, not the resolved ones: blank has to stay blank or saving the form
+          // would pin today's Gmail preset onto the mailbox forever. What is in force is shown
+          // underneath, from the server.
+          host: account.host ?? "",
+          port: account.port ? String(account.port) : "",
+          security: account.use_ssl ? ("ssl" as const) : account.use_tls ? ("starttls" as const) : ("none" as const),
+          imap_host: account.imap_host ?? "",
+          imap_port: account.imap_port ? String(account.imap_port) : "",
+          drafts_folder: account.drafts_folder ?? "",
         }
       : EMPTY_MAILBOX,
   );
   const [busy, setBusy] = useState(false);
+  /** Custom SMTP has no preset, so its servers are required rather than advanced: open on sight. */
+  const isCustom = form.provider === "smtp";
+  const [showServers, setShowServers] = useState(isCustom);
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -541,6 +561,18 @@ function MailboxModal({
         from_email: form.username.trim(),
         from_name: form.from_name.trim(),
         enabled: form.enabled,
+        host: form.host.trim(),
+        // The schema floor is 1, so an empty box cannot post 0. STARTTLS listens on 587 and
+        // implicit TLS on 465; a server that uses neither port has the box to say so.
+        port: Number(form.port) || (form.security === "ssl" ? 465 : 587),
+        use_tls: form.security === "starttls",
+        use_ssl: form.security === "ssl",
+        imap_host: form.imap_host.trim(),
+        imap_port: Number(form.imap_port) || 993,
+        drafts_folder: form.drafts_folder.trim(),
+        // The form collected this and never sent it, and the field defaults to "" on the server —
+        // so every edit silently deleted the rep's own sign-off block.
+        signature: form.signature,
         // Password is write-only: send only when the user typed one.
         ...(form.password ? { password: form.password } : {}),
       };
@@ -566,7 +598,13 @@ function MailboxModal({
           <Button variant="secondary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={save} loading={busy} disabled={form.username.trim() === ""}>
+          {/* A custom mailbox with no host resolves to no host at all, and the failure arrives
+              later as "SMTP is not fully configured" on a screen that said it saved. */}
+          <Button
+            onClick={save}
+            loading={busy}
+            disabled={form.username.trim() === "" || (isCustom && form.host.trim() === "")}
+          >
             {account ? "Save mailbox" : "Add mailbox"}
           </Button>
         </>
@@ -577,7 +615,12 @@ function MailboxModal({
           <Field label="Provider">
             <Select
               value={form.provider}
-              onChange={(e) => set("provider", e.target.value)}
+              onChange={(e) => {
+                set("provider", e.target.value);
+                // Custom SMTP knows no host, port or IMAP server of its own, so the fields stop
+                // being advanced and become the ones without which nothing works.
+                if (e.target.value === "smtp") setShowServers(true);
+              }}
               options={[
                 { value: "gmail", label: "Gmail" },
                 { value: "outlook", label: "Outlook.com" },
@@ -611,6 +654,102 @@ function MailboxModal({
             autoComplete="new-password"
           />
         </Field>
+
+        {/* Server settings. Gmail, Outlook and Microsoft 365 fill these in themselves, so they stay
+            folded away; Custom SMTP has no preset at all and opens straight into them. Before this
+            existed the form posted no host, so choosing Custom SMTP saved a mailbox that could
+            never send and never said why. */}
+        <div className={styles.servers}>
+          {isCustom ? (
+            <span className={styles.serversTitle}>Server settings</span>
+          ) : (
+            <button
+              type="button"
+              className={styles.serversToggle}
+              aria-expanded={showServers}
+              aria-controls="mailbox-servers"
+              onClick={() => setShowServers((v) => !v)}
+            >
+              <Icons.ChevronRightIcon
+                aria-hidden
+                className={cn(styles.serversChevron, showServers && styles.serversChevronOpen)}
+              />
+              Server settings
+            </button>
+          )}
+          {showServers && (
+            <div id="mailbox-servers" className={styles.serversBody}>
+              <p className={styles.serversHint}>
+                {account?.server_summary
+                  ? account.server_summary
+                  : isCustom
+                    ? "Ask your mail provider for these. Without an SMTP host this mailbox cannot send."
+                    : "Leave blank to use this provider's own servers."}
+              </p>
+              <div className={styles.emailRow}>
+                <Field label="SMTP host">
+                  <Input
+                    value={form.host}
+                    onChange={(e) => set("host", e.target.value)}
+                    placeholder="smtp.yourcompany.com"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </Field>
+                <Field label="SMTP port">
+                  <Input
+                    inputMode="numeric"
+                    value={form.port}
+                    onChange={(e) => set("port", e.target.value)}
+                    placeholder={form.security === "ssl" ? "465" : "587"}
+                  />
+                </Field>
+              </div>
+              <Field
+                label="Security"
+                hint="STARTTLS upgrades a plain connection (usually port 587). SSL/TLS is encrypted from the first byte (usually 465)."
+              >
+                <Select
+                  value={form.security}
+                  onChange={(e) => set("security", e.target.value as typeof form.security)}
+                  options={[
+                    { value: "starttls", label: "STARTTLS" },
+                    { value: "ssl", label: "SSL/TLS" },
+                    { value: "none", label: "None (not encrypted)" },
+                  ]}
+                />
+              </Field>
+              <div className={styles.emailRow}>
+                <Field label="IMAP host" hint="Needed to save drafts to this mailbox.">
+                  <Input
+                    value={form.imap_host}
+                    onChange={(e) => set("imap_host", e.target.value)}
+                    placeholder="imap.yourcompany.com"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </Field>
+                <Field label="IMAP port">
+                  <Input
+                    inputMode="numeric"
+                    value={form.imap_port}
+                    onChange={(e) => set("imap_port", e.target.value)}
+                    placeholder="993"
+                  />
+                </Field>
+              </div>
+              <Field label="Drafts folder">
+                <Input
+                  value={form.drafts_folder}
+                  onChange={(e) => set("drafts_folder", e.target.value)}
+                  placeholder="Drafts"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </Field>
+            </div>
+          )}
+        </div>
         <Field
           label="Signature"
           hint="Added under every email sent from this mailbox. Plain text — name, title, company, phone."

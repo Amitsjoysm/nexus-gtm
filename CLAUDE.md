@@ -1636,6 +1636,36 @@ because `resolve_smtp` returns defaults rather than raising. Every other test of
 now stops at `_send_blocking`, the last function before the socket, and asserts on the config that
 would have been dialled.
 
+**Send it, or keep it: `draft_for_contact` is the other half of the composer** (`POST /contacts/
+{id}/save-draft`). `save_to_drafts` (IMAP APPEND) had existed since the sender did and was reachable
+only from the orchestrator's tool, so a rep reading a draft had one button that did anything with it.
+Same mailbox, same signature, two deliberate differences: **it is not metered** (`outreach.email_send`
+prices a message that left the building, and charging for a draft bills a customer for pressing save)
+and **a doubtful address does not block it** (nothing leaves, and a rep correcting the address by hand
+needs the draft to exist first).
+
+**A custom SMTP mailbox could not be configured at all.** `resolve_smtp` has always merged overrides
+over the provider preset, but the modal posted a provider, a username and a password and nothing else
+— and `provider: "smtp"` has **no preset**, so it resolved to an empty host and answered "smtp not
+configured" forever. The form now asks for SMTP host/port, security, IMAP host/port and the drafts
+folder; they are folded away for Gmail/Outlook/Microsoft 365 and open by default for Custom SMTP,
+where they are required rather than advanced. Three rules hold it together:
+
+- **Blank stays blank.** `resolve_smtp` reads a preset only when the stored value is empty, so
+  writing the resolved host back would pin today's Gmail preset onto the mailbox for good. What is in
+  force is reported separately as `server_summary`, computed from the resolved config — one field
+  rather than four `effective_*` ones, and computed on the server because a frontend copy of
+  `PROVIDER_PRESETS` would be a second source of truth for what the mailbox does.
+- **Implicit TLS is its own setting** (`use_ssl`), not `port == 465`. STARTTLS and implicit TLS are
+  different protocols and a self-hosted server can offer either on any port. It DEFAULTS to
+  `port == 465`, which is the rule this module applied when the port was all it could read, so every
+  mailbox stored before the field existed behaves exactly as it did.
+- **The form refuses to save a custom mailbox with no host**, because the failure otherwise arrives
+  later, from a different screen, as "SMTP is not fully configured".
+
+The same edit found that the modal collected a `signature` and never posted it, while the field
+defaults to `""` on the server — so every mailbox edit silently deleted the rep's own sign-off block.
+
 **"SMTP not connected" was four different states wearing one sentence.** `resolve_rep_mailbox` needs
 a mailbox that is YOURS, enabled and credentialled; the old message said "you have not connected a
 sending mailbox" for all of them, which is false for three and sends the rep to add a second mailbox

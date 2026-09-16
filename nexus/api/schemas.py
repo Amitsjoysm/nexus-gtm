@@ -693,7 +693,15 @@ class EmailAccountIn(BaseModel):
     password: str | None = Field(default=None, max_length=512)
     from_email: str = Field(default="", max_length=320)
     from_name: str = Field(default="", max_length=120)
+    #: STARTTLS on a plain connection. `use_ssl` is implicit TLS from the first byte — one or the
+    #: other, never both, and a server that speaks neither needs both off.
     use_tls: bool = True
+    use_ssl: bool = False
+    #: Where drafts go. Blank for a provider with a preset (Gmail, Outlook, Microsoft 365); a custom
+    #: SMTP mailbox has no preset, so nothing can save a draft for it until somebody types these.
+    imap_host: str = Field(default="", max_length=200)
+    imap_port: int = Field(default=993, ge=1, le=65535)
+    drafts_folder: str = Field(default="", max_length=200)
     enabled: bool = True
     #: The rep's sign-off block, appended to every email sent from this mailbox. Plain text: the
     #: sender writes a text part, so markup would reach the buyer as raw tags.
@@ -710,6 +718,18 @@ class EmailAccountOut(BaseModel):
     from_email: str = ""
     from_name: str = ""
     use_tls: bool = True
+    use_ssl: bool = False
+    #: STORED, not resolved — blank means "use the provider preset", which is what the form has to
+    #: post back to keep meaning it. What is actually in force is `server_summary`.
+    imap_host: str = ""
+    imap_port: int = 993
+    drafts_folder: str = ""
+    #: The servers this mailbox will really use, preset and overrides already merged, as one line.
+    #: One field rather than four `effective_*` ones, and computed HERE: a frontend copy of
+    #: `PROVIDER_PRESETS` would be a second source of truth for what the mailbox does.
+    server_summary: str = ""
+    #: Whether a draft can be saved to this mailbox at all — the same check the save path makes.
+    supports_drafts: bool = False
     enabled: bool = True
     default: bool = False
     has_password: bool = False           # never return the secret itself

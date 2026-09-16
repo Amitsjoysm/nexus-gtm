@@ -258,8 +258,25 @@ from nexus.integrations.email_sender import (  # noqa: E402
 )
 
 
+def _server_summary(cfg: dict) -> str:
+    """The servers this mailbox will really use, in one line a person can check against their
+    provider's documentation. Built from the RESOLVED config, so a preset and a typed override read
+    the same way and a mailbox that cannot hold drafts says so instead of showing a blank field."""
+    security = "implicit TLS" if cfg["use_ssl"] else ("STARTTLS" if cfg["use_tls"] else "no TLS")
+    smtp = f"SMTP {cfg['host']}:{cfg['port']} ({security})" if cfg["host"] else "No SMTP host"
+    imap = (
+        f"IMAP {cfg['imap_host']}:{cfg['imap_port']}, drafts in {cfg['drafts_folder']}"
+        if cfg["imap_host"]
+        else "No IMAP host - this mailbox cannot save drafts"
+    )
+    return f"{smtp} - {imap}"
+
+
 def _account_out(a: dict, *, caller_user_id: str = "") -> EmailAccountOut:
     owner = a.get("owner_user_id") or ""
+    from nexus.integrations.email_sender import has_drafts_support as _has_drafts
+
+    cfg = _resolve_smtp(a)
     return EmailAccountOut(
         mine=bool(owner) and owner == caller_user_id,
         unassigned=not owner,
@@ -272,6 +289,12 @@ def _account_out(a: dict, *, caller_user_id: str = "") -> EmailAccountOut:
         from_email=a.get("from_email", "") or a.get("username", ""),
         from_name=a.get("from_name", ""),
         use_tls=bool(a.get("use_tls", True)),
+        use_ssl=bool(a.get("use_ssl", int(a.get("port", 587) or 587) == 465)),
+        imap_host=a.get("imap_host", "") or "",
+        imap_port=int(a.get("imap_port", 993) or 993),
+        drafts_folder=a.get("drafts_folder", "") or "",
+        server_summary=_server_summary(cfg),
+        supports_drafts=_has_drafts(a),
         enabled=bool(a.get("enabled", True)),
         default=bool(a.get("default", False)),
         has_password=bool(a.get("password")),
@@ -347,6 +370,12 @@ async def add_email_account(
         "from_email": body.from_email or body.username,
         "from_name": body.from_name,
         "use_tls": body.use_tls,
+        "use_ssl": body.use_ssl,
+        # Blank stays blank. `resolve_smtp` reads a preset only when the stored value is empty, so
+        # writing the resolved host here would PIN today's preset onto the mailbox for good.
+        "imap_host": body.imap_host,
+        "imap_port": body.imap_port,
+        "drafts_folder": body.drafts_folder,
         "enabled": body.enabled,
         "default": not any(a.get("default") for a in accounts),  # first added becomes default
         "verified_at": None,
@@ -387,6 +416,10 @@ async def update_email_account(
             "from_email": body.from_email or body.username,
             "from_name": body.from_name,
             "use_tls": body.use_tls,
+            "use_ssl": body.use_ssl,
+            "imap_host": body.imap_host,
+            "imap_port": body.imap_port,
+            "drafts_folder": body.drafts_folder,
             "enabled": body.enabled,
             "signature": body.signature,
             # Password is write-only: a blank/omitted value keeps the stored secret.
