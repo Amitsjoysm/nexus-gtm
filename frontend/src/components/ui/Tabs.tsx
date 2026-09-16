@@ -15,11 +15,31 @@ export interface TabsProps {
   onChange: (value: string) => void;
   className?: string;
   "aria-label"?: string;
+  /**
+   * `underline` (default) sits above page content. `segmented` is a recessed track with one raised
+   * segment, filling its container: the same vocabulary as the billing interval switch, for a
+   * choice that should read as a pair of buttons rather than as sections of a page.
+   */
+  variant?: "underline" | "segmented";
+  /**
+   * Makes tab and panel ids predictable (`{idPrefix}-tab-{value}`, `{idPrefix}-panel-{value}`), so a
+   * caller can give its panel the id `aria-controls` points at. Generated when omitted.
+   */
+  idPrefix?: string;
 }
 
 /** Accessible tablist with roving arrow-key navigation. Render the panel yourself. */
-export function Tabs({ items, value, onChange, className, ...rest }: TabsProps) {
-  const baseId = useId();
+export function Tabs({
+  items,
+  value,
+  onChange,
+  className,
+  variant = "underline",
+  idPrefix,
+  ...rest
+}: TabsProps) {
+  const generatedId = useId();
+  const baseId = idPrefix ?? generatedId;
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
 
   function onKeyDown(e: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -35,13 +55,19 @@ export function Tabs({ items, value, onChange, className, ...rest }: TabsProps) 
   }
 
   return (
-    <div role="tablist" aria-label={rest["aria-label"]} className={cn(styles.tabs, className)}>
+    <div
+      role="tablist"
+      aria-label={rest["aria-label"]}
+      className={cn(styles.tabs, variant === "segmented" && styles.segmented, className)}
+    >
       {items.map((item, i) => {
         const selected = item.value === value;
         return (
           <button
             key={item.value}
             ref={(el) => (refs.current[i] = el)}
+            // A button's default type is submit, so a tablist placed inside a form submitted it.
+            type="button"
             role="tab"
             id={`${baseId}-tab-${item.value}`}
             aria-selected={selected}

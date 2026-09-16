@@ -25,6 +25,41 @@
   border-bottom-color: var(--accent);
 }
 
+/* ---- segmented ---------------------------------------------------------------------------------
+   A recessed track holding one raised segment, the vocabulary of the billing interval switch. The
+   chosen segment is marked by surface, border and shadow together (and aria-selected), never by
+   colour alone, and never by weight: a bolder label is wider, and the control would twitch on every
+   flip. The track is `--bg`, not `--surface-3`: `--text-muted` measures 4.25:1 on light
+   `--surface-3` and 4.62:1 on `--bg`, so only the second keeps the unchosen label at AA. */
+.segmented {
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.segmented .tab {
+  flex: 1;
+  justify-content: center;
+  /* 44px: the touch target DESIGN.md commits to. */
+  min-height: calc(var(--space-10) + var(--space-1));
+  padding: 0 var(--space-4);
+  margin-bottom: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.segmented .selected {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+}
+
 .count {
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);

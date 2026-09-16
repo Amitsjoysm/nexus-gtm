@@ -144,6 +144,11 @@
   height: 18px;
 }
 
+/* Log in | Sign up. Space beneath it, because it chooses the form rather than belonging to it. */
+.modeSwitch {
+  margin-bottom: var(--space-6);
+}
+
 .title {
   font-size: var(--text-xl);
   font-weight: var(--weight-bold);

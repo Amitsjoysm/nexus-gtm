@@ -69,7 +69,7 @@ export function ResetPasswordPage() {
 
           {done ? (
             <p className={styles.notice} role="status">
-              Your password has been reset. Redirecting you to sign in…
+              Your password has been reset. Redirecting you to log in…
             </p>
           ) : linkValid ? (
             <form className={styles.form} onSubmit={onSubmit} noValidate>
@@ -115,7 +115,7 @@ export function ResetPasswordPage() {
 
           <p className={styles.switch}>
             <Link className={styles.switchBtn} to="/login">
-              Back to sign in
+              Back to log in
             </Link>
           </p>
         </div>

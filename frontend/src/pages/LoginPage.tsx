@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { Button, Field, Input } from "@/components/ui";
+import { Button, Field, Input, Tabs } from "@/components/ui";
 import { TargetIcon, SignalIcon, SparklesIcon } from "@/components/ui/icons";
 import { useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -108,6 +108,8 @@ export function LoginPage() {
   }
 
   const verifying = mode === "signup" && step === "verify";
+  /** Which side of the switch is showing. Resetting a password is part of logging in. */
+  const side = mode === "signup" ? "signup" : "login";
 
   return (
     <div className={styles.page}>
@@ -142,6 +144,30 @@ export function LoginPage() {
             </span>
           </div>
 
+          {/* Log in | Sign up, at the top. Sign-up used to be a small text link under the form,
+              which a first-time visitor reads past on the way to the password box.
+              Hidden while a code is being verified: switching away mid-verification would drop
+              the code, and "Edit details" below is the way back. */}
+          {!verifying && (
+            <Tabs
+              variant="segmented"
+              idPrefix="auth"
+              aria-label="Log in or sign up"
+              items={[
+                { value: "login", label: "Log in" },
+                { value: "signup", label: "Sign up" },
+              ]}
+              value={side}
+              onChange={(next) => switchMode(next as Mode)}
+              className={styles.modeSwitch}
+            />
+          )}
+
+          <div
+            role={verifying ? undefined : "tabpanel"}
+            id={verifying ? undefined : `auth-panel-${side}`}
+            aria-labelledby={verifying ? undefined : `auth-tab-${side}`}
+          >
           <h1 className={styles.title}>
             {verifying
               ? "Verify your email"
@@ -157,8 +183,8 @@ export function LoginPage() {
               : mode === "forgot"
                 ? "Enter your account email and we'll send you a reset link."
                 : mode === "login"
-                  ? "Sign in to your GTM intelligence workspace."
-                  : "Spin up a new workspace in seconds — no credit card."}
+                  ? "Log in to your GTM intelligence workspace."
+                  : "Set up your workspace in seconds. No credit card needed."}
           </p>
 
           <form className={styles.form} onSubmit={onSubmit} noValidate>
@@ -272,7 +298,7 @@ export function LoginPage() {
                 : mode === "forgot"
                   ? "Send reset link"
                   : mode === "login"
-                    ? "Sign in"
+                    ? "Log in"
                     : "Send verification code"}
             </Button>
           </form>
@@ -295,33 +321,25 @@ export function LoginPage() {
           ) : mode === "forgot" ? (
             <p className={styles.switch}>
               <button type="button" className={styles.switchBtn} onClick={() => switchMode("login")}>
-                Back to sign in
+                Back to log in
               </button>
             </p>
           ) : (
-            <p className={styles.switch}>
-              {mode === "login" && (
-                <>
-                  <button
-                    type="button"
-                    className={styles.switchBtn}
-                    onClick={() => switchMode("forgot")}
-                  >
-                    Forgot password?
-                  </button>
-                  <br />
-                </>
-              )}
-              {mode === "login" ? "New to InfoJoy?" : "Already have a workspace?"}{" "}
-              <button
-                type="button"
-                className={styles.switchBtn}
-                onClick={() => switchMode(mode === "login" ? "signup" : "login")}
-              >
-                {mode === "login" ? "Create a workspace" : "Sign in"}
-              </button>
-            </p>
+            // Switching between logging in and signing up is the job of the switch at the top, so
+            // only the one link that switch cannot express stays down here.
+            mode === "login" && (
+              <p className={styles.switch}>
+                <button
+                  type="button"
+                  className={styles.switchBtn}
+                  onClick={() => switchMode("forgot")}
+                >
+                  Forgot password?
+                </button>
+              </p>
+            )
           )}
+          </div>
         </div>
       </section>
     </div>
