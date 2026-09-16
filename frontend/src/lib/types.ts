@@ -1958,6 +1958,9 @@ export interface ImportFields {
   max_rows: number;
   default_limit: number;
   max_upload_bytes: number;
+  /** The target that means "drop this column". Sent by the server so the sentinel the picker
+   *  offers and the one the server honours cannot drift apart. */
+  skip_target?: string;
 }
 
 // ---- external source databases (superadmin) ----

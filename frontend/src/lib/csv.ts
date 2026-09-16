@@ -9,10 +9,47 @@ export interface ParsedCsv {
   rows: string[][];
 }
 
-export function parseCsv(text: string, opts: { maxRows?: number } = {}): ParsedCsv {
+/**
+ * The delimiter of the HEADER line: whichever candidate splits it into the most fields.
+ *
+ * Excel writes the LIST SEPARATOR of the machine's locale, so a German, French, Dutch, Spanish or
+ * Indian export is semicolon-separated, and "Save as: Text (tab delimited)" is tabs. Read as
+ * commas, such a file shows ONE column whose header is the whole line, every row is then skipped
+ * server-side for having no company name, and the upload reports nothing imported and no reason.
+ *
+ * Mirrors `sniff_delimiter` in `nexus/imports/csv_ingest.py`: the preview and the import must agree
+ * on where the columns are, or the mapping the operator builds addresses columns the server never
+ * sees. Ties go to the comma, so an ordinary CSV is never re-interpreted.
+ */
+export function sniffDelimiter(text: string): string {
+  const header = text.split("\n", 1)[0] ?? "";
+  let outside = "";
+  let inQuotes = false;
+  for (const char of header) {
+    if (char === '"') inQuotes = !inQuotes;
+    else if (!inQuotes) outside += char;
+  }
+  const candidates = [",", ";", "\t", "|"];
+  let best = ",";
+  let bestCount = -1;
+  for (const d of candidates) {
+    const count = outside.split(d).length - 1;
+    if (count > bestCount) {
+      best = d;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+export function parseCsv(
+  text: string,
+  opts: { maxRows?: number; delimiter?: string } = {},
+): ParsedCsv {
   const maxRows = opts.maxRows ?? Number.POSITIVE_INFINITY;
   // Strip a leading UTF-8 BOM if present.
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const delimiter = opts.delimiter ?? sniffDelimiter(text);
 
   const records: string[][] = [];
   let record: string[] = [];
@@ -58,7 +95,7 @@ export function parseCsv(text: string, opts: { maxRows?: number } = {}): ParsedC
       i += 1;
       continue;
     }
-    if (ch === ",") {
+    if (ch === delimiter) {
       endField();
       dirty = true;
       i += 1;

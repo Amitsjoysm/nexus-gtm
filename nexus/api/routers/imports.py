@@ -83,6 +83,9 @@ class ImportFieldsOut(BaseModel):
     max_rows: int
     default_limit: int
     max_upload_bytes: int
+    #: The target that means "drop this column". Sent rather than hardcoded in the client, so the
+    #: sentinel the picker offers and the one the server honours cannot drift apart.
+    skip_target: str = "__skip__"
 
 
 async def _custom_targets(ts: TenantSession, entity: str) -> list[CustomFieldOut]:
@@ -115,6 +118,8 @@ async def _allowed_targets(
 
 
 def _parse_mapping(raw: str, allowed: set[str]) -> dict[str, str]:
+    from nexus.imports.csv_ingest import SKIP_TARGET
+
     try:
         parsed = json.loads(raw)
     except ValueError as exc:
@@ -122,7 +127,9 @@ def _parse_mapping(raw: str, allowed: set[str]) -> dict[str, str]:
     if not isinstance(parsed, dict) or not parsed:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "mapping must be a non-empty JSON object of {csv_column: field}")
-    unknown = sorted({v for v in parsed.values() if v not in allowed})
+    # "Drop this column" is a legitimate target, and the only way to say it: an UNMAPPED column is
+    # kept under its own header, which is the right default and leaves no way to exclude anything.
+    unknown = sorted({v for v in parsed.values() if v not in allowed and v != SKIP_TARGET})
     if unknown:
         # Named rather than ignored: a typo'd target silently drops that column, and the operator
         # discovers it only by noticing the data is missing later.
@@ -158,7 +165,7 @@ async def importable_fields(
     RAW HEADER — so a workspace that had defined `territory` and uploaded a "Territory (2026)"
     column stored the value under that literal string, where the field it defined never saw it.
     """
-    from nexus.imports.csv_ingest import MAX_ROWS
+    from nexus.imports.csv_ingest import MAX_ROWS, SKIP_TARGET
 
     return ImportFieldsOut(
         account_fields=list(ACCOUNT_FIELDS),
@@ -168,6 +175,7 @@ async def importable_fields(
         max_rows=MAX_ROWS,
         default_limit=DEFAULT_LIMIT,
         max_upload_bytes=MAX_UPLOAD_BYTES,
+        skip_target=SKIP_TARGET,
     )
 
 

@@ -19,6 +19,30 @@ import type { ParsedCsv } from "@/lib/csv";
 import type { ImportFields, RecordImportResult } from "@/lib/types";
 import styles from "./RecordImportModal.module.css";
 
+/**
+ * Read the file the way the SERVER will read it: UTF-8, falling back to windows-1252.
+ *
+ * `File.text()` always decodes UTF-8, and Excel on Windows exports cp1252 — so a header like
+ * `Société` came back as `Soci<?>t<?>` in the preview while `_decode` in `nexus/imports/csv_ingest.py`
+ * read it correctly. The mapping is keyed BY HEADER TEXT, so the two spellings never met: the column
+ * the operator mapped to Company name was, as far as the server was concerned, not mapped at all.
+ * Every row was then skipped for having no company name and no website, and the upload reported
+ * nothing imported. Reported 2026-09-16 as "uploads in accounts are failing".
+ *
+ * U+FFFD is the tell: it is what a decoder substitutes for bytes it cannot read, and it cannot occur
+ * in a correctly-decoded UTF-8 file unless the file itself contains one.
+ */
+async function readCsvText(file: File): Promise<string> {
+  const bytes = await file.arrayBuffer();
+  const utf8 = new TextDecoder("utf-8").decode(bytes);
+  if (!utf8.includes("�")) return utf8;
+  try {
+    return new TextDecoder("windows-1252").decode(bytes);
+  } catch {
+    return utf8; // a browser without that label is still better served by the UTF-8 attempt
+  }
+}
+
 /** "1.2 MB". Sizes are shown so an operator can tell a 40-row test file from the real export. */
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -39,7 +63,13 @@ function formatBytes(bytes: number): string {
  */
 
 const PREVIEW_ROWS = 6;
+/** Not sent: it means "no target", and an unmapped column is kept under its own header. */
 const IGNORE = "__ignore__";
+/** Sent, and the server drops the column. The default is to KEEP an unmapped column, which is
+ *  right for the territory/tier/owner columns an ops CSV is built around and leaves no way to
+ *  exclude anything — an internal note, a stale owner, a field somebody should not have exported.
+ *  The server sends this sentinel back in `/imports/fields`; this is the fallback. */
+const SKIP = "__skip__";
 
 export type ImportEntity = "accounts" | "contacts";
 
@@ -198,7 +228,7 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
       setError(`${chosen.name} is not a CSV. Export the sheet as CSV and try again.`);
       return;
     }
-    const text = await chosen.text();
+    const text = await readCsvText(chosen);
     const csv = parseCsv(text, { maxRows: PREVIEW_ROWS });
     if (!csv.headers.length) {
       setError("That file has no header row, so there are no columns to map.");
@@ -227,27 +257,40 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
     return out;
   }, [parsed, overrides, allowed]);
 
+  const skipTarget = fields?.skip_target || SKIP;
+
+  /** What gets POSTed. Includes the skips: "drop this column" is an instruction, and the only way
+   *  to give it — a column left out of the mapping is KEPT as extra data. */
   const mapped = useMemo(
     () => Object.entries(mapping).filter(([, v]) => v && v !== IGNORE),
     [mapping],
   );
 
+  /** Columns going onto a field. Skipped ones are neither an identity nor a duplicate. */
+  const targeted = useMemo(
+    () => mapped.filter(([, v]) => v !== skipTarget),
+    [mapped, skipTarget],
+  );
+
+  const skippedCount = mapped.length - targeted.length;
+
   const identityMissing = useMemo(() => {
-    const chosen = new Set(mapped.map(([, v]) => v));
+    const chosen = new Set(targeted.map(([, v]) => v));
     return !REQUIRED_ONE_OF[entity].some((f) => chosen.has(f));
-  }, [mapped, entity]);
+  }, [targeted, entity]);
 
   // A field mapped twice writes one column over the other and the operator sees neither error nor
   // the data they expected.
   const duplicates = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const [, field] of mapped) counts.set(field, (counts.get(field) ?? 0) + 1);
+    for (const [, field] of targeted) counts.set(field, (counts.get(field) ?? 0) + 1);
     return [...counts.entries()].filter(([, n]) => n > 1).map(([f]) => f);
-  }, [mapped]);
+  }, [targeted]);
 
   const fieldOptions: SelectOption[] = useMemo(
     () => [
       { value: IGNORE, label: "Keep as extra data" },
+      { value: skipTarget, label: "Don't import this column" },
       ...allowed.map((f) => ({
         value: f,
         label: LABELS[f] ?? f,
@@ -261,7 +304,7 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
         group: "Your workspace's fields",
       })),
     ],
-    [allowed, customFields, entity],
+    [allowed, customFields, entity, skipTarget],
   );
 
   async function runCsvImport() {
@@ -414,7 +457,16 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
                   <p className={styles.hint}>
                     Match each column to a field. Anything left as{" "}
                     <strong>Keep as extra data</strong> is stored on the record under its own column
-                    name rather than dropped.
+                    name rather than dropped; choose{" "}
+                    <strong>Don&rsquo;t import this column</strong> to leave it out altogether.
+                    {skippedCount > 0 && (
+                      <>
+                        {" "}
+                        <strong>
+                          {skippedCount} column{skippedCount === 1 ? "" : "s"} will not be imported.
+                        </strong>
+                      </>
+                    )}
                   </p>
                   <div className={styles.mapGrid}>
                     {parsed.headers.map((header, columnIndex) => {

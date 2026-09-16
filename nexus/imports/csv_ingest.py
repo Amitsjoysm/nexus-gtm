@@ -59,12 +59,25 @@ CONTACT_TEXT_FIELDS = ("title", "seniority", "phone", "linkedin_url")
 # real `industry` column are different targets and must stay distinguishable.
 CUSTOM_PREFIX = "custom:"
 
+#: "Do not import this column at all." Unmapped columns are KEPT, under their own header, because an
+#: ops CSV's extra columns are usually why the list was built — but that rule left no way to drop
+#: one, and some columns must be dropped: a notes column with somebody's medical leave in it, an
+#: internal score, a stale owner. Mapped explicitly rather than by omission, so "I chose to drop
+#: this" and "I forgot about this" stay different statements.
+SKIP_TARGET = "__skip__"
+
 
 def split_targets(mapping: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
-    """``{csv_column: target}`` -> (column->real field, column->custom field key)."""
+    """``{csv_column: target}`` -> (column->real field, column->custom field key).
+
+    A column mapped to `SKIP_TARGET` appears in NEITHER. It still counts as mapped to the caller,
+    which is what keeps it out of the extras — that is the whole point of the target.
+    """
     real: dict[str, str] = {}
     custom: dict[str, str] = {}
     for column, target in mapping.items():
+        if target == SKIP_TARGET:
+            continue
         if target.startswith(CUSTOM_PREFIX):
             key = target[len(CUSTOM_PREFIX):].strip()
             if key:
@@ -119,8 +132,37 @@ def normalise_email(raw: str) -> str:
     return (raw or "").strip().lower()
 
 
+#: Delimiters a spreadsheet actually exports. Excel writes the LIST SEPARATOR of the machine's
+#: locale, so a German, French, Dutch, Spanish or Indian export is semicolon-separated and a
+#: "Save as: Text (tab delimited)" is tabs. Reading one of those as comma-separated yields exactly
+#: one column whose header is the whole line, every row is then skipped for having no company name
+#: and no website, and the upload reports "0 created" with nothing wrong on screen.
+_DELIMITERS = (",", ";", "\t", "|")
+
+
+def sniff_delimiter(text: str) -> str:
+    """The delimiter of the HEADER line: whichever candidate splits it into the most fields.
+
+    The header rather than the file, because it is the one line guaranteed to be present, to be one
+    record, and to carry no free text. Ties go to the comma by ordering, so an ordinary CSV is never
+    re-interpreted. Quoted sections are ignored, or a header like `"Revenue, USD",Owner` counts the
+    comma inside the quotes.
+    """
+    header = text.split("\n", 1)[0]
+    outside = []
+    in_quotes = False
+    for char in header:
+        if char == '"':
+            in_quotes = not in_quotes
+        elif not in_quotes:
+            outside.append(char)
+    line = "".join(outside)
+    return max(_DELIMITERS, key=lambda d: (line.count(d), -_DELIMITERS.index(d)))
+
+
 def _rows(content: bytes) -> list[dict]:
-    reader = _csv.DictReader(io.StringIO(_decode(content)))
+    text = _decode(content)
+    reader = _csv.DictReader(io.StringIO(text), delimiter=sniff_delimiter(text))
     return [row for _, row in zip(range(MAX_ROWS), reader)]
 
 
@@ -146,14 +188,38 @@ def _custom_values(row: dict, custom: dict[str, str], extras: dict) -> dict:
     return merged
 
 
-def _to_int(raw: str) -> int | None:
+#: Postgres `integer` and `bigint`. SQLite has neither limit, so a value that overflows the column
+#: passes every test here and takes down the whole upload in production with a
+#: `NumericValueOutOfRange` - one mis-mapped column (revenue typed into Employee count) against one
+#: row. Out of range is treated as unparseable, which is what it is.
+_INT_MAX = {"employee_count": 2**31 - 1, "annual_revenue": 2**63 - 1}
+
+
+def _to_int(raw: str, limit: int = 2**63 - 1) -> int | None:
     """Parse '1,200', '$25,000,000' and '25000000'. Returns None for anything else.
 
     Ops spreadsheets format numbers for humans. Refusing a value with a comma in it would drop the
     revenue column of most real files.
     """
     cleaned = (raw or "").replace(",", "").replace("$", "").replace(" ", "").strip()
-    return int(cleaned) if cleaned.isdigit() else None
+    if not cleaned.isdigit():
+        return None
+    value = int(cleaned)
+    return value if value <= limit else None
+
+
+def _row_reason(exc: Exception) -> str:
+    """The database's own sentence about this row, trimmed to one line.
+
+    "value too long for type character varying(120)" tells an operator which column to fix;
+    "the import failed" tells them to file a ticket. SQLAlchemy wraps the driver error and appends
+    the whole statement and its parameters, which would put the row's data - including whatever the
+    workspace considers private - into a response and a log line, so only the first line is kept.
+    """
+    original = getattr(exc, "orig", None) or exc
+    text = str(original).strip().splitlines()
+    reason = text[0].strip() if text else exc.__class__.__name__
+    return reason[:200] or exc.__class__.__name__
 
 
 def _apply_account(account: Account, fields: dict, extras: dict) -> None:
@@ -173,7 +239,7 @@ def _apply_account(account: Account, fields: dict, extras: dict) -> None:
         account.domain = domain
 
     for field in ACCOUNT_INT_FIELDS:
-        parsed = _to_int(fields.get(field, ""))
+        parsed = _to_int(fields.get(field, ""), _INT_MAX.get(field, 2**63 - 1))
         if parsed is not None:
             setattr(account, field, parsed)
 
@@ -221,15 +287,28 @@ async def import_accounts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
             existing = await ts.first(Account, Account.name == name)
 
         extras = _custom_values(row, custom, _extras(row, mapped_columns))
-        if existing is None:
-            account = Account(tenant_id=ts.tenant_id, name=name or domain, source="csv_import")
-            _apply_account(account, fields, extras)
-            ts.add(account)
-            created += 1
-        else:
-            _apply_account(existing, fields, extras)
-            updated += 1
-        await ts.flush()
+        try:
+            # ONE ROW, ONE SAVEPOINT. The write used to be flushed straight onto the request's
+            # transaction, so a single row the database refused - a value longer than the column,
+            # a domain already held by another account - raised out of the loop, rolled the whole
+            # upload back and returned a 500. The operator saw "the import failed" for a file that
+            # was 4,998 good rows and two bad ones, with nothing naming either.
+            async with ts.session.begin_nested():
+                if existing is None:
+                    account = Account(
+                        tenant_id=ts.tenant_id, name=name or domain, source="csv_import"
+                    )
+                    _apply_account(account, fields, extras)
+                    ts.add(account)
+                    await ts.flush()
+                    created += 1
+                else:
+                    _apply_account(existing, fields, extras)
+                    await ts.flush()
+                    updated += 1
+        except Exception as exc:  # noqa: BLE001 - the database's reason is what the operator needs
+            skipped += 1
+            errors.append(f"row {index}: {_row_reason(exc)}")
 
     return {
         "created": created, "updated": updated, "skipped": skipped,
@@ -265,48 +344,55 @@ async def import_contacts_csv(ts, *, content: bytes, mapping: dict[str, str]) ->
         domain = normalise_domain(fields.get("account_domain", "")) or normalise_domain(
             email.split("@")[-1]
         )
-        account = await ts.first(Account, Account.domain == domain) if domain else None
-        if account is None:
-            account = Account(
-                tenant_id=ts.tenant_id,
-                name=fields.get("account_name") or domain or (full_name or email),
-                source="csv_import",
-            )
-            if domain:
-                account.domain = domain
-            ts.add(account)
-            await ts.flush()
+        try:
+            # One row, one savepoint — see the account loop above.
+            async with ts.session.begin_nested():
+                account = await ts.first(Account, Account.domain == domain) if domain else None
+                if account is None:
+                    account = Account(
+                        tenant_id=ts.tenant_id,
+                        name=fields.get("account_name") or domain or (full_name or email),
+                        source="csv_import",
+                    )
+                    if domain:
+                        account.domain = domain
+                    ts.add(account)
+                    await ts.flush()
 
-        existing = await ts.first(Contact, Contact.email == email)
-        if existing is None:
-            contact = Contact(
-                tenant_id=ts.tenant_id,
-                account_id=account.id,
-                full_name=full_name or email.split("@")[0],
-                email=email,
-            )
-            for field in CONTACT_TEXT_FIELDS:
-                value = (fields.get(field) or "").strip()
-                if value:
-                    setattr(contact, field, value)
-            extras = _custom_values(row, custom, _extras(row, mapped_columns))
-            if extras:
-                contact.custom_fields = extras
-            ts.add(contact)
-            created += 1
-        else:
-            # Blank cells never overwrite, for the same reason they do not on accounts.
-            if full_name:
-                existing.full_name = full_name
-            for field in CONTACT_TEXT_FIELDS:
-                value = (fields.get(field) or "").strip()
-                if value:
-                    setattr(existing, field, value)
-            extras = _custom_values(row, custom, _extras(row, mapped_columns))
-            if extras:
-                existing.custom_fields = {**(existing.custom_fields or {}), **extras}
-            updated += 1
-        await ts.flush()
+                existing = await ts.first(Contact, Contact.email == email)
+                if existing is None:
+                    contact = Contact(
+                        tenant_id=ts.tenant_id,
+                        account_id=account.id,
+                        full_name=full_name or email.split("@")[0],
+                        email=email,
+                    )
+                    for field in CONTACT_TEXT_FIELDS:
+                        value = (fields.get(field) or "").strip()
+                        if value:
+                            setattr(contact, field, value)
+                    extras = _custom_values(row, custom, _extras(row, mapped_columns))
+                    if extras:
+                        contact.custom_fields = extras
+                    ts.add(contact)
+                    await ts.flush()
+                    created += 1
+                else:
+                    # Blank cells never overwrite, for the same reason they do not on accounts.
+                    if full_name:
+                        existing.full_name = full_name
+                    for field in CONTACT_TEXT_FIELDS:
+                        value = (fields.get(field) or "").strip()
+                        if value:
+                            setattr(existing, field, value)
+                    extras = _custom_values(row, custom, _extras(row, mapped_columns))
+                    if extras:
+                        existing.custom_fields = {**(existing.custom_fields or {}), **extras}
+                    await ts.flush()
+                    updated += 1
+        except Exception as exc:  # noqa: BLE001 - the database's reason is what the operator needs
+            skipped += 1
+            errors.append(f"row {index}: {_row_reason(exc)}")
 
     return {
         "created": created, "updated": updated, "skipped": skipped,

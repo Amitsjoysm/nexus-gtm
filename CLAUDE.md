@@ -1676,6 +1676,44 @@ anything**, storing `verified_at` or the server's own refusal in `last_error`. T
 SENDS an email, which needs a recipient and an inbox; "can this mailbox sign in?" is the question the
 rep is actually asking.
 
+## Importing a list (`nexus/imports/csv_ingest.py`)
+
+Creates accounts and contacts from a CSV, mapped column by column. Identity is the normalised
+domain (accounts) and the normalised email (contacts), for the reason the shared stores give.
+
+**A file the operator can open is not a file the parser could read**, and every failure in this
+subsystem has looked identical from the screen: *nothing imported, no reason*. Three were reported
+together on 2026-09-16 as "uploads in accounts are failing":
+
+- **The delimiter is the locale's list separator, not a comma.** Excel writes `;` on a German,
+  French, Dutch, Spanish or Indian machine, and tabs for "Text (tab delimited)". Read as commas that
+  is ONE column whose header is the whole line, so every row is skipped for having no name and no
+  website. `sniff_delimiter` reads the HEADER line — the one line guaranteed present, single-record
+  and free of prose — counting only separators outside quotes, with ties going to the comma so an
+  ordinary CSV is never re-interpreted.
+- **The preview must decode the file the way the server does.** `File.text()` is always UTF-8 and
+  Excel on Windows writes cp1252, so a `Société` header reached the mapping as `Soci<?>t<?>` while
+  the server read it correctly. The mapping is keyed BY HEADER TEXT, so the column the operator
+  mapped to Company name was, server-side, not mapped at all. `readCsvText` mirrors `_decode`'s
+  ladder, using U+FFFD as the tell.
+- **One row the database refuses used to lose the whole file.** The write was flushed straight onto
+  the request's transaction, so a value longer than its column or a domain already held by another
+  account raised out of the loop, rolled everything back and returned a 500 for a file that was
+  4,998 good rows and two bad ones. Each row now has its own SAVEPOINT and a bad one is reported with
+  the database's own first line (only the first: SQLAlchemy appends the statement and its
+  parameters, which would put the row's data into a response and a log).
+
+`employee_count` is a Postgres `integer` and SQLite has no such limit, so a revenue figure typed into
+that column passes every test here and raises `NumericValueOutOfRange` in production. Out-of-range is
+treated as unparseable, which is what it is.
+
+**`SKIP_TARGET` ("don't import this column") exists because the default is to KEEP.** An unmapped
+column is stored under its own header — right for the territory/tier/owner columns an ops list is
+built around, and it left no way to exclude anything: an internal note, a stale owner, a field
+somebody should not have exported. It is mapped explicitly rather than by omission, so "I chose to
+drop this" and "I forgot about this" stay different statements, and the server sends the sentinel
+back in `/imports/fields` so the picker's spelling and the server's cannot drift.
+
 ## Feed text (`nexus/ingestion/sources.py`)
 
 **RSS is double-encoded far more often than not**: the publisher HTML-escapes the content and the

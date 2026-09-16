@@ -463,3 +463,175 @@ def test_the_picker_offers_the_workspaces_own_fields():
     assert "account_custom_fields" in pathlib.Path("frontend/src/lib/types.ts").read_text(
         encoding="utf-8"
     )
+
+
+# ---- excluding a column ------------------------------------------------------------------------
+
+async def test_a_column_can_be_dropped_instead_of_kept(fresh_db):
+    """Reported 2026-09-16: "no option to exclude a field".
+
+    An UNMAPPED column is kept under its own header, which is right for the territory/tier/owner
+    columns an ops list is built around — and left no way to say "not this one". Some columns must
+    not land: an internal note, a stale owner, a field somebody should not have exported.
+    """
+    from nexus.core.db import get_sessionmaker
+    from nexus.imports.csv_ingest import SKIP_TARGET, import_accounts_csv
+
+    async with get_sessionmaker()() as s:
+        ts = await _ts(s, "skipcol")
+        csv = b"company,website,Owner Notes,Territory\nAcme Corp,acme.com,on medical leave,EMEA\n"
+        result = await import_accounts_csv(
+            ts, content=csv,
+            mapping={"company": "name", "website": "domain", "Owner Notes": SKIP_TARGET},
+        )
+        assert result["created"] == 1
+        account = (await s.execute(select(Account))).scalars().one()
+        extras = account.custom_fields or {}
+        assert "Owner Notes" not in extras, "an excluded column was imported anyway"
+        # Still the default for everything else: only what was named is dropped.
+        assert extras.get("Territory") == "EMEA"
+
+
+async def test_the_skip_target_is_accepted_by_the_endpoint(fresh_db, client):
+    """It is not in `ACCOUNT_FIELDS`, and the router rejects unknown targets by name — correctly,
+    since a typo'd target silently drops a column. The one target that MEANS that has to be let
+    through explicitly."""
+    from tests.conftest import auth, signup
+
+    token = await signup(client, slug="skipapi", email="ops@skipapi.com", company="Skip API")
+    r = await client.post(
+        "/api/imports/accounts/csv", headers=auth(token),
+        data={"mapping": '{"company":"name","Notes":"__skip__"}'},
+        files={"file": ("a.csv", b"company,Notes\nAcme,internal\n", "text/csv")},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["created"] == 1
+
+    fields = await client.get("/api/imports/fields", headers=auth(token))
+    assert fields.json()["skip_target"] == "__skip__", "the picker cannot learn the sentinel"
+
+
+# ---- files a spreadsheet actually exports -------------------------------------------------------
+
+async def test_a_semicolon_export_is_read_as_columns(fresh_db):
+    """Excel writes the list separator of the machine's LOCALE. A German, French, Dutch, Spanish or
+    Indian export is semicolon-separated; read as commas it is one column whose header is the whole
+    line, every row is skipped for having no name and no website, and the upload reports nothing
+    imported with nothing on screen saying why. Reported 2026-09-16 as "uploads are failing"."""
+    from nexus.core.db import get_sessionmaker
+    from nexus.imports.csv_ingest import import_accounts_csv
+
+    async with get_sessionmaker()() as s:
+        ts = await _ts(s, "semi")
+        csv = "company;website;country\nNordic AB;nordic.se;Sweden\n".encode()
+        result = await import_accounts_csv(
+            ts, content=csv,
+            mapping={"company": "name", "website": "domain", "country": "country"},
+        )
+        assert result["created"] == 1, result
+        account = (await s.execute(select(Account))).scalars().one()
+        assert account.domain == "nordic.se"
+        assert account.country == "Sweden"
+
+
+async def test_a_tab_export_is_read_as_columns(fresh_db):
+    """"Save as: Text (tab delimited)" is the other half of the same story."""
+    from nexus.core.db import get_sessionmaker
+    from nexus.imports.csv_ingest import import_accounts_csv
+
+    async with get_sessionmaker()() as s:
+        ts = await _ts(s, "tabs")
+        result = await import_accounts_csv(
+            ts, content=b"company\twebsite\nAcme Corp\tacme.com\n",
+            mapping={"company": "name", "website": "domain"},
+        )
+        assert result["created"] == 1, result
+
+
+def test_an_ordinary_csv_is_never_re_interpreted():
+    """A comma file whose headers also contain semicolons must stay a comma file: ties and near-ties
+    go to the comma, and a quoted header carrying the other separator does not count."""
+    from nexus.imports.csv_ingest import sniff_delimiter
+
+    assert sniff_delimiter('company,website,notes\nAcme,acme.com,"a; b; c"\n') == ","
+    assert sniff_delimiter('"Revenue, USD";Owner\n') == ";"
+    assert sniff_delimiter("company\nAcme\n") == ","
+
+
+async def test_a_number_too_large_for_the_column_does_not_take_down_the_upload(fresh_db):
+    """`employee_count` is a Postgres `integer`. SQLite has no such limit, so a revenue figure typed
+    into that column passes every test here and raises NumericValueOutOfRange in production, which
+    rolled back the whole file. Out of range is treated as unparseable, which is what it is."""
+    from nexus.core.db import get_sessionmaker
+    from nexus.imports.csv_ingest import import_accounts_csv
+
+    async with get_sessionmaker()() as s:
+        ts = await _ts(s, "bignum")
+        result = await import_accounts_csv(
+            ts, content=b"company,website,employees\nAcme Corp,acme.com,25000000000\n",
+            mapping={"company": "name", "website": "domain", "employees": "employee_count"},
+        )
+        assert result["created"] == 1, result
+        account = (await s.execute(select(Account))).scalars().one()
+        assert account.employee_count is None
+
+
+async def test_one_bad_row_is_reported_and_the_rest_still_import(fresh_db, monkeypatch):
+    """The write used to be flushed straight onto the request's transaction, so a single row the
+    DATABASE refused raised out of the loop and the whole upload 500ed with nothing imported and
+    nothing naming the row. Each row now has its own savepoint."""
+    from nexus.core.db import get_sessionmaker
+    from nexus.imports import csv_ingest
+
+    real_apply = csv_ingest._apply_account
+
+    def explode_on_beta(account, fields, extras):
+        real_apply(account, fields, extras)
+        if account.name == "Beta Inc":
+            raise RuntimeError("value too long for type character varying(120)")
+
+    monkeypatch.setattr(csv_ingest, "_apply_account", explode_on_beta)
+
+    async with get_sessionmaker()() as s:
+        ts = await _ts(s, "badrow")
+        csv = b"company,website\nAcme Corp,acme.com\nBeta Inc,beta.io\nGamma Ltd,gamma.dev\n"
+        result = await csv_ingest.import_accounts_csv(
+            ts, content=csv, mapping={"company": "name", "website": "domain"},
+        )
+
+    assert result["created"] == 2, result
+    assert result["skipped"] == 1
+    assert any("row 3" in e and "character varying" in e for e in result["errors"]), result["errors"]
+
+
+def test_the_picker_offers_dropping_a_column():
+    """The screen half of the exclude option, and the preview half of the delimiter: a semicolon
+    file parsed as commas shows ONE column, so the mapping the operator builds addresses columns
+    the server never sees even though the server now reads the file correctly."""
+    import pathlib
+
+    from nexus.imports.csv_ingest import SKIP_TARGET
+
+    src = pathlib.Path("frontend/src/components/imports/RecordImportModal.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "Don&rsquo;t import this column" in src or "Don't import this column" in src
+    assert SKIP_TARGET in src, "the picker cannot name the skip target"
+    assert "skip_target" in src, "the sentinel is hardcoded rather than taken from the server"
+
+    csv_lib = pathlib.Path("frontend/src/lib/csv.ts").read_text(encoding="utf-8")
+    assert "sniffDelimiter" in csv_lib, "the preview still assumes commas"
+
+
+def test_the_preview_decodes_a_windows_export_the_way_the_server_does():
+    """`File.text()` always decodes UTF-8 and Excel on Windows writes cp1252, so a header like
+    `Société` reached the mapping as `Soci<?>t<?>` while the server read it correctly. The mapping is
+    keyed BY HEADER TEXT, so the column the operator mapped to Company name was, server-side, not
+    mapped at all: every row skipped, nothing imported, no reason on screen."""
+    import pathlib
+
+    src = pathlib.Path("frontend/src/components/imports/RecordImportModal.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "windows-1252" in src, "the preview still assumes UTF-8"
+    assert "await chosen.text()" not in src, "the raw UTF-8 read is back"
