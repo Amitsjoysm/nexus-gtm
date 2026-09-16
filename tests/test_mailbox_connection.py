@@ -163,6 +163,56 @@ async def test_verifying_a_mailbox_with_no_password_does_not_call_the_server(cli
     assert "password" in r.json()["detail"].lower()
 
 
+async def test_a_real_send_reaches_smtp_with_the_mailboxs_own_credentials(monkeypatch):
+    """Reported 2026-09-16: "send test email successful but send to a contact says mailbox not
+    configured". Both paths end at `send_email`, and they handed it different shapes.
+
+    `resolve_smtp` reads `provider`, `host`, `username` and `password` off the TOP LEVEL of what it
+    is given. The test endpoint passes the mailbox dict, where they are. The send path passed
+    `{"accounts": [mailbox]}`, where every one of them is a level down — so the resolved host was
+    empty and `send_email` returned "smtp not configured" before touching the network. Nothing
+    caught it because every other test of this path replaces `send_email` itself.
+
+    This test therefore stops at the LAST function before the socket, and asserts on the config
+    that would have been dialled.
+    """
+    from nexus.integrations import email_sender
+    from nexus.models.account import Account, Contact
+    from nexus.models.identity import Tenant
+    from nexus.outreach import send as send_mod
+    from tests.conftest import make_tenant, tenant_session
+
+    dialled: dict = {}
+
+    def fake_send_blocking(cfg, to, subject, body, html=None):
+        dialled.update(cfg)
+
+    monkeypatch.setattr(email_sender, "_send_blocking", fake_send_blocking)
+
+    tid = await make_tenant(slug="mb4", name="MB Four")
+    async with tenant_session(tid) as ts:
+        tenant = await ts.session.get(Tenant, tid)
+        tenant.email_settings = {"accounts": [_mailbox(owner_user_id="u1")]}
+        await ts.flush()
+        account = Account(tenant_id=tid, name="Marketjoy")
+        ts.add(account)
+        await ts.flush()
+        contact = Contact(tenant_id=tid, account_id=account.id, full_name="Curtis Bent",
+                          email="curtis@marketjoy.com", email_status="valid")
+        ts.add(contact)
+        await ts.flush()
+
+        outcome = await send_mod.send_to_contact(
+            ts, contact=contact, subject="Quick question", body="Hi Curtis,\n\nShort body.",
+            user_id="u1",
+        )
+
+    assert outcome.ok, outcome.detail
+    assert dialled.get("username") == "rep@acme.com"
+    assert dialled.get("password") == "app-password"
+    assert dialled.get("host"), "no SMTP host was resolved, so nothing would have been dialled"
+
+
 def test_the_settings_screen_offers_the_test_and_the_claim():
     """There is no frontend test runner here, so this reads the source, like the nav/route guards."""
     import pathlib

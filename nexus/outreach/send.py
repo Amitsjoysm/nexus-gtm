@@ -159,9 +159,14 @@ async def send_to_contact(
 
     signed = append_signature(body, resolve_signature(tenant.email_settings, mailbox))
 
-    result = await send_email(
-        {"accounts": [mailbox]}, to=to, subject=(subject or "").strip(), body=signed
-    )
+    # THE MAILBOX ITSELF, not `{"accounts": [mailbox]}`.
+    #
+    # `resolve_smtp` reads `provider`, `host`, `username` and `password` off the TOP LEVEL of what
+    # it is handed. Wrapped in an accounts list, every one of them is a level down, so the resolved
+    # host was empty and `send_email` answered "smtp not configured" before opening a socket —
+    # while the Send-test button, which passes the mailbox dict, worked. Reported 2026-09-16 as
+    # "send test successful, sending to a contact says mailbox not configured".
+    result = await send_email(mailbox, to=to, subject=(subject or "").strip(), body=signed)
     ok = bool(getattr(result, "ok", False))
     detail = str(getattr(result, "detail", "") or ("sent" if ok else "send failed"))
     if ok:

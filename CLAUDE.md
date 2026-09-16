@@ -1625,6 +1625,17 @@ adds HTML only when a caller passes one, so markup would reach the buyer as lite
 samples and both signatures live in `Tenant.email_settings` beside the mailboxes — workspace
 preference, not schema, so no migration and nothing new for `apply_rls.py` to enrol.
 
+**`send_email` takes A MAILBOX, not a settings blob wrapping one.** `resolve_smtp` reads
+`provider`, `host`, `username` and `password` off the TOP LEVEL of whatever it is given. The send
+path passed `{"accounts": [mailbox]}`, where all four are a level down, so the resolved host was
+empty and every real send answered "smtp not configured" before opening a socket — while the
+Send-test button, which passes the mailbox dict, worked. Reported 2026-09-16 as "send test
+successful, sending to a contact says mailbox not configured"; the shape mismatch is invisible
+because `resolve_smtp` returns defaults rather than raising. Every other test of that path replaced
+`send_email` itself, so nothing saw it: `test_a_real_send_reaches_smtp_with_the_mailboxs_own_credentials`
+now stops at `_send_blocking`, the last function before the socket, and asserts on the config that
+would have been dialled.
+
 **"SMTP not connected" was four different states wearing one sentence.** `resolve_rep_mailbox` needs
 a mailbox that is YOURS, enabled and credentialled; the old message said "you have not connected a
 sending mailbox" for all of them, which is false for three and sends the rep to add a second mailbox
