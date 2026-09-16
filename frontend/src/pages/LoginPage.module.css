@@ -1,8 +1,12 @@
 .page {
-  /* `min-height: 100vh` makes the page taller than the screen wherever the toolbar retracts,
-     which is blank space under the sign-in form on the very first screen anyone sees. */
-  min-height: 100vh;
-  min-height: 100dvh;
+  /* Exactly the screen, never taller. `min-height: 100vh` made the page taller than the screen
+     wherever the toolbar retracts, which is blank space under the form on the very first screen
+     anyone sees. And a page that GROWS moves everything on it: the sign-up form is ~150px taller
+     than the log-in form, so flipping the Log in | Sign up switch on a 640px-tall laptop made the
+     document scroll, a scrollbar appear and push the layout sideways, and the left panel stretch and
+     re-centre its headline. Only the form column scrolls now (below). */
+  height: 100vh;
+  height: 100dvh;
   display: grid;
   grid-template-columns: 1.1fr 1fr;
 }
@@ -112,11 +116,23 @@
 
 /* ---- right form panel ---- */
 .formCol {
+  /* Anchored to the TOP, not centred. Centred, the switch sat 76px lower on Log in than on Sign up
+     (measured at 1366x768: 122px vs 46px) because the card re-centred around a taller form, so the
+     control you had just clicked moved out from under the pointer. */
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: var(--space-6);
+  /* 12% of the height: ~77px on a 640px laptop, capped at 128px so a 1080p screen does not pin
+     the form to its top edge. */
+  padding: clamp(var(--space-6), 12vh, calc(var(--space-16) * 2)) var(--space-6) var(--space-6);
   background: var(--bg);
+  /* The one scroller on the page. The gutter is reserved whether or not the form overflows, so a
+     scrollbar appearing when the sign-up form gets long cannot shift the form sideways. A scroll
+     container must also be a containing block (tests/test_scroll_containers.py). */
+  position: relative;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 .formCard {
   width: 100%;

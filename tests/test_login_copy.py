@@ -38,3 +38,23 @@ def test_a_tab_inside_a_form_does_not_submit_it():
     primitive and will end up inside one."""
     src = pathlib.Path("frontend/src/components/ui/Tabs.tsx").read_text(encoding="utf-8")
     assert 'type="button"' in src
+
+
+def test_flipping_the_switch_does_not_move_the_page():
+    """Reported 2026-09-16: "when we click on sign up or login the whole screen moves".
+
+    Measured at 1366x768 the switch sat at 122px on Log in and 46px on Sign up, because the form card
+    was vertically centred around a form ~150px taller. At 640px tall it also made the document
+    scroll: a 10px scrollbar shoved the layout sideways and the left panel's headline dropped 41px.
+    The page is now exactly the viewport, the form is anchored to the top, and only the form column
+    scrolls, with its gutter always reserved."""
+    import re
+
+    css = pathlib.Path("frontend/src/pages/LoginPage.module.css").read_text(encoding="utf-8")
+    # Declarations only: the comments explain the old `min-height` and must not count as using it.
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    page = css.split(".page {", 1)[1].split("}", 1)[0]
+    form_col = css.split(".formCol {", 1)[1].split("}", 1)[0]
+    assert "height: 100dvh" in page and "min-height" not in page, "the page can grow again"
+    assert "align-items: flex-start" in form_col, "the form is re-centred on every flip"
+    assert "overflow-y: auto" in form_col and "scrollbar-gutter: stable" in form_col
