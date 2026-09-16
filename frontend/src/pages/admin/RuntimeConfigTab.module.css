@@ -47,6 +47,9 @@
   list-style: none;
   overflow-x: auto;
   scrollbar-width: thin;
+  /* A scroll container must be a containing block, or an absolutely-positioned descendant (every
+     `.sr-only` label) escapes it and stretches the page. See tests/test_scroll_containers.py. */
+  position: relative;
 }
 
 @media (min-width: 1024px) {
