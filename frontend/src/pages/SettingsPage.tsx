@@ -14,6 +14,7 @@ import {
   Select,
   Skeleton,
   Spinner,
+  Textarea,
   useToast,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
@@ -26,6 +27,7 @@ import type {
   AutomationSettings,
   CRMSyncStatus,
   EmailAccount,
+  EmailStyle,
   SignalPreference,
 } from "@/lib/types";
 import styles from "./SettingsPage.module.css";
@@ -146,6 +148,8 @@ export function SettingsPage() {
         <SignalCollectionCard />
 
         <MailboxesCard />
+
+        <EmailStyleCard />
       </div>
     </div>
   );
@@ -158,7 +162,126 @@ const EMPTY_MAILBOX = {
   password: "",
   from_name: "",
   enabled: true,
+  signature: "",
 };
+
+/**
+ * How drafted emails read, and how they sign off when a rep has not written their own signature.
+ *
+ * The sample emails are the strongest control here and the most dangerous input the draft prompt
+ * takes: a real SDR email names a real customer and a real number. The agent is told to copy their
+ * structure and voice and never their facts (`nexus/agents/email_style.py`), and the hint says so,
+ * because somebody pasting an email deserves to know what will be reused from it.
+ */
+function EmailStyleCard() {
+  const api = useApiClient();
+  const toast = useToast();
+  const state = useApi<EmailStyle>((signal) => api.emailStyle(signal), []);
+  const [draft, setDraft] = useState<EmailStyle | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const value = draft ?? state.data ?? null;
+
+  function set<K extends keyof EmailStyle>(key: K, v: EmailStyle[K]) {
+    if (!value) return;
+    setDraft({ ...value, [key]: v });
+  }
+
+  async function save() {
+    if (!value) return;
+    setSaving(true);
+    try {
+      const saved = await api.setEmailStyle({
+        ...value,
+        samples: value.samples.map((s) => s.trim()).filter(Boolean),
+      });
+      setDraft(null);
+      state.refetch();
+      toast.success("Email style saved", `Drafts follow it from the next one.${
+        saved.samples.length ? ` ${saved.samples.length} sample(s) in use.` : ""
+      }`);
+    } catch (err) {
+      toast.error("Couldn't save", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card padding="lg">
+      <CardHeader
+        title="Email style & signature"
+        subtitle="How drafts read, and what signs them off when a rep has not set their own signature."
+      />
+      <DataState
+        state={state}
+        errorTitle="Couldn't load the email style"
+        skeleton={<Skeleton width="100%" height={200} />}
+      >
+        {() =>
+          value && (
+            <div className={styles.styleForm}>
+              <Field
+                label="Workspace signature"
+                hint="Used when a mailbox has no signature of its own. Plain text."
+              >
+                <Textarea
+                  rows={3}
+                  value={value.default_signature}
+                  onChange={(e) => set("default_signature", e.target.value)}
+                  placeholder={"The Acme team\nacme.com"}
+                />
+              </Field>
+              <div className={styles.styleRow}>
+                <Field label="Tone" hint="For example: direct and practical, no hype.">
+                  <Input
+                    value={value.tone}
+                    onChange={(e) => set("tone", e.target.value)}
+                    placeholder="Direct, plain, peer to peer"
+                  />
+                </Field>
+                <Field label="Target length (words)" hint="Between 40 and 200. Blank uses the default 90.">
+                  <Input
+                    type="number"
+                    min={40}
+                    max={200}
+                    value={value.length_words ?? ""}
+                    onChange={(e) =>
+                      set("length_words", e.target.value ? Number(e.target.value) : null)
+                    }
+                  />
+                </Field>
+              </div>
+              <Field
+                label="Example emails"
+                hint="Up to 3. The agent copies their structure and voice only — never their customer names, metrics or claims."
+              >
+                <Textarea
+                  rows={8}
+                  value={value.samples.join("\n---\n")}
+                  onChange={(e) =>
+                    set("samples", e.target.value.split(/\n-{3,}\n/).map((s) => s.trim()))
+                  }
+                  placeholder={"Hi Ann,\n\nSaw you opened a second pod...\n\nBest,\nJane\n---\n(second example below the --- line)"}
+                />
+              </Field>
+              <div className={styles.styleActions}>
+                <Button loading={saving} disabled={saving || !draft} onClick={() => void save()}>
+                  Save email style
+                </Button>
+                {draft && (
+                  <Button variant="ghost" disabled={saving} onClick={() => setDraft(null)}>
+                    Discard changes
+                  </Button>
+                )}
+              </div>
+            </div>
+          )
+        }
+      </DataState>
+    </Card>
+  );
+}
 
 function MailboxesCard() {
   const api = useApiClient();
@@ -192,6 +315,36 @@ function MailboxesCard() {
       }
     } catch (err) {
       toast.error("Test failed", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  /** Signs in to the SMTP server. Sends nothing, so it needs no recipient and no inbox. */
+  async function verifyMailbox(a: EmailAccount) {
+    setBusyId(a.id);
+    try {
+      const res = await api.verifyEmailAccount(a.id);
+      accounts.refetch();
+      if (res.ok) toast.success("Mailbox connected", res.detail);
+      // The server's own words: "535 Username and Password not accepted" is actionable.
+      else toast.error("Couldn't sign in", res.detail);
+    } catch (err) {
+      toast.error("Test failed", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  /** Take an unowned mailbox. Sending requires your own, because replies come back to the sender. */
+  async function claimMailbox(a: EmailAccount) {
+    setBusyId(a.id);
+    try {
+      await api.claimEmailAccount(a.id);
+      accounts.refetch();
+      toast.success("Mailbox is yours", "You can now send approved outreach from it.");
+    } catch (err) {
+      toast.error("Couldn't claim it", err instanceof ApiError ? err.detail : "Try again.");
     } finally {
       setBusyId(null);
     }
@@ -255,12 +408,21 @@ function MailboxesCard() {
                   <div className={styles.mbBadges}>
                     {a.default && <Badge tone="accent" dot>Default</Badge>}
                     {a.verified_at ? (
-                      <Badge tone="success" dot>Verified</Badge>
+                      <Badge tone="success" dot>Connected</Badge>
+                    ) : a.last_error ? (
+                      <Badge tone="danger" dot>Sign-in failed</Badge>
                     ) : (
-                      <Badge tone="warning" dot>Unverified</Badge>
+                      <Badge tone="warning" dot>Not tested</Badge>
                     )}
                     {!a.enabled && <Badge tone="neutral">Off</Badge>}
+                    {/* "Nobody owns this" and "a colleague owns this" need different fixes: the
+                        first is one click, the second means adding your own. */}
+                    {a.unassigned && <Badge tone="warning">Unassigned</Badge>}
+                    {!a.unassigned && !a.mine && <Badge tone="neutral">A colleague's</Badge>}
                   </div>
+                  {a.last_error && (
+                    <span className={styles.mbError} role="status">{a.last_error}</span>
+                  )}
                 </div>
                 <div className={styles.mbActions}>
                   {!a.default && (
@@ -275,12 +437,30 @@ function MailboxesCard() {
                   )}
                   <Button
                     size="sm"
+                    variant="secondary"
+                    loading={busyId === a.id}
+                    onClick={() => verifyMailbox(a)}
+                  >
+                    Test connection
+                  </Button>
+                  <Button
+                    size="sm"
                     variant="ghost"
                     loading={busyId === a.id}
                     onClick={() => test(a)}
                   >
                     Send test
                   </Button>
+                  {a.unassigned && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={busyId === a.id}
+                      onClick={() => claimMailbox(a)}
+                    >
+                      Claim
+                    </Button>
+                  )}
                   <Button size="sm" variant="ghost" onClick={() => setEditing(a)}>
                     Edit
                   </Button>
@@ -334,6 +514,7 @@ function MailboxModal({
           password: "",
           from_name: account.from_name,
           enabled: account.enabled,
+          signature: account.signature ?? "",
         }
       : EMPTY_MAILBOX,
   );
@@ -428,6 +609,17 @@ function MailboxModal({
             onChange={(e) => set("password", e.target.value)}
             placeholder={account?.has_password ? "•••••••• (leave blank to keep)" : "App password"}
             autoComplete="new-password"
+          />
+        </Field>
+        <Field
+          label="Signature"
+          hint="Added under every email sent from this mailbox. Plain text — name, title, company, phone."
+        >
+          <Textarea
+            rows={4}
+            value={form.signature ?? ""}
+            onChange={(e) => set("signature", e.target.value)}
+            placeholder={"Jane Roe\nSDR, Acme\n+1 415 555 2671"}
           />
         </Field>
         <div className={styles.control}>

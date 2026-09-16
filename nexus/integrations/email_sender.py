@@ -174,6 +174,49 @@ async def send_email(
         return SendResult(False, f"smtp error: {exc}")
 
 
+def _verify_blocking(cfg: dict) -> tuple[bool, str]:
+    """Open the SMTP session and log in. Sends nothing.
+
+    "Can this mailbox send?" and "did this message arrive?" are different questions, and only the
+    first can be answered without involving somebody's inbox. Returns the server's own words on
+    failure: "535 authentication failed" and "connection refused" send an operator to different
+    places, and a generic "not connected" sends them nowhere.
+    """
+    try:
+        if cfg["port"] == 465:  # implicit TLS
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context, timeout=20) as srv:
+                srv.login(cfg["username"], cfg["password"])
+        else:
+            with smtplib.SMTP(cfg["host"], cfg["port"], timeout=20) as srv:
+                srv.ehlo()
+                if cfg["use_tls"]:
+                    srv.starttls(context=ssl.create_default_context())
+                    srv.ehlo()
+                srv.login(cfg["username"], cfg["password"])
+    except smtplib.SMTPAuthenticationError as exc:
+        detail = exc.smtp_error.decode(errors="replace") if isinstance(exc.smtp_error, bytes) else str(exc)
+        return False, f"{exc.smtp_code} {detail}".strip()
+    except Exception as exc:  # noqa: BLE001 - network, DNS, TLS: the reason is what matters
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, f"Signed in to {cfg['host']} as {cfg['username']}."
+
+
+async def verify_smtp(account: dict | None) -> tuple[bool, str]:
+    """Whether this mailbox's credentials work right now. Never raises, never sends."""
+    cfg = resolve_smtp(account)
+    missing = [
+        name for name, value in (
+            ("host", cfg["host"]), ("username", cfg["username"]), ("password", cfg["password"]),
+        ) if not value
+    ]
+    if missing:
+        # Naming the field is the difference between a fix and a guess; "password" is by far the
+        # most common one, because it is the only field a rep cannot see after saving.
+        return False, f"This mailbox is missing its {', '.join(missing)}."
+    return await asyncio.to_thread(_verify_blocking, cfg)
+
+
 def has_drafts_support(settings: dict | None) -> bool:
     """True when the mailbox can save drafts via IMAP (host + credentials present)."""
     cfg = resolve_smtp(settings)

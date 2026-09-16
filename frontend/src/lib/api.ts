@@ -78,6 +78,7 @@ import type {
   EmailAccountInput,
   EmailSettings,
   EmailSettingsInput,
+  EmailStyle,
   EmailTestResult,
   Mailbox,
   WorkspaceContact,
@@ -1491,6 +1492,27 @@ export class ApiClient {
       method: "POST",
       signal,
     });
+  }
+  /** Signs in to the SMTP server without sending anything: "can this mailbox send?" answered
+   *  without involving somebody's inbox. */
+  verifyEmailAccount(id: string, signal?: AbortSignal) {
+    return this.request<EmailTestResult>(`/workspace/email/accounts/${id}/verify`, {
+      method: "POST",
+      signal,
+    });
+  }
+  emailStyle(signal?: AbortSignal) {
+    return this.request<EmailStyle>("/workspace/email/style", { signal });
+  }
+  setEmailStyle(body: EmailStyle, signal?: AbortSignal) {
+    return this.request<EmailStyle>("/workspace/email/style", { method: "PUT", body, signal });
+  }
+  /** Pull accounts FROM the connected CRM into NEXUS. The other half of a two-way sync. */
+  pullAccountsFromCrm(signal?: AbortSignal) {
+    return this.request<RecordImportResult>("/imports/accounts/crm", { method: "POST", signal });
+  }
+  pullContactsFromCrm(signal?: AbortSignal) {
+    return this.request<RecordImportResult>("/imports/contacts/crm", { method: "POST", signal });
   }
   testEmailAccount(id: string, to?: string, signal?: AbortSignal) {
     return this.request<EmailTestResult>(`/workspace/email/accounts/${id}/test`, {

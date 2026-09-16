@@ -695,6 +695,9 @@ class EmailAccountIn(BaseModel):
     from_name: str = Field(default="", max_length=120)
     use_tls: bool = True
     enabled: bool = True
+    #: The rep's sign-off block, appended to every email sent from this mailbox. Plain text: the
+    #: sender writes a text part, so markup would reach the buyer as raw tags.
+    signature: str = Field(default="", max_length=2000)
 
 
 class EmailAccountOut(BaseModel):
@@ -711,6 +714,10 @@ class EmailAccountOut(BaseModel):
     default: bool = False
     has_password: bool = False           # never return the secret itself
     verified_at: str | None = None
+    #: Why the last verification failed, in the SMTP server's own words. Kept beside `verified_at`
+    #: because "never tested" and "tested and rejected" need different actions from the rep.
+    last_error: str | None = None
+    signature: str = ""
     #: Whether the CALLER owns this mailbox. Not the owner's id: the list is workspace-wide and a
     #: rep does not need to be told which colleague owns which address, only which one is theirs —
     #: sending requires their own (see `nexus/outreach/send.py`).
@@ -718,6 +725,31 @@ class EmailAccountOut(BaseModel):
     #: A mailbox created before ownership existed. Its own state, because "nobody owns this" and
     #: "somebody else owns this" need different fixes: the first is claimable, the second is not.
     unassigned: bool = False
+
+
+class EmailStyleIn(BaseModel):
+    """How this workspace's drafted emails should read, and how they sign off.
+
+    Lives in `Tenant.email_settings` beside the mailboxes rather than in a column of its own: it is
+    workspace preference, not schema, and keeping it there means no migration and no new table to
+    enrol in RLS.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    default_signature: str = Field(default="", max_length=2000)
+    tone: str = Field(default="", max_length=200)
+    length_words: int | None = Field(default=None, ge=40, le=200)
+    #: Emails this workspace considers good. The agent copies their STRUCTURE and voice only —
+    #: never their facts. See `nexus/agents/email_style.py`.
+    samples: list[str] = Field(default_factory=list)
+
+
+class EmailStyleOut(BaseModel):
+    default_signature: str = ""
+    tone: str = ""
+    length_words: int | None = None
+    samples: list[str] = Field(default_factory=list)
 
 
 class MailboxOut(BaseModel):

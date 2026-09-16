@@ -74,20 +74,41 @@ def resolve_rep_mailbox(tenant, user_id: str) -> dict:
     """
     from nexus.integrations.email_sender import account_is_configured
 
-    owned = [
-        a for a in _accounts(tenant)
-        if a.get("owner_user_id") == user_id and a.get("enabled", True)
-    ]
-    if not owned:
+    accounts = _accounts(tenant)
+    mine = [a for a in accounts if a.get("owner_user_id") == user_id]
+    usable = [a for a in mine if a.get("enabled", True) and account_is_configured(a)]
+    if not usable:
+        # NAME THE ACTUAL STATE. All four of these used to read "You have not connected a sending
+        # mailbox", which is false for three of them and sends the rep to add a second mailbox
+        # nobody will use. Reported 2026-09-16 as "even after connecting email, SMTP not connected".
+        unowned = [a for a in accounts if not (a.get("owner_user_id") or "")]
+        if mine and any(not a.get("enabled", True) for a in mine):
+            raise MailboxNotConnected(
+                "Your mailbox is switched off, so it cannot send. Turn sending on for it under "
+                "Settings -> Sending mailboxes."
+            )
+        if mine:
+            raise MailboxNotConnected(
+                "Your mailbox is missing its app password, so it cannot send. Re-enter it under "
+                "Settings -> Sending mailboxes, then press Test connection."
+            )
+        if unowned:
+            labels = ", ".join(
+                str(a.get("label") or a.get("from_email") or a.get("username") or "a mailbox")
+                for a in unowned[:3]
+            )
+            raise MailboxNotConnected(
+                f"This workspace has a mailbox nobody owns ({labels}). Claim it under Settings -> "
+                "Sending mailboxes to send from it, or add your own."
+            )
+        if accounts:
+            raise MailboxNotConnected(
+                "The mailboxes in this workspace belong to colleagues, and a reply goes back to "
+                "whoever sent the email. Add your own under Settings -> Sending mailboxes."
+            )
         raise MailboxNotConnected(
             "You have not connected a sending mailbox. Add yours under Settings -> Sending "
-            "mailboxes, send yourself a test, then try again."
-        )
-    usable = [a for a in owned if account_is_configured(a)]
-    if not usable:
-        raise MailboxNotConnected(
-            "Your mailbox is missing its app password, so it cannot send. Re-enter it under "
-            "Settings -> Sending mailboxes."
+            "mailboxes, press Test connection, then try again."
         )
     # Their default first if they marked one, else the first they connected. Stable either way:
     # which of a rep's own mailboxes sends must not vary run to run.
@@ -132,8 +153,14 @@ async def send_to_contact(
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     mailbox = resolve_rep_mailbox(tenant, user_id)
 
+    # Sign it. The composer shows the signature too, so `append_signature` is idempotent — without
+    # that the buyer reads the rep's phone number twice.
+    from nexus.outreach.signature import append_signature, resolve_signature
+
+    signed = append_signature(body, resolve_signature(tenant.email_settings, mailbox))
+
     result = await send_email(
-        {"accounts": [mailbox]}, to=to, subject=(subject or "").strip(), body=body
+        {"accounts": [mailbox]}, to=to, subject=(subject or "").strip(), body=signed
     )
     ok = bool(getattr(result, "ok", False))
     detail = str(getattr(result, "detail", "") or ("sent" if ok else "send failed"))

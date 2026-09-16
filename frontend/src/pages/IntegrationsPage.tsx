@@ -222,16 +222,34 @@ function CrmConnectionCard() {
               />
             </Field>
 
-            <details className={styles.advanced}>
-              <summary className={styles.summary}>Advanced</summary>
-              <Field label="API base URL" hint="Only for a regional host or a proxy.">
+            {/* Salesforce REST is addressed at the ORG'S OWN host, which only the token response
+                carries. Without it the stored credential can reach nothing, and resolution falls
+                back to the deployment connector — so a sync reported success while Salesforce
+                received nothing. It is a required field here, not an advanced one. */}
+            {provider === "salesforce" ? (
+              <Field
+                label="Instance URL"
+                required={!conn.api_base}
+                hint="Your org's host, shown in Salesforce under Setup → My Domain."
+              >
                 <Input
                   value={apiBase}
                   onChange={(e) => setApiBase(e.target.value)}
-                  placeholder={conn.api_base || "https://api.hubapi.com"}
+                  placeholder={conn.api_base || "https://acme.my.salesforce.com"}
                 />
               </Field>
-            </details>
+            ) : (
+              <details className={styles.advanced}>
+                <summary className={styles.summary}>Advanced</summary>
+                <Field label="API base URL" hint="Only for a regional host or a proxy.">
+                  <Input
+                    value={apiBase}
+                    onChange={(e) => setApiBase(e.target.value)}
+                    placeholder={conn.api_base || "https://api.hubapi.com"}
+                  />
+                </Field>
+              </details>
+            )}
 
             {conn.last_error && (
               <p className={styles.errorNote} role="status">
@@ -267,6 +285,8 @@ function CrmConnectionCard() {
             </div>
           </form>
 
+          <CrmPullPanel connected={conn.has_credentials} provider={conn.provider} />
+
           <details className={styles.advanced}>
             <summary className={styles.summary}>Import accounts manually</summary>
             <ManualImportForm />
@@ -294,6 +314,69 @@ function CrmConnectionCard() {
         <p>You will need the access token again to reconnect.</p>
       </Modal>
     </Card>
+  );
+}
+
+/**
+ * The inbound half of the sync.
+ *
+ * Both adapters have read accounts and contacts since they were written, and no screen called
+ * either: the only Sync button on this page imported hand-typed rows. Reported 2026-09-16 as
+ * "two-way syncs are failing" — outbound ran on the heartbeat, inbound had no way in at all.
+ */
+function CrmPullPanel({ connected, provider }: { connected: boolean; provider: string }) {
+  const api = useApiClient();
+  const toast = useToast();
+  const [busy, setBusy] = useState<"accounts" | "contacts" | null>(null);
+
+  async function pull(kind: "accounts" | "contacts") {
+    setBusy(kind);
+    try {
+      const res =
+        kind === "accounts" ? await api.pullAccountsFromCrm() : await api.pullContactsFromCrm();
+      const summary = `${res.created} new, ${res.updated} updated, ${res.skipped} skipped.`;
+      // Errors from a CRM read are per-row and expected (a record with no name, a missing domain);
+      // reporting them beside the counts is what makes a partial import legible.
+      if (res.errors.length) toast.error(`Pulled ${kind} with problems`, `${summary} ${res.errors[0]}`);
+      else toast.success(`Pulled ${kind} from ${provider}`, summary);
+    } catch (err) {
+      toast.error(`Couldn't pull ${kind}`, err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className={styles.pullPanel}>
+      <div className={styles.pullText}>
+        <h3 className={styles.pullTitle}>Bring your CRM data in</h3>
+        <p className={styles.cardDesc}>
+          {connected
+            ? "Pulls companies and people from your CRM into NEXUS. Accounts you change here go back automatically on the next sweep."
+            : "Connect a CRM above first."}
+        </p>
+      </div>
+      <div className={styles.actionGroup}>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={!connected || busy !== null}
+          loading={busy === "accounts"}
+          onClick={() => void pull("accounts")}
+        >
+          Pull accounts
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={!connected || busy !== null}
+          loading={busy === "contacts"}
+          onClick={() => void pull("contacts")}
+        >
+          Pull contacts
+        </Button>
+      </div>
+    </div>
   );
 }
 

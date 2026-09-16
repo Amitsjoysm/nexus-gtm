@@ -10,6 +10,8 @@ from nexus.agents.copy import (
     signal_facts,
     today_line,
 )
+from nexus.agents.email_quality import check_draft
+from nexus.agents.email_style import style_prompt
 from nexus.agents.llm import LLMMessage
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 
@@ -19,6 +21,42 @@ def _split_subject(text: str) -> tuple[str, str]:
         head, _, rest = text.partition("\n")
         return head.split(":", 1)[1].strip(), rest.strip()
     return "", text.strip()
+
+
+def _first_name(contact) -> str:
+    """What the greeting has to say. A full name in a salutation reads as a mail merge."""
+    full = (getattr(contact, "full_name", "") or "").strip() if contact else ""
+    return full.split()[0] if full else ""
+
+
+def retry_instruction(problems: list[str]) -> str:
+    """The corrective turn: what was wrong, in the model's own terms.
+
+    Naming the faults is the whole point. "Try again" re-rolls the same dice; "there is no greeting
+    and no sign-off" is a brief.
+    """
+    joined = "\n".join(f"- {p}" for p in problems)
+    return (
+        "Your previous draft had these problems:\n"
+        f"{joined}\n"
+        "Rewrite the whole email, fixing every one of them and keeping everything else the same. "
+        "Return it in the same format: 'Subject: ...', a blank line, then the body."
+    )
+
+
+async def _email_settings(ctx) -> dict:
+    """This workspace's email settings, for the house style. Never raises: a style that cannot be
+    read must cost the styling, not the draft."""
+    try:
+        from nexus.models.identity import Tenant
+
+        ts = getattr(ctx, "ts", None) or getattr(ctx, "session", None)
+        if ts is None:
+            return {}
+        tenant = await ts.session.get(Tenant, ts.tenant_id)
+        return dict(getattr(tenant, "email_settings", None) or {})
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 class MessagingAgent(BaseAgent):
@@ -117,6 +155,12 @@ class MessagingAgent(BaseAgent):
             # Per-touch cadence angle: shape this specific touch (e.g. a follow-up nudge,
             # a case-study share) so successive touches don't repeat the same message.
             content += f"Angle for this specific touch: {angle}\n"
+        # The workspace's own voice: tone, length and its sample emails, offered as STRUCTURE only.
+        # Placed after the facts and before the rules, so the rules — including "use only facts
+        # given above" — are still the last word on what may be claimed.
+        style = style_prompt(await _email_settings(ctx))
+        if style:
+            content += f"\n{style}"
         guidance = (ctx.inputs.get("guidance") or "").strip()
         if guidance:
             # Reviewer redraft instructions from the approval gate take precedence — they are
@@ -153,6 +197,36 @@ class MessagingAgent(BaseAgent):
             },
         )
         subject, body = _split_subject(message)
+        # CHECK IT, THEN FIX IT ONCE. A rule in a prompt is a request: the same instruction is
+        # followed on one generation and dropped on the next, which is how drafts reached reps with
+        # no greeting at all (reported 2026-09-16). One retry, carrying the specific complaints —
+        # a second blind attempt would be a coin flip, and more than one turns every draft into
+        # three completions nobody asked to pay for.
+        problems = check_draft(
+            subject=subject, body=body, first_name=_first_name(contact),
+        )
+        if problems:
+            retry = LLMMessage(
+                role="user", content=f"{content}\n\n{retry_instruction(problems)}"
+            )
+            second = await ctx.complete(
+                [ctx.system_message(), retry], purpose="outreach_message", max_tokens=1500,
+                variables={
+                    "account": ctx.account.name,
+                    "contact": contact.full_name if contact else "there",
+                    "value_prop": vp.get("name", "our platform"),
+                    "trigger": trigger,
+                    "pain": pains,
+                },
+            )
+            retry_subject, retry_body = _split_subject(second)
+            # Keep the retry only when it is genuinely better: a second attempt that is empty, or
+            # that breaks MORE rules than the first, is not an improvement worth showing.
+            if retry_body.strip() and len(
+                check_draft(subject=retry_subject, body=retry_body,
+                            first_name=_first_name(contact))
+            ) < len(problems):
+                message, subject, body = second, retry_subject, retry_body
         # A BLANK COMPLETION IS NOT A DRAFT. Observed live 2026-09-08: the provider returned an
         # empty string, `_split_subject("")` yielded two empty strings, and the run reported
         # `status: completed` with an empty subject and an empty body — which reaches the approval

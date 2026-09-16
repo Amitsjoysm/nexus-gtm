@@ -1134,6 +1134,14 @@ export interface EmailAccount {
   default: boolean;
   has_password: boolean;
   verified_at: string | null;
+  /** Why the last verification failed, in the SMTP server's own words. */
+  last_error: string | null;
+  /** The rep's sign-off block, appended to every email sent from this mailbox. */
+  signature: string;
+  /** Whether the CALLER owns this mailbox — sending requires your own. */
+  mine: boolean;
+  /** Owned by nobody (added before ownership existed). Claimable, unlike a colleague's. */
+  unassigned: boolean;
 }
 
 export interface EmailAccountInput {
@@ -1147,6 +1155,20 @@ export interface EmailAccountInput {
   from_name?: string;
   use_tls?: boolean;
   enabled: boolean;
+  signature?: string;
+}
+
+/**
+ * How this workspace's drafted emails read and sign off.
+ *
+ * `samples` are emails the workspace considers good. The draft writer copies their structure and
+ * voice only — never their facts; see `nexus/agents/email_style.py`.
+ */
+export interface EmailStyle {
+  default_signature: string;
+  tone: string;
+  length_words: number | null;
+  samples: string[];
 }
 
 /** Send-ready mailbox shown at the approval gate (no secrets, visible to approvers). */

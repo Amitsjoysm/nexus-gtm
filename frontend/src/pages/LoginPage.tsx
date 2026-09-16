@@ -149,7 +149,7 @@ export function LoginPage() {
                 ? "Reset your password"
                 : mode === "login"
                   ? "Welcome back"
-                  : "Create your workspace"}
+                  : "Sign up"}
           </h1>
           <p className={styles.subtitle}>
             {verifying

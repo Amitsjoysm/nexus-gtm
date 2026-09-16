@@ -20,6 +20,8 @@ from nexus.api.schemas import (
     MailboxOut,
     EmailSettingsIn,
     EmailSettingsOut,
+    EmailStyleIn,
+    EmailStyleOut,
     EmailTestIn,
     EmailTestOut,
     MemberInviteRequest,
@@ -245,6 +247,7 @@ def _utcnow_iso() -> str:
 
 
 # ---- multiple sending mailboxes -------------------------------------------------------
+import re as _re  # noqa: E402
 import uuid as _uuid  # noqa: E402
 
 from nexus.integrations.email_sender import (  # noqa: E402
@@ -273,6 +276,8 @@ def _account_out(a: dict, *, caller_user_id: str = "") -> EmailAccountOut:
         default=bool(a.get("default", False)),
         has_password=bool(a.get("password")),
         verified_at=a.get("verified_at"),
+        last_error=a.get("last_error"),
+        signature=a.get("signature", "") or "",
     )
 
 
@@ -345,6 +350,8 @@ async def add_email_account(
         "enabled": body.enabled,
         "default": not any(a.get("default") for a in accounts),  # first added becomes default
         "verified_at": None,
+        "last_error": None,
+        "signature": body.signature,
         # WHO SENDS FROM THIS. A reply goes back to whoever sent it, so a shared workspace address
         # turns every reply into a triage problem — `outreach/send.py` therefore sends only from a
         # mailbox the rep owns. Stamped on creation and never reassigned by an edit; a mailbox
@@ -381,6 +388,7 @@ async def update_email_account(
             "from_name": body.from_name,
             "use_tls": body.use_tls,
             "enabled": body.enabled,
+            "signature": body.signature,
             # Password is write-only: a blank/omitted value keeps the stored secret.
             "password": body.password if body.password else acct.get("password", ""),
         }
@@ -490,9 +498,112 @@ async def test_email_account(
     )
     if res.ok:
         acct["verified_at"] = _utcnow_iso()
+        acct["last_error"] = None
         _save_accounts(tenant, accounts)
         await ts.flush()
     return EmailTestOut(ok=res.ok, detail=res.detail)
+
+
+@router.post("/email/accounts/{account_id}/verify", response_model=EmailTestOut)
+async def verify_email_account(
+    account_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailTestOut:
+    """Prove this mailbox's credentials against the SMTP server, WITHOUT sending anything.
+
+    Reported 2026-09-16: reps connected a mailbox and were still told "SMTP not connected", with no
+    way to find out which part was wrong. The existing test SENDS an email, which needs a recipient
+    and puts a message in somebody's inbox; "can this mailbox sign in?" is the question being asked
+    and it is answerable on its own.
+
+    The result is stored, so the screen can show it later without re-testing, and a failure keeps
+    the server's own words — "535 Username and Password not accepted" is actionable, "not
+    connected" is not.
+    """
+    from nexus.integrations.email_sender import verify_smtp
+
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    accounts = _load_accounts(tenant)
+    acct = next((a for a in accounts if a["id"] == account_id), None)
+    if acct is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
+
+    ok, detail = await verify_smtp(acct)
+    acct["verified_at"] = _utcnow_iso() if ok else None
+    acct["last_error"] = None if ok else detail
+    _save_accounts(tenant, accounts)
+    await ts.flush()
+    return EmailTestOut(ok=ok, detail=detail)
+
+
+# ---- how this workspace's emails read and sign off ------------------------------------------
+# Stored in `email_settings` beside the mailboxes: workspace preference, not schema. No migration,
+# and nothing new for `apply_rls.py` to enrol.
+
+_MARKUP = _re.compile(r"<[a-zA-Z/][^>]*>")
+
+
+def _reject_markup(*values: str) -> None:
+    """Signatures and samples are plain text (decided 2026-09-16).
+
+    `email_sender._build_message` sets a text part and only adds an HTML alternative when a caller
+    passes one, so markup stored here would reach the buyer as literal tags. Refusing at the door
+    beats storing something that renders wrongly for every recipient.
+    """
+    for value in values:
+        if value and _MARKUP.search(value):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Signatures and sample emails are plain text for now — remove the HTML tags.",
+            )
+
+
+@router.get("/email/style", response_model=EmailStyleOut)
+async def get_email_style(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailStyleOut:
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    settings = dict(tenant.email_settings or {})
+    style = settings.get("style") if isinstance(settings.get("style"), dict) else {}
+    return EmailStyleOut(
+        default_signature=str(settings.get("default_signature") or ""),
+        tone=str(style.get("tone") or ""),
+        length_words=style.get("length_words"),
+        samples=[str(s) for s in (style.get("samples") or []) if str(s).strip()],
+    )
+
+
+@router.put("/email/style", response_model=EmailStyleOut)
+async def set_email_style(
+    body: EmailStyleIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> EmailStyleOut:
+    """The workspace's default signature, plus the tone, length and sample emails the draft writer
+    adapts to (`nexus/agents/email_style.py`)."""
+    from nexus.agents.email_style import MAX_SAMPLES
+
+    samples = [s.strip() for s in body.samples if s and s.strip()][:MAX_SAMPLES]
+    _reject_markup(body.default_signature, *samples)
+
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    settings = dict(tenant.email_settings or {})
+    settings["default_signature"] = body.default_signature.strip()
+    settings["style"] = {
+        "tone": body.tone.strip(),
+        "length_words": body.length_words,
+        "samples": samples,
+    }
+    tenant.email_settings = settings
+    await ts.flush()
+    return EmailStyleOut(
+        default_signature=settings["default_signature"],
+        tone=settings["style"]["tone"],
+        length_words=settings["style"]["length_words"],
+        samples=samples,
+    )
 
 
 # ---- members ----

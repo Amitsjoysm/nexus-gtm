@@ -81,6 +81,24 @@ OUTPUT_CONTRACT = (
     "then the body. No preamble, no commentary, no markdown."
 )
 
+#: The shape of the body itself.
+#:
+#: Reported 2026-09-16: drafts arrived with no salutation. Nothing had ever asked for one — the
+#: contract above names the subject and the body, and "open with a specific observation about THEM"
+#: was read literally, so the email began mid-thought with no greeting and often no sign-off. A
+#: buyer reads those two lines before anything else, and their absence is the first thing that says
+#: a machine wrote this.
+#:
+#: The sign-off is the NAME ONLY: the rep's signature block (title, company, phone) is appended by
+#: `nexus/outreach/signature.py` at send time, and a model inventing one would put a made-up title
+#: and number under a real person's name.
+STRUCTURE_RULE = (
+    "Structure the body as: a greeting line addressing the recipient by first name ('Hi Sam,'), "
+    "then the observation, then one line on what we remove, then the ask, then a short sign-off "
+    "line ('Best,' and your first name). Do not write a title, company, phone number or any other "
+    "signature detail under the sign-off — that is added automatically."
+)
+
 #: The closing ask. Shared by both agents so an email and a call script cannot drift into asking
 #: for different things.
 #:
@@ -107,6 +125,7 @@ TONE_RULE = (
 
 EMAIL_RULES = (
     f"Rules: Under {EMAIL_WORD_CAP} words. Short sentences. "
+    f"{STRUCTURE_RULE} "
     "Open with a specific observation about THEM, then connect it to one problem we solve, then "
     "make the ask. Never open with a pitch or with our company. "
     f"{TONE_RULE} "

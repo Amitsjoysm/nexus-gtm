@@ -98,6 +98,33 @@
 
 /* Progressive disclosure: Advanced settings, and the manual-import grid the connection form
    replaced as the primary affordance. */
+/* The inbound half of the sync, given its own band so it reads as an action rather than as more
+   form fields under the credentials. */
+.pullPanel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.pullText {
+  min-width: 0;
+  flex: 1 1 20rem;
+}
+
+.pullTitle {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
 .advanced {
   border-top: 1px solid var(--border);
   padding-top: var(--space-4);

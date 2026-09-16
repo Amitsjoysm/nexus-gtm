@@ -254,6 +254,13 @@ export function EmailComposer({
         onChange={(e) => setBody(e.target.value)}
       />
 
+      {/* The draft deliberately ends at the sign-off: the signature block is appended from the
+          sending mailbox (Settings → Sending mailboxes), so one rep's draft cannot go out under
+          another's details, and regenerating never loses it. */}
+      <p className={styles.hint}>
+        Your signature is added from your sending mailbox when this goes out.
+      </p>
+
       {needsRiskyConfirm && (
         <p className={styles.warn} role="alert">
           That address was verified as invalid, so it will almost certainly bounce — and bounces

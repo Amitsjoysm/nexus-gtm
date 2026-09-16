@@ -104,6 +104,36 @@ class _PostedRows(CRMConnector):
         return self._sample
 
 
+async def _reject_unusable_connection(ts: TenantSession) -> None:
+    """Refuse a person-initiated sync when this workspace's stored credential cannot be built.
+
+    The background sweep deliberately falls back to the deployment connector rather than stopping
+    collection. A human pressing Sync needs the opposite: silence there means their own CRM is
+    receiving nothing while the screen says it worked.
+    """
+    from nexus.ingestion.crm_credentials import build_tenant_connector
+    from nexus.integrations import connections as _connections
+
+    row = await get_connection(ts)
+    if row is None or not has_credentials(row):
+        return  # no stored credential: the env connector is the honest answer, not a surprise
+    built = build_tenant_connector(
+        row.provider, _connections.secret_bundle(row), row.api_base or ""
+    )
+    if built is not None:
+        return
+    detail = (
+        f"Your {row.provider} connection cannot be used: "
+        + (
+            "Salesforce needs the instance URL of your org (e.g. https://acme.my.salesforce.com)."
+            if row.provider == "salesforce"
+            else "the stored credential could not be read."
+        )
+        + " Reconnect it under Settings > Integrations, then run the sync again."
+    )
+    raise HTTPException(status.HTTP_400_BAD_REQUEST, detail)
+
+
 @router.post("/crm/sync", response_model=CRMSyncResponse)
 async def crm_sync(
     body: CRMSyncRequest,
@@ -138,6 +168,14 @@ async def crm_sync(
     if sample:
         connector: CRMConnector = _PostedRows(body.source, sample)
     else:
+        # A STORED CREDENTIAL WE CANNOT HONOUR MUST NOT BECOME A SYNC AGAINST SOMETHING ELSE.
+        #
+        # `resolve_crm_connector` falls back to the deployment connector when a tenant's row cannot
+        # be built (rotated key, missing Salesforce instance URL). That is right for the background
+        # sweep — never stop collection — and exactly wrong for a person pressing Sync: the stub
+        # accepts everything, so the screen reported success while the customer's CRM received
+        # nothing. Reported 2026-09-16 as "two-way syncs are failing".
+        await _reject_unusable_connection(ts)
         # Pull from the CRM this *tenant* is connected to, falling back to the deployment's.
         connector = await resolve_crm_connector(ts)
         if connector.source != body.source:

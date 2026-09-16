@@ -179,9 +179,20 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
   An unsealable secret is **tolerated** (like `network/crypto.py`, unlike `sources/crypto.py`):
   it degrades to "reconnect your CRM", a state the admin can fix, and resolution falls back to env
   rather than failing the sync.
-- **Salesforce is known but not live.** `SalesforceConnector.fetch_accounts` returns an injected
-  sample, so `PUT /crm/connection` 400s for it and `test_connection()` says so plainly. Storing a
-  credential we cannot use would be a silent no-op for the customer.
+- **Salesforce needs its instance URL, and that is a required field rather than an advanced one**
+  (2026-09-16). REST is addressed at the org's own host, which only the token response carries, so
+  `build_tenant_connector` returns `None` without it. The connect form asked for a token and an
+  optional "API base", so a Salesforce workspace stored a credential that could reach nothing.
+- **A person pressing Sync never falls back to another CRM.** `resolve_crm_connector` degrades to
+  the deployment connector when a tenant's row cannot be built — right for the heartbeat, which must
+  never stop collecting, and exactly wrong for a human: the stub accepts everything, so the screen
+  reported success while the customer's CRM received nothing. `_reject_unusable_connection` in
+  `routers/integrations.py` 400s the request instead, naming the missing instance URL or the
+  unreadable secret. That was the whole of "two-way syncs are failing", together with the next line.
+- **Both directions are reachable from the screen.** `imports/crm_pull.py` has read accounts and
+  contacts from both CRMs since it was written and no screen called either — the Integrations page's
+  only Sync button imported hand-typed rows. `CrmPullPanel` wires `POST /imports/accounts/crm` and
+  `/imports/contacts/crm`; outbound stays on the heartbeat sweep.
 - The resolution cache keys on `updated_at|provider|api_base` and **still reads the row every
   call** — that lookup is how a worker notices a credential the API just changed. It buys instance
   stability (the `MAX_RECORDED_PUSHES` buffers) and a skipped decrypt, not a skipped query. N+1
@@ -1577,6 +1588,52 @@ nothing reported a problem.
 The system grounding (`RelevanceContext.to_prompt`) names the specific fabrications — a customer
 name, a metric, a percentage, a case study, an integration — because "never invent value props"
 alone is not enforceable, and this product *has* the real facts, so omission is always available.
+
+## Drafted email: structure, signature, and the mailbox that sends it
+
+Four reports on 2026-09-16, one chain: the draft had no salutation, no signature, did not read like
+an SDR wrote it, and the mailbox said "SMTP not connected" after the rep had connected one.
+
+**The prompt never asked for a greeting.** `OUTPUT_CONTRACT` named the subject and the body, and
+"open with a specific observation about THEM" was followed literally, so emails began mid-thought.
+`STRUCTURE_RULE` (`agents/copy.py`) now names greeting → observation → value line → ask → sign-off,
+and says the sign-off is the FIRST NAME ONLY: the block under it is appended at send, and a model
+inventing a title and phone number would put fiction beneath a real person's name.
+
+**A rule in a prompt is a request; a check is a guarantee.** `agents/email_quality.check_draft`
+inspects the draft for the things a reader notices — missing greeting, the WRONG first name, no ask,
+no sign-off, over the word cap, a banned phrase — and `MessagingAgent` regenerates ONCE with the
+complaints attached (`retry_instruction`). The retry is kept only if it breaks fewer rules than the
+first attempt, so a worse second draft is discarded rather than shown. Every rule is something a
+person can point at in the text; a quality score would reject good drafts for reasons nobody can act
+on. One retry, never more: two more completions per draft is a bill, not a fix.
+
+**The workspace's own sample emails are style, never facts** (`agents/email_style.py`). Asked for by
+the product owner: reps paste emails they consider good and the agent adapts. A real SDR email names
+a real customer and a real number, so copying one into a draft for a different buyer is a fabricated
+case study reaching a prospect — the failure `EMAIL_RULES` exists to prevent, arriving through a door
+it was not watching. Samples therefore travel with the instruction that they are a shape to follow,
+the fact rules still sit *after* them in the prompt, and `MAX_SAMPLES` is 3 because every sample is
+tokens on every draft.
+
+**Signatures belong to the mailbox** (`outreach/signature.py`), with a workspace default for the rep
+who has not written one. The mailbox is what identifies the sender — a reply goes back to whoever
+sent it — so the name under the message has to be that person's. `append_signature` is idempotent
+(the composer shows it and the send path adds it) and leaves a rep who typed their own sign-off
+alone. Plain text for now, decided with the product owner: `_build_message` writes a text part and
+adds HTML only when a caller passes one, so markup would reach the buyer as literal tags. Style,
+samples and both signatures live in `Tenant.email_settings` beside the mailboxes — workspace
+preference, not schema, so no migration and nothing new for `apply_rls.py` to enrol.
+
+**"SMTP not connected" was four different states wearing one sentence.** `resolve_rep_mailbox` needs
+a mailbox that is YOURS, enabled and credentialled; the old message said "you have not connected a
+sending mailbox" for all of them, which is false for three and sends the rep to add a second mailbox
+nobody will use. It now names the actual state — switched off, missing its app password, owned by
+nobody (claim it), or owned by a colleague (add your own) — and
+`POST /workspace/email/accounts/{id}/verify` signs in to the SMTP server **without sending
+anything**, storing `verified_at` or the server's own refusal in `last_error`. The existing test
+SENDS an email, which needs a recipient and an inbox; "can this mailbox sign in?" is the question the
+rep is actually asking.
 
 ## Feed text (`nexus/ingestion/sources.py`)
 
