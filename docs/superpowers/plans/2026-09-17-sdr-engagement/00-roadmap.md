@@ -17,8 +17,8 @@
 | # | Plan | Delivers | Depends on | Release |
 |---|---|---|---|---|
 | 01 | [01-foundation.md](01-foundation.md) | Migration `0057_engagement`, all models, `tzdata`, RBAC permissions, pure libraries: ids, subjects, timekeeping, date resolution | — | A (dark) |
-| 02 | [02-platform-configuration.md](02-platform-configuration.md) | Superadmin OAuth app keys (Google, Microsoft), ledger store credentials and pseudonym secret, runtime settings with validators, health rows, guided setup docs | 01 | A |
-| 03 | [03-mailbox-connections.md](03-mailbox-connections.md) | `MailProvider` protocol, Gmail and Graph adapters, OAuth connect/refresh/revoke, Settings → Mailboxes, live-suite scaffold + CI job | 01, 02 | A |
+| 02 | [02-platform-configuration.md](02-platform-configuration.md) | Superadmin OAuth app keys (Google, Microsoft), ledger store credentials and pseudonym secret, runtime settings with validators, health rows, Mailbox apps tab, guided setup docs, live-suite scaffold + CI job | 01 | A |
+| 03 | [03-mailbox-connections.md](03-mailbox-connections.md) | `MailProvider` protocol, Gmail and Graph adapters, OAuth connect/refresh/revoke, Settings → Mailboxes | 01, 02 | A |
 | 04 | [04-suppression.md](04-suppression.md) | Do-not-contact list, signed unsubscribe links, RFC 8058 one-click endpoint, lift with audit, Settings → Do-not-contact, contact badge | 01 | A |
 | 05 | [05-ledger-capture.md](05-ledger-capture.md) | `training_consents`, sign-up consent, existing-workspace prompt, settings toggle, `ledger.emit()` transactional outbox, emit seams across today's app | 01 | A |
 | 06 | [06-ledger-stores.md](06-ledger-stores.md) | Archive/training/insights stores, versioned SQL, `ship_ledger`, pseudonymisation + scrubber, dataset builders, export script, opt-out deletion, person erasure, outbox retention | 02, 05 | A |
