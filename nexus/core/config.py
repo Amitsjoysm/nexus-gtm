@@ -335,6 +335,18 @@ class Settings(BaseSettings):
     # ~10 rapid requests, which one account refresh can reach alone; keyed engines are limited by
     # contract instead and need no spacing. Auto-selected per provider unless set.
     signal_dork_pace_s: float = 0.0
+
+    # ---- Self-hosted fetching -------------------------------------------------------------
+    #: Serve repeated searches and page fetches from `web_cache` instead of re-buying them.
+    #: Off means every lookup misses, which is exactly the behaviour before the cache existed.
+    web_cache_enabled: bool = True
+    #: Re-ask window for time-critical kinds (funding, news).
+    signal_cache_ttl_fast_s: int = 21600     # 6h — matches the HOT refresh interval
+    #: Re-ask window for everything else searched (hiring, job postings, tech adoption).
+    signal_cache_ttl_slow_s: int = 86400     # 24h
+    #: Re-fetch window for a page (website watch, careers pages).
+    page_cache_ttl_s: int = 86400            # 24h
+
     # Per-tenant ceiling on billed source runs per UTC day. Automation is now on by default for new
     # workspaces, so this is what stops an enthusiastic account import from producing a surprise
     # bill: each source run is one row in `signal_source_runs`, so the crawl history IS the budget
