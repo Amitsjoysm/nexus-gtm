@@ -68,3 +68,18 @@ async def test_prune_deletes_only_expired_rows():
 
     assert deleted == 1
     assert await cache.get("search", "fresh", engine="t", limit=4) == HITS
+
+
+async def test_a_bad_argument_is_a_miss_not_an_exception():
+    # The whole contract: a caller that hands us something odd must still get a signal crawl, not
+    # a traceback. `cache_key` normalises strings, so a non-string subject would raise.
+    assert await cache.get("search", ["not", "a", "string"], engine="t", limit=4) is None
+    await cache.put("search", ["not", "a", "string"], engine="t", limit=4, payload=[], ttl_s=60)
+
+
+async def test_the_switch_off_means_every_lookup_misses(monkeypatch):
+    from nexus.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "web_cache_enabled", False, raising=False)
+    await cache.put("search", "q", engine="t", limit=4, payload=HITS, ttl_s=3600)
+    assert await cache.get("search", "q", engine="t", limit=4) is None

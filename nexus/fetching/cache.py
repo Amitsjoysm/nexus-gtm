@@ -6,6 +6,16 @@ resolve to "miss", and the caller buys the answer as it does today.
 
 Platform-global storage, so a company crawled for one tenant is not re-bought for the next. See
 `nexus/models/web_cache.py` for why there is no `tenant_id`.
+
+**Ordering matters for callers that also hold a tenant session.** `get()` and `put()` each open
+their own platform session, separate from any tenant session the caller may have open. Complete
+cache reads and writes *before* opening a tenant write transaction, the same discipline
+`nexus/people/enrich.py` documents for its own platform-session lookup: nesting a second
+connection's write inside an open tenant transaction is something Postgres tolerates and SQLite
+deadlocks on. Even where Postgres does not deadlock outright, a hot key here can serialise other
+callers on SQLite's single-writer lock, or queue up row locks on Postgres, while the tenant
+transaction sits open and holding its own locks — a "works in production, hangs the test suite"
+split, or a production stall under load, that is not worth the elegance of interleaving the two.
 """
 from __future__ import annotations
 
@@ -15,6 +25,7 @@ import logging
 from datetime import timedelta
 
 from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 
 from nexus.core.db import get_platform_sessionmaker, utcnow
 from nexus.models.web_cache import WebCache
@@ -39,10 +50,11 @@ def enabled() -> bool:
 
 async def get(kind: str, subject: str, *, engine: str = "", limit: int = 0):
     """The cached payload, or ``None`` when there is nothing fresh to serve."""
-    if not enabled():
-        return None
-    key = cache_key(kind, subject, engine=engine, limit=limit)
+    key = "?"
     try:
+        if not enabled():
+            return None
+        key = cache_key(kind, subject, engine=engine, limit=limit)
         async with get_platform_sessionmaker()() as session:
             row = await session.get(WebCache, key)
             if row is None or row.expires_at <= utcnow():
@@ -58,19 +70,24 @@ async def get(kind: str, subject: str, *, engine: str = "", limit: int = 0):
 async def put(kind: str, subject: str, *, engine: str = "", limit: int = 0,
               payload, ttl_s: float) -> None:
     """Store an answer for ``ttl_s`` seconds. Replaces any existing row for the same key."""
-    if not enabled():
-        return
-    key = cache_key(kind, subject, engine=engine, limit=limit)
-    now = utcnow()
+    key = "?"
     try:
-        size = len(json.dumps(payload).encode("utf-8"))
-    except Exception:
-        size = 0
-    try:
+        if not enabled():
+            return
+        key = cache_key(kind, subject, engine=engine, limit=limit)
+        now = utcnow()
+        try:
+            size = len(json.dumps(payload).encode("utf-8"))
+        except Exception:
+            size = 0
+        # Truncated, not validated, against the column width: an unknown or oversized `kind`
+        # must still be a cache row, never a DataError that the blanket handler below would log
+        # as an outage.
+        kind_norm = (kind or "")[:16]
         async with get_platform_sessionmaker()() as session:
             row = await session.get(WebCache, key)
             if row is None:
-                row = WebCache(id=key, kind=kind, subject=(subject or "")[:2000])
+                row = WebCache(id=key, kind=kind_norm, subject=(subject or "")[:2000])
                 session.add(row)
             row.engine = (engine or "")[:64]
             row.payload = payload
@@ -78,6 +95,10 @@ async def put(kind: str, subject: str, *, engine: str = "", limit: int = 0,
             row.expires_at = now + timedelta(seconds=float(ttl_s))
             row.bytes = size
             await session.commit()
+    except IntegrityError:
+        # Two workers raced on the same deterministic key; the loser's insert lost the primary
+        # key. Normal operation, not an incident — the key exists precisely so this is harmless.
+        logger.debug("web cache write lost the race for %s (another worker stored it first)", key)
     except Exception:
         logger.warning("web cache write failed for %s", key, exc_info=True)
 
