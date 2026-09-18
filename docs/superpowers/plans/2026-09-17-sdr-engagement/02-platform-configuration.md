@@ -10,7 +10,7 @@
 
 **Roadmap:** [00-roadmap.md](00-roadmap.md). **Spec:** §12, §18.2, D20, D21. **Depends on:** phase 01.
 
-**Verified:** backend code in this plan was run in the CI image on top of phase 01 (`tests/test_engagement_platform_config.py`, `test_engagement_setup_ui.py`, `test_provider_keys.py`, `test_runtime_control_plane.py`, `test_runtime_config.py`, `test_admin_health.py`, `test_admin_routes_are_not_discoverable.py`, `ruff`), and the frontend with `npm run typecheck`: 158 tests passed, typecheck clean.
+**Verified:** backend code in this plan was run in the CI image on top of phase 01 (`tests/test_engagement_platform_config.py`, `test_engagement_setup_ui.py`, `test_provider_keys.py`, `test_runtime_control_plane.py`, `test_runtime_config.py`, `test_admin_health.py`, `test_admin_routes_are_not_discoverable.py`, `ruff`), and the frontend with `npm run typecheck`: 158 tests passed, typecheck clean. Amended after the phases 01–05 full-suite run (2026-09-18): `/admin/provider-keys/providers` now lists 15 ids, and the Gmail push URL carries no `?token=` — `tests/test_credential_leaks.py` refuses a credential in a query string, and the OIDC verification is the trust.
 
 **Change to the roadmap:** the live-suite scaffold (`tests_live/engagement/conftest.py`) and the `live-engagement` CI job move from phase 03 to this phase, because the Test buttons are the first thing that needs a live check.
 
@@ -53,6 +53,7 @@ Graph delegated scopes `openid email offline_access User.Read Mail.ReadWrite Mai
 | Create | `tests/test_engagement_platform_config.py` | offline behaviour |
 | Create | `tests/test_engagement_setup_ui.py` | source-reading UI test |
 | Modify | `tests/test_provider_keys.py` | the catalog grew from 9 to 15 |
+| Modify | `tests/test_provider_keys_api.py` | `/admin/provider-keys/providers` lists 15 ids |
 | Create | `tests_live/engagement/conftest.py`, `tests_live/engagement/test_credentials_live.py` | live suite |
 | Modify | `.github/workflows/ci.yml` | `workflow_dispatch` + `live-engagement` job |
 | Create | `docs/engagement/setup-google.md`, `docs/engagement/setup-microsoft.md` | owner guides |
@@ -111,12 +112,14 @@ git commit -m "feat(engagement): settings floors for mailbox OAuth apps and ledg
 ### Task 2: Six provider-key ids
 
 **Files:**
-- Modify: `nexus/providers/catalog.py`, `tests/test_provider_keys.py`
+- Modify: `nexus/providers/catalog.py`, `tests/test_provider_keys.py`, `tests/test_provider_keys_api.py`
 - Test: `tests/test_engagement_platform_config.py` (created here, extended in later tasks)
 
 - [ ] **Step 1: Write the failing tests**
 
 Create `tests/test_engagement_platform_config.py` containing, for now, only the imports, the fixture and the first test from the final file shown in Task 5 Step 1 (`test_the_six_engagement_secrets_are_provider_keys_with_env_floors`).
+
+In `tests/test_provider_keys_api.py::test_the_supported_provider_list_is_offered`, change `len(ids) == 9` to `len(ids) == 15` (the endpoint lists the catalog).
 
 In `tests/test_provider_keys.py`, change `assert len(PROVIDERS) == 9` to `assert len(PROVIDERS) == 15` and extend the set in `test_the_catalog_covers_exactly_the_pooled_providers`:
 
@@ -133,7 +136,7 @@ In `tests/test_provider_keys.py`, change `assert len(PROVIDERS) == 9` to `assert
 
 - [ ] **Step 2: Run to see them fail**
 
-Run: `pytest tests/test_engagement_platform_config.py tests/test_provider_keys.py -n0 -q`
+Run: `pytest tests/test_engagement_platform_config.py tests/test_provider_keys.py tests/test_provider_keys_api.py -n0 -q`
 Expected: FAIL — `assert 'google_oauth' in PROVIDERS` and `assert 9 == 15`.
 
 - [ ] **Step 3: Add the ids**
@@ -172,13 +175,13 @@ None of these is a cryptographic root of THIS application (`test_crypto_roots_ar
 
 - [ ] **Step 4: Run to see them pass**
 
-Run: `pytest tests/test_engagement_platform_config.py tests/test_provider_keys.py -n0 -q`
+Run: `pytest tests/test_engagement_platform_config.py tests/test_provider_keys.py tests/test_provider_keys_api.py -n0 -q`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add nexus/providers/catalog.py tests/test_provider_keys.py tests/test_engagement_platform_config.py
+git add nexus/providers/catalog.py tests/test_provider_keys.py tests/test_provider_keys_api.py tests/test_engagement_platform_config.py
 git commit -m "feat(engagement): provider-key ids for OAuth client secrets and ledger stores"
 ```
 
@@ -192,7 +195,7 @@ git commit -m "feat(engagement): provider-key ids for OAuth client secrets and l
 
 - [ ] **Step 1: Write the failing tests**
 
-Add these tests from the final file (Task 5 Step 1): `test_an_unconfigured_provider_names_every_missing_piece`, `test_a_managed_secret_and_two_settings_configure_a_provider`, `test_endpoints_are_derived_from_the_base_url_and_the_push_token_from_the_secret_key`, `test_campaigns_are_off_until_switched_on`.
+Add these tests from the final file (Task 5 Step 1): `test_an_unconfigured_provider_names_every_missing_piece`, `test_a_managed_secret_and_two_settings_configure_a_provider`, `test_endpoints_are_derived_from_the_base_url`, `test_campaigns_are_off_until_switched_on`.
 
 - [ ] **Step 2: Run to see them fail**
 
@@ -225,8 +228,6 @@ mailbox screen shows "not configured" rather than a connect button that cannot w
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 from dataclasses import dataclass
 
 from nexus.core.config import get_settings
@@ -287,25 +288,18 @@ def redirect_uri(provider: str) -> str:
 
 
 def gmail_push_audience() -> str:
-    """The audience the Pub/Sub push subscription must put in its OIDC token."""
+    """The Pub/Sub push endpoint, which is also the audience its OIDC token must carry.
+
+    **No secret of ours in this URL, deliberately.** A shared ``?token=`` on the push URL was the
+    first design and ``tests/test_credential_leaks.py`` refuses it — rightly: a push endpoint is
+    typed into a console, read back out of it, and logged by every proxy in front of us. The trust
+    is the Google-signed OIDC token instead, verified in phase 09 against Google's certificates,
+    this audience and the configured push service account. A deployment with no service account
+    configured refuses the webhook rather than falling back to a weaker check, so dropping the
+    token removes a second factor that was never the one doing the work.
+    """
     base = public_base_url()
     return f"{base}/api/engagement/webhooks/gmail" if base else ""
-
-
-def gmail_push_token() -> str:
-    """A per-deployment path token, derived from ``secret_key``, required on every Gmail push.
-
-    A second factor beside the OIDC signature: a leaked push URL alone does not make a forged
-    notification acceptable, and a stolen Google-signed token for another audience fails the
-    audience check.
-    """
-    key = get_settings().secret_key.encode()
-    return hmac.new(key, b"engagement:gmail-push", hashlib.sha256).hexdigest()[:40]
-
-
-def gmail_push_endpoint() -> str:
-    audience = gmail_push_audience()
-    return f"{audience}?token={gmail_push_token()}" if audience else ""
 
 
 def gmail_push_service_account() -> str:
@@ -607,7 +601,7 @@ insert (in `verify`, keep the comment):
 
 - [ ] **Step 5: Run the offline tests**
 
-Run: `pytest tests/test_engagement_platform_config.py tests/test_provider_keys.py -n0 -q`
+Run: `pytest tests/test_engagement_platform_config.py tests/test_provider_keys.py tests/test_provider_keys_api.py -n0 -q`
 Expected: all pass.
 
 - [ ] **Step 6: Create the live-suite scaffold**
@@ -801,20 +795,17 @@ async def test_a_managed_secret_and_two_settings_configure_a_provider(monkeypatc
     assert "https://graph.microsoft.com/Mail.Send" in app.scopes
 
 
-def test_endpoints_are_derived_from_the_base_url_and_the_push_token_from_the_secret_key(
-    monkeypatch,
-):
+def test_endpoints_are_derived_from_the_base_url(monkeypatch):
     from nexus.engagement import config
 
     monkeypatch.setattr(get_settings(), "engagement_public_base_url", "https://app.example.com/")
     assert config.gmail_push_audience() == "https://app.example.com/api/engagement/webhooks/gmail"
-    assert config.gmail_push_endpoint().startswith(config.gmail_push_audience() + "?token=")
     assert config.graph_notification_url() == (
         "https://app.example.com/api/engagement/webhooks/graph"
     )
-    token = config.gmail_push_token()
-    monkeypatch.setattr(get_settings(), "secret_key", "a-different-deployment-secret-key-0000")
-    assert config.gmail_push_token() != token
+    # The push URL carries no credential of ours: the OIDC signature is what is trusted, and a
+    # URL an operator pastes into a console must survive being logged.
+    assert "?" not in config.gmail_push_audience()
 
 
 def test_campaigns_are_off_until_switched_on():
@@ -888,8 +879,8 @@ async def test_the_setup_screen_shows_what_to_paste_and_never_a_secret(client, m
     assert "google-client-secret-never-shown" not in r.text
     google = next(a for a in body["mailbox_apps"] if a["provider"] == "google")
     assert google["redirect_uri"].endswith("/api/engagement/mailboxes/oauth/google/callback")
-    assert body["gmail_push_endpoint"].startswith(
-        "https://app.example.com/api/engagement/webhooks/gmail?token="
+    assert body["gmail_push_audience"] == (
+        "https://app.example.com/api/engagement/webhooks/gmail"
     )
     assert body["ledger_stores"] == {"archive": False, "training": False, "insights": False}
 
@@ -1196,9 +1187,9 @@ consoles ask for — redirect URIs, the Pub/Sub push endpoint and its OIDC audie
 notification URL, the scopes to request — is derived here from the public base URL, so the
 operator copies it rather than composing it, and a typo cannot silently break the flow.
 
-Gated on ``providers.manage``: the push endpoint carries the deployment's push token, and the
-people who hold the client secrets are the people who need to see it. No secret is in the response;
-``configured`` booleans say whether one is stored.
+Gated on ``providers.manage``: the people who hold the client secrets are the people who set
+these consoles up. No secret is in the response — ``configured`` booleans say whether one is
+stored, and the push URL carries no token of ours (see ``config.gmail_push_audience``).
 """
 from __future__ import annotations
 
@@ -1227,7 +1218,6 @@ class EngagementSetupOut(BaseModel):
     mailbox_apps: list[MailboxAppOut]
     gmail_pubsub_topic: str
     gmail_push_service_account: str
-    gmail_push_endpoint: str
     gmail_push_audience: str
     graph_notification_url: str
     ledger_stores: dict[str, bool]
@@ -1254,7 +1244,6 @@ async def engagement_setup(
         mailbox_apps=apps,
         gmail_pubsub_topic=config.gmail_pubsub_topic(),
         gmail_push_service_account=config.gmail_push_service_account(),
-        gmail_push_endpoint=config.gmail_push_endpoint(),
         gmail_push_audience=config.gmail_push_audience(),
         graph_notification_url=config.graph_notification_url(),
         ledger_stores={s: bool(await config.ledger_dsn(s)) for s in config.LEDGER_STORES},
@@ -1360,7 +1349,6 @@ export interface EngagementSetup {
   mailbox_apps: MailboxAppSetup[];
   gmail_pubsub_topic: string;
   gmail_push_service_account: string;
-  gmail_push_endpoint: string;
   gmail_push_audience: string;
   graph_notification_url: string;
   ledger_stores: Record<string, boolean>;
@@ -1441,7 +1429,7 @@ export function EngagementSetupTab() {
 
             <section className={styles.section} aria-labelledby="eng-gmail-push">
               <h3 id="eng-gmail-push" className={styles.heading}>Gmail reply notifications</h3>
-              <CopyRow label="Push endpoint" value={s.gmail_push_endpoint} />
+              <CopyRow label="Push endpoint" value={s.gmail_push_audience} />
               <CopyRow label="OIDC audience" value={s.gmail_push_audience} />
               <ValueRow label="Topic" value={s.gmail_pubsub_topic} />
               <ValueRow label="Push service account" value={s.gmail_push_service_account} />
@@ -1729,7 +1717,8 @@ It needs a public https base URL; it cannot work against `localhost`.
 5. **Pub/Sub → Subscriptions → Create subscription**:
    - Topic: `gmail-replies`
    - Delivery type: **Push**
-   - Endpoint URL: the **Push endpoint** *(copy)*
+   - Endpoint URL: the **Push endpoint** *(copy)* — it carries no token of ours; the
+     authentication is the OIDC token configured on the next line
    - **Enable authentication**, service account `gmail-push@<project-id>.iam.gserviceaccount.com`,
      audience: the **OIDC audience** *(copy)*
    - Acknowledgement deadline 30 s, retry policy *exponential backoff*.

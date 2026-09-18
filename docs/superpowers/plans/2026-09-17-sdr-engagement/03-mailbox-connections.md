@@ -10,7 +10,7 @@
 
 **Roadmap:** [00-roadmap.md](00-roadmap.md). **Spec:** §3 (`MailProvider`), §5 (threading, limits), §9 (Settings → Mailboxes), §12, D1, D2, D16, D21. **Depends on:** phases 01, 02.
 
-**Verified:** the code in this plan was run in the CI image on top of phases 01–02: `tests/test_engagement_mailboxes.py`, `test_continuous_automation.py`, `test_plan_gated_nav.py`, `test_rls_binding_guard.py`, `test_job_durability.py`, `test_admin_health.py` (96 passed), `ruff check nexus tests tests_live scripts`, `npm run typecheck`, and `pytest tests_live/engagement` (5 skipped, each naming its missing secrets). The live round trip itself runs once the owner's test mailboxes exist.
+**Verified:** the code in this plan was run in the CI image on top of phases 01–02: `tests/test_engagement_mailboxes.py`, `test_continuous_automation.py`, `test_plan_gated_nav.py`, `test_rls_binding_guard.py`, `test_job_durability.py`, `test_admin_health.py` (96 passed), `ruff check nexus tests tests_live scripts`, `npm run typecheck`, and `pytest tests_live/engagement` (5 skipped, each naming its missing secrets). Amended after the phases 01–05 full-suite run (2026-09-18): `tests/test_crm_auto_sync.py` asserts the whole set of enqueued jobs, so it needs `refresh_mailbox_tokens` too. The live round trip itself runs once the owner's test mailboxes exist.
 
 ---
 
@@ -36,7 +36,7 @@ The code merges without these; the live tests skip until they exist. Follow `doc
 | Create | `nexus/api/routers/engagement_mailboxes.py` | My mailboxes API + OAuth callback |
 | Modify | `nexus/api/routers/__init__.py` | register the router |
 | Modify | `nexus/workers/tasks.py`, `nexus/workers/scheduler.py` | `refresh_mailbox_tokens` job |
-| Modify | `tests/test_continuous_automation.py` | the scheduler enqueues one more job |
+| Modify | `tests/test_continuous_automation.py`, `tests/test_crm_auto_sync.py` | the scheduler enqueues one more job |
 | Create | `frontend/src/pages/engagement/MailboxesPage.tsx` (+ `.module.css`) | My mailboxes |
 | Modify | `frontend/src/App.tsx`, `frontend/src/app/nav.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts` | route, nav item, client |
 | Create | `tests/test_engagement_mailboxes.py` | offline behaviour |
@@ -1973,9 +1973,18 @@ In `tests/test_continuous_automation.py`:
 - `test_enqueue_due_enqueues_both_drivers_when_enabled`: `assert count == 12` → `assert count == 13` (add the comment `# +1 for refresh_mailbox_tokens, which keeps SDR mailbox status honest whether or not automation is on.`) and add `"refresh_mailbox_tokens",` to the expected set.
 - `test_enqueue_due_noop_when_disabled`: `assert count == 8` → `assert count == 9` and add `"refresh_mailbox_tokens",` to the expected set.
 
+In `tests/test_crm_auto_sync.py`, both `test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled` and
+`test_scheduler_omits_crm_sweep_when_disabled` assert the WHOLE set of enqueued job names, so each
+needs `"refresh_mailbox_tokens",` added to its expected set, with the comment:
+
+```python
+        # The mailbox refresh rides along too: a revoked grant must show Reconnect whether or
+        # not this workspace switched automation on.
+```
+
 - [ ] **Step 2: Run to see them fail**
 
-Run: `pytest tests/test_engagement_mailboxes.py tests/test_continuous_automation.py -n0 -q`
+Run: `pytest tests/test_engagement_mailboxes.py tests/test_continuous_automation.py tests/test_crm_auto_sync.py -n0 -q`
 Expected: FAIL — `ImportError: cannot import name 'handle_refresh_mailbox_tokens'` and `12 == 13`.
 
 - [ ] **Step 3: Implement the job**
@@ -2047,13 +2056,13 @@ In `nexus/workers/scheduler.py`, import `enqueue_refresh_mailbox_tokens` beside 
 
 - [ ] **Step 4: Run to see them pass**
 
-Run: `pytest tests/test_engagement_mailboxes.py tests/test_continuous_automation.py tests/test_job_durability.py -n0 -q`
+Run: `pytest tests/test_engagement_mailboxes.py tests/test_continuous_automation.py tests/test_crm_auto_sync.py tests/test_job_durability.py -n0 -q`
 Expected: all pass (the UI test in this file still fails until Task 10).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add nexus/workers/tasks.py nexus/workers/scheduler.py tests/test_continuous_automation.py tests/test_engagement_mailboxes.py
+git add nexus/workers/tasks.py nexus/workers/scheduler.py tests/test_continuous_automation.py tests/test_crm_auto_sync.py tests/test_engagement_mailboxes.py
 git commit -m "feat(engagement): daily mailbox token refresh so a revoked grant shows Reconnect early"
 ```
 
