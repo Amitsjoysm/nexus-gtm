@@ -379,6 +379,41 @@ _SPECS: tuple[SettingSpec, ...] = (
         minimum=1, maximum=168,
         effect="How often the signal digest is sent.",
     ),
+    SettingSpec(
+        key="web_cache_enabled", label="Reuse web answers", group=SIGNALS, kind="bool",
+        effect="Serve a repeated search or page fetch from our own database instead of buying it "
+               "again. Off means every lookup goes to the provider, as it did before the cache "
+               "existed.",
+        warning="Turning this off multiplies signal search spend by roughly four for every hot "
+                "account, because the same queries are re-bought on every six-hour refresh.",
+        risk="medium",
+    ),
+    SettingSpec(
+        key="signal_cache_ttl_fast_s", label="Re-ask window: funding and news (seconds)",
+        group=SIGNALS, kind="int", minimum=600, maximum=604800,
+        effect="How long a funding or news search result is reused before the web is asked again.",
+        warning="Raising this delays time-critical signals: a funding round found by open-web news "
+                "can reach the rep this much later than the company announced it.",
+        risk="medium",
+    ),
+    SettingSpec(
+        key="signal_cache_ttl_slow_s", label="Re-ask window: hiring and tech (seconds)",
+        group=SIGNALS, kind="int", minimum=600, maximum=604800,
+        effect="How long a hiring, job-posting or technology search result is reused. The ATS board "
+               "and the company's own site are fetched first-party and are not affected.",
+        warning="Lowering this towards the funding window removes most of the saving, because these "
+                "kinds are the bulk of the queries.",
+        risk="medium",
+    ),
+    SettingSpec(
+        key="page_cache_ttl_s", label="Re-fetch window: pages (seconds)", group=SIGNALS,
+        kind="int", minimum=600, maximum=604800,
+        effect="How long a fetched page (website watch, careers page) is reused before it is "
+               "fetched again.",
+        warning="Below the website-watch baseline this reports the same change repeatedly; far "
+                "above it, a pricing-page change is noticed late.",
+        risk="medium",
+    ),
 
     # ---- automation and schedules: the things that spend money on their own ----------------------
     SettingSpec(
