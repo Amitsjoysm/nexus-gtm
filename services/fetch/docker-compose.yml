@@ -1,0 +1,16 @@
+# nexus-fetch on its own VM. Run from the repository root:
+#   FETCH_TOKEN=$(openssl rand -hex 32) docker compose -f services/fetch/docker-compose.yml up -d --build
+services:
+  fetch:
+    build:
+      context: ../..
+      dockerfile: services/fetch/Dockerfile
+    restart: unless-stopped
+    environment:
+      FETCH_TOKEN: ${FETCH_TOKEN:?set FETCH_TOKEN to a long random value}
+      FETCH_CONCURRENCY: "4"
+    ports:
+      # Published on the host so the app can reach it; the VM FIREWALL is what limits who can. Allow
+      # 8081 only from the app's egress addresses — reachable by anyone else, this is an open proxy.
+      - "8081:8081"
+    mem_limit: 2g

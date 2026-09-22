@@ -28,6 +28,7 @@ dependencies = [
 postgres = ["asyncpg>=0.29"]
 redis = ["redis>=5.0"]
 scraping = ["scrapling>=0.4"]   # enables the Scrapling browser/enrichment adapter
+fetch = ["scrapling[fetchers]>=0.4.15"]   # the nexus-fetch service image only (services/fetch/)
 metrics = ["prometheus-fastapi-instrumentator>=7.0,<8"]   # 8.x mismatches FastAPI<0.116 route resolution
 migrate = ["alembic>=1.13"]     # schema migrations for production databases
 # Parquet for `scripts/export_training_dataset.py`. Optional because pyarrow is ~40 MB and no
