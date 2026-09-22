@@ -705,6 +705,9 @@ class DorkedSearchSource(SignalSource):
         # `timeout_s` below computes it from the cap in force, so a changed cap moves the budget.
         # Read by IngestionService after each fetch and stored on the crawl-history row.
         self.last_provenance: dict = {}
+        #: Whether the last `_run` was served from `web_cache` rather than bought, for provenance
+        #: and so a stale provider failure is not mistaken for this query's outcome.
+        self._last_run_cached = False
 
     @property
     def _max_queries(self) -> int:
@@ -755,14 +758,34 @@ class DorkedSearchSource(SignalSource):
             self._search_choice = choice
         return self._search
 
-    async def _run(self, query: str, include: tuple, exclude: tuple) -> list[dict] | None:
+    async def _run(self, query: str, include: tuple, exclude: tuple,
+                   *, kind: str = "") -> list[dict] | None:
         """Hits for one dork, or None if the provider itself failed.
 
         None is not the same as no results, and the caller treats it differently: the keyless
         DuckDuckGo backend starts returning 403 after roughly ten rapid queries, and continuing to
         fire the rest of the batch only deepens the block while returning nothing.
+
+        A fresh cached answer short-circuits before any request. That reuse IS the per-kind
+        cadence (`nexus/fetching/ttl.py`): funding and news are re-asked every six hours, the rest
+        once a day, with no change to how often the account itself is refreshed. Only a SUCCESSFUL
+        answer is stored. A provider whose key pool is condemned returns `[]` with `last_failure`
+        set rather than raising, and caching that would replay an outage as "no results" for the
+        whole TTL, long after the key was fixed.
+
+        The cache runs on its own platform session and is read and written here, before the caller
+        ingests anything into the tenant's session — the ordering `nexus/fetching/cache.py` asks for.
         """
+        from nexus.fetching import cache
+        from nexus.fetching.ttl import ttl_for_signal_kind
+
         provider = self._provider()
+        engine = getattr(provider, "name", "unknown")
+        cached = await cache.get("search", query, engine=engine, limit=self._per_query)
+        if cached is not None:
+            self._last_run_cached = True
+            return list(cached)
+        self._last_run_cached = False
         try:
             hits = await provider.search_recent(
                 query,
@@ -788,6 +811,11 @@ class DorkedSearchSource(SignalSource):
         for h in hits or []:
             # SearchHit dataclass or a plain dict, depending on the seam an injected double uses.
             out.append(h.as_dict() if hasattr(h, "as_dict") else dict(h))
+        if not getattr(provider, "last_failure", ""):
+            await cache.put(
+                "search", query, engine=engine, limit=self._per_query,
+                payload=out, ttl_s=ttl_for_signal_kind(kind),
+            )
         return out
 
     async def fetch(self, account: Account) -> list[RawSignal]:
@@ -825,7 +853,8 @@ class DorkedSearchSource(SignalSource):
             )
             include, exclude = dork.domains(domain=domain, dialect=dialect)
             self.last_provenance["queries"].append({"dork": dork.slug, "query": query})
-            hits = await self._run(query, include, exclude)
+            hits = await self._run(query, include, exclude, kind=dork.kind)
+            self.last_provenance["queries"][-1]["cached"] = self._last_run_cached
             if hits is None:
                 self.last_provenance["queries"][-1]["failed"] = True
                 # The provider failed, not the query. Stop: the rest of the batch would fail too,
@@ -837,7 +866,9 @@ class DorkedSearchSource(SignalSource):
             # reason only in a log line. Recorded here because the crawl-history row is the
             # operator's surface for this, and stop for the same reason as above: the remaining
             # queries are billed calls against a pool already known to be dead.
-            failure = str(getattr(provider, "last_failure", "") or "")
+            # A cached answer never reached the provider, so a failure it recorded on an EARLIER
+            # call says nothing about this one; reading it would abort a crawl that bought nothing.
+            failure = "" if self._last_run_cached else str(getattr(provider, "last_failure", "") or "")
             if failure:
                 self.last_provenance["provider_failure"] = failure
                 self.last_provenance["queries"][-1]["failed"] = True

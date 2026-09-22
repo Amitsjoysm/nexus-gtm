@@ -34,6 +34,9 @@ def _account() -> Account:
 
 
 async def test_a_changed_cap_reaches_a_source_that_already_exists(monkeypatch):
+    # Counts provider calls across two crawls of one account, so the shared web cache would serve
+    # the second crawl and hide the cap. This test is about the cap, not the cache.
+    monkeypatch.setattr(get_settings(), "web_cache_enabled", False)
     monkeypatch.setattr(get_settings(), "signal_dork_max_queries", 3)
     search = _Counting()
     source = DorkedSearchSource(search=search)
