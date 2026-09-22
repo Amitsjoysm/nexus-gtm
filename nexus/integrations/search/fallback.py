@@ -11,6 +11,11 @@ Two rules that are easy to get wrong:
   deliberate precision cost on the path that should now be rare.
 * **An empty answer with no failure is an ANSWER.** Falling through on it would pay the next
   provider for a question already answered, and "nothing was published" is the common case.
+
+**Shadow mode** asks every member, answers with the LAST one that succeeded (the paid engine), and
+records how many hits each returned in `shadow_report`. It exists because the ordinary chain cannot
+see the failure that matters most: a self-hosted engine that answers with WORSE results never falls
+through, it just quietly degrades what reps see. Shadow is how that is measured before promotion.
 """
 from __future__ import annotations
 
@@ -26,10 +31,13 @@ _DIALECT_RANK = {"plain": 0, "operator": 1, "semantic": 2}
 class FallbackSearchProvider(SearchProvider):
     name = "fallback"
 
-    def __init__(self, providers: list) -> None:
+    def __init__(self, providers: list, *, shadow: bool = False) -> None:
         self.providers = [p for p in providers if p is not None]
         #: Which member answered the last query, empty when none did. Recorded in provenance.
         self.answered_by = ""
+        self.shadow = shadow
+        #: Hits per member for the last shadow query; None where that member failed.
+        self.shadow_report: dict[str, int | None] = {}
 
     @property
     def query_dialect(self) -> str:  # type: ignore[override]
@@ -56,6 +64,8 @@ class FallbackSearchProvider(SearchProvider):
             return await provider.search_recent(query, limit=limit, days=kwargs.get("days", 90))
 
     async def _run(self, query: str, *, recent: bool, limit: int, **kwargs) -> list[SearchHit]:
+        if self.shadow and len(self.providers) > 1:
+            return await self._run_shadow(query, recent=recent, limit=limit, **kwargs)
         failures: list[str] = []
         for provider in self.providers:
             name = getattr(provider, "name", "unknown")
@@ -75,3 +85,35 @@ class FallbackSearchProvider(SearchProvider):
         self.answered_by = ""
         self.last_failure = "; ".join(failures)
         return []
+
+    async def _run_shadow(self, query: str, *, recent: bool, limit: int,
+                          **kwargs) -> list[SearchHit]:
+        """Ask everyone; answer with the last member that succeeded; count what each returned.
+
+        The last successful member rather than strictly the last member: if the paid engine fails,
+        reps get the free answer, exactly as the ordinary chain would give them. Shadow must never
+        be worse than what it shadows.
+        """
+        self.shadow_report = {}
+        answer: list[SearchHit] | None = None
+        answered_by = ""
+        failures: list[str] = []
+        for provider in self.providers:
+            name = getattr(provider, "name", "unknown")
+            try:
+                hits = await self._ask(provider, query, recent=recent, limit=limit, **kwargs)
+            except Exception as exc:
+                logger.warning("shadow search via %s failed: %r", name, exc)
+                self.shadow_report[name] = None
+                failures.append(f"{name}: {type(exc).__name__}")
+                continue
+            failure = str(getattr(provider, "last_failure", "") or "")
+            if failure:
+                self.shadow_report[name] = None
+                failures.append(f"{name}: {failure}")
+                continue
+            self.shadow_report[name] = len(hits or [])
+            answer, answered_by = list(hits or []), name
+        self.answered_by = answered_by
+        self.last_failure = "" if answer is not None else "; ".join(failures)
+        return answer or []

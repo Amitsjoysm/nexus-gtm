@@ -309,10 +309,12 @@ def build_signal_search_provider() -> SearchProvider:
     from nexus.core.config import get_settings
     from nexus.integrations.search.fallback import FallbackSearchProvider
 
+    settings = get_settings()
     paid = build_search_provider(signal_search_choice())
-    if not (get_settings().fetch_service_url or "").strip():
+    if not (settings.fetch_service_url or "").strip():
         return paid
-    return FallbackSearchProvider([build_search_provider("nexusfetch"), paid])
+    return FallbackSearchProvider([build_search_provider("nexusfetch"), paid],
+                                  shadow=bool(settings.signal_fetch_shadow))
 
 
 def build_search_provider(name: str, *, browser=None) -> SearchProvider:

@@ -354,6 +354,10 @@ class Settings(BaseSettings):
     #: because the panel returns values in plaintext.
     fetch_service_token: str = ""
     fetch_service_timeout_s: float = 20.0
+    #: Ask the self-hosted fetcher AND the paid engine, record both, answer with the paid result.
+    #: The only way to see whether promoting the fetcher would cost recall before it does. Doubles
+    #: signal search volume while on.
+    signal_fetch_shadow: bool = False
 
     # Per-tenant ceiling on billed source runs per UTC day. Automation is now on by default for new
     # workspaces, so this is what stops an enthusiastic account import from producing a surprise

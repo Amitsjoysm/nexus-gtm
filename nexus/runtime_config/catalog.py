@@ -433,6 +433,16 @@ _SPECS: tuple[SettingSpec, ...] = (
                 "fetch holds up the whole account crawl.",
         risk="medium",
     ),
+    SettingSpec(
+        key="signal_fetch_shadow", label="Compare fetcher with paid search", group=SIGNALS,
+        kind="bool",
+        effect="Asks the self-hosted fetcher and the paid provider for every signal search and "
+               "records what each returned, but always shows reps the paid answer. For deciding "
+               "whether the fetcher is good enough, using scripts/fetch_shadow_report.py.",
+        warning="Doubles signal search volume and cost while it is on. Leave it on only as long as "
+                "the comparison needs, then turn it off.",
+        risk="medium",
+    ),
 
     # ---- automation and schedules: the things that spend money on their own ----------------------
     SettingSpec(

@@ -662,7 +662,7 @@ class DorkedSearchSource(SignalSource):
         # never re-resolved; a resolved one is rebuilt when `signal_search_provider` changes.
         self._search = search
         self._search_injected = search is not None
-        self._search_choice: tuple[str, str] | None = None
+        self._search_choice: tuple[str, str, bool] | None = None
         # The budget that matters: each dork is one billed search call, so this multiplies the cost
         # of every account refresh. Four is enough for funding + hiring + exec + one event class.
         # None reads `signal_dork_max_queries` on every fetch: this source lives inside the
@@ -755,7 +755,9 @@ class DorkedSearchSource(SignalSource):
         # change made in the Control plane until a restart. Reading the settings is a dict lookup.
         # The self-hosted fetcher is part of the choice: setting or clearing its URL moves the
         # source onto or off the fallback chain (`build_signal_search_provider`).
-        choice = (signal_search_choice(), (get_settings().fetch_service_url or "").strip())
+        settings = get_settings()
+        choice = (signal_search_choice(), (settings.fetch_service_url or "").strip(),
+                  bool(settings.signal_fetch_shadow))
         if self._search is None or self._search_choice != choice:
             self._search = build_signal_search_provider()
             self._search_choice = choice
@@ -857,7 +859,15 @@ class DorkedSearchSource(SignalSource):
             include, exclude = dork.domains(domain=domain, dialect=dialect)
             self.last_provenance["queries"].append({"dork": dork.slug, "query": query})
             hits = await self._run(query, include, exclude, kind=dork.kind)
-            self.last_provenance["queries"][-1]["cached"] = self._last_run_cached
+            entry = self.last_provenance["queries"][-1]
+            entry["cached"] = self._last_run_cached
+            # Who answered, per query, so promoting the self-hosted fetcher is decided on evidence
+            # (scripts/fetch_shadow_report.py) rather than on how it felt.
+            entry["answered_by"] = "cache" if self._last_run_cached else (
+                getattr(provider, "answered_by", "") or getattr(provider, "name", "")
+            )
+            if getattr(provider, "shadow", False) and not self._last_run_cached:
+                entry["shadow"] = dict(getattr(provider, "shadow_report", {}) or {})
             if hits is None:
                 self.last_provenance["queries"][-1]["failed"] = True
                 # The provider failed, not the query. Stop: the rest of the batch would fail too,
