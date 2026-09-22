@@ -34,6 +34,10 @@ from nexus.fetching.parse import BlockedByEngine, parse_ddg
 logger = logging.getLogger("nexus.fetching.service")
 
 DDG_HTML = "https://html.duckduckgo.com/html/"
+#: The most page content returned per fetch. Targets come from `account.domain`, which a tenant's
+#: own reps control, so an oversized or slow-drip body must not be able to fill the response — or,
+#: through JSON encoding, twice the memory — on a VM every tenant shares.
+DEFAULT_MAX_CHARS = 2_000_000
 
 
 class SearchIn(BaseModel):
@@ -99,10 +103,24 @@ def _html_of(page) -> str:
     return body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)
 
 
+def _bounded(page: dict, max_chars: int) -> dict:
+    """Cap the text a fetch returns, and say so rather than silently shortening it."""
+    out = dict(page)
+    truncated = False
+    for key in ("html", "text"):
+        value = out.get(key)
+        if isinstance(value, str) and len(value) > max_chars:
+            out[key] = value[:max_chars]
+            truncated = True
+    out["truncated"] = truncated
+    return out
+
+
 def build_app(*, token: str | None = None, search_fn=None, fetch_fn=None,
-              concurrency: int | None = None) -> FastAPI:
+              concurrency: int | None = None, max_chars: int | None = None) -> FastAPI:
     """The ASGI app. The fetchers are injectable so tests never touch the network."""
     secret = os.environ.get("FETCH_TOKEN", "") if token is None else token
+    cap = max_chars or int(os.environ.get("FETCH_MAX_CHARS", str(DEFAULT_MAX_CHARS)))
     search_fn = search_fn or scrape_ddg
     fetch_fn = fetch_fn or fetch_page
     # Per app, not per module: asyncio primitives bind to the first event loop that uses them.
@@ -121,7 +139,10 @@ def build_app(*, token: str | None = None, search_fn=None, fetch_fn=None,
         return host_locks.setdefault(host, asyncio.Lock())
 
     @app.get("/health")
-    async def health() -> dict:
+    async def health(x_fetch_token: str | None = Header(default=None)) -> dict:
+        # Token-gated like everything else: even "which tiers are installed" tells a stranger
+        # what this box is. The app's health check sends the token.
+        authorize(x_fetch_token)
         return {"ok": True, "browser": importlib.util.find_spec("scrapling") is not None}
 
     @app.post("/search")
@@ -148,10 +169,20 @@ def build_app(*, token: str | None = None, search_fn=None, fetch_fn=None,
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
         async with limit, host_lock((urlsplit(url).hostname or "").lower()):
             try:
-                return await fetch_fn(url, mode=body.mode, timeout_s=body.timeout_s)
+                page = await fetch_fn(url, mode=body.mode, timeout_s=body.timeout_s)
             except Exception as exc:
                 # Logged here, never echoed: a fetcher's exception text can carry internal detail.
                 logger.warning("fetch failed for %s: %r", url, exc)
                 raise HTTPException(status.HTTP_502_BAD_GATEWAY, "fetch failed") from None
+        # The guard saw only the FIRST url. The HTTP tier refuses private redirects itself, but a
+        # browser follows them, so where the fetch ENDED is checked too: a public page that
+        # redirected to a metadata endpoint must not have that endpoint's content handed back.
+        try:
+            check_url(str(page.get("final_url") or url))
+        except UrlRejected as exc:
+            logger.warning("fetch for %s ended somewhere not fetchable: %s", url, exc)
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "redirected somewhere not fetchable") from None
+        return _bounded(page, cap)
 
     return app

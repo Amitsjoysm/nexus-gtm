@@ -34,10 +34,17 @@ logger = logging.getLogger("nexus.fetching.cache")
 
 
 def cache_key(kind: str, subject: str, *, engine: str = "", limit: int = 0) -> str:
-    """Deterministic id, so two workers racing on one query write the same row."""
+    """Deterministic id, so two workers racing on one query write the same row.
+
+    A search query is case-insensitive, so it is lowercased; a page URL is not — `/Pricing` and
+    `/pricing` can be different pages — so a page's subject keeps its case.
+    """
+    kind_norm = (kind or "").strip().lower()
+    subject_norm = (subject or "").strip()
+    if kind_norm != "page":
+        subject_norm = subject_norm.lower()
     raw = "|".join(
-        [(kind or "").strip().lower(), (subject or "").strip().lower(),
-         (engine or "").strip().lower(), str(int(limit or 0))]
+        [kind_norm, subject_norm, (engine or "").strip().lower(), str(int(limit or 0))]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

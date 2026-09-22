@@ -65,6 +65,14 @@ async def test_if_the_paid_member_fails_the_free_answer_is_still_served():
     assert chain.last_failure == ""
 
 
+def test_a_shadow_run_uses_its_own_cache_keys():
+    # Otherwise answers cached before shadow was switched on are served for up to a day and nothing
+    # is compared, which reads as "the fetcher never agrees".
+    plain = FallbackSearchProvider([Stub("nexusfetch", FREE), Stub("firecrawl", PAID)])
+    shadow = FallbackSearchProvider([Stub("nexusfetch", FREE), Stub("firecrawl", PAID)], shadow=True)
+    assert plain.name != shadow.name
+
+
 def test_the_setting_turns_it_on(monkeypatch):
     from nexus.core.config import get_settings
     from nexus.integrations.search.provider import build_signal_search_provider

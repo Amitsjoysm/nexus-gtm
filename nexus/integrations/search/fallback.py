@@ -29,7 +29,10 @@ _DIALECT_RANK = {"plain": 0, "operator": 1, "semantic": 2}
 
 
 class FallbackSearchProvider(SearchProvider):
-    name = "fallback"
+    """Per-call state (`answered_by`, `last_failure`, `shadow_report`) lives on the instance, as it
+    does on every provider here. Safe while `run_worker` is serial; bounded per-account concurrency —
+    the documented next lever — must give each in-flight account its own provider, or two accounts
+    will write each other's provenance."""
 
     def __init__(self, providers: list, *, shadow: bool = False) -> None:
         self.providers = [p for p in providers if p is not None]
@@ -38,6 +41,13 @@ class FallbackSearchProvider(SearchProvider):
         self.shadow = shadow
         #: Hits per member for the last shadow query; None where that member failed.
         self.shadow_report: dict[str, int | None] = {}
+
+    @property
+    def name(self) -> str:  # type: ignore[override]
+        # The cache keys on this name. A shadow run gets its own keys, so turning shadow on starts
+        # comparing at once instead of being served, for up to a day, answers cached before it was
+        # on — which would read as "the fetcher never gets compared".
+        return "fallback-shadow" if self.shadow else "fallback"
 
     @property
     def query_dialect(self) -> str:  # type: ignore[override]

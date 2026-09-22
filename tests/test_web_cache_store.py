@@ -75,6 +75,12 @@ async def test_a_bad_argument_is_a_miss_not_an_exception():
     await cache.put("search", ["not", "a", "string"], engine="t", limit=4, payload=[], ttl_s=60)
 
 
+def test_a_query_is_case_insensitive_but_a_page_url_is_not():
+    assert cache.cache_key("search", "Acme Funding") == cache.cache_key("search", "acme funding")
+    assert (cache.cache_key("page", "https://acme.test/Pricing")
+            != cache.cache_key("page", "https://acme.test/pricing"))
+
+
 async def test_the_switch_off_means_every_lookup_misses(monkeypatch):
     from nexus.core.config import get_settings
 

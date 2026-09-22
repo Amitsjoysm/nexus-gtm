@@ -87,11 +87,42 @@ async def test_a_crashing_fetcher_is_a_502_not_a_500_with_a_traceback():
     assert "browser died" not in response.text
 
 
-async def test_health_reports_without_a_token():
+async def test_health_answers_the_token_holder():
     async with _client() as client:
-        response = await client.get("/health")
+        response = await client.get("/health", headers=AUTH)
     assert response.status_code == 200
     assert response.json()["ok"] is True
+
+
+async def test_health_tells_a_stranger_nothing():
+    async with _client() as client:
+        assert (await client.get("/health")).status_code == 401
+
+
+async def test_an_oversized_page_is_capped_and_says_so():
+    async def fetch(url, *, mode, timeout_s):
+        return {"status": 200, "final_url": url, "html": "x" * 50, "text": "y" * 50, "title": ""}
+
+    app = build_app(token=TOKEN, fetch_fn=fetch, max_chars=10)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://fetch.test") as client:
+        body = (await client.post("/fetch", json={"url": "https://93.184.216.34/p"},
+                                  headers=AUTH)).json()
+    assert len(body["html"]) == 10 and len(body["text"]) == 10
+    assert body["truncated"] is True
+
+
+async def test_a_redirect_to_a_private_address_returns_nothing_from_it():
+    # A browser follows redirects the guard never saw. The content of wherever it landed must not
+    # come back if that place is one the guard would have refused.
+    async def fetch(url, *, mode, timeout_s):
+        return {"status": 200, "final_url": "http://169.254.169.254/latest/meta-data/iam",
+                "html": "SECRET-ROLE-CREDENTIALS", "text": "", "title": ""}
+
+    async with _client(fetch=fetch) as client:
+        response = await client.post("/fetch", json={"url": "https://93.184.216.34/p",
+                                                     "mode": "stealth"}, headers=AUTH)
+    assert response.status_code == 400
+    assert "SECRET" not in response.text
 
 
 async def test_the_api_documentation_is_not_published():

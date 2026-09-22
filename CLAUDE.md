@@ -959,7 +959,10 @@ inert: the production image never installed it. Spec and plan:
   from `services/fetch/`). Shared secret compared in constant time, and an EMPTY secret refuses
   everything; firewall to the app's egress; `nexus/fetching/guard.py` reuses
   `sources/safety._is_blocked_host` rather than keeping a second copy of the SSRF rules; the HTTP
-  tier follows redirects with `follow_redirects="safe"` because the guard only sees the first URL.
+  tier follows redirects with `follow_redirects="safe"` because the guard only sees the first URL,
+  and the FINAL url is re-checked before content is returned, because a browser follows redirects
+  the guard never saw. Every endpoint, `/health` included, needs the token. Page content is capped
+  (`FETCH_MAX_CHARS`, default 2M, `truncated: true`): targets come from tenant-controlled domains.
   Its own VM, NOT the Reacher box: scraping egress must not share an IP with email verification.
 - **`blocked` is not `empty`.** An anti-bot page raises `BlockedByEngine` → 503 → `last_failure`,
   so a crawl records `error` rather than a quiet market. `parse_ddg` pairs titles and snippets by
@@ -968,6 +971,12 @@ inert: the production image never installed it. Spec and plan:
   falls through. `signal_fetch_shadow` asks both, serves the paid answer, and records per-member hit
   counts in provenance; `scripts/fetch_shadow_report.py` reads `paid_only` asymmetrically, like
   `companies/diff.py`. It runs on the platform sessionmaker (`signal_source_runs` is tenant-scoped).
+  Shadow runs have their own cache keys (`fallback-shadow`), or answers cached before it was on
+  would be served for a day and nothing compared.
+- **The chain holds per-call state on the instance** (`answered_by`, `last_failure`,
+  `shadow_report`), like every provider here. Safe while `run_worker` is serial; bounded
+  per-account concurrency must give each in-flight account its own provider, or two accounts will
+  write each other's provenance.
 - **Website watch uses both** (`webwatch._get`): cache, then the fetcher, then plain httpx, so a
   deployment without the VM behaves exactly as before. Pages over 1M characters are used, never
   cached.

@@ -23,7 +23,7 @@ cache lives in the app's own database (`web_cache`). Code: `nexus/fetching/servi
 
 ## Check it
 
-    curl -s localhost:8081/health
+    curl -s localhost:8081/health -H "X-Fetch-Token: $FETCH_TOKEN"
     curl -s -X POST localhost:8081/search -H "X-Fetch-Token: $FETCH_TOKEN" \
          -H 'content-type: application/json' -d '{"query":"vanta series c funding","limit":3}'
     curl -s -X POST localhost:8081/fetch -H "X-Fetch-Token: $FETCH_TOKEN" \
@@ -41,8 +41,21 @@ its API is exercised end to end.
 | `200` with `[]` | The engine found nothing | Cached as a real "nothing" |
 | `503 blocked` | The engine served an anti-bot page | Falls back to the paid provider; not cached |
 | `502` | The fetch or scrape failed | Falls back to the paid provider; not cached |
-| `401` | Wrong or missing token | Check `NEXUS_FETCH_SERVICE_TOKEN` |
+| `401` | Wrong or missing token (every endpoint, `/health` included) | Check `NEXUS_FETCH_SERVICE_TOKEN` |
+| `400 redirected somewhere not fetchable` | The page redirected to a private or metadata address | Refused by design; nothing from there is returned |
 | `400 not fetchable` | Private, loopback, metadata or non-http target | Refused by design |
+
+Page content is capped at `FETCH_MAX_CHARS` (default 2,000,000) and the response says
+`"truncated": true` when it was cut — targets come from account domains that tenants control,
+so one huge page must not fill a VM every tenant shares.
+
+## Shadow comparisons
+
+`NEXUS_SIGNAL_FETCH_SHADOW=true` makes the app ask this service and the paid engine for every
+signal search, record both, and still show reps the paid answer. Shadow runs use their own cache
+keys, so comparisons start immediately. Read them with
+`python scripts/fetch_shadow_report.py --days 7`; the line that matters is ONLY PAID FOUND.
+Shadow doubles search volume, so turn it off once the comparison has enough rows.
 
 Occasional `503`s are normal. **Sustained** blocks mean the pacing is too aggressive for the volume,
 or the VM's IP has been flagged — lower `FETCH_CONCURRENCY`, and check the cache hit rate in the app
