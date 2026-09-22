@@ -653,6 +653,49 @@ _ENGINES: dict[str, tuple[type[SearchProvider], str]] = {
 }
 
 
+class SelfHostedSearchProvider(SearchProvider):
+    """Searches through our own nexus-fetch service instead of a paid API.
+
+    `plain`, like DuckDuckGo, because that is what the service scrapes. Over-claiming the dialect
+    costs every result: an `operator` dork on these endpoints matches nothing and does not error.
+
+    The client is resolved per call, not captured, so a fetcher URL changed in the Control plane
+    reaches the next search; an explicitly passed client (tests) is used as given.
+    """
+
+    name = "nexusfetch"
+    query_dialect = "plain"
+
+    def __init__(self, client=None):
+        self._client = client
+
+    def _resolved(self):
+        if self._client is not None:
+            return self._client
+        from nexus.fetching.client import get_fetch_client
+
+        return get_fetch_client()
+
+    async def search(self, query: str, *, limit: int = 5) -> list[SearchHit]:
+        return await self._hits(query, limit=limit, recency_days=0)
+
+    async def search_recent(self, query: str, *, limit: int = 5, days: int = 90,
+                            include_domains: tuple[str, ...] = (),
+                            exclude_domains: tuple[str, ...] = ()) -> list[SearchHit]:
+        # The domains are already inside the query for a `plain` dialect, as the base class notes.
+        return await self._hits(query, limit=limit, recency_days=days)
+
+    async def _hits(self, query: str, *, limit: int, recency_days: int) -> list[SearchHit]:
+        client = self._resolved()
+        raw = await client.search(query, limit=limit, recency_days=recency_days)
+        self.last_failure = client.last_failure
+        return [
+            SearchHit(title=h.get("title", ""), url=h["url"], snippet=h.get("snippet", ""),
+                      source=h.get("source") or self.name)
+            for h in raw if h.get("url")
+        ]
+
+
 def build_engine(name: str, settings, *, browser=None) -> SearchProvider:
     """Build a hosted-engine provider, reading its key from settings.
 

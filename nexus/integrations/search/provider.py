@@ -312,6 +312,12 @@ def build_search_provider(name: str, *, browser=None) -> SearchProvider:
         return StubSearchProvider()
     if key in ("duckduckgo", "ddg"):
         return DuckDuckGoSearchProvider(browser=browser)
+    if key in ("nexusfetch", "selfhosted"):
+        # Our own fetcher (services/fetch/). Keyless from the app's side: the shared secret lives
+        # on the client, and an unconfigured client answers "not configured" rather than raising.
+        from nexus.integrations.search.engines import SelfHostedSearchProvider
+
+        return SelfHostedSearchProvider()
     if key in ("exa", "brave", "serper", "firecrawl"):
         from nexus.core.config import get_settings
         from nexus.integrations.search.engines import build_engine
