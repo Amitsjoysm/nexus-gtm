@@ -200,6 +200,12 @@ async def _main() -> None:
         schedule_verifier_warning(logger)
     except Exception:
         logger.warning("could not schedule the email verifier check", exc_info=True)
+    try:
+        from nexus.fetching.health import schedule_fetcher_warning
+
+        schedule_fetcher_warning(logger)
+    except Exception:
+        logger.warning("could not schedule the web fetcher check", exc_info=True)
     from nexus.ingestion.crm_sync import register_crm_sync_subscribers
     from nexus.workers.state_metrics import run_state_metrics, serve_worker_metrics
 

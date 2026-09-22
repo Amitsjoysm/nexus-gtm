@@ -202,6 +202,16 @@ async def lifespan(app: FastAPI):
         logging.getLogger("nexus.main").warning(
             "could not schedule the email verifier check", exc_info=True
         )
+    # The same for the self-hosted fetcher: when it cannot answer, signal searches fall back to the
+    # paid provider and the only symptom is the bill. Quiet when the fetcher is not configured.
+    try:
+        from nexus.fetching.health import schedule_fetcher_warning
+
+        schedule_fetcher_warning(logging.getLogger("nexus.main"))
+    except Exception:
+        logging.getLogger("nexus.main").warning(
+            "could not schedule the web fetcher check", exc_info=True
+        )
 
     # Billing catalog/plan seed: idempotent, additive, and non-fatal. A seed failure must never
     # stop the API from serving (docs/billing/15-Migration-Strategy.md).

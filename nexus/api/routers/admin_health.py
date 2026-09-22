@@ -244,6 +244,17 @@ async def _probe_email_verifier() -> tuple[str, str]:
     return check.status, f"provider={check.provider or 'stub'}: {check.detail}{where}"
 
 
+async def _probe_web_fetcher() -> tuple[str, str]:
+    """Whether the self-hosted fetcher answers. When it does not, nothing fails: signal searches
+    fall back to the paid provider, so the only symptom is the bill."""
+    from nexus.fetching.health import check_fetch_service
+
+    check = await check_fetch_service()
+    status = {"ok": OK, "unconfigured": UNCONFIGURED}.get(check.status, ERROR)
+    where = f" (url={check.url})" if check.url else ""
+    return status, f"{check.detail}{where}"
+
+
 async def _probe_phone_lookup() -> tuple[str, str]:
     import httpx
 
@@ -351,6 +362,7 @@ _PROBES: tuple[tuple[str, Any], ...] = (
     ("search", _probe_search),
     ("billing enforcement", _probe_enforcement),
     ("email verifier", _probe_email_verifier),
+    ("web fetcher", _probe_web_fetcher),
     ("phone lookup", _probe_phone_lookup),
     ("mailbox apps", _probe_mailbox_apps),
     ("ledger stores", _probe_ledger_stores),
