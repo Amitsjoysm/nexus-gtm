@@ -2206,6 +2206,10 @@ export interface ConnectedMailbox {
   reply_confidence_max: number;
   paused_until: string | null;
   last_synced_at: string | null;
+  /** Sent since the owner's local midnight. */
+  sent_today: number;
+  /** Non-empty above 50 a day (D10). A warning, never a block. */
+  volume_warning: string;
   created_at: string;
 }
 

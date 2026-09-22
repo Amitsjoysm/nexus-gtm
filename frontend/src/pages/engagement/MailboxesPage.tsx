@@ -244,6 +244,12 @@ function MailboxCard({
         </div>
 
         {mailbox.last_error && <p className={styles.error} role="status">{mailbox.last_error}</p>}
+        {mailbox.volume_warning && (
+          <p className={styles.error} role="status">
+            <Badge tone="warning" dot>{mailbox.sent_today} sent today</Badge>{" "}
+            {mailbox.volume_warning}
+          </p>
+        )}
 
         {mailbox.mine && mailbox.status !== "revoked" && (
           <div className={styles.fields}>

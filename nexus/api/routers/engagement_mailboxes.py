@@ -50,6 +50,9 @@ class MailboxOut(BaseModel):
     paused_until: datetime | None
     last_synced_at: datetime | None
     created_at: datetime
+    # Sent since the owner's local midnight, and the warning above 50 (D10). Never a block.
+    sent_today: int = 0
+    volume_warning: str = ""
 
 
 class ProviderStateOut(BaseModel):
@@ -86,9 +89,11 @@ async def _settings(ts: TenantSession):
 
 
 async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal) -> MailboxOut:
+    from nexus.engagement.sending.limits import sent_today, volume_warning
     from nexus.engagement.settings import effective_confidence
 
     settings = await _settings(ts)
+    today = await sent_today(ts, row)
     return MailboxOut(
         id=row.id, provider=row.provider, email=row.email, display_name=row.display_name or "",
         owner_user_id=row.owner_user_id, mine=row.owner_user_id == principal.user_id,
@@ -98,7 +103,8 @@ async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal) 
         reply_confidence_min=settings.reply_confidence_min,
         reply_confidence_max=settings.reply_confidence_max,
         paused_until=row.paused_until, last_synced_at=row.last_synced_at,
-        created_at=row.created_at,
+        created_at=row.created_at, sent_today=today,
+        volume_warning=volume_warning(row.email, today),
     )
 
 
