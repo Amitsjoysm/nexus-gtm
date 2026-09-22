@@ -26,6 +26,7 @@
 | Relevance Engine ★ | `nexus/relevance` | per-tenant ICP / value-props / product context + retrieval |
 | Ingestion | `nexus/ingestion` | signal sources, signal library, CRM sync → `SignalEvent` |
 | Enrichment | `nexus/enrichment` | waterfall email/phone via Scrapling + DuckDuckGo fallback |
+| Fetching | `nexus/fetching` + `services/fetch` | shared `web_cache` (TTL = re-search cadence); self-hosted SERP and page fetching with paid fallback and shadow comparison |
 | Agents (AI core) | `nexus/agents` | runtime + Research / Scoring / Messaging / ContactRec / QA |
 | Rep UX | `nexus/inbox`, `nexus/lists` | intelligent inbox, list builder |
 | Automation | `nexus/plays` | signal → action plays, alerts, compelling events |

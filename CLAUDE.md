@@ -215,7 +215,8 @@ PSP references) -> `0055` (`feature_switches`) -> `0056` (`accounts.owner_user_i
 ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_enrollment_id`) ->
 `0058` (`crm_logged_at` on `engagement_messages` and `reply_classifications`) -> `0059`
 (`signal_events.dated`, `company_signals.dated`) -> `0060` (`integration_connections.config`) -> `0061` (`placed_calls`,
-`tenants.platform_caller_id`). Every tenant-scoped table gets RLS via
+`tenants.platform_caller_id`) -> `0062` (`web_cache`, platform-global). Every tenant-scoped
+table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -928,6 +929,52 @@ exhausted quickly.
 (`find_similar`) plus company/ICP discovery (`search_companies`) are **Exa-only capabilities**.
 Repointing the global setting to diversify signal collection takes those down silently — the base
 `find_similar` returns `[]`, so lookalikes report "no results" with nothing in the logs.
+
+## Self-hosted fetching (`nexus/fetching/`, `services/fetch/`)
+
+Signal collection re-asked the same four dork queries about the same company on every six-hour HOT
+refresh, per tenant, at $0.0064 each through Firecrawl: ~$3/month per hot account, bought again for
+every workspace tracking it. `DataSourceRegistry`'s cache is in-process and `DorkedSearchSource`
+bypassed it entirely. Scrapling was already a declared extra with a `ScraplingBrowser` adapter, and
+inert: the production image never installed it. Spec and plan:
+`docs/superpowers/{specs,plans}/2026-09-18-self-hosted-signal-fetching*`.
+
+- **`web_cache` is platform-global (migration `0057`, no `tenant_id`)**, like `companies` and
+  `people`. Enrolling it in RLS would return zero rows to the shared reader — silently.
+- **The TTL IS the cadence.** Funding and news 6h, everything else searched 24h, pages 24h (all
+  runtime settings). No scheduler change: a fresh cached answer short-circuits in
+  `DorkedSearchSource._run`, so `next_refresh_at` and `tiering.classify` are untouched.
+- **A failed search is never cached.** A condemned key pool returns `[]` with `last_failure` set,
+  not an exception; caching that freezes an outage for the whole TTL. And a CACHED answer ignores a
+  stale `last_failure` from an earlier call, which would otherwise abort a crawl that bought nothing.
+- **The cache store is total** (`nexus/fetching/cache.py`): every entry point, including argument
+  normalisation, is inside its try. It opens its own platform session, so callers finish cache work
+  before opening a tenant write transaction — the ordering `nexus/people/enrich.py` documents.
+- **The chain declares `plain`, the dialect of its weakest member** (`search/fallback.py`). The dork
+  renders before it knows who will answer; an `operator` query returns zero results on DuckDuckGo
+  and does not error. So with the fetcher on, a Firecrawl fallback gets the plain phrasing — a
+  deliberate precision cost on what should be the rare path. An empty answer with no failure is an
+  answer, never retried down the chain.
+- **`nexus-fetch` is stateless and never publicly reachable** (`nexus/fetching/service.py`, deployed
+  from `services/fetch/`). Shared secret compared in constant time, and an EMPTY secret refuses
+  everything; firewall to the app's egress; `nexus/fetching/guard.py` reuses
+  `sources/safety._is_blocked_host` rather than keeping a second copy of the SSRF rules; the HTTP
+  tier follows redirects with `follow_redirects="safe"` because the guard only sees the first URL.
+  Its own VM, NOT the Reacher box: scraping egress must not share an IP with email verification.
+- **`blocked` is not `empty`.** An anti-bot page raises `BlockedByEngine` → 503 → `last_failure`,
+  so a crawl records `error` rather than a quiet market. `parse_ddg` pairs titles and snippets by
+  destination URL, not position, and drops sponsored results (they still point at duckduckgo.com).
+- **Shadow before promotion.** The chain cannot see a free engine that answers WORSE — it never
+  falls through. `signal_fetch_shadow` asks both, serves the paid answer, and records per-member hit
+  counts in provenance; `scripts/fetch_shadow_report.py` reads `paid_only` asymmetrically, like
+  `companies/diff.py`. It runs on the platform sessionmaker (`signal_source_runs` is tenant-scoped).
+- **Website watch uses both** (`webwatch._get`): cache, then the fetcher, then plain httpx, so a
+  deployment without the VM behaves exactly as before. Pages over 1M characters are used, never
+  cached.
+- **Signal scans are still metered nowhere.** `signal.news_scan` and its siblings are priced in
+  `rates.py` with no `metered()` call site in `nexus/ingestion/`, so this saving is pure COGS.
+  Adding metering would start charging customers for something they have never paid for — a pricing
+  decision, not a side effect of this work.
 
 ## Shared company records (`nexus/companies/`)
 
