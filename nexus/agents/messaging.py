@@ -144,6 +144,13 @@ class MessagingAgent(BaseAgent):
         )
         if recent:
             content += f"\nRECENT SIGNALS (strongest first):\n{recent}\n"
+        # The engagement engine's context pack (spec §7): the date in the buyer's timezone, the
+        # whole conversation so far and every other conversation with this person. Placed with
+        # the facts, before the rules, so "use only facts given above" covers it too.
+        context_pack = (ctx.inputs.get("context_pack") or "").strip()
+        if context_pack:
+            content += f"\n{context_pack}\n"
+        facts_to_use = [f for f in (ctx.inputs.get("personal_facts") or []) if f]
         content += (
             f"\nThe trigger to open on: {hook}\n"
             f"The value proposition to land: {vp.get('name')}\n"
@@ -204,6 +211,7 @@ class MessagingAgent(BaseAgent):
         # three completions nobody asked to pay for.
         problems = check_draft(
             subject=subject, body=body, first_name=_first_name(contact),
+            facts=facts_to_use, company_name=ctx.account.name or "",
         )
         if problems:
             retry = LLMMessage(
@@ -224,7 +232,8 @@ class MessagingAgent(BaseAgent):
             # that breaks MORE rules than the first, is not an improvement worth showing.
             if retry_body.strip() and len(
                 check_draft(subject=retry_subject, body=retry_body,
-                            first_name=_first_name(contact))
+                            first_name=_first_name(contact), facts=facts_to_use,
+                            company_name=ctx.account.name or "")
             ) < len(problems):
                 message, subject, body = second, retry_subject, retry_body
         # A BLANK COMPLETION IS NOT A DRAFT. Observed live 2026-09-08: the provider returned an

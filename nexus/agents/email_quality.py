@@ -57,10 +57,13 @@ def _words(text: str) -> int:
     return len([w for w in re.split(r"\s+", text.strip()) if w])
 
 
-def check_draft(*, subject, body, first_name) -> list[str]:
+def check_draft(*, subject, body, first_name, facts=None, company_name: str = "") -> list[str]:
     """Problems with this draft, in the order a reader would notice them. Empty means it is fine.
 
     Never raises: it is called on whatever the model returned, including None.
+
+    ``facts`` switches on the personalisation rule (D17): the draft must visibly use one of them.
+    Callers that pass none — the composer, the orchestrator — are checked exactly as before.
     """
     problems: list[str] = []
     text = str(body or "").strip()
@@ -107,5 +110,11 @@ def check_draft(*, subject, body, first_name) -> list[str]:
     for phrase in BANNED_PHRASES:
         if phrase in lowered:
             problems.append(f"Remove the phrase '{phrase}' — it is the tell that this is automated.")
+
+    if facts:
+        from nexus.engagement.drafting.personalisation import PROBLEM, uses_a_fact
+
+        if not uses_a_fact(text, list(facts), company_name=company_name):
+            problems.append(PROBLEM)
 
     return problems

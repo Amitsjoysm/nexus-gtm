@@ -29,7 +29,9 @@ from nexus.api.routers import (
     custom_fields,
     engagement_mailboxes,
     engagement_suppression,
+    engagement_campaigns,
     engagement_settings,
+    engagement_templates,
     imports,
     integrations,
     network,
@@ -81,7 +83,9 @@ all_routers = [
     admin_ledger.router,
     engagement_mailboxes.router,
     engagement_suppression.router,
+    engagement_campaigns.router,
     engagement_settings.router,
+    engagement_templates.router,
     unsubscribe.router,
 ]
 

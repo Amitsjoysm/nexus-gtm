@@ -198,6 +198,22 @@ async def _claim_row(ts, *, mailbox, contact, enrollment, thread, step_index, ki
     from nexus.models.engagement import EngagementMessage
 
     existing = await _existing(ts, enrollment, step_index, idempotency_key)
+    if existing is not None and existing.status in ("draft", "approved"):
+        # The draft the SDR approved (phase 08) IS the outbound row: adopt it, so the text that
+        # was approved is exactly the text that is sent, and give it the ids it will carry.
+        parent = await _latest_in_thread(ts, thread, exclude_id=existing.id)
+        existing.thread_id = existing.thread_id or getattr(thread, "id", None)
+        existing.subject, existing.body_text = subject, body
+        existing.rfc_message_id = existing.rfc_message_id or mime.new_rfc_message_id(
+            _domain(mailbox.email))
+        existing.ref_header = existing.ref_header or new_ulid()
+        existing.in_reply_to = getattr(parent, "rfc_message_id", "") or ""
+        existing.references_header = mime.references_for(
+            getattr(parent, "references_header", "") or "",
+            getattr(parent, "rfc_message_id", "") or "")
+        existing.status = "queued"
+        await ts.flush()
+        return existing, False
     if existing is not None:
         return existing, True
 

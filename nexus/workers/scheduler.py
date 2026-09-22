@@ -23,6 +23,7 @@ from nexus.workers.tasks import (
     enqueue_crawl_companies,
     enqueue_discover_icp_accounts,
     enqueue_billing_reconcile,
+    enqueue_advance_engagement,
     enqueue_alert_digests,
     enqueue_expire_trials,
     enqueue_dunning_sweep,
@@ -105,6 +106,13 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             await enqueue_ship_ledger(queue=queue)
             await enqueue_build_ledger_datasets(queue=queue)
             count += 2
+            # Engagement campaigns send on their own switch, not automation_enabled: an SDR who
+            # launched a campaign expects it to run. Dark until the cutover flips it on.
+            from nexus.engagement import config as engagement_config
+
+            if engagement_config.campaigns_enabled():
+                await enqueue_advance_engagement(queue=queue)
+                count += 1
             if settings.automation_enabled:
                 await enqueue_advance_cadences(queue=queue)
                 await enqueue_refresh_due_accounts(queue=queue)

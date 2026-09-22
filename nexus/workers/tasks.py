@@ -1017,6 +1017,22 @@ async def handle_ledger_erase_person(payload: dict) -> dict:
     return await deletion.erase_person(person_key)
 
 
+async def handle_advance_engagement(payload: dict) -> dict:
+    """Send what is due in running engagement campaigns (spec §8). Does nothing while the engine
+    is dark: the switch is re-read here, not only when the heartbeat enqueues."""
+    from nexus.engagement import config
+    from nexus.engagement.sequences.advance import advance
+
+    if not config.campaigns_enabled():
+        return {"skipped": "engagement campaigns are switched off"}
+    return await advance()
+
+
+async def enqueue_advance_engagement(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="advance_engagement", payload={}))
+
+
 async def enqueue_ship_ledger(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="ship_ledger", payload={}))
@@ -1078,6 +1094,7 @@ HANDLERS: dict[str, Handler] = {
     "expire_trials": handle_expire_trials,
     "refresh_mailbox_tokens": handle_refresh_mailbox_tokens,
     "ship_ledger": handle_ship_ledger,
+    "advance_engagement": handle_advance_engagement,
     "build_ledger_datasets": handle_build_ledger_datasets,
     "ledger_delete_workspace": handle_ledger_delete_workspace,
     "ledger_erase_person": handle_ledger_erase_person,
