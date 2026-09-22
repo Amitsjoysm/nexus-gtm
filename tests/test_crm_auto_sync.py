@@ -371,6 +371,7 @@ async def test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled(monkeypatch):
         # contributing whether or not it switched automation on.
         "ship_ledger",
         "build_ledger_datasets",
+        "prune_web_cache",
     }
 
 
@@ -394,6 +395,7 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
         # contributing whether or not it switched automation on.
         "ship_ledger",
         "build_ledger_datasets",
+        "prune_web_cache",
     }
 
 

@@ -29,6 +29,7 @@ from nexus.workers.tasks import (
     enqueue_alert_digests,
     enqueue_expire_trials,
     enqueue_charge_unlogged_calls,
+    enqueue_prune_web_cache,
     enqueue_dunning_sweep,
     enqueue_refresh_due_accounts,
     enqueue_build_ledger_datasets,
@@ -128,6 +129,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
                     # Sent emails, replies and meetings into each workspace's CRM (§19).
                     await enqueue_log_engagement_crm(queue=queue)
                     count += 1
+            # The shared web cache is platform-global and fills from manual refreshes too, so a
+            # deployment with automation off would otherwise never empty it.
+            await enqueue_prune_web_cache(queue=queue)
+            count += 1
             if settings.automation_enabled:
                 await enqueue_refresh_due_accounts(queue=queue)
                 # Digest rides the automation switch; its handler is idempotent per interval.

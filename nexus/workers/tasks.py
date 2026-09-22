@@ -574,6 +574,18 @@ async def _resolve_icp_paused_alert(ts) -> None:
         existing.acked_at = _utcnow()
 
 
+async def handle_prune_web_cache(payload: dict) -> dict:
+    """Delete expired `web_cache` rows.
+
+    Idempotent and served by the index on `expires_at`, so the heartbeat may enqueue it every tick.
+    Never raises: `cache.prune` returns 0 on any failure, because a cache that cannot tidy itself
+    must not fail a job other work is queued behind.
+    """
+    from nexus.fetching import cache
+
+    return {"pruned": await cache.prune()}
+
+
 async def handle_rollup_usage(payload: dict) -> dict:
     """Periodic driver: fold each tenant's usage events into rollups.
 
@@ -1251,6 +1263,7 @@ HANDLERS: dict[str, Handler] = {
     "backfill_companies": handle_backfill_companies,
     "sync_network_account": handle_sync_network_account,
     "rollup_usage": handle_rollup_usage,
+    "prune_web_cache": handle_prune_web_cache,
     "roll_billing_periods": handle_roll_billing_periods,
     "dunning_sweep": handle_dunning_sweep,
     "billing_reconcile": handle_billing_reconcile,
@@ -1341,6 +1354,11 @@ async def enqueue_sync_network_account(
 async def enqueue_rollup_usage(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="rollup_usage", payload={}))
+
+
+async def enqueue_prune_web_cache(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="prune_web_cache", payload={}))
 
 
 async def enqueue_roll_billing_periods(*, queue: TaskQueue | None = None) -> None:

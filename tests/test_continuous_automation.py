@@ -195,8 +195,9 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     # automation_enabled, because billing accuracy and shared-company maintenance are platform
     # concerns rather than per-workspace opt-ins. +1 for refresh_mailbox_tokens, which keeps SDR
     # mailbox status honest whether or not automation is on; +1 for charge_unlogged_calls,
-    # which charges platform calls nobody logged.
-    assert count == 15
+    # which charges platform calls nobody logged; +1 for prune_web_cache, which empties the
+    # shared web cache whether or not automation is on.
+    assert count == 16
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "refresh_due_accounts", "send_daily_digests",
@@ -207,6 +208,7 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
         # contributing whether or not it switched automation on.
         "ship_ledger",
         "build_ledger_datasets",
+        "prune_web_cache",
     }
 
 
@@ -221,7 +223,7 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    assert count == 12
+    assert count == 13
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "rollup_usage", "roll_billing_periods", "dunning_sweep", "billing_reconcile",
@@ -231,6 +233,7 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
         # contributing whether or not it switched automation on.
         "ship_ledger",
         "build_ledger_datasets",
+        "prune_web_cache",
     }
 
 
