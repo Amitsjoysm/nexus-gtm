@@ -65,6 +65,11 @@ class EnrichmentResult:
     # Deliverability verdict that travels back with a found email (verifying finder).
     email_status: str | None = None
     provider_type: str | None = None
+    #: What that verdict examined: "mailbox" (Reacher), "domain" (DNS) or "" (nothing). The save
+    #: policy (`nexus/enrichment/policy.py`) keeps a risky address only when the mailbox was checked.
+    email_check: str = ""
+    #: Addresses this provider proved invalid. The waterfall remembers them on the contact.
+    rejected: tuple[str, ...] = ()
 
     @property
     def best_confidence(self) -> float:
@@ -262,7 +267,12 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
         return seen[: self._cap()]
 
     async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult:
-        cands = self._candidates(contact.full_name, account.domain or "")
+        from nexus.enrichment.policy import check_level, rejected_emails
+
+        # An address already proven invalid for this person is never tried again.
+        rejected = set(rejected_emails(contact))
+        cands = [c for c in self._candidates(contact.full_name, account.domain or "")
+                 if c not in rejected]
         if not cands:
             return EnrichmentResult()
         verify = await self._resolve_verify()
@@ -279,13 +289,13 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
                 return EnrichmentResult(
                     found=True, email=canonical, email_confidence=0.5,
                     email_status=STATUS_CATCH_ALL, provider_type=verdict.provider_type,
-                    source=self.name,
+                    source=self.name, email_check=check_level(verdict.source),
                 )
             if verdict.status == STATUS_VALID:
                 return EnrichmentResult(
                     found=True, email=email, email_confidence=verdict.confidence,
                     email_status=STATUS_VALID, provider_type=verdict.provider_type,
-                    source=self.name,
+                    source=self.name, email_check=check_level(verdict.source),
                 )
             if verdict.status != STATUS_INVALID:
                 rank = 2.0 if verdict.status in (STATUS_RISKY, STATUS_CATCH_ALL) else 1.0
@@ -293,7 +303,10 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
                     best = (rank, email, verdict)
 
         if best is None:
-            return EnrichmentResult()  # every candidate verified invalid
+            # Every candidate verified invalid. Reported, not swallowed: the waterfall remembers
+            # them so none is ever guessed again, and so the blind guess after this provider cannot
+            # quietly write one of them back.
+            return EnrichmentResult(rejected=tuple(cands))
         _, best_email, verdict = best
         # Return the candidate that earned the best non-invalid verdict, paired with THAT verdict.
         # Ties keep the earliest (highest-frequency) pattern — first.last — via the strict `>`
@@ -303,5 +316,5 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
         return EnrichmentResult(
             found=True, email=best_email, email_confidence=verdict.confidence,
             email_status=verdict.status, provider_type=verdict.provider_type,
-            source=self.name,
+            source=self.name, email_check=check_level(verdict.source),
         )

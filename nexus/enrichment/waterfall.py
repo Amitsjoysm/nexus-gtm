@@ -26,8 +26,16 @@ from nexus.enrichment.providers import (
     SourceDatabaseProvider,
     VerifyingPatternEmailProvider,
 )
+from nexus.enrichment.policy import (
+    check_level,
+    forget_email,
+    keep_address,
+    rejected_emails,
+    remember_rejected,
+    verification_configured,
+)
 from nexus.models.account import Account, Contact
-from nexus.verification import STATUS_VALID
+from nexus.verification import STATUS_CATCH_ALL, STATUS_INVALID, STATUS_RISKY, STATUS_VALID
 
 logger = logging.getLogger("nexus.enrichment.waterfall")
 
@@ -58,37 +66,97 @@ class WaterfallEnricher:
 
         return get_registry().verify_email
 
-    def _satisfied(self, merged: EnrichmentResult) -> bool:
-        """Both channels clear the bar, so consulting anyone else would spend money for nothing."""
-        return merged.email_confidence >= self.min_confidence and (
-            merged.phone_confidence >= self.min_confidence or bool(merged.phone)
-        )
+    def _best(self, candidates: list[EnrichmentResult]) -> EnrichmentResult | None:
+        """The address to save, among those the policy allows.
+
+        With a real verifier configured, a stronger verdict beats a higher confidence: a valid
+        address outranks a catch-all one however each scored. With the offline stub, confidence alone
+        decides, which is today's behaviour. Ties keep the earliest candidate.
+        """
+        rank = {STATUS_VALID: 3, STATUS_CATCH_ALL: 2, STATUS_RISKY: 2}
+        strict = verification_configured()
+        best: EnrichmentResult | None = None
+        for c in candidates:
+            if not keep_address(c.email_status, c.email_check):
+                continue
+            key = (rank.get(c.email_status or "", 1) if strict else 0, c.email_confidence)
+            if best is None or key > (
+                rank.get(best.email_status or "", 1) if strict else 0, best.email_confidence
+            ):
+                best = c
+        return best
+
+    def _satisfied(self, merged: EnrichmentResult, candidates: list[EnrichmentResult]) -> bool:
+        """Both channels clear the bar, so consulting anyone else would spend money for nothing.
+
+        With a real verifier configured, only a VALID address satisfies the email side: an address
+        found without a verdict (a scraped one) may turn out unverifiable, and stopping on it would
+        skip the finder that could have proven one.
+        """
+        best = self._best(candidates)
+        if best is None:
+            return False
+        email_ok = (best.email_status == STATUS_VALID if verification_configured()
+                    else best.email_confidence >= self.min_confidence)
+        return email_ok and (merged.phone_confidence >= self.min_confidence or bool(merged.phone))
 
     async def _consult(
         self, providers: list[EnrichmentProvider], account: Account, contact: Contact,
-        merged: EnrichmentResult,
+        merged: EnrichmentResult, candidates: list[EnrichmentResult],
     ) -> None:
-        """Run providers in order, merging the best value per field. Stops early once satisfied."""
+        """Run providers in order. Every found address is kept as a CANDIDATE — which one is saved is
+        decided once, after verification, by the policy — and the best phone is merged as found.
+        Stops early once satisfied."""
         for provider in providers:
             try:
                 r = await provider.enrich(account, contact)
             except Exception as exc:  # provider isolation
                 logger.warning("enrichment provider %s failed: %r", provider.name, exc)
                 continue
+            if r.rejected:
+                merged.rejected = merged.rejected + tuple(r.rejected)
             if not r.found:
                 continue
-            # Keep the highest-confidence value for each field.
-            if r.email and r.email_confidence > merged.email_confidence:
-                merged.email, merged.email_confidence = r.email, r.email_confidence
-                merged.email_status = r.email_status
-                merged.provider_type = r.provider_type
-                merged.source = r.source
+            if r.email:
+                candidates.append(r)
             if r.phone and r.phone_confidence > merged.phone_confidence:
                 merged.phone, merged.phone_confidence = r.phone, r.phone_confidence
                 merged.source = merged.source or r.source
-            merged.found = merged.found or bool(merged.email or merged.phone)
-            if self._satisfied(merged):
+            merged.found = merged.found or bool(r.email or merged.phone)
+            if self._satisfied(merged, candidates):
                 break
+
+    async def _verify_unchecked(self, candidates: list[EnrichmentResult]) -> None:
+        """Give every candidate found without a verdict (search, source database, blind guess) one.
+
+        An address already verified by another provider — the blind guess is usually the finder's
+        own first.last — reuses that verdict rather than being checked twice.
+        """
+        known = {c.email.lower(): c for c in candidates if c.email_status}
+        verify = None
+        for c in candidates:
+            if c.email_status:
+                continue
+            same = known.get(c.email.lower())
+            if same is not None:
+                c.email_status, c.email_check = same.email_status, same.email_check
+                c.provider_type = c.provider_type or same.provider_type
+                if same.email_status == STATUS_VALID:
+                    c.email_confidence = max(c.email_confidence, same.email_confidence)
+                continue
+            try:
+                verify = verify or await self._resolve_verify()
+                verdict = await verify(c.email)
+            except Exception as exc:  # never let verification break enrichment
+                logger.warning("final email verify failed for %r: %r", c.email, exc)
+                continue
+            if verdict and verdict.status:
+                c.email_status = verdict.status
+                c.email_check = check_level(verdict.source)
+                c.provider_type = c.provider_type or verdict.provider_type
+                if verdict.status == STATUS_VALID and verdict.confidence > c.email_confidence:
+                    c.email_confidence = verdict.confidence
+                known[c.email.lower()] = c
 
     async def enrich_contact(
         self, ts: TenantSession, contact: Contact, account: Account | None = None,
@@ -113,12 +181,13 @@ class WaterfallEnricher:
             return EnrichmentResult()
 
         merged = EnrichmentResult()
+        candidates: list[EnrichmentResult] = []
         free = [p for p in self.providers if not p.costs_money]
         paid = [p for p in self.providers if p.costs_money]
 
-        await self._consult(free, account, contact, merged)
+        await self._consult(free, account, contact, merged, candidates)
 
-        if free and self._satisfied(merged):
+        if free and self._satisfied(merged, candidates):
             # Answered without spending anything. Metered like the paid waterfall it replaced, and
             # deliberately never blocked — the same posture as a shared-record hit in
             # `nexus/people/enrich.py`, where the answer is already ours to give.
@@ -134,7 +203,7 @@ class WaterfallEnricher:
                     ts, CONTACT_CAPABILITY, user_id=user_id, source="enrichment",
                     attrs={"provider": "waterfall", "cached": False},
                 ):
-                    await self._consult(paid, account, contact, merged)
+                    await self._consult(paid, account, contact, merged, candidates)
             except QuotaExceeded:
                 if raise_on_block:
                     raise
@@ -144,23 +213,27 @@ class WaterfallEnricher:
                 )
                 return merged
 
-        # Final verification: ensure the CHOSEN address carries a deliverability verdict. The
-        # search/pattern providers find an email but never verify it, so without this the winning
-        # address lands with no status -> "unverified" in the UI even when the verifier is up.
-        # Only runs when nothing already attached a verdict (the verifying finder won).
-        if merged.email and not merged.email_status:
-            try:
-                verify = await self._resolve_verify()
-                verdict = await verify(merged.email)
-                if verdict and verdict.status:
-                    merged.email_status = verdict.status
-                    if (
-                        verdict.status == STATUS_VALID
-                        and verdict.confidence > merged.email_confidence
-                    ):
-                        merged.email_confidence = verdict.confidence
-            except Exception as exc:  # never let verification break enrichment
-                logger.warning("final email verify failed for %r: %r", merged.email, exc)
+        # Final verification: every candidate found without a verdict (search, source database, the
+        # blind guess) gets one, so the choice below is made on evidence rather than on who guessed.
+        await self._verify_unchecked(candidates)
+
+        # Invalid is never kept (policy): remember every address proven dead for this person so it
+        # is never guessed again, and remove the saved one if that is what was just disproved.
+        disproved = [c.email for c in candidates if c.email_status == STATUS_INVALID]
+        disproved += list(merged.rejected)
+        remember_rejected(contact, disproved)
+        if contact.email and contact.email.strip().lower() in rejected_emails(contact):
+            forget_email(contact)
+
+        choice = self._best(candidates)
+        merged.email = choice.email if choice else None
+        merged.email_confidence = choice.email_confidence if choice else 0.0
+        merged.email_status = choice.email_status if choice else None
+        merged.email_check = choice.email_check if choice else ""
+        merged.provider_type = choice.provider_type if choice else None
+        if choice:
+            merged.source = choice.source
+        merged.found = bool(merged.email or merged.phone)
 
         if merged.email and merged.email_confidence >= contact.email_confidence:
             contact.email, contact.email_confidence = merged.email, merged.email_confidence
