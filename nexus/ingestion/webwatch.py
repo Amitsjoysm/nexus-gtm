@@ -87,11 +87,14 @@ class PageCheck:
     error: str = ""
 
 
-async def _get(url: str, fetch=None) -> tuple[int, str]:
-    """(status, body). Never raises."""
+#: Pages larger than this are fetched but not cached. A careers page measured 3.7 MB of JavaScript;
+#: storing pages that size for every watched account would trade a search bill for a storage one.
+_MAX_CACHED_PAGE_CHARS = 1_000_000
+
+
+async def _direct_get(url: str) -> tuple[int, str]:
+    """(status, body) fetched from this process with plain httpx. Never raises."""
     try:
-        if fetch is not None:
-            return await fetch(url)
         import httpx
 
         async with httpx.AsyncClient(
@@ -102,6 +105,47 @@ async def _get(url: str, fetch=None) -> tuple[int, str]:
     except Exception as exc:
         logger.warning("page fetch failed for %s: %r", url, exc)
         return 0, ""
+
+
+async def _get(url: str, fetch=None) -> tuple[int, str]:
+    """(status, body). Never raises.
+
+    An injected `fetch` is used as given — the seam the tests drive. Otherwise the page comes from,
+    in order: the shared `web_cache` (a page fetched for one tenant is reused for the next within
+    `page_cache_ttl_s`), the nexus-fetch service when it is configured (these are the pages most
+    likely to sit behind Cloudflare or be rendered by JavaScript, which plain httpx cannot read),
+    and plain httpx from this process — so a deployment without the service watches pages exactly
+    as it did before. Only a 200 with a body is cached: a failure replayed for a day would read as
+    "the page vanished" when it was a blip.
+    """
+    if fetch is not None:
+        try:
+            return await fetch(url)
+        except Exception as exc:
+            logger.warning("page fetch failed for %s: %r", url, exc)
+            return 0, ""
+
+    from nexus.fetching import cache
+    from nexus.fetching.client import get_fetch_client
+    from nexus.fetching.ttl import ttl_for_page
+
+    cached = await cache.get("page", url, engine="page")
+    if isinstance(cached, dict) and cached.get("html"):
+        return int(cached.get("status") or 200), str(cached["html"])
+
+    status, body = 0, ""
+    client = get_fetch_client()
+    if client.configured:
+        page = await client.fetch_page(url, mode="http")
+        if page and page.get("html"):
+            status, body = int(page.get("status") or 200), str(page["html"])
+    if not body:
+        status, body = await _direct_get(url)
+
+    if status == 200 and body and len(body) <= _MAX_CACHED_PAGE_CHARS:
+        await cache.put("page", url, engine="page", payload={"status": status, "html": body},
+                        ttl_s=ttl_for_page())
+    return status, body
 
 
 async def check_page(domain: str, page_kind: str, paths: tuple[str, ...], *, fetch=None) -> PageCheck:
