@@ -300,6 +300,21 @@ def signal_search_choice() -> str:
     return "firecrawl" if choice in ("", "exa") else choice
 
 
+def build_signal_search_provider() -> SearchProvider:
+    """What the signal pipeline searches with: the self-hosted fetcher first, then the paid engine.
+
+    The self-hosted member is present only when `fetch_service_url` is set, so a deployment that has
+    not provisioned the VM gets exactly the single provider it had before this existed.
+    """
+    from nexus.core.config import get_settings
+    from nexus.integrations.search.fallback import FallbackSearchProvider
+
+    paid = build_search_provider(signal_search_choice())
+    if not (get_settings().fetch_service_url or "").strip():
+        return paid
+    return FallbackSearchProvider([build_search_provider("nexusfetch"), paid])
+
+
 def build_search_provider(name: str, *, browser=None) -> SearchProvider:
     """Resolve a single search provider by settings token.
 
