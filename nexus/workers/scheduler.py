@@ -27,7 +27,10 @@ from nexus.workers.tasks import (
     enqueue_expire_trials,
     enqueue_dunning_sweep,
     enqueue_refresh_due_accounts,
+    enqueue_build_ledger_datasets,
+    enqueue_refresh_mailbox_tokens,
     enqueue_roll_billing_periods,
+    enqueue_ship_ledger,
     enqueue_rollup_usage,
     enqueue_send_daily_digests,
     enqueue_sync_crm_due_accounts,
@@ -90,6 +93,17 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             # `shared_company_crawl_enabled` is set, so this gathers data without delivering any.
             await enqueue_backfill_companies(queue=queue)
             await enqueue_crawl_companies(queue=queue)
+            count += 2
+            # A connected mailbox whose grant was revoked must show Reconnect before a campaign
+            # needs it, whether or not automation is on. The handler touches only mailboxes due
+            # their daily refresh, so enqueuing every tick costs one indexed query.
+            await enqueue_refresh_mailbox_tokens(queue=queue)
+            count += 1
+            # The ledger collects for workspaces that opted in, which is not an automation
+            # opt-in either; both handlers self-filter (nothing due, nothing consented,
+            # no store configured) and cost one indexed query when there is nothing to do.
+            await enqueue_ship_ledger(queue=queue)
+            await enqueue_build_ledger_datasets(queue=queue)
             count += 2
             if settings.automation_enabled:
                 await enqueue_advance_cadences(queue=queue)

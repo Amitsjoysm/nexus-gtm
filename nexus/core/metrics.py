@@ -192,6 +192,21 @@ def record_credit_burn(capability_id: str, credits: float) -> None:
 WEBHOOK_OUTCOMES = ("processed", "ignored", "duplicate", "bad_signature", "stale", "error")
 
 
+def record_ledger_event(event_type: str, outcome: str) -> None:
+    """Ledger emits by type and outcome (``recorded`` | ``dropped`` | ``failed``). Event types are
+    a closed registry, so the label set is bounded."""
+    _observe(
+        _counter(
+            "nexus_ledger_events_total",
+            "Training & insights ledger events by type and outcome. `failed` means an action went "
+            "ahead without its event; `dropped` means an unregistered event type.",
+            ("event_type", "outcome"),
+        ),
+        {"event_type": event_type, "outcome": outcome},
+        inc=1,
+    )
+
+
 def record_webhook_event(provider: str, outcome: str) -> None:
     _observe(
         _counter(

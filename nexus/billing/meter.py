@@ -59,6 +59,13 @@ async def metered(
 
     if result.recorded and cost.usd > 0:
         await _stamp_cost(ts, key, cost.usd / max(float(quantity), 1.0))
+    if result.recorded:
+        from nexus.engagement.ledger.emit import emit
+
+        await emit(ts, "credits.charged", actor_user_id=user_id,
+                   payload={"capability_id": capability_id, "quantity": float(quantity),
+                            "source": source, "attrs": attrs or {},
+                            "unit_cost_usd": cost.usd / max(float(quantity), 1.0)})
 
 
 async def _refund(

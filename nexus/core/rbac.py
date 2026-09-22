@@ -32,6 +32,13 @@ class Permission(str, enum.Enum):
     # manager+: says who owns an account. A rep may claim an unowned one or release their own; taking
     # a colleague's, or handing one over, decides whose "only my accounts" alerts fire.
     assign_accounts = "assign_accounts"
+    # rep+: build campaigns, review drafts, work your own reply desk, connect your own mailbox.
+    # SDRs are reps; the old `manage_campaigns` stopped at manager, which kept the people who send
+    # the email out of the screen that sends it.
+    run_engagement = "run_engagement"
+    # manager+: the workspace confidence bar and its range (D23), the team's reply desk, reassigning
+    # a reply, lifting a do-not-contact block.
+    manage_engagement = "manage_engagement"
 
 
 _MIN_ROLE: dict[Permission, Role] = {
@@ -46,6 +53,8 @@ _MIN_ROLE: dict[Permission, Role] = {
     Permission.manage_campaigns: Role.manager,
     Permission.manage_alert_channels: Role.manager,
     Permission.assign_accounts: Role.manager,
+    Permission.run_engagement: Role.rep,
+    Permission.manage_engagement: Role.manager,
 }
 
 

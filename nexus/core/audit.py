@@ -100,3 +100,9 @@ async def record_audit(
         )
 
     audit(action, tenant_id=ts.tenant_id, actor=actor_user_id, **payload)
+
+    from nexus.engagement.ledger.emit import emit
+
+    await emit(ts, "audit.action", actor_user_id=actor_user_id,
+               refs={"target_id": target_id},
+               payload={"action": action, "target_type": target_type, "meta": payload})

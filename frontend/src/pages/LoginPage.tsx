@@ -39,6 +39,8 @@ export function LoginPage() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // Pre-selected, as agreed for sign-up (D24); the link says exactly what it means.
+  const [trainingConsent, setTrainingConsent] = useState(true);
   const [tenantSlug, setTenantSlug] = useState("");
   const [code, setCode] = useState("");
   const [resendIn, setResendIn] = useState(0); // cooldown countdown (seconds) for "resend code"
@@ -78,6 +80,7 @@ export function LoginPage() {
           full_name: fullName,
           email,
           password,
+          training_consent: trainingConsent,
         });
         setStep("verify");
         setResendIn(res.resend_in_s);
@@ -272,6 +275,20 @@ export function LoginPage() {
                   required
                 />
               </Field>
+            )}
+
+            {mode === "signup" && !verifying && (
+              <label className={styles.consent}>
+                <input
+                  type="checkbox"
+                  checked={trainingConsent}
+                  onChange={(e) => setTrainingConsent(e.target.checked)}
+                />
+                <span>
+                  Help improve the AI with this workspace's data.{" "}
+                  <a href="/data-use" target="_blank" rel="noopener noreferrer">What is collected</a>
+                </span>
+              </label>
             )}
 
             {mode === "login" && (

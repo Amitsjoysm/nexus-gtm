@@ -544,6 +544,31 @@ class Settings(BaseSettings):
     # deterministically from secret_key, so tokens are always encrypted with no extra secret.
     network_token_enc_key: str = ""
 
+    # SDR engagement engine (docs/superpowers/specs/2026-09-17-sdr-engagement-design.md, §12).
+    # Client SECRETS are managed in Provider keys (google_oauth, microsoft_oauth); these env values
+    # are the floor the managed keys layer over. The non-secret values are runtime settings.
+    engagement_google_client_id: str = ""
+    engagement_google_client_secret: str = ""
+    engagement_google_pubsub_topic: str = ""          # projects/<project>/topics/<topic>
+    engagement_google_push_service_account: str = ""  # signs the Pub/Sub push OIDC token
+    engagement_microsoft_client_id: str = ""
+    engagement_microsoft_client_secret: str = ""
+    engagement_microsoft_tenant: str = "common"
+    # Public https origin Google and Microsoft call back to: OAuth redirects, Gmail push, Graph
+    # notifications. Never client-supplied.
+    engagement_public_base_url: str = ""
+    # Release B switch: campaigns, the reply desk and their workers. Mailbox connection and the
+    # ledger do not depend on it.
+    engagement_campaigns_enabled: bool = False
+    # Training & insights ledger stores and the pseudonymisation secret (§18). Managed in
+    # Provider keys (ledger_archive, ledger_training, ledger_insights, ledger_pseudonym).
+    ledger_archive_dsn: str = ""
+    ledger_training_dsn: str = ""
+    ledger_insights_dsn: str = ""
+    ledger_pseudonym_secret: str = ""
+    # Kill switch for ledger capture on every workspace, whatever each one consented to.
+    ledger_capture_enabled: bool = True
+
     # Hosted web-search API keys, consumed only when `search_provider` selects that engine.
     # Secrets: set via NEXUS_*_API_KEY env (or a gitignored .env). NEVER commit a real value.
     # A selected engine with no key degrades to keyless DuckDuckGo so search keeps working.

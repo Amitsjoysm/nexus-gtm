@@ -72,6 +72,13 @@ import type {
   WebhookInfo,
   WebhookTestResult,
   SupportedProvider,
+  EngagementSetup,
+  ConnectedMailbox,
+  MailboxProviderState,
+  DoNotContactEntry,
+  LedgerStatus,
+  LedgerStoreStatus,
+  TrainingConsentState,
   SellablePlan,
   HostedSession,
   PlatformAdmin,
@@ -1149,6 +1156,78 @@ export class ApiClient {
   // and yields a 422 with no useful detail; see the comment on billingCheckout.
   providerKeys(provider = "", signal?: AbortSignal) {
     return this.request<ProviderKey[]>("/admin/provider-keys", { query: { provider }, signal });
+  }
+  // ---- admin: the training & insights ledger ----
+  ledgerStatus(signal?: AbortSignal) {
+    return this.request<LedgerStatus>("/admin/ledger", { signal });
+  }
+  applyLedgerSchema(store: string) {
+    return this.request<{ store: string; applied: string[]; status: LedgerStoreStatus }>(
+      `/admin/ledger/${store}/schema`, { method: "POST" });
+  }
+  eraseLedgerPerson(email: string) {
+    return this.request<{ queued: boolean; person_key: string }>("/admin/ledger/erase-person", {
+      method: "POST", body: { email },
+    });
+  }
+  // ---- engagement: training & insights consent ----
+  trainingConsent(signal?: AbortSignal) {
+    return this.request<TrainingConsentState>("/engagement/settings/training", { signal });
+  }
+  setTrainingConsent(status: "on" | "off") {
+    return this.request<TrainingConsentState>("/engagement/settings/training", {
+      method: "PUT", body: { status },
+    });
+  }
+  // ---- engagement: do not contact ----
+  listDoNotContact(params: { q?: string; include_lifted?: boolean } = {}, signal?: AbortSignal) {
+    return this.request<DoNotContactEntry[]>("/engagement/do-not-contact", { query: params, signal });
+  }
+  addDoNotContact(email: string) {
+    return this.request<DoNotContactEntry>("/engagement/do-not-contact", {
+      method: "POST", body: { email },
+    });
+  }
+  liftDoNotContact(id: string, note: string) {
+    return this.request<DoNotContactEntry>(`/engagement/do-not-contact/${id}/lift`, {
+      method: "POST", body: { note },
+    });
+  }
+  checkDoNotContact(emails: string[], signal?: AbortSignal) {
+    return this.request<Record<string, string>>("/engagement/do-not-contact/check", {
+      method: "POST", body: { emails }, signal,
+    });
+  }
+  // ---- engagement: my mailboxes ----
+  listConnectedMailboxes(team = false, signal?: AbortSignal) {
+    return this.request<ConnectedMailbox[]>("/engagement/mailboxes", { query: { team }, signal });
+  }
+  connectedMailboxProviders(signal?: AbortSignal) {
+    return this.request<MailboxProviderState[]>("/engagement/mailboxes/providers", { signal });
+  }
+  startMailboxConnect(provider: "google" | "microsoft", timezone: string) {
+    return this.request<{ authorize_url: string }>(
+      `/engagement/mailboxes/oauth/${provider}/start`,
+      { method: "POST", body: { timezone } },
+    );
+  }
+  updateConnectedMailbox(
+    id: string,
+    body: { timezone?: string; signature?: string; reply_confidence?: number;
+      clear_reply_confidence?: boolean },
+  ) {
+    return this.request<ConnectedMailbox>(`/engagement/mailboxes/${id}`, { method: "PATCH", body });
+  }
+  checkConnectedMailbox(id: string) {
+    return this.request<ConnectedMailbox>(`/engagement/mailboxes/${id}/check`, {
+      method: "POST",
+    });
+  }
+  disconnectConnectedMailbox(id: string) {
+    return this.request<null>(`/engagement/mailboxes/${id}`, { method: "DELETE" });
+  }
+  engagementSetup(signal?: AbortSignal) {
+    return this.request<EngagementSetup>("/admin/engagement/setup", { signal });
   }
   supportedProviders(signal?: AbortSignal) {
     return this.request<SupportedProvider[]>("/admin/provider-keys/providers", { signal });

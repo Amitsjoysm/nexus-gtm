@@ -104,6 +104,65 @@ def _validate_dunning_schedule(value) -> None:
             )
 
 
+def _validate_public_base_url(value) -> None:
+    """Google and Microsoft redirect browsers here and POST notifications here. It must be an
+    https origin with no path, because every endpoint is appended to it; plain http is allowed
+    only on a local stack."""
+    from urllib.parse import urlparse
+
+    from nexus.core.config import get_settings
+    from nexus.sources.safety import _is_blocked_host
+
+    raw = str(value or "").strip()
+    parsed = urlparse(raw)
+    local = get_settings().env in ("local", "test")
+    allowed = ("https", "http") if local else ("https",)
+    if (parsed.scheme or "").lower() not in allowed:
+        raise ValueError("the public base URL must start with https://")
+    if not parsed.hostname:
+        raise ValueError("the public base URL has no host")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise ValueError("give only the origin, like https://app.example.com, with no path")
+    blocked, why = _is_blocked_host(parsed.hostname, allow_private=local)
+    if blocked:
+        raise ValueError(f"refusing this host: {why}")
+
+
+def _regex_validator(pattern: str, message: str):
+    import re
+
+    compiled = re.compile(pattern)
+
+    def _validate(value) -> None:
+        if not compiled.fullmatch(str(value or "").strip()):
+            raise ValueError(message)
+
+    return _validate
+
+
+_validate_google_client_id = _regex_validator(
+    r"[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com",
+    "a Google OAuth client id looks like 123456789012-abc123.apps.googleusercontent.com",
+)
+_validate_pubsub_topic = _regex_validator(
+    r"projects/[a-z][-a-z0-9]{4,28}[a-z0-9]/topics/[A-Za-z][-A-Za-z0-9._~%+]{2,254}",
+    "a Pub/Sub topic looks like projects/my-project/topics/gmail-replies",
+)
+_validate_service_account = _regex_validator(
+    r"[a-z][-a-z0-9]{4,28}[a-z0-9]@[a-z][-a-z0-9]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com",
+    "a service account looks like gmail-push@my-project.iam.gserviceaccount.com",
+)
+_validate_microsoft_client_id = _regex_validator(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+    "an Azure application (client) id is a GUID like 00000000-0000-0000-0000-000000000000",
+)
+_validate_microsoft_tenant = _regex_validator(
+    r"common|organizations|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}|[a-z0-9-]+(\.[a-z0-9-]+)+",
+    "use common, organizations, a tenant id (GUID) or a domain like contoso.onmicrosoft.com",
+)
+
+
 # Settings whose value does NOT live on the `Settings` object. Pydantic refuses an attribute it has
 # not declared, so anything `config.py` does not know about needs somewhere else to live and its own
 # reader. Keep this small: a growing list means the override mechanism is being worked around
@@ -119,6 +178,12 @@ _VALIDATORS = {
     "admin_ip_allowlist": _validate_allowlist,
     "email_verify_url": _validate_verify_url,
     "billing_dunning_schedule_days": _validate_dunning_schedule,
+    "engagement_public_base_url": _validate_public_base_url,
+    "engagement_google_client_id": _validate_google_client_id,
+    "engagement_google_pubsub_topic": _validate_pubsub_topic,
+    "engagement_google_push_service_account": _validate_service_account,
+    "engagement_microsoft_client_id": _validate_microsoft_client_id,
+    "engagement_microsoft_tenant": _validate_microsoft_tenant,
 }
 
 

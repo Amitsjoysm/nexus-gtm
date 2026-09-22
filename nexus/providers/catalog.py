@@ -40,6 +40,31 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "serper": ProviderSpec("serper", "Serper (search)", "serper_api_key"),
     "apify": ProviderSpec("apify", "Apify (actors)", "apify_api_key_list"),
     "github": ProviderSpec("github", "GitHub (public API signals)", "github_token"),
+    # Engagement engine (spec §12, §18). One secret each, not rotation pools: the resolver's
+    # first key is the one in use. Tested by nexus/engagement/credential_checks.py.
+    "google_oauth": ProviderSpec(
+        "google_oauth", "Google OAuth client secret (mailboxes)",
+        "engagement_google_client_secret",
+    ),
+    "microsoft_oauth": ProviderSpec(
+        "microsoft_oauth", "Microsoft app client secret (mailboxes)",
+        "engagement_microsoft_client_secret",
+    ),
+    "ledger_archive": ProviderSpec(
+        "ledger_archive", "Ledger archive store (Postgres connection string)",
+        "ledger_archive_dsn",
+    ),
+    "ledger_training": ProviderSpec(
+        "ledger_training", "Ledger training store (Postgres connection string)",
+        "ledger_training_dsn",
+    ),
+    "ledger_insights": ProviderSpec(
+        "ledger_insights", "Ledger insights store (Postgres connection string)",
+        "ledger_insights_dsn",
+    ),
+    "ledger_pseudonym": ProviderSpec(
+        "ledger_pseudonym", "Ledger pseudonymisation secret", "ledger_pseudonym_secret",
+    ),
 }
 
 # The providers that HAVE a model to choose. One definition, read by `testing.list_models`, by the

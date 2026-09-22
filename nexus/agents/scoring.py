@@ -98,6 +98,13 @@ class ScoringAgent(BaseAgent):
         )
         ctx.ts.add(score)
         await ctx.ts.flush()
+        from nexus.engagement.ledger.emit import emit
+
+        await emit(ctx.ts, "account.scored",
+                   refs={"account_id": ctx.account.id, "score_id": score.id,
+                         "company_id": ctx.account.company_id},
+                   payload={"icp_fit": icp_fit, "intent": intent, "health": health,
+                            "composite": composite, "rationale": rationale})
 
         return {
             "score_id": score.id,

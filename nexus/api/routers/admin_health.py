@@ -270,6 +270,78 @@ async def _probe_phone_lookup() -> tuple[str, str]:
     return OK, "Apify phone_finder reachable"
 
 
+async def _probe_mailbox_apps() -> tuple[str, str]:
+    """Whether SDRs can connect Gmail and Microsoft 365. Each configured client is checked against
+    its token endpoint; an unconfigured one is reported as such, never as broken."""
+    from nexus.engagement import config
+    from nexus.engagement.credential_checks import check_google_client, check_microsoft_client
+
+    parts, statuses = [], []
+    for provider in config.MAILBOX_PROVIDERS:
+        app = await config.oauth_app(provider)
+        if not app.configured:
+            parts.append(f"{provider}: not configured ({'; '.join(app.missing)})")
+            statuses.append(UNCONFIGURED)
+            continue
+        if provider == config.GOOGLE:
+            result = await check_google_client(app.client_secret, client_id=app.client_id,
+                                               redirect_uri=app.redirect_uri)
+        else:
+            result = await check_microsoft_client(app.client_secret, client_id=app.client_id,
+                                                  tenant=app.tenant,
+                                                  redirect_uri=app.redirect_uri)
+        parts.append(f"{provider}: {result.detail}")
+        statuses.append(OK if result.ok else ERROR)
+    if ERROR in statuses:
+        return ERROR, "; ".join(parts)
+    if all(s == UNCONFIGURED for s in statuses):
+        return UNCONFIGURED, "; ".join(parts)
+    return (DEGRADED if UNCONFIGURED in statuses else OK), "; ".join(parts)
+
+
+async def _probe_ledger_outbox() -> tuple[str, str]:
+    """How much is waiting to be shipped, and how old the oldest is.
+
+    A backlog that keeps growing is how a store outage shows up before anybody reads a dataset — the
+    shipper itself is quiet by design, because it backs each row off rather than dead-lettering
+    every tick."""
+    from nexus.engagement.ledger import shipper
+
+    backlog = await shipper.backlog()
+    hours = backlog["oldest_age_s"] // 3600
+    if backlog["waiting"] == 0:
+        return OK, "nothing waiting"
+    detail = f"{backlog['waiting']} events waiting, oldest {hours}h"
+    if backlog["retrying"]:
+        detail += f", {backlog['retrying']} retrying"
+    return (ERROR if (hours >= 6 or backlog["retrying"]) else OK), detail
+
+
+async def _probe_ledger_stores() -> tuple[str, str]:
+    """Whether the three training & insights stores accept a connection with a scoped role."""
+    from nexus.engagement import config
+    from nexus.engagement.credential_checks import check_store_dsn
+
+    parts, statuses = [], []
+    for store in config.LEDGER_STORES:
+        dsn = await config.ledger_dsn(store)
+        if not dsn:
+            parts.append(f"{store}: not configured")
+            statuses.append(UNCONFIGURED)
+            continue
+        result = await check_store_dsn(dsn, store=store)
+        parts.append(f"{store}: {result.detail}")
+        statuses.append(OK if result.ok else ERROR)
+    if not await config.pseudonym_secret():
+        parts.append("pseudonymisation secret: not configured")
+        statuses.append(UNCONFIGURED)
+    if ERROR in statuses:
+        return ERROR, "; ".join(parts)
+    if all(s == UNCONFIGURED for s in statuses):
+        return UNCONFIGURED, "; ".join(parts)
+    return (DEGRADED if UNCONFIGURED in statuses else OK), "; ".join(parts)
+
+
 _PROBES: tuple[tuple[str, Any], ...] = (
     ("database", _probe_database),
     ("queue", _probe_queue),
@@ -280,6 +352,9 @@ _PROBES: tuple[tuple[str, Any], ...] = (
     ("billing enforcement", _probe_enforcement),
     ("email verifier", _probe_email_verifier),
     ("phone lookup", _probe_phone_lookup),
+    ("mailbox apps", _probe_mailbox_apps),
+    ("ledger stores", _probe_ledger_stores),
+    ("ledger outbox", _probe_ledger_outbox),
 )
 
 

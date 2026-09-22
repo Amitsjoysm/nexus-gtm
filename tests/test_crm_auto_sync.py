@@ -362,6 +362,13 @@ async def test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled(monkeypatch):
     assert {j.name for j in jobs} == {
         "sync_crm_due_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
         "billing_reconcile", "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
+        # The mailbox refresh rides along too: a revoked grant must show Reconnect whether or
+        # not this workspace switched automation on.
+        "refresh_mailbox_tokens",
+        # The ledger ships and builds on the heartbeat too: a workspace that opted in is
+        # contributing whether or not it switched automation on.
+        "ship_ledger",
+        "build_ledger_datasets",
     }
 
 
@@ -377,6 +384,13 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
         "advance_cadences", "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
         "billing_reconcile", "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
+        # The mailbox refresh rides along too: a revoked grant must show Reconnect whether or
+        # not this workspace switched automation on.
+        "refresh_mailbox_tokens",
+        # The ledger ships and builds on the heartbeat too: a workspace that opted in is
+        # contributing whether or not it switched automation on.
+        "ship_ledger",
+        "build_ledger_datasets",
     }
 
 

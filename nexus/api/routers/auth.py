@@ -87,6 +87,7 @@ async def register_start(
             full_name=req.full_name,
             email=req.email,
             password=req.password,
+            training_consent=req.training_consent,
         )
     except RegistrationError as exc:
         raise HTTPException(exc.status_code, exc.detail)
@@ -171,6 +172,11 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db_session))
             tenant_id=tenant.id, user_id=user.id, workspace_id=workspace.id, role="owner"
         )
         db.add(membership)
+        # The ledger consent chosen on the form, in the SAME transaction (D24).
+        from nexus.engagement.ledger.consent import add_signup_decision
+
+        add_signup_decision(db, tenant_id=tenant.id, user_id=user.id,
+                            opted_in=req.training_consent)
         # Start the workspace on the free plan, in the SAME transaction that creates it.
         # Without this a tenant exists with no subscription at all, the entitlement engine's
         # "no subscription -> allow" default grants it everything, and the startup backfill later
@@ -548,6 +554,10 @@ async def create_workspace(
             role="owner",
         )
         db.add(membership)
+        from nexus.engagement.ledger.consent import add_signup_decision
+
+        add_signup_decision(db, tenant_id=tenant.id, user_id=principal.user_id,
+                            opted_in=req.training_consent)
         # Start the workspace on the free plan, in the SAME transaction that creates it.
         # Without this a tenant exists with no subscription at all, the entitlement engine's
         # "no subscription -> allow" default grants it everything, and the startup backfill later

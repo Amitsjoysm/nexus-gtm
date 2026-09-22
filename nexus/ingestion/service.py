@@ -106,6 +106,16 @@ class IngestionService:
             from nexus.alerts.signal_alerts import raise_alerts_for
 
             await raise_alerts_for(ts, account, created)
+            from nexus.engagement.ledger.emit import emit
+
+            for ev in created:
+                await emit(ts, "signal.ingested",
+                           refs={"account_id": account.id, "signal_id": ev.id,
+                                 "company_id": account.company_id},
+                           payload={"kind": ev.kind, "subtype": ev.subtype, "source": ev.source,
+                                    "title": ev.title, "body": ev.body or "", "url": ev.url,
+                                    "strength": ev.strength,
+                                    "occurred_at": ev.occurred_at})
             for ev in created:
                 await bus.publish(
                     Event(

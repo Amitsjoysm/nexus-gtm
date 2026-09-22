@@ -1,0 +1,39 @@
+.page {
+  min-height: 100dvh;
+  padding: var(--space-8) var(--space-4);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.article {
+  max-inline-size: 68ch;
+  margin: 0 auto;
+  line-height: var(--leading);
+}
+
+.article h1 {
+  font-size: var(--text-2xl);
+  margin: 0 0 var(--space-4);
+}
+
+.article h2 {
+  font-size: var(--text-lg);
+  margin: var(--space-6) 0 var(--space-2);
+}
+
+.article ul {
+  padding-left: var(--space-5);
+}
+
+.article li + li {
+  margin-top: var(--space-2);
+}
+
+.lede {
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+}
+
+.back {
+  margin-top: var(--space-8);
+}

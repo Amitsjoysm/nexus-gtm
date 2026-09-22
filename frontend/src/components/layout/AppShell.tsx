@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ConsentPrompt } from "@/components/engagement/ConsentPrompt";
 import { Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/app/AuthContext";
 import { NAV_ITEMS } from "@/app/nav";
@@ -70,6 +71,8 @@ export function AppShell() {
     // same "is this in our plan?" question, and one fetch answers all of them.
     <EntitlementsProvider>
       <ImpersonationBanner />
+      {/* Asks an owner or admin once, for workspaces created before the ledger existed. */}
+      <ConsentPrompt />
       <div className={styles.shell}>
         <a className="skip-link" href="#main">
           Skip to content

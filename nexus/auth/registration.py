@@ -92,6 +92,7 @@ async def start_registration(
     full_name: str,
     email: str,
     password: str,
+    training_consent: bool = True,
 ) -> StartResult:
     """Validate + persist a pending registration and email an OTP. Overwrites any prior pending
     row for the same email so a stale attempt never blocks a fresh one."""
@@ -132,6 +133,7 @@ async def start_registration(
         attempts=0,
         resends=0,
         last_sent_at=now,
+        training_consent=bool(training_consent),
     )
     db.add(pending)
     try:
@@ -217,6 +219,11 @@ async def verify_and_create(db: AsyncSession, *, email: str, code: str) -> tuple
         db.add(workspace)
         await db.flush()
         db.add(Membership(tenant_id=tenant.id, user_id=user.id, workspace_id=workspace.id, role="owner"))
+        # The consent chosen on the form survived the OTP step on the pending row (D24).
+        from nexus.engagement.ledger.consent import add_signup_decision
+
+        add_signup_decision(db, tenant_id=tenant.id, user_id=user.id,
+                            opted_in=bool(pending.training_consent))
         # Start the workspace on the free plan, in the SAME transaction that creates it. The OTP
         # path creates tenants exactly like /auth/signup does, so it needs this for the same
         # reason: without it the tenant has no subscription, the engine's "no subscription ->

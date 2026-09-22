@@ -14,6 +14,9 @@ class SignupRequest(BaseModel):
     email: EmailStr
     full_name: str
     password: str = Field(min_length=8)
+    # "Help improve the AI with this workspace's data" (D24). Shown and pre-selected on the form;
+    # omitted by an older client, which is the same pre-selected choice.
+    training_consent: bool = True
 
 
 class RegisterStartRequest(BaseModel):
@@ -25,6 +28,9 @@ class RegisterStartRequest(BaseModel):
     email: EmailStr
     full_name: str
     password: str = Field(min_length=8)
+    # "Help improve the AI with this workspace's data" (D24). Shown and pre-selected on the form;
+    # omitted by an older client, which is the same pre-selected choice.
+    training_consent: bool = True
 
 
 class RegisterStartResponse(BaseModel):
@@ -88,6 +94,9 @@ class NewWorkspaceRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9\-]{1,79}$")
+    # "Help improve the AI with this workspace's data" (D24). Shown and pre-selected on the form;
+    # omitted by an older client, which is the same pre-selected choice.
+    training_consent: bool = True
 
 
 # ---- MFA ----

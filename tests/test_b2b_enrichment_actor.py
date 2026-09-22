@@ -186,7 +186,9 @@ def test_the_actor_is_tried_before_the_web_path():
 
     from nexus.enrichment.account import SearchBackedAccountEnricher
 
-    src = inspect.getsource(SearchBackedAccountEnricher.enrich)
+    # `enrich` is the thin wrapper that records the ledger event; the ordering this guards
+    # lives in `_enrich`, where the enrichment itself happens.
+    src = inspect.getsource(SearchBackedAccountEnricher._enrich)
     assert src.index("from_b2b_actor") < src.index("self.fetch("), (
         "the web+LLM path runs before the structured actor again"
     )
@@ -201,7 +203,7 @@ def test_a_good_actor_answer_stops_the_search():
 
     from nexus.enrichment.account import SearchBackedAccountEnricher
 
-    src = inspect.getsource(SearchBackedAccountEnricher.enrich)
+    src = inspect.getsource(SearchBackedAccountEnricher._enrich)
     assert "if actor_filled and account.industry:" in src
 
 

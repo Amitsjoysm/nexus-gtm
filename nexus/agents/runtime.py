@@ -177,6 +177,16 @@ class AgentRuntime:
         if persist:
             ts.add(run)
             await ts.flush()
+            from nexus.engagement.ledger.emit import emit
+
+            await emit(
+                ts, "research.completed" if agent_name == "research" else "ai.call",
+                refs={"account_id": account_id, "agent_run_id": run.id},
+                model=getattr(self.llm, "model", "") or type(self.llm).__name__,
+                payload={"agent": agent_name, "status": status, "inputs": inputs,
+                         "output": output, "error": error, "tokens": ctx.tokens,
+                         "latency_ms": latency_ms},
+            )
 
         return AgentResult(
             agent=agent_name,

@@ -109,6 +109,12 @@ class OutcomeService:
         )
         ts.add(outcome)
         await ts.flush()
+        from nexus.engagement.ledger.emit import emit
+
+        await emit(ts, "outcome.recorded",
+                   refs={"account_id": outcome.account_id, "contact_id": contact_id,
+                         "campaign_id": campaign_id, "outcome_id": outcome.id},
+                   payload={"stage": stage, "meta": meta or {}})
         return outcome
 
     async def campaign_attribution(self, ts: TenantSession, campaign_id: str) -> dict[str, int]:

@@ -321,6 +321,14 @@ class CallQueueService:
         if disposition not in REQUEUE_DISPOSITIONS:
             task.status = CALL_DONE
         await ts.flush()
+        from nexus.engagement.ledger.emit import emit
+
+        await emit(ts, "call.disposition",
+                   refs={"account_id": task.account_id, "contact_id": task.contact_id,
+                         "call_task_id": task.id, "call_activity_id": activity.id},
+                   payload={"disposition": disposition, "notes": notes or "",
+                            "duration_s": duration_s, "next_step": next_step,
+                            "transcript": transcript or ""})
         return activity
 
     async def skip(self, ts: TenantSession, task_id: str) -> CallTask | None:

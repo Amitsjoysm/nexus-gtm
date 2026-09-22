@@ -18,6 +18,8 @@ export interface SignupRequest {
   email: string;
   full_name: string;
   password: string;
+  /** "Help improve the AI with this workspace's data" (D24). Pre-selected on the form. */
+  training_consent?: boolean;
 }
 
 export interface LoginRequest {
@@ -2160,4 +2162,106 @@ export interface AlertChannelSecret {
   bot_token?: string;
   chat_id?: string;
   to?: string;
+}
+
+/** One mailbox OAuth app as the Control plane reports it. No secret is ever included. */
+export interface MailboxAppSetup {
+  provider: "google" | "microsoft";
+  configured: boolean;
+  missing: string[];
+  client_id: string;
+  tenant: string;
+  redirect_uri: string;
+  scopes: string[];
+}
+
+/** GET /admin/engagement/setup — what to paste into Google Cloud and Azure (spec §12). */
+export interface EngagementSetup {
+  public_base_url: string;
+  campaigns_enabled: boolean;
+  mailbox_apps: MailboxAppSetup[];
+  gmail_pubsub_topic: string;
+  gmail_push_service_account: string;
+  gmail_push_audience: string;
+  graph_notification_url: string;
+  ledger_stores: Record<string, boolean>;
+  pseudonym_secret_configured: boolean;
+}
+
+/** An SDR mailbox connected by OAuth. Tokens never leave the server. */
+export interface ConnectedMailbox {
+  id: string;
+  provider: "google" | "microsoft";
+  email: string;
+  display_name: string;
+  owner_user_id: string;
+  mine: boolean;
+  status: "connected" | "needs_reauth" | "revoked" | "error";
+  last_error: string | null;
+  timezone: string;
+  signature: string;
+  reply_confidence: number | null;
+  effective_reply_confidence: number;
+  reply_confidence_min: number;
+  reply_confidence_max: number;
+  paused_until: string | null;
+  last_synced_at: string | null;
+  created_at: string;
+}
+
+export interface MailboxProviderState {
+  provider: "google" | "microsoft";
+  configured: boolean;
+}
+
+/** One do-not-contact entry (D7). `liftable` is false for unsubscribes and lifted blocks. */
+export interface DoNotContactEntry {
+  id: string;
+  email: string;
+  reason: "unsubscribed" | "declined" | "bounced" | "manual";
+  contact_id: string | null;
+  source_message_id: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  lifted_at: string | null;
+  lifted_by_user_id: string | null;
+  lift_note: string;
+  liftable: boolean;
+}
+
+/** GET /engagement/settings/training — the workspace's ledger consent (D24). */
+export interface TrainingConsentState {
+  status: "on" | "off" | "pending";
+  source: "signup" | "prompt" | "settings" | null;
+  terms_version: string;
+  decided_at: string | null;
+  can_decide: boolean;
+  prompt: boolean;
+}
+
+/** GET /admin/ledger — one ledger store's state (spec §18.2). */
+export interface LedgerStoreStatus {
+  store: string;
+  configured: boolean;
+  reachable: boolean;
+  owns_schema: boolean;
+  applied: string[];
+  pending: string[];
+  detail: string;
+}
+
+export interface LedgerStatus {
+  capture_enabled: boolean;
+  pseudonym_secret_configured: boolean;
+  stores: LedgerStoreStatus[];
+  outbox: {
+    waiting: number;
+    oldest_age_s: number;
+    retrying: number;
+    max_attempts: number;
+  };
+  last_built_at: string | null;
+  consented_workspaces: number;
+  opted_out_workspaces: number;
+  undecided_workspaces: number;
 }

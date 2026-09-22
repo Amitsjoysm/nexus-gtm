@@ -41,6 +41,8 @@ import { SharedCrawlTab } from "./admin/SharedCrawlTab";
 import { SourcesTab } from "./admin/SourcesTab";
 import { RuntimeConfigTab } from "./admin/RuntimeConfigTab";
 import { FeatureSwitchesTab } from "./admin/FeatureSwitchesTab";
+import { EngagementSetupTab } from "./admin/EngagementSetupTab";
+import { LedgerTab } from "./admin/LedgerTab";
 import styles from "./AdminBillingPage.module.css";
 
 const MARGIN_FLOOR = 0.5;
@@ -805,6 +807,10 @@ export function AdminBillingPage() {
     // through someone else's API key, so registering one and granting platform power stay
     // separate acts.
     ...(can(PROVIDERS_MANAGE) ? [{ value: "keys", label: "Provider keys" }] : []),
+    // Beside Provider keys because the two are one job: the secrets go there, and this shows the
+    // redirect URIs, notification endpoints and scopes to paste into Google Cloud and Azure.
+    ...(can(PROVIDERS_MANAGE) ? [{ value: "engagement", label: "Mailbox apps" }] : []),
+    ...(can(PROVIDERS_MANAGE) ? [{ value: "ledger", label: "Ledger" }] : []),
     ...(can(FEATURES_MANAGE) ? [{ value: "features", label: "Feature switches" }] : []),
     // Its own permission, deliberately not folded into admins.manage: registering a data
     // source and granting platform power are different acts, and only `superadmin` holds it.
@@ -844,6 +850,8 @@ export function AdminBillingPage() {
           {tab === "payments" && can(PRICING_WRITE) && <PaymentsTab />}
           {tab === "access" && can(ADMINS_MANAGE) && <PlatformAdmins />}
           {tab === "keys" && can(PROVIDERS_MANAGE) && <ProviderKeysTab />}
+          {tab === "engagement" && can(PROVIDERS_MANAGE) && <EngagementSetupTab />}
+          {tab === "ledger" && can(PROVIDERS_MANAGE) && <LedgerTab />}
           {tab === "features" && can(FEATURES_MANAGE) && <FeatureSwitchesTab />}
           {tab === "sources" && can(SOURCES_MANAGE) && <SourcesTab />}
           {tab === "shared" && can(SOURCES_MANAGE) && <SharedCrawlTab />}

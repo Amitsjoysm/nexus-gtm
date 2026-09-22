@@ -200,7 +200,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0056_alert_routing`. The chain is
+Alembic under `migrations/versions/`. Head: `0057_engagement`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -211,7 +211,9 @@ Alembic under `migrations/versions/`. Head: `0056_alert_routing`. The chain is
 (`crm_connections`, `audit_log`, `integration_connections`) -> `0050` (`runtime_settings`) ->
 `0051`-`0054` (account geo/revenue, signal preferences, `users.token_version`, indexed invoice
 PSP references) -> `0055` (`feature_switches`) -> `0056` (`accounts.owner_user_id`,
-`notification_preferences.scope`, `alert_channel_rules`). Every tenant-scoped table gets RLS via
+`notification_preferences.scope`, `alert_channel_rules`) -> `0057` (engagement engine + training
+ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_enrollment_id`).
+Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -1844,6 +1846,31 @@ owner control is a `<select>` and a `<p>` may only hold phrasing content.
 
 Pinned by `tests/test_account_owner.py`, `test_alert_routing_api.py`,
 `test_alert_routing_delivery.py` and `test_alert_routing_ui.py`.
+
+## SDR engagement engine (`nexus/engagement/`) — in progress
+
+Replaces Campaigns and Cadences. Spec: `docs/superpowers/specs/2026-09-17-sdr-engagement-design.md`;
+plans: `docs/superpowers/plans/2026-09-17-sdr-engagement/`. Ships dark behind
+`engagement_campaigns_enabled` until the cutover (phase 15).
+
+- **Rules live in pure modules, and nothing re-derives them.** `subjects.reply_subject` is the only
+  way to build a follow-up subject (exactly one "Re:", D16). `dates.resolve_date` is the only way a
+  reply's "try me in June" becomes a date, and an ambiguous phrase resolves to `None` so a person
+  decides (D8). `timekeeping` owns business days (Mon–Fri, no holiday table) and the recipient's
+  timezone (contact `custom_fields["timezone"]` → account country/region → SDR mailbox).
+- **Double sends are prevented by the schema, not by care.** An outbound message row is written
+  `queued` before the provider call; a partial unique index on `(enrollment_id, step_index)` where
+  `direction = 'out'` and one on `(tenant_id, idempotency_key)` make a second send of the same step,
+  re-engagement or response an `IntegrityError`.
+- **No mocks (D21).** New tests use real inputs, real SQLite rows, or the live suites in
+  `tests_live/engagement/`. `tzdata` is a dependency because `zoneinfo` has no zone database on
+  Windows.
+- **The training & insights ledger** (`nexus/engagement/ledger/`): `emit()` writes to
+  `ledger_outbox` in the caller's transaction, only for workspaces whose newest `training_consents`
+  row is `on`, and never raises. `ship_ledger` seals events into the archive store;
+  `build_ledger_datasets` derives the training and insights stores from it, so both are
+  rebuildable. The Gmail push URL carries no token of ours — `tests/test_credential_leaks.py`
+  refuses a credential in a query string, and the Pub/Sub OIDC signature is the trust.
 
 ## Frontend skills — USE THESE for any UI work
 

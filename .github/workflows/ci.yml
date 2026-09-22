@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main, master]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -188,6 +189,43 @@ jobs:
           --ignorefile /work/.trivyignore.yaml
           --no-progress
           nexus-gtm:ci-${{ github.sha }}
+
+  # ---------- Live engagement suite: real Google, Microsoft, Supabase, LLM (D21) ----------
+  # Not in `quality-gate` until the cutover (phase 15): until the owner has created the test
+  # mailboxes and stores, every test here skips with the name of the missing secret. Never runs on
+  # pull requests, whose forks cannot read secrets and must not send real mail.
+  live-engagement:
+    name: Live engagement suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    concurrency:
+      # One run at a time: the suite shares real mailboxes and stores.
+      group: live-engagement
+      cancel-in-progress: false
+    env:
+      NEXUS_LIVE_REDIRECT_BASE: ${{ secrets.NEXUS_LIVE_REDIRECT_BASE }}
+      NEXUS_LIVE_GOOGLE_CLIENT_ID: ${{ secrets.NEXUS_LIVE_GOOGLE_CLIENT_ID }}
+      NEXUS_LIVE_GOOGLE_CLIENT_SECRET: ${{ secrets.NEXUS_LIVE_GOOGLE_CLIENT_SECRET }}
+      NEXUS_LIVE_MICROSOFT_CLIENT_ID: ${{ secrets.NEXUS_LIVE_MICROSOFT_CLIENT_ID }}
+      NEXUS_LIVE_MICROSOFT_CLIENT_SECRET: ${{ secrets.NEXUS_LIVE_MICROSOFT_CLIENT_SECRET }}
+      NEXUS_LIVE_MICROSOFT_TENANT: ${{ secrets.NEXUS_LIVE_MICROSOFT_TENANT }}
+      NEXUS_LIVE_GMAIL_ADDRESS: ${{ secrets.NEXUS_LIVE_GMAIL_ADDRESS }}
+      NEXUS_LIVE_GMAIL_REFRESH_TOKEN: ${{ secrets.NEXUS_LIVE_GMAIL_REFRESH_TOKEN }}
+      NEXUS_LIVE_M365_ADDRESS: ${{ secrets.NEXUS_LIVE_M365_ADDRESS }}
+      NEXUS_LIVE_M365_REFRESH_TOKEN: ${{ secrets.NEXUS_LIVE_M365_REFRESH_TOKEN }}
+      # The three ledger stores. Absent, the ledger live tests skip naming these.
+      NEXUS_LEDGER_ARCHIVE_DSN: ${{ secrets.NEXUS_LEDGER_ARCHIVE_DSN }}
+      NEXUS_LEDGER_TRAINING_DSN: ${{ secrets.NEXUS_LEDGER_TRAINING_DSN }}
+      NEXUS_LEDGER_INSIGHTS_DSN: ${{ secrets.NEXUS_LEDGER_INSIGHTS_DSN }}
+      NEXUS_LEDGER_PSEUDONYM_SECRET: ${{ secrets.NEXUS_LEDGER_PSEUDONYM_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.10", cache: pip }
+      - run: pip install -e ".[dev,postgres]"
+      - name: Live engagement tests (serial; skips name the missing secret)
+        run: pytest tests_live/engagement -n0 -p no:cacheprovider --timeout=300 -q -rs
 
   # ---------- Single required status check for branch protection ----------
   quality-gate:

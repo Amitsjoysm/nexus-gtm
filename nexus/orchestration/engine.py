@@ -479,6 +479,12 @@ class OrchestrationEngine:
         await ts.flush()
         if evt:
             await self._emit(ts, run, evt, {"status": run.status})
+            from nexus.engagement.ledger.emit import emit as ledger_emit
+
+            await ledger_emit(ts, "workflow.run_finished", refs={"run_id": run.id},
+                              payload={"status": run.status, "error": run.error,
+                                       "steps": [{"idx": s.idx, "tool": s.tool,
+                                                  "status": s.status} for s in steps]})
 
     async def _emit(
         self, ts: TenantSession, run: OrchestrationRun, type_: str, data: dict

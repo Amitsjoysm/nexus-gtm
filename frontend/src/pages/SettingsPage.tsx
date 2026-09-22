@@ -18,6 +18,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
+import { TrainingConsentCard } from "@/pages/settings/TrainingConsentCard";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -68,6 +69,7 @@ export function SettingsPage() {
       />
 
       <div className={styles.stack}>
+        <TrainingConsentCard />
         {/* Alert delivery moved beside Alerts. This page is admin-only, so the one setting on it
             that belonged to every member was out of reach for all of them. The card stays so an
             admin who remembers it here finds where it went. */}

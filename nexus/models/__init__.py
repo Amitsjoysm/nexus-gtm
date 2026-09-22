@@ -38,6 +38,18 @@ from nexus.models.cadence import (
     CadenceTouch,
 )
 from nexus.models.calling import CallActivity, CallTask
+from nexus.models.engagement import (
+    DoNotContact,
+    EngagementCampaign,
+    EngagementEnrollment,
+    EngagementMessage,
+    EngagementStep,
+    EngagementThread,
+    MailboxConnection,
+    ReplyClassification,
+    SequenceTemplate,
+)
+from nexus.models.ledger import LedgerOutbox, TrainingConsent
 from nexus.models.network import (
     NetworkEdge,
     NetworkIdentity,
@@ -104,6 +116,17 @@ __all__ = [
     "CadenceTouch",
     "CallTask",
     "CallActivity",
+    "MailboxConnection",
+    "SequenceTemplate",
+    "EngagementCampaign",
+    "EngagementStep",
+    "EngagementEnrollment",
+    "EngagementThread",
+    "EngagementMessage",
+    "ReplyClassification",
+    "DoNotContact",
+    "TrainingConsent",
+    "LedgerOutbox",
     "NetworkSourceAccount",
     "NetworkPerson",
     "NetworkIdentity",

@@ -3,6 +3,8 @@ from nexus.api.routers import (
     accounts,
     admin_billing,
     admin_billing_write,
+    admin_engagement,
+    admin_ledger,
     admin_users,
     admin_jobs,
     admin_payment_credentials,
@@ -25,6 +27,9 @@ from nexus.api.routers import (
     chat,
     contacts,
     custom_fields,
+    engagement_mailboxes,
+    engagement_suppression,
+    engagement_settings,
     imports,
     integrations,
     network,
@@ -32,6 +37,7 @@ from nexus.api.routers import (
     outcomes,
     relevance,
     signals,
+    unsubscribe,
     workflow,
     workspace,
 )
@@ -71,6 +77,12 @@ all_routers = [
     admin_shared_crawl.router,
     admin_sources.router,
     admin_health.router,
+    admin_engagement.router,
+    admin_ledger.router,
+    engagement_mailboxes.router,
+    engagement_suppression.router,
+    engagement_settings.router,
+    unsubscribe.router,
 ]
 
 __all__ = ["all_routers"]

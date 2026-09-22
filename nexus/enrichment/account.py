@@ -379,6 +379,24 @@ class SearchBackedAccountEnricher:
         raise_on_block: bool = False, meter: bool = True, force: bool = False,
         web_search: bool = True,
     ) -> list[str]:
+        """Fill blank firmographics (see ``_enrich``), then record what was filled in the ledger.
+
+        A thin wrapper so the event is written once, whichever of ``_enrich``'s many early returns
+        was taken."""
+        filled = await self._enrich(ts, account, user_id=user_id, raise_on_block=raise_on_block,
+                                    meter=meter, force=force, web_search=web_search)
+        from nexus.engagement.ledger.emit import emit
+
+        await emit(ts, "enrichment.account", actor_user_id=user_id,
+                   refs={"account_id": account.id, "company_id": account.company_id},
+                   payload={"filled": list(filled), "web_search": web_search})
+        return filled
+
+    async def _enrich(
+        self, ts, account: Account, *, user_id: str | None = None,
+        raise_on_block: bool = False, meter: bool = True, force: bool = False,
+        web_search: bool = True,
+    ) -> list[str]:
         """Fill blank firmographics. Source databases first, then the web. Returns fields filled.
 
         ``ts`` is the requesting tenant's session, and it is **required** — this call spends a

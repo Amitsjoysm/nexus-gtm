@@ -904,6 +904,146 @@ async def handle_backfill_companies(payload: dict) -> dict:
     return await backfill_companies(limit=payload.get("limit", 1000))
 
 
+async def handle_refresh_mailbox_tokens(payload: dict) -> dict:
+    """Refresh each connected SDR mailbox at least once a day (spec §9 mailbox status).
+
+    A revoked grant is otherwise discovered at the moment a campaign tries to send. Refreshing
+    marks it ``needs_reauth`` a day earlier, where the SDR sees Reconnect. Microsoft refresh tokens
+    also lapse after 90 days unused; a daily refresh keeps an idle mailbox connected.
+
+    The scan reads only ids across tenants (the worker connects as the owner role); each refresh
+    runs inside that tenant's own session."""
+    from collections import defaultdict
+
+    from sqlalchemy import select
+
+    from nexus.engagement.mailboxes.provider import AuthExpired, ProviderError
+    from nexus.engagement.mailboxes.tokens import fresh_access_token, liveness_due, unseal
+    from nexus.models.engagement import MailboxConnection
+
+    async with get_sessionmaker()() as session:
+        rows = (await session.execute(
+            select(MailboxConnection.tenant_id, MailboxConnection.id)
+            .where(MailboxConnection.status == "connected")
+        )).all()
+    by_tenant: dict[str, list[str]] = defaultdict(list)
+    for tenant_id, mailbox_id in rows:
+        by_tenant[tenant_id].append(mailbox_id)
+
+    refreshed = needs_reauth = failed = 0
+    for tenant_id, mailbox_ids in by_tenant.items():
+        async with tenant_session(tenant_id) as ts:
+            for mailbox_id in mailbox_ids:
+                connection = await ts.get(MailboxConnection, mailbox_id)
+                if connection is None or connection.status != "connected":
+                    continue
+                if not liveness_due(unseal(connection.tokens)):
+                    continue
+                try:
+                    await fresh_access_token(ts, connection, force=True)
+                    refreshed += 1
+                except AuthExpired:
+                    needs_reauth += 1
+                except ProviderError:
+                    failed += 1
+    return {"refreshed": refreshed, "needs_reauth": needs_reauth, "failed": failed}
+
+
+async def handle_ship_ledger(payload: dict) -> dict:
+    """Ship consented events to the archive, then drop what has been archived for a week.
+
+    Raises when a store refused, so the batch retries and finally dead-letters with its evidence.
+    Rows carry their own backoff, so the ticks in between find nothing due and return quietly rather
+    than dead-lettering once a minute for the length of an outage (spec §18.2)."""
+    from nexus.engagement.ledger import shipper
+
+    result = await shipper.ship()
+    if not result.get("skipped"):
+        result["purged"] = await shipper.purge_shipped()
+    return result
+
+
+async def handle_build_ledger_datasets(payload: dict) -> dict:
+    """Turn newly archived events into training examples and insights facts, hourly.
+
+    Self-limiting on the watermark's own `built_at`, so the heartbeat can enqueue it every tick: the
+    worker is not the only process that could run this, and an hour kept in a module variable would
+    be wrong in the second replica."""
+    from datetime import timedelta
+
+    from nexus.core.db import utcnow
+    from nexus.engagement.ledger import builder
+    from nexus.engagement.ledger.stores import StoreNotConfigured
+
+    try:
+        last = await builder.last_built_at()
+    except StoreNotConfigured:
+        return {"skipped": "the training store is not configured"}
+    except Exception:
+        last = None
+    if last is not None and utcnow() - last < timedelta(hours=1):
+        return {"skipped": "built less than an hour ago"}
+    return await builder.build()
+
+
+async def handle_ledger_delete_workspace(payload: dict) -> dict:
+    """A workspace switched training off: remove what it already contributed (spec §18.6)."""
+    from nexus.engagement.ledger import deletion
+
+    tenant_id = payload.get("tenant_id") or ""
+    if not tenant_id:
+        return {"error": "no tenant"}
+    report = await deletion.delete_workspace(tenant_id)
+    async with tenant_session(tenant_id) as ts:
+        from nexus.core.audit import record_audit
+
+        await record_audit(ts, "ledger.workspace_deleted", target_type="tenant",
+                           target_id=tenant_id, meta=report)
+    return report
+
+
+async def handle_ledger_erase_person(payload: dict) -> dict:
+    """Erase one person everywhere, by key. Ships the outbox first so an event recorded seconds
+    before the request cannot land in the archive seconds after the erasure."""
+    from nexus.engagement.ledger import deletion, shipper
+
+    person_key = payload.get("person_key") or ""
+    if not person_key:
+        return {"error": "no person key"}
+    try:
+        await shipper.ship()
+    except Exception:
+        logger.warning("could not flush the outbox before an erasure", exc_info=True)
+    return await deletion.erase_person(person_key)
+
+
+async def enqueue_ship_ledger(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="ship_ledger", payload={}))
+
+
+async def enqueue_build_ledger_datasets(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="build_ledger_datasets", payload={}))
+
+
+async def enqueue_ledger_delete_workspace(tenant_id: str, *,
+                                          queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="ledger_delete_workspace", payload={"tenant_id": tenant_id}))
+
+
+async def enqueue_ledger_erase_person(person_key: str, *,
+                                      queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="ledger_erase_person", payload={"person_key": person_key}))
+
+
+async def enqueue_refresh_mailbox_tokens(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="refresh_mailbox_tokens", payload={}))
+
+
 async def enqueue_crawl_companies(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="crawl_companies", payload={}))
@@ -936,6 +1076,11 @@ HANDLERS: dict[str, Handler] = {
     # the dead-letter replay button is not a no-op; never enqueued on a schedule.
     "billing_grant_plan_credits": handle_grant_plan_credits,
     "expire_trials": handle_expire_trials,
+    "refresh_mailbox_tokens": handle_refresh_mailbox_tokens,
+    "ship_ledger": handle_ship_ledger,
+    "build_ledger_datasets": handle_build_ledger_datasets,
+    "ledger_delete_workspace": handle_ledger_delete_workspace,
+    "ledger_erase_person": handle_ledger_erase_person,
 }
 
 
@@ -1089,4 +1234,23 @@ async def dispatch(job: Job) -> dict:
         logger.exception(
             "job %s failed (attempt %s/%s)", job.name, job.attempts + 1, job.max_attempts
         )
+        await _record_job_failure(job, exc)
         return {"error": f"{type(exc).__name__}: {exc}", JOB_FAILED_KEY: True}
+
+
+async def _record_job_failure(job: Job, exc: Exception) -> None:
+    """A ledger ``error.job_failed`` for a tenant job that raised. Never raises: the retry and
+    dead-letter path must run whatever happens here."""
+    tenant_id = (job.payload or {}).get("tenant_id")
+    if not tenant_id:
+        return
+    try:
+        from nexus.engagement.ledger.emit import emit
+
+        async with tenant_session(tenant_id) as ts:
+            await emit(ts, "error.job_failed",
+                       payload={"job": job.name, "attempt": job.attempts + 1,
+                                "max_attempts": job.max_attempts,
+                                "error": f"{type(exc).__name__}: {exc}"[:500]})
+    except Exception:
+        logger.debug("could not record job failure in the ledger", exc_info=True)

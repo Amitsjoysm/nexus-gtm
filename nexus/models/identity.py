@@ -95,6 +95,11 @@ class PendingRegistration(IdMixin, TimestampMixin, Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     resends: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_sent_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    # The "Help improve the AI" choice made on the sign-up form (D24). It has to survive the OTP
+    # step: the tenant, and so its consent row, is only created once the code is verified.
+    training_consent: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default="1"
+    )
 
 
 class PasswordReset(IdMixin, TimestampMixin, Base):

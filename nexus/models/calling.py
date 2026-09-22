@@ -74,6 +74,10 @@ class CallTask(IdMixin, TimestampMixin, TenantScoped, Base):
         ForeignKey("cadence_enrollments.id"), nullable=True
     )
     cadence_step_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Engagement engine linkage (spec §13). The cadence columns above stay as history.
+    engagement_enrollment_id: Mapped[str | None] = mapped_column(
+        ForeignKey("engagement_enrollments.id"), nullable=True
+    )
     # Last generated AI script, cached so re-opening the call panel doesn't re-hit the LLM.
     script_cache: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

@@ -180,6 +180,15 @@ class WaterfallEnricher:
         if merged.found:
             contact.enrichment_source = merged.source
         await ts.flush()
+        from nexus.engagement.ledger.emit import emit
+
+        await emit(ts, "enrichment.contact", actor_user_id=user_id,
+                   refs={"account_id": account.id, "contact_id": contact.id},
+                   payload={"found": merged.found, "source": merged.source,
+                            "email_found": bool(merged.email),
+                            "email_status": merged.email_status,
+                            "email_confidence": merged.email_confidence,
+                            "phone_found": bool(merged.phone)})
         return merged
 
 

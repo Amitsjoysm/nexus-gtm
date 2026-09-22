@@ -280,7 +280,28 @@ async def forget_person(session, person_id: str) -> bool:
     # test suite — the same "passes every test, differs in prod" trap CLAUDE.md documents for RLS.
     # An erasure that half-completes is the one operation where that is unacceptable.
     await session.execute(delete(PersonIdentity).where(PersonIdentity.person_id == person_id))
+    email = unseal_text(person.email_encrypted or "", key=_enc_key())
     await session.delete(person)
     await session.flush()
+    await _erase_from_ledger(email)
     logger.info("erased shared person record %s", person_id)
     return True
+
+
+async def _erase_from_ledger(email: str) -> None:
+    """The same request reaches the ledger stores (spec §18.6). Never raises: the person's
+    record here is already gone, and failing the erasure would leave it.
+
+    The job carries the person KEY, never the address: a dead-lettered job logs its payload."""
+    if not email:
+        return
+    try:
+        from nexus.engagement import config
+        from nexus.engagement.ledger.pseudonym import person_key
+        from nexus.workers.tasks import enqueue_ledger_erase_person
+
+        secret = await config.pseudonym_secret()
+        if secret:
+            await enqueue_ledger_erase_person(person_key(secret, email))
+    except Exception:
+        logger.warning("could not queue the ledger erasure", exc_info=True)

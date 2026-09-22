@@ -86,6 +86,10 @@ async def probe(provider: str, key: str, *, transport=None) -> TestResult:
 
     if provider not in PROVIDERS:
         return TestResult(False, "failed", f"unknown provider {provider!r}")
+    from nexus.engagement.credential_checks import ENGAGEMENT_KEY_IDS, check
+
+    if provider in ENGAGEMENT_KEY_IDS:
+        return await check(provider, key, transport=transport)
     s = get_settings()
     try:
         if provider == "groq":
@@ -139,6 +143,12 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
 
     if provider not in PROVIDERS:
         return TestResult(False, "failed", f"unknown provider {provider!r}")
+    from nexus.engagement.credential_checks import ENGAGEMENT_KEY_IDS, check
+
+    if provider in ENGAGEMENT_KEY_IDS:
+        # No deeper call exists: an OAuth client is proven only when a user authorises it, and a
+        # store's grants are checked by the ledger's own schema check (phase 06).
+        return await check(provider, key, transport=transport)
     s = get_settings()
     try:
         if provider in ("groq", "openai_compat"):

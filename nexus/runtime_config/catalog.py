@@ -84,13 +84,14 @@ OUTREACH = "Outreach & CRM"
 BILLING = "Billing"
 ACCESS = "Access & security"
 RELIABILITY = "Reliability"
+ENGAGEMENT = "Mailboxes & engagement"
 
 #: The order the panel shows groups in. Server-defined so a new group lands deliberately rather
 #: than wherever the alphabet puts it; `test_every_group_is_one_the_panel_orders_and_none_is_empty`
 #: keeps the two in step.
 GROUP_ORDER: tuple[str, ...] = (
-    EMAIL, CONTACTS, PERSONALIZATION, AI, SIGNALS, AUTOMATION, OUTREACH, BILLING, ACCESS,
-    RELIABILITY,
+    EMAIL, CONTACTS, PERSONALIZATION, AI, SIGNALS, AUTOMATION, OUTREACH, ENGAGEMENT, BILLING,
+    ACCESS, RELIABILITY,
 )
 
 
@@ -489,6 +490,79 @@ _SPECS: tuple[SettingSpec, ...] = (
         key="crm_sync_batch_size", label="Accounts pushed per sweep", group=OUTREACH,
         kind="int", minimum=1, maximum=1000,
         effect="Most changed accounts claimed for a CRM push per heartbeat sweep.",
+    ),
+
+    # ---- mailboxes and engagement (spec §12) ----------------------------------------------------
+    SettingSpec(
+        key="engagement_public_base_url", label="Public base URL", group=ENGAGEMENT, kind="str",
+        effect="The https address Google and Microsoft call back to: OAuth redirects, Gmail push "
+               "notifications and Microsoft Graph notifications are all built from it.",
+        warning="Changing it breaks every redirect URI and notification endpoint registered in "
+                "Google Cloud and Azure until they are updated to match. Mailboxes stop "
+                "connecting and replies stop arriving, silently.",
+        risk="high", placeholder="https://app.example.com",
+    ),
+    SettingSpec(
+        key="engagement_google_client_id", label="Google OAuth client id", group=ENGAGEMENT,
+        kind="str",
+        effect="Which Google Cloud OAuth client SDRs connect Gmail through. Its secret lives in "
+               "Provider keys as google_oauth.",
+        warning="A different client invalidates every connected Gmail mailbox: each SDR has to "
+                "connect again.",
+        risk="high", placeholder="123456789012-abc123.apps.googleusercontent.com",
+    ),
+    SettingSpec(
+        key="engagement_google_pubsub_topic", label="Gmail notification topic", group=ENGAGEMENT,
+        kind="str",
+        effect="The Pub/Sub topic Gmail publishes to when a connected mailbox changes. Replies "
+               "arrive within seconds instead of on the few-minute poll.",
+        warning="A topic Gmail cannot publish to makes every watch fail; replies then arrive "
+                "only on the poll. The topic must grant Publisher to "
+                "gmail-api-push@system.gserviceaccount.com.",
+        risk="medium", placeholder="projects/my-project/topics/gmail-replies",
+    ),
+    SettingSpec(
+        key="engagement_google_push_service_account", label="Gmail push service account",
+        group=ENGAGEMENT, kind="str",
+        effect="The service account the Pub/Sub push subscription signs its requests with. A "
+               "push signed by any other account is refused.",
+        warning="If it does not match the subscription's authentication setting, every push is "
+                "refused and replies arrive only on the poll.",
+        risk="medium", placeholder="gmail-push@my-project.iam.gserviceaccount.com",
+    ),
+    SettingSpec(
+        key="engagement_microsoft_client_id", label="Microsoft app (client) id",
+        group=ENGAGEMENT, kind="str",
+        effect="Which Azure app registration SDRs connect Microsoft 365 through. Its secret lives "
+               "in Provider keys as microsoft_oauth.",
+        warning="A different app invalidates every connected Microsoft mailbox: each SDR has to "
+                "connect again.",
+        risk="high", placeholder="00000000-0000-0000-0000-000000000000",
+    ),
+    SettingSpec(
+        key="engagement_microsoft_tenant", label="Microsoft tenant", group=ENGAGEMENT, kind="str",
+        effect="Which Microsoft accounts may connect: common (any work or school account and "
+               "personal), organizations (work or school only), or one tenant id or domain.",
+        warning="Narrowing it stops SDRs outside that tenant from connecting or refreshing.",
+        risk="medium", placeholder="common",
+    ),
+    SettingSpec(
+        key="engagement_campaigns_enabled", label="Campaigns and reply desk", group=ENGAGEMENT,
+        kind="bool",
+        effect="Turns on the engagement campaigns, the reply desk and the workers that send "
+               "follow-ups and read replies.",
+        warning="Campaign steps send real email from SDR mailboxes and replies are read and "
+                "acted on. Switch on only after the cutover dry run has been reviewed.",
+        risk="high",
+    ),
+    SettingSpec(
+        key="ledger_capture_enabled", label="Training ledger capture", group=ENGAGEMENT,
+        kind="bool",
+        effect="Records server-side activity from workspaces that opted in, for model training "
+               "and prospect insights. Off stops recording for every workspace at once.",
+        warning="Activity while it is off is never recorded and cannot be recovered later; "
+                "training sets and insights have a gap for that period.",
+        risk="medium",
     ),
 
     # ---- money ----------------------------------------------------------------------------------

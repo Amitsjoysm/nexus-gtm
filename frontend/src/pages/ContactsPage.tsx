@@ -22,6 +22,7 @@ import { ProviderIcon } from "@/components/ui/providerIcons";
 import { AddSimilarPerson, lookalikeFromAdded } from "@/components/AddSimilarPerson";
 import { CallConsole } from "@/components/CallConsole";
 import { EmailComposer } from "@/components/EmailComposer";
+import { DncBadge, useDoNotContact } from "@/components/engagement/DncBadge";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -105,6 +106,8 @@ export function ContactsPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const contacts = useApi<WorkspaceContact[]>((signal) => api.listWorkspaceContacts(undefined, signal), []);
+  // Blocked addresses, checked in one request for the loaded rows (spec §9 contact badge).
+  const blocked = useDoNotContact((contacts.data ?? []).map((c) => c.email));
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState(ALL);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -420,7 +423,9 @@ export function ContactsPage() {
         header: "Status",
         sortValue: (c) => c.email_status,
         render: (c) =>
-          c.email_status ? (
+          c.email && blocked[c.email.toLowerCase()] ? (
+            <DncBadge reason={blocked[c.email.toLowerCase()]} />
+          ) : c.email_status ? (
             <Badge tone={STATUS_TONE[c.email_status] ?? "neutral"} dot>
               {STATUS_LABEL[c.email_status] ?? c.email_status}
             </Badge>
@@ -540,7 +545,7 @@ export function ContactsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId, callingId, similarId, phoneId],
+    [busyId, callingId, similarId, phoneId, blocked],
   );
 
   return (

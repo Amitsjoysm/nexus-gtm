@@ -64,6 +64,11 @@ const ApprovalsPage = lazyPage(() => import("@/pages/ApprovalsPage"), "Approvals
 const ChatPage = lazyPage(() => import("@/pages/ChatPage"), "ChatPage");
 const CampaignsPage = lazyPage(() => import("@/pages/CampaignsPage"), "CampaignsPage");
 const CadencesPage = lazyPage(() => import("@/pages/CadencesPage"), "CadencesPage");
+const MailboxesPage = lazyPage(() => import("@/pages/engagement/MailboxesPage"), "MailboxesPage");
+const DataUsePage = lazyPage(() => import("@/pages/DataUsePage"), "DataUsePage");
+const DoNotContactPage = lazyPage(
+  () => import("@/pages/engagement/DoNotContactPage"), "DoNotContactPage",
+);
 const SettingsPage = lazyPage(() => import("@/pages/SettingsPage"), "SettingsPage");
 const BillingPage = lazyPage(() => import("@/pages/BillingPage"), "BillingPage");
 const AdminHealthPage = lazyPage(
@@ -171,6 +176,8 @@ export function App() {
 
               {/* Public: a password-reset link works whether or not the user is signed in. */}
               <Route path="/reset-password" element={<ResetPasswordPage />} />
+              {/* Public: the sign-up form links here before an account exists (D24). */}
+              <Route path="/data-use" element={<DataUsePage />} />
 
               <Route
                 element={
@@ -300,6 +307,24 @@ export function App() {
                         <CampaignsPage />
                       </RequireCapability>
                     </RequireRole>
+                  }
+                />
+                {/* Every member: an SDR connects their own mailbox. Gated like the email composer,
+                    on module.outreach, so a plan without outreach hides it everywhere. */}
+                <Route
+                  path="/mailboxes"
+                  element={
+                    <RequireCapability capability="module.outreach" name="My mailboxes">
+                      <MailboxesPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="/do-not-contact"
+                  element={
+                    <RequireCapability capability="module.outreach" name="Do not contact">
+                      <DoNotContactPage />
+                    </RequireCapability>
                   }
                 />
                 <Route

@@ -191,13 +191,19 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     # +6 for rollup_usage, roll_billing_periods, dunning_sweep, billing_reconcile,
     # backfill_companies and crawl_companies — all enqueued every tick regardless of
     # automation_enabled, because billing accuracy and shared-company maintenance are platform
-    # concerns rather than per-workspace opt-ins.
-    assert count == 12
+    # concerns rather than per-workspace opt-ins. +1 for refresh_mailbox_tokens, which keeps SDR
+    # mailbox status honest whether or not automation is on.
+    assert count == 15
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "advance_cadences", "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
         "billing_reconcile", "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
+        "refresh_mailbox_tokens",
+        # The ledger ships and builds on the heartbeat too: a workspace that opted in is
+        # contributing whether or not it switched automation on.
+        "ship_ledger",
+        "build_ledger_datasets",
     }
 
 
@@ -211,11 +217,16 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    assert count == 8
+    assert count == 11
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "rollup_usage", "roll_billing_periods", "dunning_sweep", "billing_reconcile",
         "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
+        "refresh_mailbox_tokens",
+        # The ledger ships and builds on the heartbeat too: a workspace that opted in is
+        # contributing whether or not it switched automation on.
+        "ship_ledger",
+        "build_ledger_datasets",
     }
 
 
