@@ -137,8 +137,9 @@ async def test_an_invalid_saved_address_searches_patterns_and_charges_the_enrich
     assert outcome.action == "searched"
     assert (outcome.previous_email, outcome.previous_status) == ("curtis.bent@marketjoy.com", STATUS_RISKY)
     assert (contact.email, contact.email_status) == ("curtis@marketjoy.com", STATUS_VALID)
-    # first.last, then first — and it stops at the first valid instead of probing the other eight.
-    assert probed == ["curtis.bent@marketjoy.com", "curtis@marketjoy.com"]
+    # The re-check just proved first.last dead, so the search does not probe it again: it goes
+    # straight to first, and stops at the first valid instead of probing the other eight.
+    assert probed == ["curtis@marketjoy.com"]
     assert charges == [("enrich.contact", 1)]
 
 

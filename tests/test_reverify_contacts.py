@@ -89,8 +89,12 @@ async def test_reverify_contacts_all_includes_verified():
         result = await reverify_contacts(ts, verify=verify, only_unverified=False)
         await ts.session.refresh(c)
 
-    assert result["checked"] == 1
-    assert c.email_status == STATUS_INVALID  # re-checked even though it had a verdict
+    assert result["checked"] == 1            # re-checked even though it had a verdict
+    # ...and, proven invalid, removed rather than relabelled (product decision 2026-09-22), with
+    # the address remembered so it is never guessed again and counted as what removed it.
+    assert c.email is None
+    assert "jane.doe@acme.com" in c.custom_fields["rejected_emails"]
+    assert result["statuses"] == {STATUS_INVALID: 1}
 
 
 async def test_reverify_stamps_checked_at_even_when_status_unchanged():

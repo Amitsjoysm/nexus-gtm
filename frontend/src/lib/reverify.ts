@@ -37,6 +37,14 @@ export function describeReverify(res: ContactReverifyResult): {
   if (email) {
     return { found: false, title: "No better address found", body: `${email} is ${label}.` };
   }
+  if (before) {
+    // A disproved address is removed rather than kept with a label, so say where it went.
+    return {
+      found: false,
+      title: "Address removed",
+      body: `${before} doesn't exist, so it was removed. None of the other common patterns for ${contact.full_name} checked out.`,
+    };
+  }
   return {
     found: false,
     title: "No email found",

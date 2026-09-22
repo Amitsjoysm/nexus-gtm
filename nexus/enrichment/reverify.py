@@ -22,6 +22,7 @@ from sqlalchemy import or_, select
 from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Contact
+from nexus.enrichment.policy import forget_email, remember_rejected
 from nexus.verification import STATUS_INVALID, STATUS_UNKNOWN, STATUS_VALID, EmailVerification
 
 logger = logging.getLogger("nexus.enrichment.reverify")
@@ -48,7 +49,8 @@ async def reverify_contact(contact: Contact, verify: Verify) -> bool:
 
     Sets ``email_status`` from the live verdict. Only *raises* the stored confidence (on a
     confirmed ``valid``) — a catch-all "risky" verdict must not clobber a high web-sourced
-    confidence that the address is the right one. Never mutates the address itself.
+    confidence that the address is the right one. An address proven INVALID is removed, not
+    relabelled (see :func:`apply_verdict`).
     """
     email = (contact.email or "").strip()
     if not email:
@@ -64,7 +66,16 @@ def apply_verdict(contact: Contact, verdict: EmailVerification) -> bool:
 
     Only *raises* the stored confidence, and only on a confirmed ``valid``: a catch-all verdict must
     not clobber a high web-sourced confidence that the address is the right one.
+
+    **An invalid address is removed, not relabelled** (decided with the product owner 2026-09-22):
+    a dead address labelled "undeliverable" still reads as "an email was found", and a rep with a
+    deadline sends it. It is remembered on the contact so the finder never guesses it again.
     """
+    if verdict.status == STATUS_INVALID and contact.email:
+        remember_rejected(contact, [contact.email])
+        forget_email(contact)
+        contact.email_checked_at = utcnow()
+        return True
     changed = verdict.status != contact.email_status
     contact.email_status = verdict.status
     # Stamp the check time even when the verdict didn't move (unknown→unknown): the SDR sees
@@ -119,20 +130,27 @@ async def reverify_contacts(
 
     sem = asyncio.Semaphore(_CONCURRENCY)
 
+    removed: set[str] = set()
+
     async def _one(contact: Contact) -> bool:
         async with sem:
+            had_email = bool(contact.email)
             try:
-                return await reverify_contact(contact, verify)
+                changed = await reverify_contact(contact, verify)
             except Exception as exc:  # provider isolation — one bad row can't fail the sweep
                 logger.warning("reverify failed for contact %s: %r", contact.id, exc)
                 return False
+            if had_email and not contact.email:
+                removed.add(contact.id)
+            return changed
 
     results = await asyncio.gather(*(_one(c) for c in contacts))
     await ts.flush()
 
     tally: dict[str, int] = {}
     for c in contacts:
-        key = c.email_status or "none"
+        # A removed address no longer has a status of its own; it is counted as what removed it.
+        key = STATUS_INVALID if c.id in removed else (c.email_status or "none")
         tally[key] = tally.get(key, 0) + 1
     return {"checked": len(contacts), "updated": sum(1 for r in results if r), "statuses": tally}
 
@@ -190,11 +208,11 @@ async def reverify_or_find(
         return ReverifyOutcome("rechecked", previous_email, previous_status)
 
     if verdict is not None and verdict.status == STATUS_INVALID:
-        # Proven wrong. Its old confidence must not outrank what the search finds, or the waterfall
-        # (which only replaces an address with an equally or more confident one) keeps the dead one.
-        contact.email_status = STATUS_INVALID
+        # Proven wrong: removed and remembered, so the search below neither keeps it (the waterfall
+        # only replaces an address with an equally or more confident one) nor probes it again.
+        remember_rejected(contact, [email])
+        forget_email(contact)
         contact.email_checked_at = utcnow()
-        contact.email_confidence = 0.0
     await (enricher or get_enricher()).enrich_contact(
         ts, contact, user_id=user_id, raise_on_block=True
     )
