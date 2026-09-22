@@ -346,6 +346,14 @@ class Settings(BaseSettings):
     signal_cache_ttl_slow_s: int = 86400     # 24h
     #: Re-fetch window for a page (website watch, careers pages).
     page_cache_ttl_s: int = 86400            # 24h
+    #: Base URL of the nexus-fetch service (services/fetch/), e.g. http://203.0.113.7:8081. Empty
+    #: means the service is not used at all and every signal search goes to the paid provider, as
+    #: it did before the service existed.
+    fetch_service_url: str = ""
+    #: Shared secret the service demands on every call. Never settable from the Control plane,
+    #: because the panel returns values in plaintext.
+    fetch_service_token: str = ""
+    fetch_service_timeout_s: float = 20.0
 
     # Per-tenant ceiling on billed source runs per UTC day. Automation is now on by default for new
     # workspaces, so this is what stops an enthusiastic account import from producing a surprise

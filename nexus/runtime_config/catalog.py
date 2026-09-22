@@ -414,6 +414,25 @@ _SPECS: tuple[SettingSpec, ...] = (
                 "above it, a pricing-page change is noticed late.",
         risk="medium",
     ),
+    SettingSpec(
+        key="fetch_service_url", label="Self-hosted fetcher URL", group=SIGNALS, kind="str",
+        effect="Where the nexus-fetch service answers. When set, signal searches and first-party "
+               "page fetches go there first and fall back to the paid provider only when it "
+               "cannot answer. Empty means it is not used.",
+        warning="A wrong or unreachable URL does not fail loudly: every search silently falls back "
+                "to the paid provider, so the only symptom is the bill. Check the web fetcher row "
+                "on Platform health after saving. The token is set on the server, never here.",
+        risk="high", placeholder="http://203.0.113.7:8081",
+    ),
+    SettingSpec(
+        key="fetch_service_timeout_s", label="Fetcher timeout (seconds)", group=SIGNALS,
+        kind="float", minimum=2, maximum=60,
+        effect="How long one call to the self-hosted fetcher may take before the search falls back "
+               "to the paid provider.",
+        warning="Too short and slow pages always fall back and cost money; too long and one stuck "
+                "fetch holds up the whole account crawl.",
+        risk="medium",
+    ),
 
     # ---- automation and schedules: the things that spend money on their own ----------------------
     SettingSpec(
@@ -728,6 +747,10 @@ FORBIDDEN: frozenset[str] = frozenset({
     #   which is a permissions decision, not a runtime setting.
     "email_verify_auth_header",
     "billing_support_credit_cap",
+    # Withheld 2026-09-22:
+    # * fetch_service_token: the shared secret for nexus-fetch, and `current_values` returns values
+    #   in plaintext — the same reason as email_verify_auth_header.
+    "fetch_service_token",
 })
 
 

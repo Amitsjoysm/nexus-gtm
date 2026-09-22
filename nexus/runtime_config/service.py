@@ -57,13 +57,13 @@ def _validate_allowlist(value) -> None:
     parse_allowlist(str(value))
 
 
-def _validate_verify_url(value) -> None:
-    """The verifier POSTs to this URL and Check connection reports how it answered.
+def _validate_service_url(value, *, what: str) -> None:
+    """A URL the application itself will call, and whose answer an admin can observe.
 
     Pointed inside the network, that is a port scanner driven from a web form, so it gets the same
     host guard as alert webhooks and source databases. `http` is allowed, unlike a webhook: the
-    self-hosted Reacher this exists for has no TLS, and refusing it would leave a deployment unable
-    to point at the verifier it actually runs. The health check flags it instead.
+    self-hosted services this exists for (Reacher, nexus-fetch) have no TLS, and refusing it would
+    leave a deployment unable to point at what it actually runs. Their health checks flag it instead.
     """
     from urllib.parse import urlparse
 
@@ -73,20 +73,37 @@ def _validate_verify_url(value) -> None:
     raw = str(value or "").strip()
     parsed = urlparse(raw)
     if (parsed.scheme or "").lower() not in ("http", "https"):
-        raise ValueError("the verifier URL must start with http:// or https://")
+        raise ValueError(f"the {what} URL must start with http:// or https://")
     host = parsed.hostname or ""
     if not host:
-        raise ValueError("the verifier URL has no host")
+        raise ValueError(f"the {what} URL has no host")
     try:
         parsed.port
     except ValueError as exc:
-        raise ValueError(f"the verifier URL has an invalid port: {exc}") from exc
-    # A private address is a real verifier on a local stack (`http://reacher:8080`) and an SSRF
+        raise ValueError(f"the {what} URL has an invalid port: {exc}") from exc
+    # A private address is a real service on a local stack (`http://reacher:8080`) and an SSRF
     # target anywhere else. Metadata endpoints are refused whatever the environment.
     local = get_settings().env in ("local", "test")
     blocked, why = _is_blocked_host(host, allow_private=local)
     if blocked:
-        raise ValueError(f"refusing this verifier host: {why}")
+        raise ValueError(f"refusing this {what} host: {why}")
+
+
+def _validate_verify_url(value) -> None:
+    """The verifier POSTs to this URL and Check connection reports how it answered."""
+    _validate_service_url(value, what="verifier")
+
+
+def _validate_fetch_url(value) -> None:
+    """Every signal search is sent here once it is set.
+
+    Empty is allowed and means "off": signal searches go to the paid provider, as they did before
+    the service existed. A deployment whose fetcher sits on a private network address can still set
+    it through `NEXUS_FETCH_SERVICE_URL`, which this panel does not govern.
+    """
+    if not str(value or "").strip():
+        return
+    _validate_service_url(value, what="fetch service")
 
 
 def _validate_dunning_schedule(value) -> None:
@@ -201,6 +218,7 @@ _VALIDATORS = {
     "signal_window_default": _validate_signal_window,
     "admin_ip_allowlist": _validate_allowlist,
     "email_verify_url": _validate_verify_url,
+    "fetch_service_url": _validate_fetch_url,
     "billing_dunning_schedule_days": _validate_dunning_schedule,
     "engagement_public_base_url": _validate_public_base_url,
     "engagement_google_client_id": _validate_google_client_id,
