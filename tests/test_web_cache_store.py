@@ -7,11 +7,9 @@ explicitly rather than assumed.
 """
 from __future__ import annotations
 
-from datetime import timedelta
 
-import pytest
 
-from nexus.core.db import get_platform_sessionmaker, utcnow
+from nexus.core.db import get_platform_sessionmaker
 from nexus.fetching import cache
 from nexus.models.web_cache import WebCache
 
