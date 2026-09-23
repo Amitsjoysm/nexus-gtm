@@ -1028,6 +1028,76 @@ async def handle_advance_engagement(payload: dict) -> dict:
     return await advance()
 
 
+async def handle_sync_mailbox(payload: dict) -> dict:
+    """Read what arrived in one mailbox (a notification said something changed)."""
+    from nexus.engagement import config
+    from nexus.engagement.replies.ingest import sync_mailbox
+    from nexus.models.engagement import MailboxConnection
+
+    if not config.campaigns_enabled():
+        return {"skipped": "engagement campaigns are switched off"}
+    tenant_id, mailbox_id = payload.get("tenant_id"), payload.get("mailbox_id")
+    if not tenant_id or not mailbox_id:
+        return {"error": "tenant_id and mailbox_id are required"}
+    async with tenant_session(tenant_id) as ts:
+        mailbox = await ts.get(MailboxConnection, mailbox_id)
+        if mailbox is None:
+            return {"error": "mailbox_not_found"}
+        return await sync_mailbox(ts, mailbox)
+
+
+async def handle_sync_mailboxes(payload: dict) -> dict:
+    """The fallback poll (spec §6): every connected mailbox not read in the last few minutes,
+    and notification subscriptions renewed a day before they lapse."""
+    from datetime import timedelta
+
+    from sqlalchemy import or_, select
+
+    from nexus.core.db import get_platform_sessionmaker, utcnow
+    from nexus.engagement import config
+    from nexus.engagement.replies.ingest import sync_mailbox
+    from nexus.engagement.replies.notifications import renew, renewal_due
+    from nexus.models.engagement import MailboxConnection
+
+    if not config.campaigns_enabled():
+        return {"skipped": "engagement campaigns are switched off"}
+    now = utcnow()
+    stale = now - timedelta(minutes=5)
+    async with get_platform_sessionmaker()() as session:
+        rows = (await session.execute(
+            select(MailboxConnection.tenant_id, MailboxConnection.id)
+            .where(MailboxConnection.status == "connected")
+            .where(or_(MailboxConnection.last_synced_at.is_(None),
+                       MailboxConnection.last_synced_at <= stale))
+            .limit(200))).all()
+    synced = renewed = 0
+    for tenant_id, mailbox_id in rows:
+        try:
+            async with tenant_session(tenant_id) as ts:
+                mailbox = await ts.get(MailboxConnection, mailbox_id)
+                if mailbox is None:
+                    continue
+                if renewal_due(mailbox, now) and await renew(ts, mailbox, now=now) == "renewed":
+                    renewed += 1
+                await sync_mailbox(ts, mailbox, now=now)
+                synced += 1
+        except Exception:
+            logger.warning("mailbox %s could not be synced", mailbox_id, exc_info=True)
+    return {"synced": synced, "renewed": renewed}
+
+
+async def enqueue_sync_mailbox(tenant_id: str, mailbox_id: str, *,
+                              queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="sync_mailbox",
+                            payload={"tenant_id": tenant_id, "mailbox_id": mailbox_id}))
+
+
+async def enqueue_sync_mailboxes(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="sync_mailboxes", payload={}))
+
+
 async def enqueue_advance_engagement(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="advance_engagement", payload={}))
@@ -1095,6 +1165,8 @@ HANDLERS: dict[str, Handler] = {
     "refresh_mailbox_tokens": handle_refresh_mailbox_tokens,
     "ship_ledger": handle_ship_ledger,
     "advance_engagement": handle_advance_engagement,
+    "sync_mailbox": handle_sync_mailbox,
+    "sync_mailboxes": handle_sync_mailboxes,
     "build_ledger_datasets": handle_build_ledger_datasets,
     "ledger_delete_workspace": handle_ledger_delete_workspace,
     "ledger_erase_person": handle_ledger_erase_person,

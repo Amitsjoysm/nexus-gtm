@@ -54,6 +54,9 @@ async def due_enrollments(now: datetime, limit: int = BATCH) -> list[tuple[str, 
                 & (EngagementEnrollment.next_action_at <= now),
                 (EngagementEnrollment.status == "snoozed")
                 & (EngagementEnrollment.snoozed_until <= now),
+                (EngagementEnrollment.status == "paused")
+                & (EngagementEnrollment.status_reason == "out_of_office")
+                & (EngagementEnrollment.snoozed_until <= now),
             ))
             .order_by(EngagementEnrollment.next_action_at)
             .limit(limit)
@@ -101,6 +104,12 @@ async def process(ts, enrollment_id: str, *, now: datetime) -> str:
     if campaign is None or campaign.status != "active":
         return "campaign_not_active"
 
+    if (enrollment.status == "paused" and enrollment.status_reason == "out_of_office"
+            and enrollment.snoozed_until and enrollment.snoozed_until <= now):
+        # Back from out of office: resume the step it was on (§8). No extra email is added.
+        enrollment.snoozed_until = None
+        enrollment.next_action_at = now
+        await set_status(ts, enrollment, "active")
     snoozed = enrollment.status == "snoozed" and enrollment.snoozed_until \
         and enrollment.snoozed_until <= now
     due = enrollment.status == "active" and enrollment.next_action_at \

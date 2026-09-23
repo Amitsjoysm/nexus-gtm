@@ -21,6 +21,17 @@ export const CATEGORY_LABEL: Record<string, string> = {
   news: "Press mention",
   activity: "Account activity",
   usage: "Product usage",
+  reply_interested: "Interested reply",
+  reply_question: "Reply with a question",
+  reply_referral: "Reply pointing to someone else",
+  reply_needs_decision: "Reply that needs your decision",
+  reply_scheduled: "Re-engagement scheduled",
+  reply_out_of_office: "Out of office",
+  reply_bounced: "Email bounced",
+  reply_unsubscribed: "Unsubscribed",
+  reply_declined: "Declined",
+  campaign_out_of_credits: "Campaign out of credits",
+  mailbox_needs_reauth: "Mailbox needs reconnecting",
 };
 
 /** What actually fires each one. The dropdown is the first place anybody meets these names, and
@@ -35,6 +46,17 @@ export const CATEGORY_BLURB: Record<string, string> = {
   news: "Any other press coverage naming the account.",
   activity: "Calls and touches logged against the account by your team.",
   usage: "Product usage moved — often a limit being hit.",
+  reply_interested: "Someone in a sequence wants to talk or learn more. Answer the same day.",
+  reply_question: "Someone in a sequence asked something. Their sequence has stopped.",
+  reply_referral: "Someone pointed you to a colleague, or a colleague of theirs replied.",
+  reply_needs_decision: "A reply the AI could not read with confidence. Nothing sends until you decide.",
+  reply_scheduled: "Someone asked to reconnect later; one email goes on the date they gave.",
+  reply_out_of_office: "An auto-reply paused a sequence until they are back.",
+  reply_bounced: "An email bounced; the address is now on do-not-contact.",
+  reply_unsubscribed: "Someone unsubscribed; they will never be emailed again.",
+  reply_declined: "Someone said no; they are on do-not-contact until a manager lifts it.",
+  campaign_out_of_credits: "A campaign paused because the workspace ran out of credits.",
+  mailbox_needs_reauth: "A sending mailbox lost its connection and needs reconnecting.",
 };
 
 /** Every channel the delivery vocabulary can name, including the two nobody connects. */

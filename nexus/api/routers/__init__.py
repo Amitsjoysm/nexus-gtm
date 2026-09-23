@@ -32,6 +32,7 @@ from nexus.api.routers import (
     engagement_campaigns,
     engagement_settings,
     engagement_templates,
+    engagement_webhooks,
     imports,
     integrations,
     network,
@@ -86,6 +87,7 @@ all_routers = [
     engagement_campaigns.router,
     engagement_settings.router,
     engagement_templates.router,
+    engagement_webhooks.router,
     unsubscribe.router,
 ]
 

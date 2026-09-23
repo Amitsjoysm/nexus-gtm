@@ -186,6 +186,37 @@ class StubLLMProvider(LLMProvider):
                 parts.append("titles: " + ", ".join(map(str, icp["titles"])))
             body = "; ".join(parts) if parts else "no ICP details captured yet"
             return (f"Target {v.get('target', 'companies')}; {body}.")[:cap_chars]
+        if purpose == "reply_classify":
+            # Deterministic keyword reading for offline runs. It is deliberately over-eager about
+            # "later" when a refusal carries a timeframe, the way a real model can be, so the
+            # code rule that turns that into `unclear` (D8) is exercised offline too.
+            import json as _json
+            import re as _re
+
+            text = str(v.get("text") or "").lower()
+            timeframe = _re.search(
+                r"\b(?:in|after|next|until)\s+(?:q[1-4]|\w+\s+(?:weeks?|months?)|"
+                r"january|february|march|april|may|june|july|august|september|october|"
+                r"november|december|quarter|year|month)\b[^.,;]*", text)
+            phrase = timeframe.group(0).strip() if timeframe else ""
+            if _re.search(r"unsubscribe|remove me|stop emailing", text):
+                reading = ("unsubscribe", 0.95)
+            elif phrase and _re.search(r"not now|try me|reach out|get back|circle back|"
+                                       r"not interested|no thanks", text):
+                reading = ("later", 0.9)
+            elif _re.search(r"not interested|no thanks|not a fit", text):
+                reading = ("declined", 0.92)
+            elif _re.search(r"talk to|reach out to|speak to|no longer", text):
+                reading = ("referral", 0.85)
+            elif _re.search(r"interested|let'?s talk|sounds good|happy to chat|book", text):
+                reading = ("interested", 0.9)
+            elif "?" in text:
+                reading = ("question", 0.85)
+            else:
+                reading = ("unclear", 0.4)
+            return _json.dumps({"category": reading[0], "confidence": reading[1],
+                                "date_phrase": phrase if reading[0] == "later" else "",
+                                "reasoning": "offline keyword reading"})
         if purpose == "intake_understanding":
             # Deterministic stub: no opinion. Returning empty JSON makes the LLM understanding pass a
             # guaranteed no-op offline, so the regex/keyword intake layer is fully authoritative in CI.

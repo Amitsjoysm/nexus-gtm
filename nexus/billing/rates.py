@@ -87,6 +87,8 @@ RATE_SEED: list[dict] = [
     _r("ai.research_brief", 3, 0.012, "exa research + groq"),
     _r("ai.call_script", 2, 0.0016, "groq"),
     _r("ai.contact_rank", 1, 0.0009, "groq"),
+    # One short structured completion over the reply and its thread.
+    _r("ai.reply_classify", 1, 0.0008, "groq structured reading"),
     _r("ai.chat_turn", 1, 0.0010, "groq budgeted envelope"),
     _r("ai.icp_from_website", 5, 0.010, "crawl + groq"),
     _r("ai.personalization_fetch", 8, 0.030, "apify actor"),

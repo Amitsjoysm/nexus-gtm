@@ -127,6 +127,14 @@ class GmailProvider:
                 break
         return ChangeBatch(message_ids=ids, next_cursor=latest)
 
+    async def watch(self, *, topic: str, **_ignored) -> tuple[str, datetime]:
+        """``users.watch`` on the inbox: Gmail publishes each change to ``topic`` for seven days.
+        Returns ``("", expires_at)`` — a Gmail watch has no id; re-watching replaces it."""
+        data = await self._post("/watch", {"topicName": topic, "labelIds": ["INBOX"],
+                                           "labelFilterBehavior": "include"})
+        expires_ms = int(data.get("expiration") or 0)
+        return "", datetime.fromtimestamp(expires_ms / 1000, tz=timezone.utc)
+
     async def resync(self, since: datetime) -> ChangeBatch:
         """Messages received after ``since`` (bounded), and a fresh cursor. Used after
         ``CursorExpired``; duplicates are harmless because messages are unique per mailbox."""

@@ -72,8 +72,31 @@ _RULES: dict[str, tuple[str, str, str]] = {
     "call": ("activity", "info", "Log the outcome and set the next step."),
 }
 
+# The engagement engine's categories (spec §11): what a reply or a campaign needs from its owner.
+# Immediate ones reach the mailbox owner's channels; the rest land in the reply desk and digest.
+_ENGAGEMENT_RULES: dict[str, tuple[str, str]] = {
+    # category -> (severity, suggested action)
+    "reply_interested": ("critical", "Answer today: an interested buyer goes cold in hours."),
+    "reply_question": ("warning", "Answer the question, then propose one next step."),
+    "reply_referral": ("warning", "Thank them and reach the person they named."),
+    "reply_needs_decision": ("warning", "Read it and decide: re-engage, block, close."),
+    "reply_scheduled": ("info", "A re-engagement is scheduled for the date they asked."),
+    "reply_out_of_office": ("info", "The sequence resumes the day after they are back."),
+    "reply_bounced": ("info", "The address bounced and is now on do-not-contact."),
+    "reply_unsubscribed": ("info", "They unsubscribed; nothing more will be sent."),
+    "reply_declined": ("info", "They said no; they are on do-not-contact until lifted."),
+    "campaign_out_of_credits": ("critical", "Top up credits to resume the campaign."),
+    "mailbox_needs_reauth": ("critical", "Reconnect the mailbox from My mailboxes."),
+}
+
+
+def engagement_rule(category: str) -> tuple[str, str]:
+    return _ENGAGEMENT_RULES.get(category, ("info", ""))
+
+
 # Categories a user can subscribe to. Derived from the rules so the two cannot drift.
-ALERT_CATEGORIES: tuple[str, ...] = tuple(sorted({c for c, _s, _a in _RULES.values()}))
+ALERT_CATEGORIES: tuple[str, ...] = tuple(sorted(
+    {c for c, _s, _a in _RULES.values()} | set(_ENGAGEMENT_RULES)))
 
 
 @dataclass(slots=True)

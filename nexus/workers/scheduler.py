@@ -24,6 +24,7 @@ from nexus.workers.tasks import (
     enqueue_discover_icp_accounts,
     enqueue_billing_reconcile,
     enqueue_advance_engagement,
+    enqueue_sync_mailboxes,
     enqueue_alert_digests,
     enqueue_expire_trials,
     enqueue_dunning_sweep,
@@ -112,7 +113,9 @@ async def _enqueue_due(queue: TaskQueue) -> int:
 
             if engagement_config.campaigns_enabled():
                 await enqueue_advance_engagement(queue=queue)
-                count += 1
+                # The poll that catches what a missed notification would have (spec §6).
+                await enqueue_sync_mailboxes(queue=queue)
+                count += 2
             if settings.automation_enabled:
                 await enqueue_advance_cadences(queue=queue)
                 await enqueue_refresh_due_accounts(queue=queue)

@@ -257,8 +257,12 @@ async def test_launch_is_refused_when_the_worst_case_cannot_be_covered(monkeypat
         with pytest.raises(CreditGateRefused) as refused:
             await launch(ts, campaign, user_id=user_id)
         estimate = refused.value.estimate
-        # 2 contacts x 3 email steps x (draft 2 + send 1) = 18 credits in the worst case.
-        assert estimate.worst_credits == 18 and estimate.gate_applies
+        per = estimate.per_capability
+        # 2 contacts x 3 email steps x (draft 2 + send 1) = 18 credits for the emails alone...
+        assert per["ai.email_draft"]["credits"] + per["outreach.email_send"]["credits"] == 18
+        # ...and the worst case is every priced line, including one reply read per contact.
+        assert estimate.worst_credits == sum(line["credits"] for line in per.values())
+        assert estimate.gate_applies
         assert estimate.likely_credits < estimate.worst_credits
         await grant_credits(ts, 500, idempotency_key="gate-topup", reason="test")
         result = await launch(ts, campaign, user_id=user_id)

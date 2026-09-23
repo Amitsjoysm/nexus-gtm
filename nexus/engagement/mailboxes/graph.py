@@ -36,6 +36,7 @@ from nexus.engagement.mailboxes.provider import (
     ChangeBatch,
     InboundMessage,
     MailboxProfile,
+    NotFound,
     SentRef,
     ThreadRef,
 )
@@ -165,6 +166,30 @@ class GraphProvider:
             return ChangeBatch(message_ids=[], next_cursor=_iso(datetime.now(timezone.utc)))
         return await self._window(cursor)
 
+    async def watch(self, *, notification_url: str, client_state: str,
+                    subscription_id: str = "", **_ignored) -> tuple[str, datetime]:
+        """A ``created`` subscription on the Inbox, renewed in place when it still exists.
+
+        Message subscriptions last under three days; the heartbeat renews a day ahead. A renewal
+        the service has forgotten (404) creates a new subscription instead."""
+        expires = datetime.now(timezone.utc) + timedelta(minutes=4000)
+        stamp = expires.strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
+        if subscription_id:
+            try:
+                resp = await transport.request(
+                    "PATCH", f"{GRAPH}/subscriptions/{subscription_id}", token=self._token,
+                    json={"expirationDateTime": stamp})
+                return subscription_id, _graph_time(resp.json().get("expirationDateTime")) \
+                    or expires
+            except NotFound:
+                pass
+        resp = await transport.request("POST", f"{GRAPH}/subscriptions", token=self._token, json={
+            "changeType": "created", "notificationUrl": notification_url,
+            "resource": "/me/mailFolders('Inbox')/messages", "expirationDateTime": stamp,
+            "clientState": client_state})
+        data = resp.json()
+        return str(data.get("id") or ""), _graph_time(data.get("expirationDateTime")) or expires
+
     async def resync(self, since: datetime) -> ChangeBatch:
         return await self._window(_iso(since))
 
@@ -228,3 +253,20 @@ class GraphProvider:
             if best is None or distance < best[0]:
                 best = (distance, ref)
         return best[1] if best else None
+
+
+def _graph_time(value) -> datetime | None:
+    """Graph's ISO timestamps carry seven fractional digits, which ``fromisoformat``
+    refuses before Python 3.11."""
+    if not value:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    if "." in text:
+        head, _, tail = text.partition(".")
+        digits = "".join(c for c in tail if c.isdigit())[:6]
+        zone = tail[len("".join(c for c in tail if c.isdigit())):]
+        text = f"{head}.{digits}{zone}"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
