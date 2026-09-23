@@ -84,12 +84,28 @@ async def fresh_db():
 
 
 @pytest.fixture(autouse=True)
-def offline_services():
-    """Demo-only ingestion + reset the agent runtime so the stub LLM is used."""
+def offline_services(monkeypatch):
+    """Demo-only ingestion + reset the agent runtime so the stub LLM is used.
+
+    Mail-domain resolution is stubbed offline for the same reason: it reads the account's website
+    and asks DNS whether a domain accepts mail, and no test may touch the network. The doubles say
+    "no published addresses, the domain accepts mail", so resolution lands on the website domain —
+    exactly the behaviour every test had before resolution existed. Tests about resolution itself
+    inject their own evidence (`tests/test_mail_domain.py`).
+    """
     from nexus.ingestion.service import IngestionService, set_ingestion_service
     from nexus.ingestion.sources import DemoSignalSource
     from nexus.agents.runtime import reset_agent_runtime
+    from nexus.enrichment import mail_domain as mail_domain_module
 
+    async def _offline_site(domain: str):
+        return "", []
+
+    async def _offline_mx(domain: str) -> bool:
+        return True
+
+    monkeypatch.setattr(mail_domain_module, "fetch_site", _offline_site)
+    monkeypatch.setattr(mail_domain_module, "has_mx", _offline_mx)
     set_ingestion_service(IngestionService(sources=[DemoSignalSource()]))
     reset_agent_runtime()
     yield

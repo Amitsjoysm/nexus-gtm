@@ -26,6 +26,7 @@ from nexus.enrichment.providers import (
     SourceDatabaseProvider,
     VerifyingPatternEmailProvider,
 )
+from nexus.enrichment.mail_domain import cached_mail_domain, resolve_mail_domain
 from nexus.enrichment.policy import (
     check_level,
     forget_email,
@@ -179,6 +180,21 @@ class WaterfallEnricher:
         account = account or await ts.get(Account, contact.account_id)
         if account is None:
             return EnrichmentResult()
+
+        # Where does this organisation actually receive email? Resolved once per account and cached
+        # for 30 days (`nexus/enrichment/mail_domain.py`), because every guess below is built on it.
+        #
+        # A contact that already has addresses proven dead is the "suspected wrong domain" case: the
+        # patterns were right and the place was not, so the ladder is walked again — reading the
+        # company's own site — instead of guessing at the same domain a second time.
+        try:
+            suspect = bool(rejected_emails(contact)) and (
+                (cached_mail_domain(account).source if cached_mail_domain(account) else "none")
+                in ("website_domain", "none")
+            )
+            await resolve_mail_domain(ts, account, force=suspect)
+        except Exception as exc:  # resolution must never break enrichment
+            logger.warning("mail domain resolution failed for %s: %r", account.id, exc)
 
         merged = EnrichmentResult()
         candidates: list[EnrichmentResult] = []

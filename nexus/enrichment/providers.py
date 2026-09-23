@@ -108,6 +108,33 @@ class EnrichmentResult:
         return max(self.email_confidence, self.phone_confidence)
 
 
+def ordered_candidates(full_name: str, domain: str, cached=None, *, cap: int = 12) -> list[str]:
+    """The addresses to try for this person, best first.
+
+    Two pieces of evidence reorder the plain pattern list, and both come from the account's resolved
+    mail domain (`nexus/enrichment/mail_domain.py`):
+
+    * an address **published on the company's site** that is this person's goes first — a published
+      address is evidence, not a guess;
+    * the **company's own format**, inferred from colleagues whose addresses are verified, is tried
+      before first.last. That matters most on a catch-all domain, where the one address returned
+      cannot be proven and had better be the format the company actually uses.
+    """
+    domain = (domain or "").lower().lstrip("@")
+    if not domain:
+        return []
+    patterns = name_patterns(full_name)
+    index = getattr(cached, "format_index", None)
+    if isinstance(index, int) and 0 <= index < len(patterns):
+        patterns = [patterns[index]] + [p for i, p in enumerate(patterns) if i != index]
+    mine = set(patterns)
+    published = [
+        a for a in getattr(cached, "published", ()) or ()
+        if a.split("@")[0].lower() in mine
+    ]
+    return list(dict.fromkeys(published + [f"{p}@{domain}" for p in patterns]))[:cap]
+
+
 class EnrichmentProvider(abc.ABC):
     name: str
 
@@ -183,19 +210,16 @@ class PatternEmailProvider(EnrichmentProvider):
     name = "pattern"
 
     async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult:
-        if not account.domain or not contact.full_name.strip():
+        from nexus.enrichment.mail_domain import cached_mail_domain, mail_domain_of
+
+        # The organisation's mail domain, which is not always its website (see mail_domain.py).
+        domain = mail_domain_of(account)
+        candidates = ordered_candidates(contact.full_name, domain,
+                                        cached_mail_domain(account), cap=1)
+        if not candidates:
             return EnrichmentResult()
-        parts = re.split(r"\s+", contact.full_name.strip().lower())
-        # Strip apostrophes/diacritics/punctuation from each name part so the guessed address is
-        # RFC-valid: "Eileen O'Mara" -> eileen.omara@…, not eileen.o'mara@… (which parses invalid).
-        first = _local_part(parts[0])
-        last = _local_part(parts[-1]) if len(parts) > 1 else ""
-        if not first and not last:
-            return EnrichmentResult()
-        domain = account.domain.lower().lstrip("@")
-        guess = f"{first}.{last}@{domain}" if last else f"{first}@{domain}"
         return EnrichmentResult(
-            found=True, email=guess, email_confidence=0.4, source=self.name
+            found=True, email=candidates[0], email_confidence=0.4, source=self.name
         )
 
 
@@ -208,7 +232,9 @@ class SearchEnrichmentProvider(EnrichmentProvider):
         self.browser = browser
 
     async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult:
-        domain = (account.domain or "").lower().lstrip("@")
+        from nexus.enrichment.mail_domain import mail_domain_of
+
+        domain = mail_domain_of(account)
         query = f'"{contact.full_name}" {account.name} email contact'
         hits = await self.browser.search(query, limit=6)
         blob = " ".join((h.get("snippet", "") + " " + h.get("title", "")) for h in hits)
@@ -275,12 +301,17 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
         return [f"{loc}@{domain}" for loc in name_patterns(full_name)][: self._cap()]
 
     async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult:
+        from nexus.enrichment.mail_domain import cached_mail_domain, mail_domain_of
         from nexus.enrichment.policy import check_level, rejected_emails
 
-        # An address already proven invalid for this person is never tried again.
+        # An address already proven invalid for this person is never tried again, and the guesses
+        # are built on the organisation's MAIL domain rather than its website.
         rejected = set(rejected_emails(contact))
-        cands = [c for c in self._candidates(contact.full_name, account.domain or "")
-                 if c not in rejected]
+        cands = [
+            c for c in ordered_candidates(contact.full_name, mail_domain_of(account),
+                                          cached_mail_domain(account), cap=self._cap())
+            if c not in rejected
+        ]
         if not cands:
             return EnrichmentResult()
         verify = await self._resolve_verify()
