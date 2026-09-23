@@ -34,7 +34,14 @@ import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { useSignalWindow } from "@/app/SignalWindowContext";
 import { ApiError } from "@/lib/api";
-import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
+import {
+  formatNumber,
+  formatPercent,
+  humanize,
+  signalWhen,
+  signalWhenTitle,
+  timeAgo,
+} from "@/lib/format";
 import { emailStatusMeta, signalSourceMeta, strengthMeta } from "@/lib/display";
 import { describeReverify } from "@/lib/reverify";
 import type {
@@ -976,7 +983,7 @@ export function AccountDetailPage() {
                             {src.isSynthetic && " (sample)"}
                           </span>
                           <span>·</span>
-                          <span>{timeAgo(sig.occurred_at)}</span>
+                          <span title={signalWhenTitle(sig)}>{signalWhen(sig)}</span>
                           <span>·</span>
                           <a
                             className={styles.link}

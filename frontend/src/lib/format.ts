@@ -30,6 +30,27 @@ export function timeAgo(input: string | Date | null | undefined): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
+/**
+ * When a signal happened: "3d ago". For a signal whose source gave no date, when we found it:
+ * "found 3d ago". Undated signals are dated at collection, so without the word a two-year-old
+ * article found yesterday would read as yesterday's news.
+ */
+export function signalWhen(sig: { occurred_at?: string | null; dated?: string | null }): string {
+  const ago = timeAgo(sig.occurred_at);
+  return sig.dated === "event" ? ago : `found ${ago}`;
+}
+
+/** The tooltip for `signalWhen`: the exact date, and what it means. */
+export function signalWhenTitle(sig: { occurred_at?: string | null; dated?: string | null }): string {
+  if (!sig.occurred_at) return "";
+  const date = new Date(sig.occurred_at);
+  if (Number.isNaN(date.getTime())) return "";
+  const day = date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return sig.dated === "event"
+    ? `Happened ${day}`
+    : `Found ${day}. The source did not say when this happened.`;
+}
+
 /** Relative time from an age in hours, e.g. 5 → "5h ago", 50 → "2d ago". */
 export function formatAgeHours(hours: number | null | undefined): string {
   if (hours == null || Number.isNaN(hours)) return "—";

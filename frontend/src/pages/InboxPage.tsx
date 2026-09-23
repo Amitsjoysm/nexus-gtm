@@ -16,6 +16,7 @@ import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
+import { useSignalWindow } from "@/app/SignalWindowContext";
 import { formatAgeHours, humanize } from "@/lib/format";
 import { priorityTone } from "@/lib/display";
 import { EMAIL_STATUS_META, asEmailStatus } from "@/lib/runStatus";
@@ -93,7 +94,11 @@ export function InboxPage() {
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const isDone = view === "done";
-  const inbox = useApi<InboxTask[]>((signal) => api.listInbox(view, signal), [view]);
+  const { windowDays } = useSignalWindow();
+  const inbox = useApi<InboxTask[]>(
+    (signal) => api.listInbox(view, signal, windowDays),
+    [view, windowDays],
+  );
   const rows = inbox.data ?? [];
 
   // One primary mutation: complete an open task, or reopen a completed one. Either way the

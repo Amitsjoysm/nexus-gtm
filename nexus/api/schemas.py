@@ -450,6 +450,7 @@ class CallBriefSignal(BaseModel):
     url: str | None = None
     strength: float = 0.0
     occurred_at: str = ""
+    dated: str = "found"            # "event" or "found"; declared, or pydantic drops it
     is_personal: bool = False       # tied to this contact (vs. account-level)
 
 

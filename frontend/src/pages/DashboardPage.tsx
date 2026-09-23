@@ -25,7 +25,14 @@ import { useSignalWindow } from "@/app/SignalWindowContext";
 import { useEngineOn } from "@/app/EngagementContext";
 import { TodayPlan } from "@/components/engagement/TodayPlan";
 import { ApiError } from "@/lib/api";
-import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
+import {
+  formatNumber,
+  formatPercent,
+  humanize,
+  signalWhen,
+  signalWhenTitle,
+  timeAgo,
+} from "@/lib/format";
 import {
   activityTone,
   priorityTone,
@@ -93,8 +100,14 @@ export function DashboardPage() {
   const engineOn = useEngineOn() === true;
 
   const overview = useApi<AnalyticsOverview>((signal) => api.analyticsOverview(signal), []);
-  const inbox = useApi<InboxTask[]>((signal) => api.listInbox(undefined, signal), []);
-  const alerts = useApi<Alert[]>((signal) => api.listAlerts("open", signal), []);
+  const inbox = useApi<InboxTask[]>(
+    (signal) => api.listInbox(undefined, signal, windowDays),
+    [windowDays],
+  );
+  const alerts = useApi<Alert[]>(
+    (signal) => api.listAlerts("open", signal, windowDays),
+    [windowDays],
+  );
   const signals = useApi<SignalEvent[]>(
     (signal) =>
       api.listSignals({ limit: 6, max_age_days: windowDays ?? undefined }, signal),
@@ -379,7 +392,7 @@ export function DashboardPage() {
                               {src.isSynthetic && " (sample)"}
                             </span>
                             <span>·</span>
-                            <span>{timeAgo(sig.occurred_at)}</span>
+                            <span title={signalWhenTitle(sig)}>{signalWhen(sig)}</span>
                             <span>·</span>
                             <a
                               className={styles.link}

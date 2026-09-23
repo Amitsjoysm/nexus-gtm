@@ -176,8 +176,8 @@ function RequireCapability({
 export function App() {
   return (
     <ThemeProvider>
-      <SignalWindowProvider>
       <AuthProvider>
+      <SignalWindowProvider>
         <ToastProvider>
           <BrowserRouter>
             <Suspense fallback={<RouteFallback />}>
@@ -474,8 +474,8 @@ export function App() {
             </Suspense>
           </BrowserRouter>
         </ToastProvider>
-      </AuthProvider>
       </SignalWindowProvider>
+      </AuthProvider>
     </ThemeProvider>
   );
 }

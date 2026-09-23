@@ -15,6 +15,7 @@ import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
+import { useSignalWindow } from "@/app/SignalWindowContext";
 import { humanize } from "@/lib/format";
 import { severityTone, strengthMeta } from "@/lib/display";
 import type { Alert, AlertStatus } from "@/lib/types";
@@ -68,7 +69,11 @@ export function AlertsPage() {
   const [status, setStatus] = useState<AlertStatus>("open");
   const [pending, setPending] = useState<Record<string, boolean>>({});
 
-  const alerts = useApi<Alert[]>((signal) => api.listAlerts(status, signal), [status]);
+  const { windowDays } = useSignalWindow();
+  const alerts = useApi<Alert[]>(
+    (signal) => api.listAlerts(status, signal, windowDays),
+    [status, windowDays],
+  );
 
   async function ack(alert: Alert) {
     setPending((p) => ({ ...p, [alert.id]: true }));

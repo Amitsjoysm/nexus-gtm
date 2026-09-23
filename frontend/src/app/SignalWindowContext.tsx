@@ -1,32 +1,45 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { useApi } from "@/hooks/useApi";
+import { useApiClient, useAuth } from "@/app/AuthContext";
+import type { SignalWindowOption, SignalWindowPolicy } from "@/lib/types";
 
 /**
- * Global signal recency window — "show me only signals from the last N days".
+ * Global signal recency window: "show me only signals from the last N days".
  *
- * One user-chosen window applies everywhere signals render (Dashboard, Signals library,
- * Account 360), passed server-side as `max_age_days` so pagination and counts stay correct.
- * `null` means "all time". Persisted per-browser like the theme preference.
+ * One window applies everywhere signals render (Dashboard, Signals, Account 360, Inbox, Alerts),
+ * passed server-side as `max_age_days` so pagination and counts stay correct. `null` is all time.
+ *
+ * A superadmin owns the policy (`GET /signals/window`, set in the Control plane):
+ * - `user_choice` on: each user picks, starting from the platform default, remembered per browser.
+ * - `user_choice` off: the default applies to everyone and the picker becomes a read-only label.
+ *   The server enforces it too, so this is presentation, not the control.
+ *
+ * Until the policy arrives, or if it cannot be read, the user's own choice stands with the full
+ * list. Failing open matches the server: a window it cannot read hides nothing.
  */
-export type SignalWindowDays = 7 | 15 | 30 | 60 | 90 | null;
+export type SignalWindowDays = number | null;
 
-export const SIGNAL_WINDOW_OPTIONS: { value: SignalWindowDays; label: string }[] = [
-  { value: 7, label: "Last 7 days" },
-  { value: 15, label: "Last 15 days" },
-  { value: 30, label: "Last 30 days" },
-  { value: 60, label: "Last 60 days" },
-  { value: 90, label: "Last 90 days" },
-  { value: null, label: "All time" },
+/** The same list the server serves, so the picker works before the policy loads. */
+export const FALLBACK_WINDOW_OPTIONS: SignalWindowOption[] = [
+  { label: "Weekly", days: 7 },
+  { label: "Fortnightly", days: 14 },
+  { label: "Monthly", days: 30 },
+  { label: "Quarterly", days: 90 },
+  { label: "Half-yearly", days: 180 },
+  { label: "Yearly", days: 365 },
+  { label: "All time", days: null },
 ];
 
-const STORAGE_KEY = "nexus_signal_window";
-const VALID = new Set([7, 15, 30, 60, 90]);
-
 interface SignalWindowApi {
-  /** Days back to include, or null for no window (all time). */
+  /** Days back to include, or null for all time. What every list sends. */
   windowDays: SignalWindowDays;
+  /** Ignored while a superadmin has taken the choice. */
   setWindowDays: (d: SignalWindowDays) => void;
-  /** Short label for the active window, e.g. "30d" / "All". */
+  options: SignalWindowOption[];
+  /** False when a superadmin has set one window for everyone. */
+  userChoice: boolean;
+  /** "Monthly", "All time". */
   label: string;
 }
 
@@ -38,26 +51,57 @@ export function useSignalWindow(): SignalWindowApi {
   return ctx;
 }
 
-function initialWindow(): SignalWindowDays {
+const STORAGE_KEY = "nexus_signal_window";
+
+/** The stored choice: a number of days, "all", or nothing chosen yet (undefined). */
+function storedChoice(): SignalWindowDays | undefined {
   const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored === null) return undefined;
   if (stored === "all") return null;
   const n = Number(stored);
-  return VALID.has(n) ? (n as SignalWindowDays) : null;
+  return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 export function SignalWindowProvider({ children }: { children: ReactNode }) {
-  const [windowDays, setState] = useState<SignalWindowDays>(initialWindow);
+  const api = useApiClient();
+  const { session } = useAuth();
+  const signedIn = Boolean(session);
+  const policy = useApi<SignalWindowPolicy | null>(
+    (signal) => (signedIn ? api.signalWindow(signal) : Promise.resolve(null)),
+    [signedIn],
+  );
+  const [chosen, setChosen] = useState<SignalWindowDays | undefined>(storedChoice);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, windowDays === null ? "all" : String(windowDays));
-  }, [windowDays]);
+    if (chosen === undefined) return;
+    localStorage.setItem(STORAGE_KEY, chosen === null ? "all" : String(chosen));
+  }, [chosen]);
 
-  const setWindowDays = useCallback((d: SignalWindowDays) => setState(d), []);
-  const label = windowDays === null ? "All" : `${windowDays}d`;
+  const value = useMemo<SignalWindowApi>(() => {
+    const p = policy.data;
+    const options = p?.options?.length ? p.options : FALLBACK_WINDOW_OPTIONS;
+    const userChoice = p ? p.user_choice : true;
+    const fallback = p ? p.default_days : null;
+    // A stored choice counts only if it is still on the list: "15" and "60" from the old picker
+    // fall back to the default rather than sending a window no screen can show.
+    const valid = chosen !== undefined && options.some((o) => o.days === chosen);
+    const windowDays = !userChoice ? fallback : valid ? (chosen as SignalWindowDays) : fallback;
+    const label = options.find((o) => o.days === windowDays)?.label ?? `${windowDays} days`;
+    return {
+      windowDays,
+      setWindowDays: (d) => {
+        if (userChoice) setChosen(d);
+      },
+      options,
+      userChoice,
+      label,
+    };
+  }, [policy.data, chosen]);
 
-  return (
-    <SignalWindowContext.Provider value={{ windowDays, setWindowDays, label }}>
-      {children}
-    </SignalWindowContext.Provider>
-  );
+  return <SignalWindowContext.Provider value={value}>{children}</SignalWindowContext.Provider>;
+}
+
+/** Exact days for a tooltip: "the last 30 days", "all time". */
+export function describeWindow(days: SignalWindowDays): string {
+  return days === null ? "all time" : `the last ${days} days`;
 }

@@ -288,3 +288,43 @@ async def test_a_legacy_row_with_no_label_reads_as_found(client):
 
     (row,) = (await client.get("/api/signals", headers=auth(token))).json()
     assert row["dated"] == "found"
+
+
+# ---- the label reaches every screen that shows a signal's date ---------------------------------
+
+
+def test_the_brief_declares_the_label_or_pydantic_drops_it():
+    # The same trap as the credits report's email: a key the response model does not declare
+    # never reaches the client, and the screen quietly falls back.
+    from nexus.api.schemas import CallBriefSignal, SignalOut
+
+    assert "dated" in SignalOut.model_fields
+    assert "dated" in CallBriefSignal.model_fields
+
+
+def test_every_signal_date_on_screen_goes_through_signal_when():
+    # A raw `timeAgo(sig.occurred_at)` would present an undated signal as fresh news. There is no
+    # frontend test runner, so this reads the source, like the other UI tests.
+    from pathlib import Path
+
+    for path in ("frontend/src/pages/SignalsPage.tsx", "frontend/src/pages/DashboardPage.tsx",
+                 "frontend/src/pages/AccountDetailPage.tsx", "frontend/src/components/CallConsole.tsx"):
+        src = Path(path).read_text(encoding="utf-8")
+        assert "timeAgo(sig.occurred_at)" not in src, f"{path} shows a signal date without its label"
+        assert "signalWhen(sig)" in src, path
+
+
+def test_the_inbox_and_alerts_screens_send_the_window():
+    from pathlib import Path
+
+    for path, call in (("frontend/src/pages/InboxPage.tsx", "listInbox(view, signal, windowDays)"),
+                       ("frontend/src/pages/AlertsPage.tsx", "listAlerts(status, signal, windowDays)")):
+        assert call in Path(path).read_text(encoding="utf-8"), path
+
+
+def test_a_locked_window_is_shown_not_offered():
+    # A picker that cannot change anything would look broken.
+    from pathlib import Path
+
+    src = Path("frontend/src/components/layout/Topbar.tsx").read_text(encoding="utf-8")
+    assert "userChoice ?" in src and "set by your administrator" in src

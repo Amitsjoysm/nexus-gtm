@@ -19,7 +19,7 @@ import type {
   CallTask,
   TelephonyStatus,
 } from "@/lib/types";
-import { formatNumber, humanize, timeAgo } from "@/lib/format";
+import { formatNumber, humanize, signalWhen, signalWhenTitle } from "@/lib/format";
 import { emailStatusMeta, strengthMeta } from "@/lib/display";
 import styles from "./CallConsole.module.css";
 
@@ -409,7 +409,7 @@ function SignalRow({ sig }: { sig: CallBriefSignal }) {
           {sig.occurred_at && (
             <>
               <span aria-hidden="true">·</span>
-              <span>{timeAgo(sig.occurred_at)}</span>
+              <span title={signalWhenTitle(sig)}>{signalWhen(sig)}</span>
             </>
           )}
           {sig.url && (

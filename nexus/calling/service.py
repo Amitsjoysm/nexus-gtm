@@ -168,6 +168,8 @@ class CallQueueService:
                 "url": s.url,
                 "strength": s.strength,
                 "occurred_at": s.occurred_at.isoformat() if s.occurred_at else "",
+                # Lets the console say "found 3d ago" rather than dress an undated item as news.
+                "dated": s.dated or "found",
                 "is_personal": bool(cid and s.contact_id == cid),
             }
             for s in ranked[:6]

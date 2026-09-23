@@ -311,6 +311,7 @@ export interface CallBriefSignal {
   url: string | null;
   strength: number;
   occurred_at: string;
+  dated?: "event" | "found";
   is_personal: boolean;
 }
 
@@ -411,6 +412,22 @@ export interface SignalEvent {
   url: string | null;
   strength: number;
   occurred_at: string;
+  /** "event": occurred_at is when it happened. "found": only when we collected it, because the
+   *  source gave no date. Rendered by `signalWhen` so the two never look alike. */
+  dated?: "event" | "found";
+}
+
+/** One choice in the signal window picker. `days: null` is all time. */
+export interface SignalWindowOption {
+  label: string;
+  days: number | null;
+}
+
+/** GET /signals/window: the platform's window policy, set by a superadmin. */
+export interface SignalWindowPolicy {
+  user_choice: boolean;
+  default_days: number | null;
+  options: SignalWindowOption[];
 }
 
 export type AlertSeverity = "info" | "warning" | "critical";

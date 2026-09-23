@@ -186,6 +186,7 @@ import type {
   ImportFields,
   RecordImportResult,
   SignalPreference,
+  SignalWindowPolicy,
 } from "./types";
 
 export class ApiError extends Error {
@@ -809,8 +810,12 @@ export class ApiClient {
   }
 
   // ---- inbox ----
-  listInbox(status?: string, signal?: AbortSignal) {
-    return this.request<InboxTask[]>("/inbox", { query: status ? { status } : undefined, signal });
+  listInbox(status?: string, signal?: AbortSignal, maxAgeDays?: number | null) {
+    // `maxAgeDays` is the signal window: tasks raised by older signals are hidden, others shown.
+    return this.request<InboxTask[]>("/inbox", {
+      query: { status, max_age_days: maxAgeDays ?? undefined },
+      signal,
+    });
   }
   completeTask(id: string, signal?: AbortSignal) {
     return this.request<InboxTask>(`/inbox/${id}/complete`, { method: "POST", signal });
@@ -820,6 +825,10 @@ export class ApiClient {
   }
 
   // ---- signals ----
+  /** The platform's signal window policy (superadmin-set). Read once per session. */
+  signalWindow(signal?: AbortSignal) {
+    return this.request<SignalWindowPolicy>("/signals/window", { signal });
+  }
   listSignals(
     params: {
       account_id?: string;
@@ -837,8 +846,11 @@ export class ApiClient {
   }
 
   // ---- alerts ----
-  listAlerts(status?: AlertStatus, signal?: AbortSignal) {
-    return this.request<Alert[]>("/alerts", { query: { status }, signal });
+  listAlerts(status?: AlertStatus, signal?: AbortSignal, maxAgeDays?: number | null) {
+    return this.request<Alert[]>("/alerts", {
+      query: { status, max_age_days: maxAgeDays ?? undefined },
+      signal,
+    });
   }
   ackAlert(id: string, signal?: AbortSignal) {
     return this.request<Alert>(`/alerts/${id}/ack`, { method: "POST", signal });

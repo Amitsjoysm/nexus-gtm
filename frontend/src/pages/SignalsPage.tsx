@@ -13,14 +13,14 @@ import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { useSignalWindow } from "@/app/SignalWindowContext";
-import { humanize, timeAgo } from "@/lib/format";
+import { humanize, signalWhen, signalWhenTitle } from "@/lib/format";
 import { signalSourceMeta, strengthMeta } from "@/lib/display";
 import type { SignalEvent } from "@/lib/types";
 import styles from "./SignalsPage.module.css";
 
 export function SignalsPage() {
   const api = useApiClient();
-  const { windowDays } = useSignalWindow();
+  const { windowDays, userChoice } = useSignalWindow();
   /**
    * Events only, by default.
    *
@@ -112,9 +112,11 @@ export function SignalsPage() {
             icon={<Icons.SignalIcon />}
             title={windowDays !== null ? `No signals in the last ${windowDays} days` : "No signals yet"}
             description={
-              windowDays !== null
-                ? "Widen the signal window in the top bar to see older activity."
-                : "As soon as we detect buying intent on your accounts, it shows up here."
+              windowDays === null
+                ? "As soon as we detect buying intent on your accounts, it shows up here."
+                : userChoice
+                  ? "Widen the signal window in the top bar to see older activity."
+                  : "Your administrator has set how far back signals go for everyone."
             }
           />
         }
@@ -170,7 +172,7 @@ export function SignalsPage() {
                                 {src.isSynthetic && " (sample)"}
                               </span>
                               <span>·</span>
-                              <span>{timeAgo(sig.occurred_at)}</span>
+                              <span title={signalWhenTitle(sig)}>{signalWhen(sig)}</span>
                               <span>·</span>
                               <a
                                 className={styles.link}

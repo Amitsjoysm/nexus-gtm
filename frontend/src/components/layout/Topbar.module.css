@@ -46,6 +46,23 @@
   font-size: var(--text-sm);
 }
 
+/* The window a superadmin has set for everyone: read-only, so it reads as a label rather than a
+   control. Same height and type size as the select it replaces, so the bar does not shift. */
+.windowFixed {
+  align-items: center;
+  gap: var(--space-1);
+  height: 32px;
+  padding-inline: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.windowLock {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
 @media (max-width: 640px) {
   .signalWindow {
     display: none;
