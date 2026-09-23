@@ -1,7 +1,7 @@
 """Rep workflow & automation endpoints: inbox, lists, plays, analytics, ingestion."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -36,10 +36,17 @@ async def list_inbox(
     mine: bool = False,
     status: str = "open",  # open | done | snoozed | all — lets reps recover past/pending work
     limit: int = 50,
+    # The signal window, as on /signals. Hides tasks raised by older signals; see ingestion/window.
+    max_age_days: int | None = Query(default=None, ge=1, le=365),
 ) -> list[InboxTaskOut]:
+    from nexus.ingestion.window import effective_days
+
     owner = principal.user_id if mine else None
     svc = get_inbox_service()
-    tasks = await svc.list_tasks(ts, owner_user_id=owner, status=status, limit=limit)
+    tasks = await svc.list_tasks(
+        ts, owner_user_id=owner, status=status, limit=limit,
+        signal_window_days=effective_days(max_age_days),
+    )
     triage = await svc.triage(ts, tasks)
     now = utcnow()
 

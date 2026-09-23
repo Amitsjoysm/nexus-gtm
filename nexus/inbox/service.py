@@ -131,14 +131,23 @@ class InboxService:
         owner_user_id: str | None = None,
         status: str = "open",
         limit: int = 50,
+        signal_window_days: int | None = None,
     ) -> list[InboxTask]:
         """List tasks by status so an SDR can recover their pending/previous work, not just
-        today's open items. ``status`` is 'open', 'done', or 'all'."""
+        today's open items. ``status`` is 'open', 'done', or 'all'.
+
+        ``signal_window_days`` hides tasks raised by a signal older than the window; a task no
+        signal raised always shows."""
+        from nexus.ingestion.window import raised_by_a_recent_signal, since
+
         where = []
         if status in ("open", "done", "snoozed"):
             where.append(InboxTask.status == status)
         if owner_user_id:
             where.append(InboxTask.owner_user_id == owner_user_id)
+        recent = raised_by_a_recent_signal(InboxTask, ts, since(signal_window_days))
+        if recent is not None:
+            where.append(recent)
         stmt = ts.select(InboxTask, *where).order_by(InboxTask.priority.desc()).limit(limit)
         return list((await ts.session.scalars(stmt)).all())
 

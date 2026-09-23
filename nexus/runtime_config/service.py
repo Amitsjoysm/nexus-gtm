@@ -174,7 +174,17 @@ _EXTERNAL_READERS = {"admin_ip_allowlist": _get_allowlist}
 # or silently ignored (by a reader that falls back to a default), leaving a stored override the
 # panel reports as active and nothing applies. Every free-text setting needs one;
 # `test_a_free_text_setting_is_validated_before_it_is_stored` enforces it.
+def _validate_signal_window(value) -> None:
+    """Only the windows the top bar can show. The panel offers these, but the API accepts any
+    string, and a stored "15" would be a window no screen can display or explain."""
+    from nexus.ingestion.window import OPTION_VALUES
+
+    if str(value or "").strip().lower() not in OPTION_VALUES:
+        raise ValueError(f"the signal window must be one of {', '.join(OPTION_VALUES)}")
+
+
 _VALIDATORS = {
+    "signal_window_default": _validate_signal_window,
     "admin_ip_allowlist": _validate_allowlist,
     "email_verify_url": _validate_verify_url,
     "billing_dunning_schedule_days": _validate_dunning_schedule,

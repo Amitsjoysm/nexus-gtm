@@ -641,6 +641,11 @@ class Settings(BaseSettings):
     # funding round. Set `signal_alerts_enabled=false` to restore the previous silence.
     signal_alerts_enabled: bool = True
     signal_alert_floor: float = 0.5
+    # The signal day window (nexus/ingestion/window.py), set from the Control plane. ON: each user
+    # picks a window in the top bar, starting from the default. OFF: no picker, and the server
+    # enforces the default on every list. "all" is no window, which is the behaviour before this.
+    signal_window_user_choice: bool = True
+    signal_window_default: str = "all"
 
     # Orchestration engine
     orch_max_attempts: int = 2          # per-step retries before a step is marked failed

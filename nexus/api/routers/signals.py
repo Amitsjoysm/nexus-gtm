@@ -61,10 +61,14 @@ async def list_signals(
         where.append(SignalEvent.kind == kind)
     if min_strength is not None:
         where.append(SignalEvent.strength >= min_strength)
-    if max_age_days is not None:
-        # Recency window (e.g. 7/15/30/60/90 days). Server-side so pagination stays correct;
-        # backed by the (tenant_id, occurred_at) composite index on signal_events.
-        where.append(SignalEvent.occurred_at >= utcnow() - timedelta(days=max_age_days))
+    from nexus.ingestion.window import effective_days
+
+    days = effective_days(max_age_days)
+    if days is not None:
+        # The recency window, on WHEN IT HAPPENED (occurred_at). Server-side so pagination stays
+        # correct; backed by the (tenant_id, occurred_at) index. `effective_days` is where a
+        # superadmin's enforced window overrides whatever the client asked for.
+        where.append(SignalEvent.occurred_at >= utcnow() - timedelta(days=days))
     stmt = (
         ts.select(SignalEvent, *where)
         .order_by(SignalEvent.occurred_at.desc())
@@ -73,6 +77,35 @@ async def list_signals(
     )
     rows = (await ts.session.scalars(stmt)).all()
     return [_signal_out(s) for s in rows]
+
+
+class WindowOptionOut(BaseModel):
+    label: str
+    days: int | None
+
+
+class SignalWindowOut(BaseModel):
+    user_choice: bool
+    default_days: int | None
+    options: list[WindowOptionOut]
+
+
+@router.get("/window", response_model=SignalWindowOut)
+async def signal_window(
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> SignalWindowOut:
+    """The platform's signal window policy, for the top bar.
+
+    Every member reads it: the picker is on every screen. The options come from the one list the
+    Control plane offers, so the picker and the setting cannot disagree.
+    """
+    from nexus.ingestion.window import WINDOW_OPTIONS, default_days, user_choice
+
+    return SignalWindowOut(
+        user_choice=user_choice(),
+        default_days=default_days(),
+        options=[WindowOptionOut(label=label, days=days) for _, label, days in WINDOW_OPTIONS],
+    )
 
 
 # ---- collection preferences -------------------------------------------------------------------

@@ -89,10 +89,18 @@ class AlertService:
         status: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        signal_window_days: int | None = None,
     ) -> list[Alert]:
+        from nexus.ingestion.window import raised_by_a_recent_signal, since
+
         where = []
         if status:
             where.append(Alert.status == status)
+        # An alert raised by a signal older than the window is hidden, not deleted; one no signal
+        # raised always shows.
+        recent = raised_by_a_recent_signal(Alert, ts, since(signal_window_days))
+        if recent is not None:
+            where.append(recent)
         stmt = (
             ts.select(Alert, *where)
             .order_by(Alert.created_at.desc())

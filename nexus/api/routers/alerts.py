@@ -35,9 +35,14 @@ async def list_alerts(
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    # The signal window, as on /signals. See nexus/ingestion/window.py.
+    max_age_days: int | None = Query(default=None, ge=1, le=365),
 ) -> list[AlertOut]:
+    from nexus.ingestion.window import effective_days
+
     alerts = await get_alert_service().list(
-        ts, status=status_filter, limit=limit, offset=offset
+        ts, status=status_filter, limit=limit, offset=offset,
+        signal_window_days=effective_days(max_age_days),
     )
     return [_alert_out(a) for a in alerts]
 

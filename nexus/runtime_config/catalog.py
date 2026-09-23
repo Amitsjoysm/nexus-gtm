@@ -304,6 +304,31 @@ _SPECS: tuple[SettingSpec, ...] = (
         risk="medium", minimum=0.0, maximum=1.0,
     ),
     SettingSpec(
+        key="signal_window_user_choice", label="Let users pick their signal window",
+        group=SIGNALS, kind="bool",
+        effect="On: everyone chooses how far back signals go from the top bar, starting at the "
+               "default below. Off: the picker is hidden and the default applies to every "
+               "signal list, the Inbox and Alerts, for everyone.",
+        warning="Off is enforced by the server, so a narrow default hides older signals, and the "
+                "Inbox tasks and alerts they raised, from every user until it is turned back on. "
+                "Nothing is deleted.",
+        risk="medium",
+    ),
+    SettingSpec(
+        key="signal_window_default", label="Default signal window", group=SIGNALS, kind="str",
+        effect="How far back signals, Inbox tasks and alerts go by default, and how far back AI "
+               "drafts, research and call briefs may cite a signal.",
+        warning="AI drafts always use this window, whatever a user picks: a narrow one stops "
+                "drafts citing anything older, All time lets them cite any signal with its date.",
+        risk="medium",
+        options=("7", "14", "30", "90", "180", "365", "all"),
+        option_labels=(
+            ("7", "Weekly (7 days)"), ("14", "Fortnightly (14 days)"),
+            ("30", "Monthly (30 days)"), ("90", "Quarterly (90 days)"),
+            ("180", "Half-yearly (180 days)"), ("365", "Yearly (365 days)"), ("all", "All time"),
+        ),
+    ),
+    SettingSpec(
         key="inbox_min_signal_strength", label="Inbox task strength floor", group=SIGNALS,
         kind="float", minimum=0, maximum=1,
         effect="Minimum signal strength that opens an Inbox task for a rep. Weaker signals still "
