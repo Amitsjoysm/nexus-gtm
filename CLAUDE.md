@@ -213,7 +213,8 @@ Alembic under `migrations/versions/`. Head: `0058_engagement_crm_log`. The chain
 PSP references) -> `0055` (`feature_switches`) -> `0056` (`accounts.owner_user_id`,
 `notification_preferences.scope`, `alert_channel_rules`) -> `0057` (engagement engine + training
 ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_enrollment_id`) ->
-`0058` (`crm_logged_at` on `engagement_messages` and `reply_classifications`).
+`0058` (`crm_logged_at` on `engagement_messages` and `reply_classifications`) -> `0059`
+(`signal_events.dated`, `company_signals.dated`) -> `0060` (`integration_connections.config`).
 Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
@@ -222,7 +223,9 @@ Every tenant-scoped table gets RLS via
 renumbering one chain to `0047`–`0049` and rebasing it onto the other's head, rather than adding a
 merge revision — neither had been applied anywhere, so no stamped database remembered the old ids.
 If you branch for more than a day, check `ScriptDirectory.get_heads()` returns exactly one before
-merging; the collision is invisible until a deploy.
+merging; the collision is invisible until a deploy. **It is live again:** the unmerged
+`feat/self-hosted-signal-fetching` branch carries `0057_web_cache` on the same `0056` parent as
+`0057_signal_dated`. Whichever merges second renumbers and re-parents its revision.
 
 **It happened again, found 2026-09-24 before anything merged.** `feat/sdr-engagement` (`0057_engagement`,
 `0058_engagement_crm_log`) and the stacked `fix/signals-credits-telephony` →
@@ -1413,6 +1416,14 @@ are period figures and a balance can carry over.
 has nobody to attribute to, so `by_user` cannot sum to `spent`. The remainder is reported as its own
 row; dropping it leaves the customer to find the gap themselves against a number they will check.
 
+**Each row names a person, never an id.** The screen was written to show `email` and fall back to
+`user_id`, and `CreditUserRowOut` declared only `user_id` and `credits` — pydantic drops what a
+response model does not declare, so customers saw rows like `4a88e2a9a2e8438f96f3295fe51ccebd`
+(reported 2026-09-23). Rows now carry `name` and `email`, resolved through THIS workspace's
+membership rather than the global user table: a usage row's user id is only the workspace's to name
+while that person belongs to it, and someone who has left reads "Former member". The same trap hid
+`dated` on the call brief (`CallBriefSignal`) until it was declared.
+
 The old `/billing/usage` meters drew "40 of 500" against the plan quota. Under credits-only billing
 the quota is not what gates a priced action — the balance is — so a workspace with an empty balance
 saw green meters beside a product that had stopped working. `BillingPage` keeps them as **Plan
@@ -1531,6 +1542,41 @@ gets written onto.
 `NEXUS_TWILIO_AUTH_TOKEN`), resolved in `main.py`'s `lifespan` so the mistake surfaces on deploy
 rather than on the first rep's first call. `StubCallProvider` is still the default and is **not** a
 placeholder: click-to-dial plus manual dispositions is a complete workflow.
+
+**Telephony is per workspace, the platform account is managed from the panel, and its minutes cost**
+(`nexus/calling/connection.py`, 2026-09-23). Three reports, each true when made: Twilio was env-only
+(every change an edit and a restart), every customer's calls went out on our account under one caller
+ID, and `calling.minutes` was priced at 4 credits a minute and charged by nothing. Decided with the
+product owner: **both, like CRM.**
+
+- **`resolve_call_provider(ts)` is the only path** dial, disposition and status use: the
+  `set_call_provider` override (the test seam) → the workspace's own connection
+  (`integration_connections`, kind `telephony`) → the platform's Provider key `twilio` when a
+  superadmin has set **Calling (platform account)** to Twilio → the environment exactly as before →
+  click-to-dial. `provider.py` keeps an `_override` global beside the env memo for the reason
+  `crm.py` does: as one variable, "is a test double installed?" was unanswerable after first use.
+- **A workspace connection that cannot be read raises; it never falls back to the platform.** That
+  would ring on our caller ID and bill credits after the customer chose their own account.
+- **Only the platform account costs credits.** Its calls are preflighted before the dial (a 402
+  before the rep's phone rings — once it rings the minutes are spent) and charged at disposition on
+  Twilio's MEASURED duration, in started minutes, keyed on the call id so logging a second outcome
+  cannot charge twice. The typed duration is a note; it bills only when Twilio could not be asked. A
+  workspace on its own Twilio pays Twilio directly, so charging it would bill one call twice. Known
+  gap: a platform call nobody ever dispositions is not charged.
+- **The platform credential is `ACCOUNT_SID:AUTH_TOKEN`** in Provider keys — the pair Twilio
+  authenticates with, so they are stored and rotated together. `ProviderSpec.key_format` serves that
+  sentence to the Add-a-key form. Probe reads the account; verify also checks the account owns (or
+  has verified) the platform caller ID, because an unowned caller ID fails with 21210 after the rep's
+  phone has already rung. Neither places a call.
+- **The key alone is not a switch.** `telephony_provider` (Runtime settings) must also say Twilio, so
+  an operator adding a key to test it does not start live, billed calls for every workspace. Its
+  `_ON_CHANGE` hook drops the env-built provider `get_call_provider` memoized, or the panel would read
+  Click-to-dial while a live Twilio kept dialling. `telephony_from_number` is validated E.164 before
+  it is stored.
+- **The caller ID is not a secret**, so it lives in `integration_connections.config` (migration
+  `0058`), never in the sealed bundle: showing it from there would mean unsealing inside the response
+  builder, the one place that keeps "the secret never leaves the server" checkable. The SID comes back
+  only as `AC...1234`, and a blank SID or token keeps what is saved.
 
 ## Provider keys and models (`nexus/providers/`) — superadmin, no redeploy
 
@@ -1858,6 +1904,45 @@ stripped, and the second pass catches entities that were hidden inside the marku
 not a loop to a fixed point — an unbounded loop on third-party text is how a display bug becomes a
 hang. It preserves case (unlike `normalise`, which lowercases because it feeds a hash) and leaves
 URLs untouched. `scripts/repair_feed_text.py` fixes rows stored before it existed; it is idempotent.
+
+## Signal dates and the day window (`nexus/core/dates.py`, `nexus/ingestion/window.py`)
+
+**The day filter worked, on the wrong date.** Reported 2026-09-23 as "signal filtering by number of
+days not working". No source ever set `occurred_at`, so `RawSignal`'s default stamped every signal
+at collection: measured on the local database, 1,099 of 1,112 dated within ten minutes of being
+collected and none older than the day collection began. Every window showed the same list. RSS
+`pubDate`, SEC `filed_at` and Hacker News `created_at` were read and discarded.
+
+- **Each source passes the date it has**, and `dated` says which kind it is: `event` (the source's
+  own date, or an observation of the present — open roles, a changed page, active repos, where
+  collection time IS the date) or `found` (only when we collected it). Decided with the product
+  owner: an undated signal keeps its collection date and is labelled, never hidden. Hiding them was
+  the alternative, and about 90% of search-found signals carry no date (626 of 692 locally).
+- **One reader** (`parse_when`, standard library only) for RSS, ISO, `YYYY-MM-DD`, "Mar 4, 2025"
+  and "3 days ago"; `date_from_url` for `/2025/03/04/`. Anything unreadable is `None`, never a
+  guess; a future date clamps to now; before 1995 is an unset epoch. Search hits carry the
+  provider's raw string (`SearchHit.published_at`): Exa, Brave, Serper and Firecrawl give one,
+  DuckDuckGo HTML — the web-news browser — never does, so web news dates only from its URL.
+- **Scoring was already written to decay a signal to zero over 90 days** and the bug defeated it;
+  so was `_age_phrase` in the drafting prompt. Both now work as written, which means intent scores
+  FALL for accounts whose signals are old news found recently. That is the correction, not a
+  regression. `signal_age` tells the model "date unknown" for a `found` signal instead of "in the
+  last few days".
+- **The window is a superadmin policy** (Runtime settings, Signals): `signal_window_user_choice` (on:
+  each user picks from the top bar, starting at the default) and `signal_window_default` (Weekly …
+  Yearly, All time; default All time, a strict no-op). Off is ENFORCED by the server on `/signals`,
+  `/inbox` and `/alerts` whatever the client sends; the top bar shows a locked label instead of a
+  picker. `GET /signals/window` serves the options from the same list the panel offers.
+- **Where it applies, decided:** Signals, Dashboard, Account page, Inbox and Alerts (a task or alert
+  no signal raised always shows), and AI drafts, research and the call brief — which always use the
+  platform DEFAULT, having no top bar. **Not scoring or plays.** The agents filter where they READ
+  signals, not where the context loads them, because that same list feeds scoring.
+- `scripts/repair_signal_dates.py` re-dates stored rows from a URL date, an SEC key, or (`--feeds`,
+  fetches) the post date in the company feed. Dry run by default.
+- **Open, not fixed here:** `event_dedupe_key` buckets news on the month we FOUND it, so an old
+  funding article found this month takes this month's `funding` slot and a real round found later in
+  the month is deduped away. Bucketing dated events by their own month closes it; it changes source
+  behaviour, so it waits for the trade-off to be agreed.
 
 ## Person-level personalization (`nexus/personalization/`)
 
