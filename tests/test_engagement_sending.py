@@ -31,6 +31,7 @@ class SentFolder:
 
     def __init__(self):
         self.delivered: list[bytes] = []
+        self.drafts: list[bytes] = []
         self.calls = 0
         self.fail_next: Exception | None = None
         self.deliver_then_fail = False
@@ -48,6 +49,10 @@ class SentFolder:
         self.delivered.append(mime)
         return SentRef(provider_message_id=f"pm-{len(self.delivered)}",
                        provider_thread_id=getattr(thread, "provider_thread_id", "") or "thread-1")
+
+    async def create_draft(self, mime: bytes, *, thread=None) -> str:
+        self.drafts.append(mime)
+        return f"draft-{len(self.drafts)}"
 
     async def find_sent(self, *, ref_header: str, to: str, around):
         from nexus.engagement.mailboxes.provider import SentRef

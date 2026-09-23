@@ -5,12 +5,18 @@ second drafting path would drift, and the first thing to drift would be the rule
 facts out of a buyer's inbox. What this adds is the context pack (the conversation, the date, the
 history) and the personalisation rule, both passed in as agent inputs.
 
-Each draft is charged as `ai.email_draft`, the capability the composer's drafts already use, so a
-campaign's drafts and a one-off draft cost the same.
+Each outbound draft is charged as `ai.email_draft`, the capability the composer's drafts already
+use, so a campaign's drafts and a one-off draft cost the same. A response the reply desk suggests
+is `ai.reply_draft`: it reads the whole conversation as well as writing one.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+#: What a draft is charged as. Named here, beside the meter, so the capability a caller passes and
+#: the call that charges it are one module (``tests/test_billing_metering_coverage.py``).
+EMAIL_DRAFT = "ai.email_draft"
+REPLY_DRAFT = "ai.reply_draft"
 
 
 @dataclass(slots=True)
@@ -28,8 +34,15 @@ class Draft:
 
 
 async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: str = "first",
-                thread=None, user_id: str | None = None, now=None) -> Draft:
-    """One draft. Never raises: a draft that cannot be written reports why."""
+                thread=None, user_id: str | None = None, now=None,
+                capability: str = EMAIL_DRAFT) -> Draft:
+    """One draft. Never raises: a draft that cannot be written reports why.
+
+    ``capability`` is what the draft is charged as. An outbound step is ``ai.email_draft``; a reply
+    the desk suggests is ``ai.reply_draft``, priced separately because it reads the conversation as
+    well as writing one — and because a workspace that answers every reply by hand should not be
+    paying the same line as one that drafts every send.
+    """
     from nexus.agents.email_quality import check_draft
     from nexus.agents.messaging import _first_name
     from nexus.agents.runtime import get_agent_runtime
@@ -41,7 +54,7 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
     pack = await build_context(ts, enrollment=enrollment, contact=contact, account=account,
                                mailbox=mailbox, step=step, kind=kind, now=now)
     try:
-        async with metered(ts, "ai.email_draft", user_id=user_id, source="engagement"):
+        async with metered(ts, capability, user_id=user_id, source="engagement"):
             result = await get_agent_runtime().run(
                 "messaging", ts, account_id=account.id, contact_id=contact.id,
                 angle=getattr(step, "angle", "") or "", context_pack=pack.text,

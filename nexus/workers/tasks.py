@@ -1028,6 +1028,35 @@ async def handle_advance_engagement(payload: dict) -> dict:
     return await advance()
 
 
+async def handle_remind_replies(payload: dict) -> dict:
+    """Nudge SDRs whose interested buyers are still waiting (spec §19). Reads every workspace that
+    has an open reply, so it runs on the platform sessionmaker to find them and per tenant to act."""
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker, utcnow
+    from nexus.engagement import config
+    from nexus.engagement.desk.service import remind_unanswered
+    from nexus.models.engagement import ReplyClassification
+
+    if not config.campaigns_enabled():
+        return {"skipped": "engagement campaigns are switched off"}
+    now = utcnow()
+    async with get_platform_sessionmaker()() as session:
+        tenant_ids = (await session.execute(
+            select(ReplyClassification.tenant_id)
+            .where(ReplyClassification.status == "open")
+            .where(ReplyClassification.reminded_at.is_(None))
+            .distinct().limit(500))).scalars().all()
+    reminded = 0
+    for tenant_id in tenant_ids:
+        try:
+            async with tenant_session(tenant_id) as ts:
+                reminded += await remind_unanswered(ts, now=now)
+        except Exception:  # one workspace's reminder must not stop the rest
+            logger.warning("could not remind %s about waiting replies", tenant_id, exc_info=True)
+    return {"tenants": len(tenant_ids), "reminded": reminded}
+
+
 async def handle_sync_mailbox(payload: dict) -> dict:
     """Read what arrived in one mailbox (a notification said something changed)."""
     from nexus.engagement import config
@@ -1103,6 +1132,11 @@ async def enqueue_advance_engagement(*, queue: TaskQueue | None = None) -> None:
     await queue.enqueue(Job(name="advance_engagement", payload={}))
 
 
+async def enqueue_remind_replies(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="remind_replies", payload={}))
+
+
 async def enqueue_ship_ledger(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="ship_ledger", payload={}))
@@ -1167,6 +1201,7 @@ HANDLERS: dict[str, Handler] = {
     "advance_engagement": handle_advance_engagement,
     "sync_mailbox": handle_sync_mailbox,
     "sync_mailboxes": handle_sync_mailboxes,
+    "remind_replies": handle_remind_replies,
     "build_ledger_datasets": handle_build_ledger_datasets,
     "ledger_delete_workspace": handle_ledger_delete_workspace,
     "ledger_erase_person": handle_ledger_erase_person,
