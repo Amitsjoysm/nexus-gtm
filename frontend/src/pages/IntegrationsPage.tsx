@@ -756,7 +756,7 @@ function TelephonyCard() {
               required={!own}
               hint={
                 own
-                  ? `Connected: ${conn.account_hint}. Leave blank to keep it.`
+                  ? `Saved: ${conn.account_hint}. Leave blank to keep it.`
                   : "On your Twilio Console home page, under Account Info."
               }
             >
