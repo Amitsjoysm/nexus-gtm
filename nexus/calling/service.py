@@ -152,8 +152,12 @@ class CallQueueService:
                 )
             ).all()
         )
+        # Only signals inside the platform window: the brief is read out on a call.
+        from nexus.ingestion.window import within_ai_window
+
         ranked = sorted(
-            raw_signals, key=lambda s: (s.contact_id == cid, s.strength), reverse=True
+            within_ai_window(raw_signals), key=lambda s: (s.contact_id == cid, s.strength),
+            reverse=True,
         )
         signals = [
             {

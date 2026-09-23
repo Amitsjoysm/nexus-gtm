@@ -67,6 +67,10 @@ class CallScriptAgent(BaseAgent):
     async def run(self, ctx: AgentContext) -> dict:
         if ctx.account is None:
             return {"error": "call_script requires an account"}
+        # Only signals inside the platform window may be cited (nexus/ingestion/window.py).
+        from nexus.ingestion.window import within_ai_window
+
+        signals = within_ai_window(ctx.signals)
 
         # Same guard as the messaging agent, and it matters MORE here: a call script is SPOKEN,
         # so a rep reads placeholder framing out loud to a person who can hear the hesitation.
@@ -88,13 +92,13 @@ class CallScriptAgent(BaseAgent):
         contact = contact or (ctx.contacts[0] if ctx.contacts else None)
         contact_name = contact.full_name if contact else "there"
 
-        trigger_signal = max(ctx.signals, key=lambda s: s.strength, default=None)
+        trigger_signal = max(signals, key=lambda s: s.strength, default=None)
         trigger = trigger_signal.title if trigger_signal else "your current priorities"
 
         vps = ctx.relevance_context.value_props
         # Matched to what triggered the call rather than always the first — same reasoning as
         # messaging.py: pitching value_props[0] regardless of the trigger is the mail-merge failure.
-        vp = select_value_prop(vps, ctx.signals)
+        vp = select_value_prop(vps, signals)
         # Nouns, formatted to sit inside a sentence — see nexus/agents/copy.py for the
         # garbled email this replaced.
         pains = format_pains(vp.get("pains_solved", []))
@@ -104,7 +108,7 @@ class CallScriptAgent(BaseAgent):
         from nexus.core.config import get_settings
         from nexus.personalization.brief import build_person_brief
 
-        brief = build_person_brief(contact, ctx.account, ctx.signals) if contact else None
+        brief = build_person_brief(contact, ctx.account, signals) if contact else None
         hook = brief.signal_title if (brief and brief.signal_title) else trigger
         person_block = (
             " " + brief.to_prompt(max_posts=get_settings().personalization_max_posts, channel="call")
@@ -116,7 +120,7 @@ class CallScriptAgent(BaseAgent):
         # specifics — the amount raised, the roles being hired — not a headline they then have to
         # bluff around the moment the buyer asks a follow-up question.
         facts = account_facts(ctx.account)
-        recent = signal_facts(ctx.signals)
+        recent = signal_facts(signals)
         signals_block = f"\nRECENT SIGNALS (strongest first):\n{recent}\n" if recent else ""
 
         content = (

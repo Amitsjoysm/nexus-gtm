@@ -65,6 +65,10 @@ class MessagingAgent(BaseAgent):
     async def run(self, ctx: AgentContext) -> dict:
         if ctx.account is None:
             return {"error": "messaging requires an account"}
+        # Only signals inside the platform window may be cited (nexus/ingestion/window.py).
+        from nexus.ingestion.window import within_ai_window
+
+        signals = within_ai_window(ctx.signals)
 
         # REFUSE TO PITCH A PRODUCT WE HAVE NOT BEEN TOLD ABOUT.
         #
@@ -100,14 +104,14 @@ class MessagingAgent(BaseAgent):
         contact = contact or (ctx.contacts[0] if ctx.contacts else None)
 
         # Choose the strongest recent signal as the hook.
-        trigger_signal = max(ctx.signals, key=lambda s: s.strength, default=None)
+        trigger_signal = max(signals, key=lambda s: s.strength, default=None)
         trigger = trigger_signal.title if trigger_signal else "your current priorities"
 
         vps = ctx.relevance_context.value_props
         # MATCHED to what triggered the outreach, not always the first one. Pitching value_props[0]
         # at every account regardless of the trigger is the mail-merge failure in its purest form:
         # a hiring signal should pull the value prop about ramping new hires.
-        vp = select_value_prop(vps, ctx.signals)
+        vp = select_value_prop(vps, signals)
         # Nouns, formatted to sit inside a sentence — see nexus/agents/copy.py for the
         # garbled email this replaced.
         pains = format_pains(vp.get("pains_solved", []))
@@ -117,7 +121,7 @@ class MessagingAgent(BaseAgent):
         from nexus.core.config import get_settings
         from nexus.personalization.brief import build_person_brief
 
-        brief = build_person_brief(contact, ctx.account, ctx.signals) if contact else None
+        brief = build_person_brief(contact, ctx.account, signals) if contact else None
         hook = brief.signal_title if (brief and brief.signal_title) else trigger
 
         angle = (ctx.inputs.get("angle") or "").strip()
@@ -132,7 +136,7 @@ class MessagingAgent(BaseAgent):
         # The signals WITH their bodies. Only `title` used to reach the model: we crawl "raised
         # $40M led by Sequoia to expand European operations", store it, bill for it, and then sent
         # the headline "Acme raises Series B". The specifics a rep opens on were being discarded.
-        recent = signal_facts(ctx.signals)
+        recent = signal_facts(signals)
 
         content = (
             # First, because everything after it is dated relative to now: the signal ages, and the

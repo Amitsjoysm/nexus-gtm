@@ -68,8 +68,13 @@ class QAAgent(BaseAgent):
             desc = (a.custom_fields or {}).get("description")
             if desc:
                 facts.append(f"description: {str(desc)[:300]}")
-        for s in ctx.signals[:8]:
-            facts.append(f"signal[{s.kind}] {s.title}")
+        # Only signals inside the platform window, each with how old it is — or that its date is
+        # unknown — so an answer about "recent" news cannot lean on a two-year-old article.
+        from nexus.agents.copy import signal_age
+        from nexus.ingestion.window import within_ai_window
+
+        for s in within_ai_window(ctx.signals)[:8]:
+            facts.append(f"signal[{s.kind}, {signal_age(s)}] {s.title}")
         for c in ctx.contacts[:8]:
             facts.append(f"contact: {c.full_name} — {c.title}")
 

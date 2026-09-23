@@ -68,6 +68,20 @@ def ai_window_days() -> int | None:
     return default_days()
 
 
+def within_ai_window(signals):
+    """The signals an AI draft, research answer or call brief may cite: inside the platform window.
+
+    In Python rather than SQL because the agents receive their signals already loaded, and the SAME
+    list feeds scoring, which the product owner kept out of the window.
+    """
+    cutoff = since(ai_window_days())
+    if cutoff is None:
+        return list(signals or [])
+    from nexus.core.db import ensure_aware
+
+    return [s for s in (signals or []) if (ensure_aware(s.occurred_at) or cutoff) >= cutoff]
+
+
 def since(days: int | None) -> datetime | None:
     if not days:
         return None

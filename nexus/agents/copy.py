@@ -329,6 +329,20 @@ def _age_phrase(occurred_at) -> str:
     return "over six months ago"
 
 
+def signal_age(signal) -> str:
+    """How old a signal is, for a prompt — or "date unknown" when all we know is when we found it.
+
+    An undated signal is dated at collection, so `_age_phrase` alone would call a two-year-old
+    article "in the last few days" and invite the model to open on it as news.
+    """
+    dated = getattr(signal, "dated", None) or "found"
+    if dated != "event":
+        return "date unknown"
+    from nexus.core.db import ensure_aware
+
+    return _age_phrase(ensure_aware(getattr(signal, "occurred_at", None)))
+
+
 def signal_facts(signals, *, limit: int = MAX_SIGNALS_IN_PROMPT) -> str:
     """Render the strongest signals WITH their bodies. Empty string when there are none.
 
@@ -346,7 +360,7 @@ def signal_facts(signals, *, limit: int = MAX_SIGNALS_IN_PROMPT) -> str:
     lines: list[str] = []
     for signal in ranked:
         kind = (getattr(signal, "kind", "") or "signal").replace("_", " ")
-        age = _age_phrase(getattr(signal, "occurred_at", None))
+        age = signal_age(signal)
         head = f"- [{kind}{f', {age}' if age else ''}] {signal.title}"
         body = (getattr(signal, "body", "") or "").strip()
         if body:
