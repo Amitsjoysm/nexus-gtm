@@ -54,6 +54,38 @@ def _local_part(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", folded.lower())
 
 
+def name_patterns(full_name: str) -> list[str]:
+    """The local parts this person's work address could have, most common corporate format first.
+
+    One list, used twice: the pattern finder builds its guesses from it, and a scraped address is
+    accepted as this person's only if its local part is on it — so `jane.smith@` or `press@` can
+    never be taken for Jane Doe. Accents and punctuation are folded ("Renée O'Mara" -> renee.omara),
+    because an address carrying them does not parse.
+    """
+    parts = [p for p in (_local_part(t) for t in re.split(r"\s+", (full_name or "").strip())) if p]
+    if not parts:
+        return []
+    first = parts[0]
+    last = parts[-1] if len(parts) > 1 else ""
+    if not last:
+        return [first]
+    fi, li = first[0], last[0]
+    # The 10 most common corporate email patterns, in priority order. first.last and first lead
+    # (the most-wanted), then the next 8 by real-world frequency.
+    return list(dict.fromkeys([
+        f"{first}.{last}",   # jane.doe   (most common)
+        first,               # jane
+        f"{first}{last}",    # janedoe
+        f"{fi}{last}",       # jdoe
+        f"{first}{li}",      # janed
+        f"{fi}.{last}",      # j.doe
+        f"{first}_{last}",   # jane_doe
+        last,                # doe
+        f"{last}.{first}",   # doe.jane
+        f"{fi}{li}",         # jd
+    ]))
+
+
 @dataclass(slots=True)
 class EnrichmentResult:
     found: bool = False
@@ -182,13 +214,15 @@ class SearchEnrichmentProvider(EnrichmentProvider):
         blob = " ".join((h.get("snippet", "") + " " + h.get("title", "")) for h in hits)
 
         result = EnrichmentResult(source=self.name)
+        # Only THIS person's address at THIS company: on the company domain, and in one of their own
+        # name patterns. It used to take the first company address in the snippets — `press@`, a
+        # colleague — and failing that ANY address at 0.55, including one at another company.
+        mine = set(name_patterns(contact.full_name))
         for em in _EMAIL.findall(blob):
-            # Prefer an address on the company domain.
-            if domain and em.lower().endswith("@" + domain):
-                result.email, result.email_confidence, result.found = em, 0.8, True
+            local, _, host = em.lower().partition("@")
+            if domain and host == domain and local in mine:
+                result.email, result.email_confidence, result.found = em.lower(), 0.8, True
                 break
-            if not result.email:
-                result.email, result.email_confidence, result.found = em, 0.55, True
         phone = _first_usable_phone(blob)
         if phone:
             result.phone = phone
@@ -235,36 +269,10 @@ class VerifyingPatternEmailProvider(EnrichmentProvider):
         return get_settings().email_finder_max_candidates
 
     def _candidates(self, full_name: str, domain: str) -> list[str]:
-        parts = re.split(r"\s+", (full_name or "").strip().lower())
-        first = parts[0] if parts else ""
-        last = parts[-1] if len(parts) > 1 else ""
         domain = (domain or "").lower().lstrip("@")
-        if not first or not domain:
+        if not domain:
             return []
-        if last:
-            fi, li = first[0], last[0]
-            # The 10 most common corporate email patterns, in priority order. first.last and
-            # first lead (the user's most-wanted), then the next 8 by real-world frequency.
-            locals_ = [
-                f"{first}.{last}",   # jane.doe   (most common)
-                first,               # jane
-                f"{first}{last}",    # janedoe
-                f"{fi}{last}",       # jdoe
-                f"{first}{li}",      # janed
-                f"{fi}.{last}",      # j.doe
-                f"{first}_{last}",   # jane_doe
-                last,                # doe
-                f"{last}.{first}",   # doe.jane
-                f"{fi}{li}",         # jd
-            ]
-        else:
-            locals_ = [first]
-        seen: list[str] = []
-        for loc in locals_:
-            email = f"{loc}@{domain}"
-            if email not in seen:
-                seen.append(email)
-        return seen[: self._cap()]
+        return [f"{loc}@{domain}" for loc in name_patterns(full_name)][: self._cap()]
 
     async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult:
         from nexus.enrichment.policy import check_level, rejected_emails
