@@ -28,6 +28,7 @@ import type {
   AlertMode,
   AlertScope,
   AlertChannelConnection,
+  CompanyDomainResult,
   AlertChannelConnections,
   AlertChannelKind,
   AlertChannelRules,
@@ -413,6 +414,13 @@ export class ApiClient {
   // ---- accounts ----
   listAccounts(signal?: AbortSignal) {
     return this.request<Account[]>("/accounts", { signal });
+  }
+  /** A company's website domain from its name, for the Similar-people add form. */
+  companyDomain(name: string, signal?: AbortSignal) {
+    return this.request<CompanyDomainResult>(
+      `/accounts/company-domain?name=${encodeURIComponent(name)}`,
+      { signal },
+    );
   }
   listWorkspaceContacts(q?: string, signal?: AbortSignal) {
     return this.request<WorkspaceContact[]>("/contacts", {

@@ -110,6 +110,13 @@ export interface ContactLookalike {
   company: string;
 }
 
+/** A company's website domain resolved from its name, with the result that matched it. */
+export interface CompanyDomainResult {
+  domain: string | null;
+  url: string;
+  title: string;
+}
+
 /** Keep a sourced person: file them under an existing account, or find-or-create their company. */
 export interface SimilarPersonInput {
   full_name: string;

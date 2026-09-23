@@ -110,3 +110,25 @@ async def test_the_endpoint_says_nothing_rather_than_guessing(client, searching)
 
     assert r.status_code == 200
     assert r.json()["domain"] in (None, "")
+
+
+def _form_source() -> str:
+    from pathlib import Path
+
+    return Path("frontend/src/components/AddSimilarPerson.tsx").read_text(encoding="utf-8")
+
+
+def test_the_form_asks_the_server_rather_than_the_rep():
+    # There is no frontend test runner, so this reads the source, like the other *_ui tests.
+    src = _form_source()
+
+    assert ".companyDomain(" in src, "the add form no longer looks the domain up"
+    assert "creating" in src, "the lookup is not scoped to a new account"
+
+
+def test_the_lookup_never_overwrites_what_the_rep_typed():
+    # A resolved domain is a suggestion. Landing on top of a hand-typed one would file the person
+    # under a company the rep had already corrected.
+    src = _form_source()
+
+    assert "setNewDomain((typed) => typed || found.domain" in src

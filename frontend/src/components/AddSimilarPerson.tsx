@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Field, Input, Select, useToast } from "@/components/ui";
@@ -8,7 +8,13 @@ import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { emailStatusMeta } from "@/lib/display";
-import type { Account, Contact, ContactLookalike, SimilarPersonAdded } from "@/lib/types";
+import type {
+  Account,
+  CompanyDomainResult,
+  Contact,
+  ContactLookalike,
+  SimilarPersonAdded,
+} from "@/lib/types";
 import styles from "./AddSimilarPerson.module.css";
 
 const NEW_ACCOUNT = "__new__";
@@ -101,12 +107,45 @@ export function AddSimilarPerson({ person, onAdded, onCancel, className }: AddSi
 
   const [newName, setNewName] = useState(company);
   const [newDomain, setNewDomain] = useState("");
+  // The employer arrives as plain text from their profile, so the domain is looked up rather than
+  // typed. Prefilled and editable: a name is not an identity, and the rep is the one confirming it.
+  const [resolved, setResolved] = useState<CompanyDomainResult | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const asked = useRef<string>("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [findEmail, setFindEmail] = useState(true);
   const [saving, setSaving] = useState(false);
 
   // An email is guessed from the company's domain, so without one there is nothing to look up.
   const hasDomain = creating ? newDomain.trim() !== "" : Boolean(chosen?.domain);
+
+  useEffect(() => {
+    // Only when a new account is being created: an account the workspace already has carries its
+    // own domain, and looking one up costs a search.
+    if (!creating || !company || asked.current === company) return;
+    asked.current = company;
+    const ctrl = new AbortController();
+    let active = true;
+    setResolving(true);
+    api
+      .companyDomain(company, ctrl.signal)
+      .then((found) => {
+        if (!active) return;
+        setResolved(found);
+        // Never overwrite what the rep has typed.
+        if (found.domain) setNewDomain((typed) => typed || found.domain || "");
+      })
+      .catch(() => {
+        // A failed lookup just leaves the field blank; the rep can type it.
+      })
+      .finally(() => {
+        if (active) setResolving(false);
+      });
+    return () => {
+      active = false;
+      ctrl.abort();
+    };
+  }, [api, company, creating]);
 
   const options = useMemo<SelectOption[]>(() => {
     const label = (a: Account) => (a.domain ? `${a.name} (${a.domain})` : a.name);
@@ -226,7 +265,13 @@ export function AddSimilarPerson({ person, onAdded, onCancel, className }: AddSi
             </Field>
             <Field
               label="Company domain"
-              hint="Optional. Needed to find their email and to collect this company's signals."
+              hint={
+                resolving
+                  ? "Looking up their company's website…"
+                  : resolved?.domain
+                    ? `Found from ${resolved.title || resolved.url}. Check it is the right company.`
+                    : "Optional. Needed to find their email and to collect this company's signals."
+              }
             >
               <Input
                 value={newDomain}
