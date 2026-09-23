@@ -616,7 +616,10 @@ async def set_telephony_connection(
     from nexus.calling.twilio import ACCOUNT_SID, normalize_e164
 
     sid = (body.account_sid or "").strip()
-    if not ACCOUNT_SID.match(sid):
+    stored = await connection.get_connection(ts)
+    if not sid and connections.has_credentials(stored, fields=("account_sid",)):
+        pass  # keep the stored SID
+    elif not ACCOUNT_SID.match(sid):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "The account SID starts with AC followed by 32 letters and digits. Copy it from the "
@@ -630,9 +633,7 @@ async def set_telephony_connection(
             "The caller ID must be a phone number in international format, like +15551234567.",
         ) from None
     token = (body.auth_token or "").strip()
-    if not token and not connections.has_credentials(
-        await connection.get_connection(ts), fields=("auth_token",)
-    ):
+    if not token and not connections.has_credentials(stored, fields=("auth_token",)):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "The auth token is required to connect Twilio."
         )

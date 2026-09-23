@@ -187,6 +187,8 @@ import type {
   RecordImportResult,
   SignalPreference,
   SignalWindowPolicy,
+  TelephonyConnection,
+  TelephonyConnectionInput,
 } from "./types";
 
 export class ApiError extends Error {
@@ -804,6 +806,30 @@ export class ApiClient {
   }
   clearCrmConnection(signal?: AbortSignal) {
     return this.request<void>("/integrations/crm/connection", {
+      method: "DELETE",
+      signal,
+    });
+  }
+
+  // ---- a workspace's own Twilio (admin only) ----
+  telephonyConnection(signal?: AbortSignal) {
+    return this.request<TelephonyConnection>("/integrations/telephony/connection", { signal });
+  }
+  setTelephonyConnection(body: TelephonyConnectionInput, signal?: AbortSignal) {
+    return this.request<TelephonyConnection>("/integrations/telephony/connection", {
+      method: "PUT",
+      body,
+      signal,
+    });
+  }
+  testTelephonyConnection(signal?: AbortSignal) {
+    return this.request<CRMConnectionTest>("/integrations/telephony/connection/test", {
+      method: "POST",
+      signal,
+    });
+  }
+  clearTelephonyConnection(signal?: AbortSignal) {
+    return this.request<void>("/integrations/telephony/connection", {
       method: "DELETE",
       signal,
     });

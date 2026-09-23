@@ -959,9 +959,10 @@ class SEPConnectionOut(BaseModel):
 
 # ---- integrations: a workspace's own Twilio ----
 class TelephonyConnectionIn(BaseModel):
-    """A workspace's own Twilio. ``auth_token`` is write-only: omit or blank to keep the stored one."""
+    """A workspace's own Twilio. The SID and token are write-only: omit or blank keeps the stored
+    one, so changing only the caller ID does not mean re-typing credentials the screen cannot show."""
 
-    account_sid: str = Field(max_length=64)
+    account_sid: str | None = Field(default=None, max_length=64)
     auth_token: str | None = Field(default=None, max_length=128)
     from_number: str = Field(max_length=32)
 

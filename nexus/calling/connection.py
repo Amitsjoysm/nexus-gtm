@@ -129,10 +129,11 @@ async def store(
     ts: TenantSession, *, account_sid: str, auth_token: str, from_number: str,
     actor_user_id: str | None,
 ) -> IntegrationConnection:
-    """Save the workspace's own Twilio. A blank token keeps the stored one (write-only secret)."""
+    """Save the workspace's own Twilio. A blank SID or token keeps the stored one (write-only)."""
     existing = await get_connection(ts)
     bundle = dict(connections.secret_bundle(existing))
-    bundle["account_sid"] = account_sid
+    if account_sid:
+        bundle["account_sid"] = account_sid
     if auth_token:
         bundle["auth_token"] = auth_token
     row = await connections.store_credentials(

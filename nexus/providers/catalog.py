@@ -28,6 +28,9 @@ class ProviderSpec:
     # The Settings attribute holding the env fallback. Either a `list[str]` property (the four
     # providers with rotation pools) or a plain `str`; `env_pool` normalises both.
     env_attr: str
+    # How the key is typed, when it is not a single opaque token. Served to the Add-a-key form so
+    # the format is stated where it is typed, rather than learned from a failed test.
+    key_format: str = ""
 
 
 PROVIDERS: dict[str, ProviderSpec] = {
@@ -68,7 +71,10 @@ PROVIDERS: dict[str, ProviderSpec] = {
     # The PLATFORM account every workspace without its own Twilio calls on. Entered as
     # ACCOUNT_SID:AUTH_TOKEN: Twilio authenticates with the pair, so they are stored together.
     # A workspace's own Twilio is per-tenant and lives under Integrations, not here.
-    "twilio": ProviderSpec("twilio", "Twilio (calling, platform account)", "twilio_credential"),
+    "twilio": ProviderSpec(
+        "twilio", "Twilio (calling, platform account)", "twilio_credential",
+        key_format="Account SID and Auth Token joined by a colon: AC0123...:your-auth-token",
+    ),
 }
 
 # The providers that HAVE a model to choose. One definition, read by `testing.list_models`, by the

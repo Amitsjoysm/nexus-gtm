@@ -224,6 +224,7 @@ export function ProviderKeysTab() {
   // exactly when a withdrawn model needs changing.
   const modelProviders = providers.filter((p) => p.has_model).map((p) => p.id);
   const cards = Array.from(new Set([...Object.keys(grouped), ...modelProviders]));
+  const keyFormat = providers.find((p) => p.id === form.provider)?.key_format ?? "";
 
   return (
     <div className={styles.stack}>
@@ -247,7 +248,14 @@ export function ProviderKeysTab() {
               placeholder="primary"
             />
           </Field>
-          <Field label="Key" hint="Never shown again after saving.">
+          <Field
+            label="Key"
+            hint={
+              keyFormat
+                ? `${keyFormat}. Never shown again after saving.`
+                : "Never shown again after saving."
+            }
+          >
             <Input
               type="password"
               value={form.key}

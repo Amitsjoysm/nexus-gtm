@@ -25,6 +25,7 @@ import type {
   CRMConnection,
   CRMSyncResponse,
   SEPPushResponse,
+  TelephonyConnection,
 } from "@/lib/types";
 import styles from "./IntegrationsPage.module.css";
 
@@ -61,6 +62,7 @@ export function IntegrationsPage() {
       <div className={styles.grid}>
         <CrmConnectionCard />
         <SepCard />
+        <TelephonyCard />
         {/* Alert channels sit here rather than in Settings because this is the page about
             connecting other people's systems, and connecting one is a workspace decision. Choosing
             which of YOUR alerts go there is personal, and stays on Settings. */}
@@ -622,6 +624,236 @@ function SepCard() {
           </div>
         )}
       </form>
+    </Card>
+  );
+}
+
+/**
+ * A workspace's own Twilio (decided 2026-09-23: "both, like CRM").
+ *
+ * Connected: calls ring on the workspace's own account and caller ID, and it pays Twilio directly.
+ * Not connected: calls use the platform account and each minute costs credits — or, if the
+ * platform has calling off, reps dial from their own phones. The chip says which, because "is this
+ * costing us credits?" is the question an admin opens this card to answer.
+ *
+ * The SID and token are write-only, like every other credential here: the server returns the SID's
+ * last four so an admin can tell which account is connected, and blank keeps what is saved.
+ */
+function telephonyChip(c: TelephonyConnection): {
+  tone: "success" | "warning" | "danger" | "neutral";
+  text: string;
+} {
+  if (c.source === "platform") return { tone: "neutral", text: "Using the platform account" };
+  if (c.source === "none") return { tone: "neutral", text: "Click-to-dial" };
+  if (c.status === "connected") return { tone: "success", text: "Connected" };
+  if (c.status === "error") return { tone: "danger", text: "Connection error" };
+  return { tone: "warning", text: "Not verified" };
+}
+
+function TelephonyCard() {
+  const api = useApiClient();
+  const toast = useToast();
+  const state = useApi<TelephonyConnection>((signal) => api.telephonyConnection(signal), []);
+  const [sid, setSid] = useState("");
+  const [token, setToken] = useState("");
+  const [fromNumber, setFromNumber] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  const conn = state.data;
+  const own = conn?.source === "workspace";
+
+  async function onSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.setTelephonyConnection({
+        account_sid: sid.trim() || null,
+        auth_token: token.trim() || null,
+        from_number: fromNumber.trim() || conn?.from_number || "",
+      });
+      setSid("");
+      setToken("");
+      setFromNumber("");
+      state.refetch();
+      toast.success("Twilio saved", "Test the connection to check the account and caller ID.");
+    } catch (err) {
+      toast.error("Couldn't save", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onTest() {
+    setTesting(true);
+    try {
+      const res = await api.testTelephonyConnection();
+      state.refetch();
+      if (res.ok) toast.success("Twilio verified", res.detail);
+      else toast.error("Twilio check failed", res.detail);
+    } catch (err) {
+      toast.error("Test failed", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function onClear() {
+    try {
+      await api.clearTelephonyConnection();
+      setConfirmClear(false);
+      state.refetch();
+      toast.success("Twilio disconnected", "Calls use the platform account again.");
+    } catch (err) {
+      toast.error("Couldn't disconnect", err instanceof ApiError ? err.detail : "Please try again.");
+    }
+  }
+
+  const chip = conn ? telephonyChip(conn) : null;
+
+  return (
+    <Card padding="lg" className={styles.card}>
+      <div className={styles.cardHead}>
+        <span className={styles.cardIcon} aria-hidden="true">
+          <Icons.PhoneIcon />
+        </span>
+        <div className={styles.cardHeadText}>
+          <h2 className={styles.cardTitle}>Calling (Twilio)</h2>
+          <p className={styles.cardDesc}>
+            Place calls on your own Twilio account and number. Without one, calls use the platform
+            account and each minute uses credits.
+          </p>
+        </div>
+        {chip && (
+          <Badge tone={chip.tone} dot>
+            {chip.text}
+          </Badge>
+        )}
+      </div>
+
+      {state.loading && (
+        <div className={styles.form} aria-busy="true">
+          <Skeleton height={60} />
+          <Skeleton height={60} />
+          <Skeleton height={36} width="60%" />
+        </div>
+      )}
+
+      {state.error && (
+        <ErrorState
+          title="Couldn't load the calling connection"
+          message={state.error.detail}
+          onRetry={state.refetch}
+          compact
+        />
+      )}
+
+      {conn && !state.loading && (
+          <form className={styles.form} onSubmit={onSave} noValidate>
+            <Field
+              label="Account SID"
+              required={!own}
+              hint={
+                own
+                  ? `Connected: ${conn.account_hint}. Leave blank to keep it.`
+                  : "On your Twilio Console home page, under Account Info."
+              }
+            >
+              <Input
+                autoComplete="off"
+                spellCheck={false}
+                value={sid}
+                onChange={(e) => setSid(e.target.value)}
+                placeholder={own ? conn.account_hint : "AC…"}
+              />
+            </Field>
+
+            <Field
+              label="Auth token"
+              required={!own}
+              hint={own ? "A token is saved. Leave this blank to keep it." : "Beside the Account SID."}
+            >
+              <Input
+                type="password"
+                autoComplete="off"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder={own ? "••••••••  (saved)" : ""}
+              />
+            </Field>
+
+            <Field
+              label="Caller ID"
+              required
+              hint="A number this Twilio account owns or has verified. Prospects see it."
+            >
+              <Input
+                type="tel"
+                inputMode="tel"
+                autoComplete="off"
+                value={fromNumber}
+                onChange={(e) => setFromNumber(e.target.value)}
+                placeholder={own && conn.from_number ? conn.from_number : "+15551234567"}
+              />
+            </Field>
+
+            {own && conn.last_error && (
+              <p className={styles.errorNote} role="status">
+                {conn.last_error}
+              </p>
+            )}
+            {own && conn.status === "connected" && conn.verified_at && (
+              <p className={styles.okNote} role="status">
+                Last verified {new Date(conn.verified_at).toLocaleString()}.
+              </p>
+            )}
+
+            <div className={styles.actions}>
+              <div className={styles.actionGroup}>
+                <Button type="submit" loading={saving}>
+                  Save Twilio
+                </Button>
+                {own && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    iconLeft={<Icons.ShieldCheckIcon />}
+                    loading={testing}
+                    onClick={onTest}
+                  >
+                    Test connection
+                  </Button>
+                )}
+              </div>
+              {own && (
+                <Button type="button" variant="ghost" onClick={() => setConfirmClear(true)}>
+                  Disconnect
+                </Button>
+              )}
+            </div>
+          </form>
+      )}
+
+      <Modal
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        title="Disconnect Twilio?"
+        description="The saved account is deleted. Calls use the platform account again, and each minute uses credits."
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmClear(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={onClear}>
+              Disconnect Twilio
+            </Button>
+          </>
+        }
+      >
+        <p>You will need the Account SID and auth token again to reconnect.</p>
+      </Modal>
     </Card>
   );
 }

@@ -371,3 +371,51 @@ async def test_the_call_console_is_told_whose_account_it_is_on(client):
 
     assert body["source"] == "workspace"
     assert body["from_number"] == "+15550001111"
+
+
+async def test_changing_only_the_caller_id_keeps_the_saved_credentials(client):
+    # The screen never gets the SID or token back, so it cannot resend them.
+    from nexus.calling.connection import get_connection
+    from nexus.integrations.connections import secret_bundle
+
+    token, tid, _ = await _workspace(client, "tc11")
+    await client.put(URL, headers=auth(token), json=_connect_body())
+
+    r = await client.put(URL, headers=auth(token), json={"from_number": "+15550002222"})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["from_number"] == "+15550002222"
+    async with tenant_session(tid) as ts:
+        bundle = secret_bundle(await get_connection(ts))
+    assert bundle == {"account_sid": SID, "auth_token": TOKEN}
+
+
+# ---- the screens (no frontend test runner, so these read the source) ---------------------------
+
+
+def test_the_integrations_page_offers_a_workspace_twilio_that_never_shows_the_token():
+    from pathlib import Path
+
+    src = Path("frontend/src/pages/IntegrationsPage.tsx").read_text(encoding="utf-8")
+    assert "<TelephonyCard />" in src
+    assert "setTelephonyConnection" in src and "testTelephonyConnection" in src
+    # Write-only, like every other credential here: the screen never has the token to show.
+    assert "(saved)" in src and "account_hint" in src
+
+
+def test_the_call_console_says_when_a_call_costs_credits():
+    from pathlib import Path
+
+    src = Path("frontend/src/components/CallConsole.tsx").read_text(encoding="utf-8")
+    assert 'telephony?.source === "platform"' in src and "uses credits" in src
+
+
+def test_the_key_form_states_the_twilio_format_from_the_server():
+    from pathlib import Path
+
+    from nexus.providers.catalog import PROVIDERS
+
+    fmt = PROVIDERS["twilio"].key_format
+    assert "colon" in fmt and "AC" in fmt, "the served format does not say how to type the key"
+    src = Path("frontend/src/pages/admin/ProviderKeysTab.tsx").read_text(encoding="utf-8")
+    assert "key_format" in src, "the format hint is hard-coded in the frontend instead of served"

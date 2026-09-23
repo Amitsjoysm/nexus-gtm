@@ -349,6 +349,28 @@ export interface TelephonyStatus {
   record_calls: boolean;
   /** Why a selected provider is unusable — surfaced to admins, not silently swallowed. */
   detail: string | null;
+  /** Whose Twilio places the call. "platform" minutes cost credits; "workspace" ones do not. */
+  source?: "workspace" | "platform" | "none";
+}
+
+/** A workspace's own Twilio. The SID and token are never returned: `account_hint` is AC...1234. */
+export interface TelephonyConnection {
+  provider: string;
+  source: "workspace" | "platform" | "none";
+  has_credentials: boolean;
+  account_hint: string;
+  from_number: string;
+  status: "none" | "unverified" | "connected" | "error";
+  verified_at: string | null;
+  last_error: string | null;
+  updated_at: string | null;
+}
+
+/** Blank `account_sid` / `auth_token` keep the stored ones. */
+export interface TelephonyConnectionInput {
+  account_sid: string | null;
+  auth_token: string | null;
+  from_number: string;
 }
 
 export interface DialResult {
@@ -1556,6 +1578,8 @@ export interface SupportedProvider {
    * dropdown is permanently empty.
    */
   has_model: boolean;
+  /** How the key is typed when it is not one opaque token (Twilio: SID:TOKEN). Empty otherwise. */
+  key_format?: string;
 }
 
 /**

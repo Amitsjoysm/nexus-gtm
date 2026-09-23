@@ -239,7 +239,8 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
               </>
             ) : (
               <>
-                Calls show as {telephony?.from_number || "your workspace number"} to the contact.{" "}
+                Calls show as {telephony?.from_number || "your workspace number"} to the contact.
+                {telephony?.source === "platform" && " Each minute uses credits."}{" "}
                 <a className={styles.link} href={dial}>
                   Dial from this device instead
                 </a>

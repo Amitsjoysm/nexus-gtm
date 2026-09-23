@@ -78,7 +78,8 @@ async def list_supported_providers(
 
     # `has_model` travels with the id so the UI does not keep its own copy of which providers have
     # one. The same reasoning that put the id list on the server.
-    return [{"id": p.id, "label": p.label, "has_model": p.id in MODEL_PROVIDERS}
+    return [{"id": p.id, "label": p.label, "has_model": p.id in MODEL_PROVIDERS,
+             "key_format": p.key_format}
             for p in PROVIDERS.values()]
 
 
