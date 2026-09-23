@@ -8,13 +8,14 @@ sequence advances on schedule (like an email send) — logging the outcome never
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from nexus.calling.provider import (
     CallHandle,
     CallProviderError,
+    TelephonyError,
     TelephonyNotConfigured,
-    get_call_provider,
 )
 from nexus.core.db import utcnow
 from nexus.core.tenancy import TenantSession
@@ -27,6 +28,8 @@ from nexus.models.calling import (
     CallTask,
 )
 
+logger = logging.getLogger("nexus.calling.service")
+
 
 def _written_today(stamp: str | None, now: datetime) -> bool:
     """Whether an ISO timestamp falls on today's UTC date. Unparseable or missing means no."""
@@ -37,6 +40,38 @@ def _written_today(stamp: str | None, now: datetime) -> bool:
     except (TypeError, ValueError):
         return False
 
+
+#: Priced at 4 credits a minute in `billing/rates.py` and, until 2026-09-23, charged by nothing.
+MINUTES_CAPABILITY = "calling.minutes"
+
+
+async def _charge_minutes(ts, provider_call_id: str, seconds, *, user_id: str | None) -> None:
+    """Charge a platform-account call its started minutes, ONCE per call. Never raises.
+
+    Keyed on the provider's call id, so logging a second outcome for the same call (a callback
+    after a no-answer) cannot charge it twice. After the fact, like `routers/accounts._meter`: the
+    call already happened, so a refusal here decides nothing — the preflight before the dial is
+    what enforces. A call Twilio measured at 0 seconds was never answered and costs nothing.
+    """
+    import math
+
+    try:
+        seconds = int(seconds or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    if seconds <= 0:
+        return
+    from nexus.billing.meter import metered
+
+    try:
+        async with metered(
+            ts, MINUTES_CAPABILITY, quantity=math.ceil(seconds / 60), user_id=user_id,
+            source="calling", idempotency_key=f"call:{provider_call_id}",
+            attrs={"provider_call_id": provider_call_id, "seconds": seconds},
+        ):
+            pass
+    except Exception:
+        logger.warning("could not charge minutes for call %s", provider_call_id, exc_info=True)
 
 class CallQueueService:
     async def enqueue(
@@ -246,7 +281,6 @@ class CallQueueService:
         own phone) and bridges to the contact. Raises rather than degrading, so a failed dial is
         never reported as a placed call.
         """
-        from nexus.core.config import get_settings
         from nexus.models.account import Contact
 
         task = await ts.get(CallTask, task_id)
@@ -257,13 +291,26 @@ class CallQueueService:
         if not phone:
             raise CallProviderError("This contact has no phone number to dial.")
 
-        provider = get_call_provider()
-        from_number = (get_settings().telephony_from_number or "").strip()
+        # The workspace's own Twilio when connected, else the platform's (calling/connection.py).
+        from nexus.calling import connection
+
+        resolved = await connection.resolve_call_provider(ts)
+        provider, from_number = resolved.provider, resolved.from_number
         if provider.name != "stub" and not from_number:
             raise TelephonyNotConfigured(
-                "NEXUS_TELEPHONY_FROM_NUMBER is not set. A live call needs a caller ID "
-                "you own on the provider."
+                "Your workspace's Twilio connection has no caller ID. Add one under Integrations."
+                if resolved.source == "workspace" else
+                "No caller ID is set for calls. A superadmin sets it under Runtime settings "
+                "(Calling caller ID), or NEXUS_TELEPHONY_FROM_NUMBER in the environment."
             )
+        if resolved.source == "platform" and provider.name != "stub":
+            # Minutes on OUR account cost credits. Asked BEFORE dialling: once the rep's phone
+            # rings the minutes are spent, and a refusal then would only decide who pays for them.
+            # One minute is the least any answered call costs; the measured total is charged at
+            # disposition. A workspace on its own Twilio pays Twilio, so it is never asked.
+            from nexus.billing.entitlements import preflight
+
+            (await preflight(ts, MINUTES_CAPABILITY, quantity=1)).raise_if_blocked()
         return await provider.place_call(
             to=phone,
             from_=from_number,
@@ -285,6 +332,7 @@ class CallQueueService:
         duration_s: int | None = None,
         next_step: str | None = None,
         provider_call_id: str | None = None,
+        user_id: str | None = None,
     ) -> CallActivity | None:
         """Log a call outcome. Terminal dispositions close the task; re-queue dispositions
         (no_answer/callback/gatekeeper) keep it open so the SDR can try again.
@@ -300,14 +348,32 @@ class CallQueueService:
 
         recording_url = transcript = None
         if provider_call_id:
-            provider = get_call_provider()
-            status = await provider.get_call_status(provider_call_id)
-            # The provider's duration is measured, not remembered — but an explicitly entered
-            # value is the rep's deliberate correction, so it wins.
-            if duration_s is None and status:
-                duration_s = status.get("duration_s")
-            recording_url = await provider.get_recording(provider_call_id)
-            transcript = await provider.get_transcript(provider_call_id)
+            from nexus.calling import connection
+
+            try:
+                resolved = await connection.resolve_call_provider(ts)
+            except TelephonyError as exc:
+                # Logging what happened on a call must never be blocked by the connection that
+                # placed it having changed since. Nothing is fetched and nothing is charged.
+                logger.warning("disposition for %s without provider lookup: %s", task_id, exc)
+                resolved = None
+            if resolved is not None:
+                provider = resolved.provider
+                status = await provider.get_call_status(provider_call_id)
+                measured = status.get("duration_s") if status else None
+                # The provider's duration is measured, not remembered — but an explicitly entered
+                # value is the rep's deliberate correction, so it wins on the activity.
+                if duration_s is None:
+                    duration_s = measured
+                recording_url = await provider.get_recording(provider_call_id)
+                transcript = await provider.get_transcript(provider_call_id)
+                if resolved.source == "platform":
+                    # BILLED on the measured duration, not the typed one: the rep's number is a
+                    # note, Twilio's is what we pay for. Typed only when Twilio could not say.
+                    await _charge_minutes(
+                        ts, provider_call_id, measured if measured is not None else duration_s,
+                        user_id=user_id,
+                    )
 
         activity = CallActivity(
             tenant_id=ts.tenant_id,

@@ -65,7 +65,7 @@ def test_every_catalogued_provider_names_a_real_env_fallback():
     from nexus.providers.catalog import PROVIDERS
 
     settings = get_settings()
-    assert len(PROVIDERS) == 15
+    assert len(PROVIDERS) == 16
     for spec in PROVIDERS.values():
         assert hasattr(settings, spec.env_attr), f"{spec.id}: no Settings.{spec.env_attr}"
 
@@ -75,7 +75,7 @@ def test_the_catalog_covers_exactly_the_pooled_providers():
 
     assert set(PROVIDERS) == {
         "groq", "anthropic", "openai_compat", "exa",
-        "firecrawl", "brave", "serper", "apify", "github",
+        "firecrawl", "brave", "serper", "apify", "github", "twilio",
         # Engagement engine (spec §12, §18): two OAuth client secrets, three ledger store
         # connection strings and the pseudonymisation secret.
         "google_oauth", "microsoft_oauth", "ledger_archive", "ledger_training",

@@ -51,6 +51,24 @@ logger = logging.getLogger("nexus.calling.twilio")
 _E164 = re.compile(r"^\+[1-9]\d{7,14}$")
 # Everything a human might type around the digits of a phone number.
 _PUNCT = re.compile(r"[\s().\-/]")
+# An Account SID: "AC" and 32 hex digits. Checked before any request, so a pasted auth token in the
+# SID field fails with our sentence rather than a Twilio 20003 that reads like a bad password.
+ACCOUNT_SID = re.compile(r"^AC[0-9a-fA-F]{32}$")
+
+
+def parse_credential(value: str | None) -> tuple[str, str]:
+    """``(account_sid, auth_token)`` from the one-line ``ACCOUNT_SID:AUTH_TOKEN`` form.
+
+    That is how a platform account is entered as a Provider key: Twilio authenticates with the pair
+    together (HTTP Basic, SID as the user), so storing them apart would let one be rotated without
+    the other. Raises ``ValueError`` with the expected form on anything else.
+    """
+    sid, sep, token = (value or "").strip().partition(":")
+    if not sep or not ACCOUNT_SID.match(sid.strip()) or not token.strip():
+        raise ValueError(
+            "Twilio keys are entered as ACCOUNT_SID:AUTH_TOKEN, e.g. AC0123...:your-auth-token"
+        )
+    return sid.strip(), token.strip()
 
 
 class TwilioSettings(BaseSettings):
@@ -127,6 +145,10 @@ class TwilioCallProvider(CallProvider):
 
     def __repr__(self) -> str:  # pragma: no cover - trivial, but keeps the token out of logs
         return f"TwilioCallProvider(account_sid={self.account_sid!r})"
+
+    async def check_account(self, *, caller_id: str | None = None) -> tuple[bool, str]:
+        """See :func:`check_account`. A method so a test can replace it on the class."""
+        return await check_account(self, caller_id=caller_id)
 
     # ------------------------------------------------------------------ HTTP
 
@@ -244,6 +266,51 @@ class TwilioCallProvider(CallProvider):
             if text:
                 return text
         return None
+
+
+async def _owns_caller_id(provider: "TwilioCallProvider", caller_id: str) -> bool:
+    """Does the account own this number, or has it verified it as an outgoing caller ID?
+
+    Either is enough for Twilio to present it. A number that is neither is refused with 21210 on
+    the FIRST live call — after the rep's phone has already rung — so it is checked here instead.
+    """
+    from urllib.parse import quote
+
+    q = f"?PhoneNumber={quote(caller_id)}"
+    owned = await provider._request("GET", provider._url(f"IncomingPhoneNumbers.json{q}"))
+    if owned.get("incoming_phone_numbers"):
+        return True
+    verified = await provider._request("GET", provider._url(f"OutgoingCallerIds.json{q}"))
+    return bool(verified.get("outgoing_caller_ids"))
+
+
+async def check_account(provider: "TwilioCallProvider", *, caller_id: str | None = None):
+    """Read-only proof a Twilio connection will work: ``(ok, sentence)``. Places no call.
+
+    Two questions, because either can be wrong while the other is right: does the SID and token
+    open an ACTIVE account, and does that account own the caller ID the calls will show. Placing a
+    test call would prove more and would ring someone and cost money, so this stops at reading.
+    """
+    try:
+        account = await provider._request("GET", f"{provider.api_base}/Accounts/{provider.account_sid}.json")
+    except CallProviderError as exc:
+        return False, str(exc)
+    name = str(account.get("friendly_name") or provider.account_sid)
+    status = str(account.get("status") or "").lower()
+    if status and status != "active":
+        return False, f"Twilio account '{name}' is {status}, so it cannot place calls."
+    if not caller_id:
+        return True, f"Twilio account '{name}' is active. Add a caller ID before calling."
+    try:
+        owned = await _owns_caller_id(provider, caller_id)
+    except CallProviderError as exc:
+        return False, f"Twilio account '{name}' is active, but its numbers could not be read: {exc}"
+    if not owned:
+        return False, (
+            f"Twilio account '{name}' does not own {caller_id} and has not verified it as a caller "
+            "ID. Buy the number in Twilio or verify it under Phone Numbers > Verified Caller IDs."
+        )
+    return True, f"Twilio account '{name}' is active and can call from {caller_id}."
 
 
 def _describe_error(resp: httpx.Response) -> str:

@@ -174,6 +174,19 @@ _EXTERNAL_READERS = {"admin_ip_allowlist": _get_allowlist}
 # or silently ignored (by a reader that falls back to a default), leaving a stored override the
 # panel reports as active and nothing applies. Every free-text setting needs one;
 # `test_a_free_text_setting_is_validated_before_it_is_stored` enforces it.
+def _validate_caller_id(value) -> None:
+    """E.164 or empty. A number Twilio cannot parse fails the dial with an opaque 21211."""
+    from nexus.calling.provider import InvalidPhoneNumber
+    from nexus.calling.twilio import normalize_e164
+
+    if not str(value or "").strip():
+        return
+    try:
+        normalize_e164(str(value), field="the caller ID")
+    except InvalidPhoneNumber as exc:
+        raise ValueError(str(exc)) from None
+
+
 def _validate_signal_window(value) -> None:
     """Only the windows the top bar can show. The panel offers these, but the API accepts any
     string, and a stored "15" would be a window no screen can display or explain."""
@@ -184,6 +197,7 @@ def _validate_signal_window(value) -> None:
 
 
 _VALIDATORS = {
+    "telephony_from_number": _validate_caller_id,
     "signal_window_default": _validate_signal_window,
     "admin_ip_allowlist": _validate_allowlist,
     "email_verify_url": _validate_verify_url,
@@ -236,11 +250,20 @@ def _reset_providers() -> None:
 #: "in effect" while nothing changes until a restart — the trap this catalog exists to prevent.
 #: `signal_search_provider` is absent on purpose: the dork source re-reads it on every crawl.
 #: The verifier URL and timeout are here because `ReacherEmailVerifier` copies both at construction.
+def _reset_call_provider() -> None:
+    """`get_call_provider` memoizes what it built from the environment, so a switch flipped here
+    would otherwise read "Click-to-dial" in the panel while a live Twilio kept dialling."""
+    from nexus.calling.provider import reset_env_provider
+
+    reset_env_provider()
+
+
 _ON_CHANGE = {
     key: _reset_providers
     for key in ("llm_provider", "contact_search_sources", "research_provider",
                 "email_verify_provider", "email_verify_url", "email_verify_timeout_s")
 }
+_ON_CHANGE["telephony_provider"] = _reset_call_provider
 
 
 def _apply_value(settings, key: str, typed) -> None:

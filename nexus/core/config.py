@@ -470,6 +470,16 @@ class Settings(BaseSettings):
     calling_enabled: bool = True
     telephony_provider: str = "stub"        # stub | twilio | ...  (tier 2)
     telephony_from_number: str = ""         # caller ID used when a real provider is enabled
+
+    @property
+    def twilio_credential(self) -> str:
+        """NEXUS_TWILIO_ACCOUNT_SID and _AUTH_TOKEN as one ``SID:TOKEN`` value — the env floor under
+        the `twilio` Provider key, in the same one-line form an operator types there."""
+        from nexus.calling.twilio import TwilioSettings
+
+        s = TwilioSettings()
+        sid, token = s.twilio_account_sid.strip(), s.twilio_auth_token.strip()
+        return f"{sid}:{token}" if sid and token else ""
     call_queue_default_limit: int = 50      # default page size for the call queue
 
     # CRM Auto-Sync (sub-project E): continuously push account state to the configured CRM.

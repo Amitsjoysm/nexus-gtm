@@ -468,6 +468,27 @@ _SPECS: tuple[SettingSpec, ...] = (
 
     # ---- outreach and CRM -----------------------------------------------------------------------
     SettingSpec(
+        key="telephony_provider", label="Calling (platform account)", group=OUTREACH, kind="str",
+        effect="Twilio: workspaces that have not connected their own Twilio place live calls on the "
+               "platform account, and those minutes cost credits. Click-to-dial: they dial from "
+               "their own phone and nothing is charged.",
+        warning="Needs the 'twilio' Provider key (ACCOUNT_SID:AUTH_TOKEN) and a caller ID below. "
+                "A workspace that connected its own Twilio under Integrations is unaffected either "
+                "way.",
+        risk="medium",
+        options=("stub", "twilio"),
+        option_labels=(("stub", "Click-to-dial"), ("twilio", "Twilio")),
+    ),
+    SettingSpec(
+        key="telephony_from_number", label="Calling caller ID (platform account)", group=OUTREACH,
+        kind="str",
+        effect="The number prospects see when a workspace calls on the platform account.",
+        warning="It must be a number the Twilio account owns or has verified, or every live call "
+                "fails after the rep's phone has already rung. Test the Twilio key to check.",
+        risk="medium",
+        placeholder="+15551234567",
+    ),
+    SettingSpec(
         key="crm_sync_enabled", label="Push to CRM", group=OUTREACH, kind="bool",
         effect="Pushes changed accounts out to each workspace's connected CRM.",
         warning="Writes into the customer's own CRM. Change-aware, so only stale or modified "

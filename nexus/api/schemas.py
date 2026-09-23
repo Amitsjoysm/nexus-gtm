@@ -393,6 +393,9 @@ class TelephonyStatusOut(BaseModel):
     configured: bool = False
     record_calls: bool = False
     detail: str | None = None       # why a selected provider is unusable, for ops
+    # Whose Twilio places the call: "workspace" (its own, no credits), "platform" (ours, charged
+    # in credits) or "none" (click-to-dial). Declared, or pydantic drops it.
+    source: str = "none"
 
 
 class DialIn(BaseModel):
@@ -948,6 +951,31 @@ class SEPConnectionOut(BaseModel):
     provider: str
     source: str                       # tenant | default
     has_credentials: bool = False
+    status: str = "none"              # none | unverified | connected | error
+    verified_at: str | None = None
+    last_error: str | None = None
+    updated_at: str | None = None
+
+
+# ---- integrations: a workspace's own Twilio ----
+class TelephonyConnectionIn(BaseModel):
+    """A workspace's own Twilio. ``auth_token`` is write-only: omit or blank to keep the stored one."""
+
+    account_sid: str = Field(max_length=64)
+    auth_token: str | None = Field(default=None, max_length=128)
+    from_number: str = Field(max_length=32)
+
+
+class TelephonyConnectionOut(BaseModel):
+    """Everything the server says about a telephony connection. The SID and token are not on it:
+    ``account_hint`` is the SID's last four, enough to tell which account is connected."""
+
+    provider: str = "stub"
+    # workspace: its own Twilio, no credits. platform: ours, calls cost credits. none: click-to-dial.
+    source: str = "none"
+    has_credentials: bool = False
+    account_hint: str = ""
+    from_number: str = ""
     status: str = "none"              # none | unverified | connected | error
     verified_at: str | None = None
     last_error: str | None = None

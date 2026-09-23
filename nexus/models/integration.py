@@ -33,7 +33,7 @@ from nexus.core.tenancy import TenantScoped
 # EVERY tenant's account names and buying signals into that one workspace — the same cross-tenant
 # leak the CRM row was created to close. A fourth table would have duplicated the write-only
 # secret, the status ladder and the env-fallback resolution for the third time.
-CONNECTION_KINDS = ("crm", "sep", "slack", "teams", "telegram", "email")
+CONNECTION_KINDS = ("crm", "sep", "slack", "teams", "telegram", "email", "telephony")
 
 #: The subset that delivers alerts. `in_app` and `webhook` are deliberately absent: in-app needs no
 #: credential, and the generic webhook stays a deployment-level integration rather than something a
@@ -58,3 +58,6 @@ class IntegrationConnection(IdMixin, TimestampMixin, TenantScoped, Base):
     verified_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     updated_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Values that are NOT secret and that the screen must show, e.g. a Twilio caller ID. Kept out
+    # of `secret` so the response builder never has to unseal anything (migration 0058).
+    config: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)

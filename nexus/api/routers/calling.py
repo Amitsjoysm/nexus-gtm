@@ -26,7 +26,6 @@ from nexus.calling.provider import (
     TelephonyError,
     TelephonyNotConfigured,
     TelephonyNotImplemented,
-    get_call_provider,
 )
 from nexus.calling.service import get_call_queue_service
 from nexus.core.config import get_settings
@@ -157,6 +156,7 @@ async def call_brief(
 
 @router.get("/telephony", response_model=TelephonyStatusOut)
 async def telephony_status(
+    ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> TelephonyStatusOut:
     """Can this deployment place live calls? Drives which control the call console shows.
@@ -165,21 +165,27 @@ async def telephony_status(
     provider is reported here rather than raised, so the console can fall back to click-to-dial
     and tell the admin what to fix.
     """
+    from nexus.calling import connection
+
     settings = get_settings()
     name = (settings.telephony_provider or "stub").strip().lower()
-    from_number = (settings.telephony_from_number or "").strip()
     try:
-        provider = get_call_provider()
+        resolved = await connection.resolve_call_provider(ts)
     except TelephonyError as exc:
         return TelephonyStatusOut(
-            provider=name, mode="manual", from_number=from_number,
-            configured=False, detail=str(exc),
+            provider=name, mode="manual", from_number="", configured=False, detail=str(exc),
         )
 
+    provider, from_number = resolved.provider, resolved.from_number
     live = provider.name != "stub"
     detail = None
     if live and not from_number:
-        detail = "NEXUS_TELEPHONY_FROM_NUMBER is not set — set a caller ID you own."
+        detail = (
+            "Your Twilio connection has no caller ID. Add one under Integrations."
+            if resolved.source == "workspace"
+            else "No caller ID is set for calls. A superadmin sets it under Runtime settings, "
+            "or NEXUS_TELEPHONY_FROM_NUMBER in the environment."
+        )
     return TelephonyStatusOut(
         provider=provider.name,
         mode="live" if live and not detail else "manual",
@@ -187,6 +193,7 @@ async def telephony_status(
         configured=live and not detail,
         record_calls=bool(getattr(provider, "record_calls", False)),
         detail=detail,
+        source=resolved.source,
     )
 
 
@@ -225,14 +232,14 @@ async def log_disposition(
     task_id: str,
     body: DispositionIn,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> CallActivityOut:
     if body.disposition not in ALL_DISPOSITIONS:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown disposition '{body.disposition}'")
     activity = await get_call_queue_service().log_disposition(
         ts, task_id, disposition=body.disposition, notes=body.notes,
         duration_s=body.duration_s, next_step=body.next_step,
-        provider_call_id=body.provider_call_id,
+        provider_call_id=body.provider_call_id, user_id=principal.user_id,
     )
     if activity is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Call task not found")

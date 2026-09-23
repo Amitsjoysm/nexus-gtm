@@ -35,6 +35,8 @@ from nexus.api.schemas import (
     SEPConnectionOut,
     SEPPushRequest,
     SEPPushResponse,
+    TelephonyConnectionIn,
+    TelephonyConnectionOut,
 )
 from nexus.core.audit import record_audit
 from nexus.core.config import get_settings
@@ -554,6 +556,142 @@ async def test_sep_connection(
         meta={"provider": connector.platform, "ok": result.ok, "detail": result.detail},
     )
     return CRMConnectionTestOut(ok=result.ok, label=result.label, detail=result.detail)
+
+
+# ---- telephony: a workspace's own Twilio ----------------------------------------------
+# Decided with the product owner 2026-09-23: "both, like CRM". A workspace that connects its own
+# Twilio calls on its own account and caller ID and pays Twilio directly; one that does not uses the
+# platform's, and those minutes cost credits (nexus/calling/connection.py). manage_workspace, like
+# every other integration: the account decides whose number every rep's calls show and who pays.
+
+
+async def _telephony_out(ts: TenantSession) -> TelephonyConnectionOut:
+    from nexus.calling import connection
+    from nexus.calling.provider import TelephonyError
+
+    row = await connection.get_connection(ts)
+    if row is not None:
+        readable = connections.has_credentials(row, fields=("account_sid",))
+        return TelephonyConnectionOut(
+            provider="twilio",
+            source="workspace",
+            has_credentials=readable,
+            account_hint=connection.account_hint(row),
+            from_number=connection.caller_id_of(row),
+            status=row.status if readable else "error",
+            verified_at=row.verified_at.isoformat() if (readable and row.verified_at) else None,
+            last_error=(
+                row.last_error if readable
+                else "The stored Twilio connection could not be read. Reconnect it."
+            ),
+            updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        )
+    try:
+        resolved = await connection.resolve_call_provider(ts)
+    except TelephonyError:
+        return TelephonyConnectionOut()
+    return TelephonyConnectionOut(
+        provider=resolved.provider.name, source=resolved.source, from_number=resolved.from_number,
+    )
+
+
+@router.get("/telephony/connection", response_model=TelephonyConnectionOut)
+async def get_telephony_connection(
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_workspace)),
+) -> TelephonyConnectionOut:
+    """Which Twilio this workspace's calls use. Never includes the SID or the token."""
+    return await _telephony_out(ts)
+
+
+@router.put("/telephony/connection", response_model=TelephonyConnectionOut)
+async def set_telephony_connection(
+    body: TelephonyConnectionIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> TelephonyConnectionOut:
+    """Connect (or update) this workspace's own Twilio. Saved as unverified until tested."""
+    from nexus.calling import connection
+    from nexus.calling.provider import InvalidPhoneNumber
+    from nexus.calling.twilio import ACCOUNT_SID, normalize_e164
+
+    sid = (body.account_sid or "").strip()
+    if not ACCOUNT_SID.match(sid):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "The account SID starts with AC followed by 32 letters and digits. Copy it from the "
+            "Account Info panel on your Twilio Console home page.",
+        )
+    try:
+        from_number = normalize_e164(body.from_number, field="caller ID")
+    except InvalidPhoneNumber:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "The caller ID must be a phone number in international format, like +15551234567.",
+        ) from None
+    token = (body.auth_token or "").strip()
+    if not token and not connections.has_credentials(
+        await connection.get_connection(ts), fields=("auth_token",)
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "The auth token is required to connect Twilio."
+        )
+
+    row = await connection.store(
+        ts, account_sid=sid, auth_token=token, from_number=from_number,
+        actor_user_id=principal.user_id,
+    )
+    await record_audit(
+        ts, "telephony.connection.set", actor_user_id=principal.user_id,
+        target_type="telephony_connection", target_id=row.id,
+        meta={"provider": "twilio", "token_set": bool(token), "from_number": from_number},
+    )
+    return await _telephony_out(ts)
+
+
+@router.post("/telephony/connection/test", response_model=CRMConnectionTestOut)
+async def test_telephony_connection(
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> CRMConnectionTestOut:
+    """Prove the connection without placing a call: the account is active and owns the caller ID."""
+    from nexus.calling import connection
+    from nexus.calling.provider import TelephonyError
+
+    row = await connection.get_connection(ts)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This workspace has not connected Twilio.")
+    try:
+        ok, detail = await connection.build_workspace_provider(row).check_account(
+            caller_id=connection.caller_id_of(row) or None
+        )
+    except TelephonyError as exc:
+        ok, detail = False, str(exc)
+    if ok:
+        row.status, row.verified_at, row.last_error = "connected", utcnow(), None
+    else:
+        row.status, row.last_error = "error", detail[:500]
+    await ts.flush()
+    await record_audit(
+        ts, "telephony.connection.test", actor_user_id=principal.user_id,
+        target_type="telephony_connection", target_id=row.id, meta={"ok": ok, "detail": detail},
+    )
+    return CRMConnectionTestOut(ok=ok, label="Twilio", detail=detail)
+
+
+@router.delete("/telephony/connection", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_telephony_connection(
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> Response:
+    """Disconnect: this workspace's calls use the platform account again, and cost credits."""
+    removed = await connections.clear_credentials(ts, "telephony")
+    if removed:
+        await record_audit(
+            ts, "telephony.connection.clear", actor_user_id=principal.user_id,
+            target_type="telephony_connection", target_id="", meta={},
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---- OAuth (CRM + SEP) ---------------------------------------------------------------

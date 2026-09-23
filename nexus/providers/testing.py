@@ -125,6 +125,16 @@ async def probe(provider: str, key: str, *, transport=None) -> TestResult:
             resp = await _call("GET", "https://api.apify.com/v2/users/me",
                                headers={"Authorization": f"Bearer {key}"},
                                transport=transport)
+        elif provider == "twilio":
+            from nexus.calling.twilio import parse_credential
+
+            try:
+                sid, token = parse_credential(key)
+            except ValueError as exc:
+                return TestResult(False, "failed", str(exc))
+            # Reading the account is free and proves the pair authenticates.
+            resp = await _call("GET", f"https://api.twilio.com/2010-04-01/Accounts/{sid}.json",
+                               headers=_basic(sid, token), transport=transport)
         else:  # github
             resp = await _call("GET", "https://api.github.com/rate_limit",
                                headers={"Authorization": f"Bearer {key}"}, transport=transport)
@@ -134,6 +144,12 @@ async def probe(provider: str, key: str, *, transport=None) -> TestResult:
     if resp.status_code == 200:
         return TestResult(True, "probe_ok", "authenticated", 200)
     return TestResult(False, "failed", _detail(resp), resp.status_code)
+
+
+def _basic(user: str, password: str) -> dict:
+    import base64
+
+    return {"Authorization": "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()}
 
 
 async def verify(provider: str, key: str, *, transport=None) -> TestResult:
@@ -173,6 +189,20 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
                            "messages": [{"role": "user", "content": "Reply with OK"}]},
                 transport=transport,
             )
+        elif provider == "twilio":
+            # The deepest check that neither rings anyone nor costs money: the account is active
+            # AND owns the platform caller ID. An unowned caller ID fails the first live call with
+            # 21210 after the rep's phone has already rung.
+            from nexus.calling.twilio import TwilioCallProvider, parse_credential
+
+            try:
+                sid, token = parse_credential(key)
+            except ValueError as exc:
+                return TestResult(False, "failed", str(exc))
+            ok, detail = await TwilioCallProvider(
+                account_sid=sid, auth_token=token, transport=transport,
+            ).check_account(caller_id=(s.telephony_from_number or "").strip() or None)
+            return TestResult(ok, "verified" if ok else "failed", detail, 200 if ok else None)
         elif provider == "apify":
             # Listing actors exercises the token against a real, authorised resource without
             # starting a billed actor run.

@@ -129,7 +129,7 @@ async def test_the_supported_provider_list_is_offered(client, monkeypatch):
     r = await client.get("/api/admin/provider-keys/providers", headers=auth(token))
     assert r.status_code == 200, r.text
     ids = {p["id"] for p in r.json()}
-    assert "groq" in ids and "exa" in ids and len(ids) == 15
+    assert "groq" in ids and "exa" in ids and "twilio" in ids and len(ids) == 16
 
 
 # ---- the model, and the live catalogue -----------------------------------------------------------

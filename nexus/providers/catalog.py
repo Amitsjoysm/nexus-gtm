@@ -65,6 +65,10 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "ledger_pseudonym": ProviderSpec(
         "ledger_pseudonym", "Ledger pseudonymisation secret", "ledger_pseudonym_secret",
     ),
+    # The PLATFORM account every workspace without its own Twilio calls on. Entered as
+    # ACCOUNT_SID:AUTH_TOKEN: Twilio authenticates with the pair, so they are stored together.
+    # A workspace's own Twilio is per-tenant and lives under Integrations, not here.
+    "twilio": ProviderSpec("twilio", "Twilio (calling, platform account)", "twilio_credential"),
 }
 
 # The providers that HAVE a model to choose. One definition, read by `testing.list_models`, by the

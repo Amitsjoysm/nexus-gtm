@@ -136,8 +136,18 @@ def build_call_provider(name: str) -> CallProvider:
 _provider: CallProvider | None = None
 
 
+# Two globals, not one, for the reason `ingestion/crm.py` gives: `_provider` memoizes the
+# env-built instance and `_override` records a deliberate `set_call_provider()`. As one variable,
+# "is an override installed?" was unanswerable after the first lookup, so a workspace's own Twilio
+# could never be told apart from a test double.
+_override: CallProvider | None = None
+
+
 def get_call_provider() -> CallProvider:
+    """The deployment's provider from the environment, or an installed override."""
     global _provider
+    if _override is not None:
+        return _override
     if _provider is None:
         from nexus.core.config import get_settings
 
@@ -145,7 +155,19 @@ def get_call_provider() -> CallProvider:
     return _provider
 
 
-def set_call_provider(provider: CallProvider | None) -> None:
-    """Test/runtime override. ``None`` clears it, so the next lookup rebuilds from settings."""
+def get_override() -> CallProvider | None:
+    return _override
+
+
+def reset_env_provider() -> None:
+    """Forget the env-built provider so the next lookup reads `telephony_provider` again."""
     global _provider
-    _provider = provider
+    _provider = None
+
+
+def set_call_provider(provider: CallProvider | None) -> None:
+    """Test/runtime override. ``None`` clears it, and the env-built instance is rebuilt too, so a
+    changed setting is read on the next lookup."""
+    global _override, _provider
+    _override = provider
+    _provider = None
