@@ -1221,13 +1221,24 @@ not always the same**, and everything downstream keyed on `account.domain`. Gues
 `first.last@` on the wrong domain produces an address that is well-formed, plausible, and dead.
 
 An evidence ladder, best evidence first, cached on `account.custom_fields["mail_domain"]` for 30
-days:
+days. **Every rung except the first must also have MX**, which is what stops a parked or redirect-only
+domain being adopted:
 
-1. **A real address published on the company's own site** (homepage, then `/contact`). The strongest
-   evidence there is — the company is telling you where to write. Its local part also seeds
-   `format_index`, so `hello@`-style mailboxes are ignored while `jane.doe@` teaches the format.
-2. **MX records** on the website domain. Proves the domain accepts mail at all.
-3. **The website domain**, recorded as such, so a later step knows the answer was never confirmed.
+1. **`verified_contacts`** — the domain of a colleague's address that a verifier already called
+   valid. Mail demonstrably arrives there, which is why it is the one rung exempt from the MX check:
+   it has already been proven by something stronger than a DNS record.
+2. **`website_emails`** — a real address published on the company's own site (homepage, then
+   `/contact`). The company is telling you where to write. Role mailboxes are filtered, and a
+   name-shaped local part also seeds `format_index`.
+3. **`website_redirect`** — where the website actually landed, when it differs from the stored
+   domain. A rebrand moves mail before anyone updates the CRM.
+4. **`website_domain`** — the stored domain, recorded *as such*, so a later step can tell that the
+   answer was assumed rather than confirmed. That distinction is what `force=` reads.
+
+`infer_format_index` votes across colleagues whose verified address matches one of their own name
+patterns — two people at `jdoe@` and `jsmith@` say the format is first-initial+last. It matters most
+on a catch-all domain, where the address that comes back cannot be proven and had better be the
+company's real format rather than a default `first.last`.
 
 `resolve_mail_domain(..., force=True)` re-runs when a contact already has rejected addresses AND the
 cached answer is only website-derived — which is exactly the "we suspect the domain is wrong, go and
