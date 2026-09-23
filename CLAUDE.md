@@ -1174,9 +1174,83 @@ It re-checks the saved address with a fresh verifier (never the registry cache).
 catch-all keeps the address and charges one `verify.email`. Invalid, unknown or no address runs the
 pattern search (first.last, first, ... stopping at the first valid) and charges one `enrich.contact`
 INSTEAD. The verdict is written only inside the meter, so a 402 changes nothing on the contact; an
-invalid address has its confidence reset first, because the waterfall only replaces an address with
-an equally or more confident one. Enrich keeps its 30-day cool-down for a valid address; Re-verify
-has none, since it is the explicit "check again". `tests/test_reverify_one_contact.py` pins it.
+invalid address is REMOVED rather than relabelled (see the save policy below), which also clears the
+confidence the waterfall would otherwise compare against. Enrich keeps its 30-day cool-down for a
+valid address; Re-verify has none, since it is the explicit "check again".
+`tests/test_reverify_one_contact.py` pins it.
+
+## What may be saved as someone's email address (`nexus/enrichment/policy.py`)
+
+Customers reported bulk bounces. The finder was doing what it was built to do and the **save** was
+wrong: an address that had verified **invalid** was kept and merely labelled, a pattern guess nothing
+had checked was kept at 0.55, and both then appeared on the contact as that person's email — which
+is what a rep sends to and what a campaign bulk-sends to.
+
+`keep_address(status, check)` is the single rule, and nothing else decides:
+
+| Verdict | Kept? |
+|---|---|
+| `valid` | yes |
+| `catch_all` | yes — the domain accepts everything, so nobody can prove it wrong |
+| `risky` | only when a **mailbox** verifier said so |
+| `unknown` | no |
+| `invalid` | **never**, under any configuration |
+
+Decided with the product owner 2026-09-22: **whether to send to catch-all and risky is the
+customer's call, not ours** — the campaign gate already holds `risky` unless the campaign opts in —
+but an address proven dead is not a judgement call and is not kept at all.
+
+- **`risky` turns on WHO said it.** Reacher grading one mailbox risky is evidence about that
+  mailbox; the DNS fallback grades *every* address on an MX domain risky 0.5, which is evidence
+  about the domain and says nothing about the person. `check_level` reads the verdict's `source`
+  (`reacher+...` → mailbox, `dns` → domain), so the same word is trusted in one case and not the
+  other.
+- **The whole policy is scoped by `verification_configured()`.** With no verifier — the stub, dev,
+  the offline suite — nothing is checkable, so the pre-existing behaviour stands. Without that
+  scope an unverified deployment would save *nothing* and the finder would look broken. This is
+  what keeps a green suite meaningful rather than merely green.
+- **A refused address is remembered** (`rejected_emails` on `custom_fields`, newest first, capped at
+  `MAX_REJECTED`). The finder is deterministic, so without this it re-derives the same dead address
+  on the next crawl and the customer watches it come back. Only *disproved* addresses go in — an
+  unverified guess is forgotten, not blacklisted, because nothing proved it wrong.
+
+## The domain a company receives mail on (`nexus/enrichment/mail_domain.py`)
+
+The root cause under most of the invalid addresses: **the website domain and the mail domain are
+not always the same**, and everything downstream keyed on `account.domain`. Guessing
+`first.last@` on the wrong domain produces an address that is well-formed, plausible, and dead.
+
+An evidence ladder, best evidence first, cached on `account.custom_fields["mail_domain"]` for 30
+days:
+
+1. **A real address published on the company's own site** (homepage, then `/contact`). The strongest
+   evidence there is — the company is telling you where to write. Its local part also seeds
+   `format_index`, so `hello@`-style mailboxes are ignored while `jane.doe@` teaches the format.
+2. **MX records** on the website domain. Proves the domain accepts mail at all.
+3. **The website domain**, recorded as such, so a later step knows the answer was never confirmed.
+
+`resolve_mail_domain(..., force=True)` re-runs when a contact already has rejected addresses AND the
+cached answer is only website-derived — which is exactly the "we suspect the domain is wrong, go and
+find the right one" case, and the reason the cache is not simply trusted. Fetching is SSRF-guarded
+and total: unreachable, slow or empty returns *no answer*, never an exception.
+
+`ordered_candidates` / `name_patterns` (`providers.py`) are shared by the pattern finder and the
+site scraper, so "which addresses are worth checking for this person" has one definition. A
+published address that matches the person's name is tried first, then the company's observed format,
+then the ten corporate patterns.
+
+**A scraped address must be about the person asked for.** `SearchEnrichmentProvider` now requires
+the host to be the mail domain AND the local part to match one of that person's name patterns. It
+used to accept any address on the page at 0.55, which attached `info@`, `careers@` and — worse — a
+colleague's address to whoever was being enriched. Same class of mistake as the six
+wrong-*company* bugs, aimed at a person.
+
+**Resolving a company's domain from its name** is `company_domain.py`, used by the similar-person
+add form. `strict=True` requires the host root to equal the normalised name: a near miss leaves the
+field blank rather than filing someone under a company they do not work for. Directory aggregators
+are excluded by the same `_NON_COMPANY_HOSTS` discovery uses.
+
+`scripts/clean_invalid_emails.py` clears what was saved before all of this — dry run by default.
 
 ## Pay-per-result searches ask first (`preflight`)
 

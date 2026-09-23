@@ -6,7 +6,6 @@ All evidence here is injected: the suite never touches DNS or the network.
 from __future__ import annotations
 
 from nexus.enrichment.mail_domain import (
-    CACHE_KEY,
     infer_format_index,
     mail_domain_of,
     resolve_mail_domain,
