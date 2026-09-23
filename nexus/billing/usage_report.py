@@ -151,8 +151,14 @@ async def _build(ts: TenantSession, period_key: str | None) -> dict:
                 by_user[user_id] += amount * (units / total_units)
 
     attributed = sum(by_user.values())
+    people = await _member_names(ts, set(by_user))
     by_user_rows = [
-        {"user_id": uid, "credits": round(amount, 4)}
+        {
+            "user_id": uid,
+            "name": people.get(uid, (FORMER_MEMBER, ""))[0],
+            "email": people.get(uid, (FORMER_MEMBER, ""))[1],
+            "credits": round(amount, 4),
+        }
         for uid, amount in sorted(by_user.items(), key=lambda kv: -kv[1])
         if amount > 0
     ]
@@ -174,6 +180,33 @@ async def _build(ts: TenantSession, period_key: str | None) -> dict:
         "by_user": by_user_rows,
         "unattributed_credits": round(max(0.0, spent - attributed), 4),
     }
+
+
+#: What a row says for spend by someone who is no longer in this workspace. Their spend is real and
+#: stays on the report; their identity is no longer this workspace's to show.
+FORMER_MEMBER = "Former member"
+
+
+async def _member_names(ts: TenantSession, user_ids: set[str]) -> dict[str, tuple[str, str]]:
+    """``{user_id: (name, email)}`` for the people who are members of THIS workspace.
+
+    Resolved through membership, never the global user table alone: a user id from a usage row is
+    only this workspace's to name while that person belongs to it. The screen used to show the raw
+    id, because the server sent no name and the client fell back to the id.
+    """
+    from nexus.models.identity import Membership
+
+    if not user_ids:
+        return {}
+    rows = await ts.list(Membership, Membership.user_id.in_(user_ids))
+    out: dict[str, tuple[str, str]] = {}
+    for m in rows:
+        user = m.user
+        if user is None:
+            continue
+        email = user.email or ""
+        out[m.user_id] = ((user.full_name or "").strip() or email or FORMER_MEMBER, email)
+    return out
 
 
 async def _capability_names(ts: TenantSession, ids: set[str]) -> dict[str, str]:

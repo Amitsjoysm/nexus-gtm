@@ -244,3 +244,79 @@ async def test_a_grant_from_an_earlier_period_is_not_counted_as_this_one(workspa
     assert after == pytest.approx(before), (
         f"a grant from ~70 days ago moved this period's total from {before} to {after}"
     )
+
+
+# ---- who spent it: a person, not an id ---------------------------------------------------------
+#
+# The screen read `email` off each row and fell back to `user_id` — and the server never sent an
+# email, so every customer saw rows like "4a88e2a9a2e8438f96f3295fe51ccebd" under "Who used them".
+
+
+async def _member(tenant_id: str, email: str, full_name: str) -> str:
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.identity import Membership, User
+
+    async with get_sessionmaker()() as s:
+        user = User(email=email, full_name=full_name, password_hash="x")
+        s.add(user)
+        await s.flush()
+        s.add(Membership(tenant_id=tenant_id, user_id=user.id, role="rep"))
+        await s.commit()
+        return user.id
+
+
+async def test_each_row_names_the_person_not_their_id(workspace):
+    alice = await _member(workspace, "alice@report.test", "Alice Adams")
+    await _spend(workspace, "enrich.account", n=2, user_id=alice)
+
+    (row,) = (await _report(workspace))["by_user"]
+
+    assert row["name"] == "Alice Adams"
+    assert row["email"] == "alice@report.test"
+
+
+async def test_someone_who_left_reads_as_a_former_member_not_an_id(workspace):
+    # Their spend is real and stays on the report; their identity is no longer this workspace's.
+    await _spend(workspace, "enrich.account", n=1, user_id="4a88e2a9a2e8438f96f3295fe51ccebd")
+
+    (row,) = (await _report(workspace))["by_user"]
+
+    assert row["name"] == "Former member"
+    assert row["email"] == ""
+
+
+async def test_a_member_of_another_workspace_is_not_named_here(workspace):
+    # Names resolve through THIS workspace's membership, never the global user table alone.
+    from nexus.core.db import get_sessionmaker
+
+    async with get_sessionmaker()() as s:
+        other = Tenant(name="Other", slug="other")
+        s.add(other)
+        await s.commit()
+        other_id = other.id
+    stranger = await _member(other_id, "eve@other.test", "Eve Other")
+    await _spend(workspace, "enrich.account", n=1, user_id=stranger)
+
+    (row,) = (await _report(workspace))["by_user"]
+
+    assert row["name"] == "Former member", "a person from another workspace was named here"
+    assert row["email"] == ""
+
+
+def test_the_response_model_carries_the_name_and_email():
+    # Pydantic drops any key the model does not declare — which is exactly how the email the
+    # screen expected never arrived.
+    from nexus.api.routers.billing import CreditUserRowOut
+
+    assert {"name", "email"} <= set(CreditUserRowOut.model_fields)
+
+
+def test_the_screen_never_displays_the_raw_id():
+    # There is no frontend test runner, so this reads the source, like the other UI tests.
+    import re
+    from pathlib import Path
+
+    src = Path("frontend/src/pages/billing/CreditUsageReport.tsx").read_text(encoding="utf-8")
+    uses = re.findall(r"user\.user_id", src)
+    assert uses == ["user.user_id"], "the raw user id is rendered somewhere other than the list key"
+    assert "key={user.user_id}" in src

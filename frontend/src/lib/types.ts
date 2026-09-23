@@ -1229,6 +1229,8 @@ export interface CreditDay {
 
 export interface CreditUserRow {
   user_id: string;
+  /** "Former member" for someone who has left the workspace. */
+  name: string;
   email: string;
   credits: number;
 }

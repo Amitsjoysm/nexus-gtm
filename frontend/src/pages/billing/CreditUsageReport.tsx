@@ -204,19 +204,23 @@ function ByUser({ data }: { data: Report }) {
     <ul className={styles.rows}>
       {data.by_user.map((user) => {
         const rel = max > 0 ? (user.credits / max) * 100 : 0;
+        // The server names the person through this workspace's membership. Never the raw id: that
+        // is what this row showed when the name was missing, and it means nothing to a customer.
+        const who = user.name || user.email || "Former member";
         return (
           <li key={user.user_id} className={styles.row}>
             <div className={styles.rowHead}>
-              <span className={styles.rowName}>{user.email || user.user_id}</span>
+              <span className={styles.rowName}>{who}</span>
               <span className={styles.rowFigures}>
                 <span className={styles.rowCredits}>{credits(user.credits)}</span>
                 <span className={styles.rowUnit}>credits</span>
               </span>
             </div>
+            {user.email && user.email !== who && <p className={styles.rowMeta}>{user.email}</p>}
             <div
               className={styles.track}
               role="img"
-              aria-label={`${user.email || user.user_id}: ${credits(user.credits)} credits`}
+              aria-label={`${who}: ${credits(user.credits)} credits`}
             >
               <div className={styles.fill} style={{ inlineSize: `${rel}%` }} />
             </div>

@@ -758,6 +758,10 @@ class CreditDayOut(BaseModel):
 
 class CreditUserRowOut(BaseModel):
     user_id: str
+    # Who spent it, resolved through this workspace's membership. "Former member" for someone who
+    # has left — never the raw id, which is what the screen showed when these were missing.
+    name: str = ""
+    email: str = ""
     credits: float
 
 
