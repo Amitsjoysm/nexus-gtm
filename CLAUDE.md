@@ -1256,9 +1256,15 @@ used to accept any address on the page at 0.55, which attached `info@`, `careers
 colleague's address to whoever was being enriched. Same class of mistake as the six
 wrong-*company* bugs, aimed at a person.
 
-**Resolving a company's domain from its name** is `company_domain.py`, used by the similar-person
-add form. `strict=True` requires the host root to equal the normalised name: a near miss leaves the
-field blank rather than filing someone under a company they do not work for. Directory aggregators
+**Resolving a company's domain from its name** is `company_domain.py`, behind
+`GET /accounts/company-domain`, and it only ever **prefills** the similar-person add form for a rep to
+confirm. The server deliberately does **not** fill a blank domain on `from-lookalike` itself. It did
+for one commit, and that broke two things: `find_existing_account` falls back to a name match only
+when there is *no* domain, so a searched domain stopped a bare "globex" from reusing the workspace's
+own domainless "Globex Inc." and created a duplicate; and once the form prefills, a blank arriving at
+the server usually means the rep *cleared* a suggestion they judged wrong, so filling it back files
+the account under a domain a person already refused. A name match cannot say which company was meant
+— measured live, "Globex" resolves to a login page at `globex.international`. Directory aggregators
 are excluded by the same `_NON_COMPANY_HOSTS` discovery uses.
 
 `scripts/clean_invalid_emails.py` clears what was saved before all of this — dry run by default.

@@ -687,15 +687,10 @@ async def add_similar_person(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "Choose an account for this person, or name the company they work at.",
             )
+        # The form looks the domain up and a rep confirms it (`GET /company-domain`). A blank one is
+        # NOT resolved here: it usually means the rep cleared a suggestion they judged wrong, and
+        # filling it back unseen would file the account under a domain a person already refused.
         domain = (body.new_account_domain or "").strip() or None
-        if not domain:
-            # Nobody typed one, so resolve the employer's own site from its name. STRICT: this is
-            # filed without a person confirming it, and an account under the wrong domain collects
-            # another company's signals and guesses email addresses there.
-            from nexus.enrichment.company_domain import resolve_company_domain
-
-            found = await resolve_company_domain(name, strict=True)
-            domain = found.domain if found else None
         account = await find_existing_account(ts, domain=domain, name=name)
         if account is None:
             account = Account(

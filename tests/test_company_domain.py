@@ -2,7 +2,7 @@
 
 A rep had to type the domain by hand, and blank meant no email and no signals for that company.
 A name is not an identity, so the match has to be defensible: the search result travels back with
-the answer, and the server's own unconfirmed fallback only accepts a host that IS the company name.
+the answer so the rep confirming it can see what matched.
 """
 from __future__ import annotations
 
@@ -43,10 +43,10 @@ async def test_a_legal_suffix_does_not_stop_the_match():
     assert found.domain == "acme.io"
 
 
-async def test_strict_refuses_a_near_miss():
-    # The server files a person under this without anyone confirming it, so "close" is not enough.
+async def test_a_near_miss_is_not_offered():
+    # Shares a word with the company and nothing else. Offering it invites a rep to click past it.
     hits = _search(("Acme Plumbing - emergency plumbers", "https://acmeplumbing.com/"))
-    assert await resolve_company_domain("Acme Corp", search=hits, strict=True) is None
+    assert await resolve_company_domain("Acme Corp", search=hits) is None
 
 
 async def test_a_title_match_is_offered_when_a_rep_will_confirm_it():

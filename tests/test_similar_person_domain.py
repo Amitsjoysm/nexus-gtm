@@ -1,8 +1,14 @@
-"""Filing a sourced person under their employer resolves the company's domain automatically.
+"""Filing a sourced person under their employer: the domain is looked up, and a person confirms it.
 
 The add form left the domain blank for a company the workspace does not track, and blank meant no
-email could be found and no signals were ever collected for that account — so the rep typed it by
-hand or got nothing.
+email could be found and no signals were ever collected for that account. The FORM now resolves it
+and prefills it for the rep to confirm (`GET /accounts/company-domain`).
+
+The server deliberately does not fill a blank one itself. With the form prefilling, a blank that
+reaches the server usually means the rep cleared a suggestion they judged wrong, and a name match
+cannot prove which "Globex" was meant — measured live, "Globex" resolves to a login page at
+`globex.international`. Filing an account under that domain unseen collects another company's
+signals and guesses email addresses there.
 """
 from __future__ import annotations
 
@@ -44,13 +50,14 @@ async def _add(client, token, **body):
     )
 
 
-async def test_a_new_account_gets_the_resolved_domain(client, searching):
+async def test_the_server_never_files_a_domain_nobody_confirmed(client, searching):
+    # A search WOULD find one. The server must not use it: only the rep has seen the evidence.
     searching(("Acme Corp — Official site", "https://www.acme.com/"))
     token = await signup(client, slug="sp1", email="o@sp1.x", company="SP1")
 
     body = (await _add(client, token)).json()
 
-    assert body["account_domain"] == "acme.com"
+    assert body["account_domain"] in (None, ""), "the server filed a domain nobody confirmed"
     assert body["account_created"] is True
 
 
@@ -63,20 +70,9 @@ async def test_a_typed_domain_always_wins(client, searching):
     assert body["account_domain"] == "acme.io"
 
 
-async def test_a_near_miss_leaves_the_domain_blank_rather_than_guessing(client, searching):
-    # Nobody confirms the server's own fallback, and an account under the wrong domain collects
-    # another company's signals and guesses email addresses there.
-    searching(("Acme Plumbing - emergency plumbers", "https://acmeplumbing.com/"))
-    token = await signup(client, slug="sp3", email="o@sp3.x", company="SP3")
-
-    body = (await _add(client, token)).json()
-
-    assert body["account_domain"] in (None, "")
-    assert body["account_created"] is True
-
-
-async def test_an_existing_account_with_the_same_domain_is_reused(client, searching):
-    searching(("Acme Corp — Official site", "https://www.acme.com/"))
+async def test_the_prefilled_domain_reuses_the_account_that_already_has_it(client):
+    # What the form sends once the rep accepts the suggestion: the name differs ("Acme Corp" vs
+    # "Acme Corporation"), the domain is the identity, so the person lands on the existing row.
     token = await signup(client, slug="sp4", email="o@sp4.x", company="SP4")
     tid = (decode_access_token(token) or {})["tid"]
     async with tenant_session(tid) as ts:
@@ -85,7 +81,7 @@ async def test_an_existing_account_with_the_same_domain_is_reused(client, search
         await ts.flush()
         existing_id = existing.id
 
-    body = (await _add(client, token)).json()
+    body = (await _add(client, token, new_account_domain="acme.com")).json()
 
     assert body["account_id"] == existing_id, "a second account for the same company was created"
     assert body["account_created"] is False

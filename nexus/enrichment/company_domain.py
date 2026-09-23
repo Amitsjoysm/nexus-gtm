@@ -6,13 +6,13 @@ hand. Blank meant no email could be found and no signals were ever collected for
 
 **A name is not an identity**, which is the rule the shared company store enforces and the reason
 this returns evidence rather than a bare string: the search hit's title and URL travel back so the
-rep sees what it matched. Two strengths:
+rep sees what it matched. It only ever PREFILLS a form a person confirms — nothing files an account
+under its answer unseen, because a name match cannot say which "Globex" was meant (measured live:
+"Globex" resolves to a login page at ``globex.international``).
 
-* ``strict`` (the server's own fallback, unconfirmed by a human) accepts only a host whose name IS
-  the company's — "Acme Corp" -> ``acme.com``, ``acme.io``. A near miss like ``acmeplumbing.com`` is
-  refused rather than silently filed under the wrong company.
-* non-strict (prefilling a form a rep confirms) also accepts a host whose page title carries the
-  company name, which is how "Acme Corp" reaches ``acmehq.com``.
+A host is offered when its name IS the company's ("Acme Corp" -> ``acme.com``, ``acme.io``) or when
+its page title carries the full company name ("Acme Corp" -> ``acmehq.com``). A near miss like
+``acmeplumbing.com`` matches neither and is not offered.
 
 Directory, social and news hosts are excluded through the same `_NON_COMPANY_HOSTS` list company
 discovery uses: a company's LinkedIn page or Crunchbase profile is never its domain.
@@ -57,7 +57,7 @@ class CompanyDomain:
     title: str = ""
 
 
-def _acceptable(name: str, host: str, title: str, *, strict: bool) -> bool:
+def _acceptable(name: str, host: str, title: str) -> bool:
     from nexus.integrations.company_search import _NON_COMPANY_HOSTS
 
     if not host or any(host == bad or host.endswith("." + bad) for bad in _NON_COMPANY_HOSTS):
@@ -68,13 +68,11 @@ def _acceptable(name: str, host: str, title: str, *, strict: bool) -> bool:
     root = _normalise_name(_host_root(host))
     if root == wanted:
         return True
-    if strict:
-        return False
-    # The rep confirms this one, so a title that names the company is enough to offer it.
+    # A person confirms what this offers, so a title that names the company is enough.
     return (name or "").strip().lower() in (title or "").lower()
 
 
-async def resolve_company_domain(name: str, *, strict: bool = False, search=None) -> CompanyDomain | None:
+async def resolve_company_domain(name: str, *, search=None) -> CompanyDomain | None:
     """The company's own website domain, or ``None``. Never raises."""
     company = (name or "").strip()
     if not company:
@@ -95,6 +93,6 @@ async def resolve_company_domain(name: str, *, strict: bool = False, search=None
         url = getattr(hit, "url", None) or (hit.get("url") if isinstance(hit, dict) else "") or ""
         title = getattr(hit, "title", None) or (hit.get("title") if isinstance(hit, dict) else "") or ""
         host = domain_from_url(url) or ""
-        if _acceptable(company, host, title, strict=strict):
+        if _acceptable(company, host, title):
             return CompanyDomain(domain=host, url=url, title=title)
     return None
