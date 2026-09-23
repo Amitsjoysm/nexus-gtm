@@ -28,6 +28,14 @@ safer.
 `unknown` far more often than it returns anything else and a hard block would stop most real sends.
 `invalid` is the exception a caller must accept explicitly: those bounce, and bounces cost the
 sending domain its ability to deliver anything at all.
+
+**A mailbox connected with Google or Microsoft sends first.** A rep who pressed Connect Google on
+My mailboxes expects the composer to use it. It used to read only the SMTP app-password entries in
+`Tenant.email_settings`, so that rep was told "you have not connected a sending mailbox" beside the
+mailbox they had just connected. The OAuth mailbox now sends through `engagement.sending.send` —
+the provider API, the do-not-contact list, the exactly-once row and the meter, the same path a
+campaign step takes — and saves drafts into the provider's own Drafts folder. An SMTP mailbox is
+the fallback for a rep who has none, and keeps working exactly as before.
 """
 from __future__ import annotations
 
@@ -107,13 +115,113 @@ def resolve_rep_mailbox(tenant, user_id: str) -> dict:
                 "whoever sent the email. Add your own under Settings -> Sending mailboxes."
             )
         raise MailboxNotConnected(
-            "You have not connected a sending mailbox. Add yours under Settings -> Sending "
-            "mailboxes, press Test connection, then try again."
+            "You have not connected a sending mailbox. Connect Gmail or Outlook under My "
+            "mailboxes, or add an SMTP mailbox under Settings -> Sending mailboxes."
         )
     # Their default first if they marked one, else the first they connected. Stable either way:
     # which of a rep's own mailboxes sends must not vary run to run.
     usable.sort(key=lambda a: (not a.get("default", False), a.get("id", "")))
     return usable[0]
+
+
+#: `MailboxConnection.provider` → how the screen names it.
+_PROVIDER_LABELS = {"google": "Gmail", "microsoft": "Outlook"}
+
+
+async def resolve_connected_mailbox(ts, user_id: str):
+    """The rep's own mailbox connected with Google or Microsoft and able to send, or ``None``.
+
+    The first one they connected, so which mailbox sends does not vary between two clicks.
+    """
+    from nexus.models.engagement import MailboxConnection
+
+    rows = await ts.list(MailboxConnection, MailboxConnection.owner_user_id == user_id,
+                         MailboxConnection.status == "connected")
+    rows.sort(key=lambda r: (r.created_at, r.id))
+    return rows[0] if rows else None
+
+
+async def _smtp_mailbox(ts, tenant, user_id: str) -> dict:
+    """The rep's SMTP mailbox, or a refusal that names the real problem.
+
+    Reached only when the rep has no working OAuth mailbox. If they have one that stopped working,
+    that is what they need to hear about: "add an SMTP mailbox" would send them to set up a second
+    mailbox when the fix is one click on the one they already have.
+    """
+    from nexus.models.engagement import MailboxConnection
+
+    try:
+        return resolve_rep_mailbox(tenant, user_id)
+    except MailboxNotConnected:
+        stale = [r for r in await ts.list(MailboxConnection,
+                                          MailboxConnection.owner_user_id == user_id)
+                 if r.status in ("needs_reauth", "error")]
+        if stale:
+            box = stale[0]
+            label = _PROVIDER_LABELS.get(box.provider, box.provider)
+            raise MailboxNotConnected(
+                f"Your {label} mailbox {box.email} needs reconnecting before it can send. "
+                "Reconnect it under My mailboxes, then try again."
+            ) from None
+        raise
+
+
+async def _send_through_connection(ts, *, connection, contact, to: str, subject: str, body: str,
+                                   user_id: str, email_status: str) -> SendOutcome:
+    """Send through Gmail or Graph by the engine's own sender.
+
+    That sender checks the do-not-contact list, writes the outbound row before the provider call,
+    meters `outreach.email_send` inside the call and records the thread, so a reply to a one-off
+    email lands on the reply desk like any other. A refusal it would STOP on (the address is
+    blocked) is the caller's to hear about; a HOLD (paused mailbox, expired grant, no credits) is a
+    failed send with the reason.
+    """
+    from nexus.engagement.sending.service import send
+
+    result = await send(ts, mailbox=connection, contact=contact, subject=(subject or "").strip(),
+                        body=body, kind="oneoff", user_id=user_id)
+    if result.outcome == "stopped":
+        raise SendRefused(f"Not sent: {result.reason}.")
+    ok = result.sent
+    if not ok:
+        logger.warning("one-off send to %s through %s was %s: %s", to, connection.provider,
+                       result.outcome, result.reason)
+    return SendOutcome(
+        ok=ok,
+        detail="sent" if ok else (result.reason or "send failed"),
+        mailbox_id=connection.id,
+        from_email=connection.email,
+        to=to,
+        email_status=email_status,
+    )
+
+
+async def _draft_through_connection(ts, *, connection, contact, to: str, subject: str,
+                                    body: str) -> SendOutcome:
+    from nexus.engagement.mailboxes.provider import AuthExpired, ProviderError
+    from nexus.engagement.sending.drafts import save_draft
+
+    try:
+        await save_draft(ts, mailbox=connection, contact=contact, subject=subject, body=body)
+    except AuthExpired:
+        detail = "the mailbox needs reconnecting (My mailboxes)"
+        ok = False
+    except ProviderError as exc:
+        detail = f"could not save: {exc}"
+        ok = False
+    else:
+        detail, ok = "saved to drafts", True
+    if not ok:
+        logger.warning("draft for %s through %s could not be saved: %s", to,
+                       connection.provider, detail)
+    return SendOutcome(
+        ok=ok,
+        detail=detail,
+        mailbox_id=connection.id,
+        from_email=connection.email,
+        to=to,
+        email_status=(getattr(contact, "email_status", "") or "").strip().lower(),
+    )
 
 
 async def send_to_contact(
@@ -150,8 +258,14 @@ async def send_to_contact(
             "know the address is good."
         )
 
+    connection = await resolve_connected_mailbox(ts, user_id)
+    if connection is not None:
+        return await _send_through_connection(
+            ts, connection=connection, contact=contact, to=to, subject=subject, body=body,
+            user_id=user_id, email_status=status)
+
     tenant = await ts.session.get(Tenant, ts.tenant_id)
-    mailbox = resolve_rep_mailbox(tenant, user_id)
+    mailbox = await _smtp_mailbox(ts, tenant, user_id)
 
     # Sign it. The composer shows the signature too, so `append_signature` is idempotent — without
     # that the buyer reads the rep's phone number twice.
@@ -216,8 +330,13 @@ async def draft_for_contact(
     if not (body or "").strip():
         raise SendRefused("The draft is empty. Generate or write a body before saving it.")
 
+    connection = await resolve_connected_mailbox(ts, user_id)
+    if connection is not None:
+        return await _draft_through_connection(
+            ts, connection=connection, contact=contact, to=to, subject=subject, body=body)
+
     tenant = await ts.session.get(Tenant, ts.tenant_id)
-    mailbox = resolve_rep_mailbox(tenant, user_id)
+    mailbox = await _smtp_mailbox(ts, tenant, user_id)
     if not has_drafts_support(mailbox):
         # "Saved" for something nobody can find is worse than a refusal naming the missing field.
         # Only the known providers carry an IMAP host in their preset; a custom SMTP mailbox has

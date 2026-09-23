@@ -181,9 +181,10 @@ export function EmailComposer({
         setNeedsRiskyConfirm(false);
         toast.success(`Sent to ${res.to}`, `From ${res.from_email}.`);
       } else {
-        // A 200 with ok:false carries the SMTP server's own reason — "authentication failed" and
-        // "recipient rejected" send a rep to two completely different places.
-        toast.error("The mail server refused it", res.detail);
+        // A 200 with ok:false carries the mail server's own reason, or the engine's: "recipient
+        // rejected", "the mailbox needs reconnecting" and "the workspace cannot cover this send"
+        // each send a rep somewhere different, so the reason is the message.
+        toast.error("Not sent", res.detail);
       }
     } catch (err) {
       const detail = err instanceof ApiError ? explainFailure(err) : "Couldn't send.";
@@ -200,7 +201,8 @@ export function EmailComposer({
 
   /**
    * Keep it instead of sending it: the same mailbox, the same signature, written into the rep's own
-   * Drafts folder over IMAP so the last read happens in the mail client they live in.
+   * Drafts folder (through the Gmail or Outlook API for a connected mailbox, over IMAP for an SMTP
+   * one) so the last read happens in the mail client they live in.
    *
    * Never charged — `outreach.email_send` prices a message that left the building.
    */
@@ -212,9 +214,9 @@ export function EmailComposer({
         setDraftedIn(res.from_email || "your mailbox");
         toast.success("Saved to Drafts", `In ${res.from_email}. Send it from your mail client.`);
       } else {
-        // The IMAP server's own words: "authentication failed" and "no such folder" send a rep to
-        // two different places.
-        toast.error("The mail server refused it", res.detail);
+        // The server's own words: "authentication failed" and "no such folder" send a rep to two
+        // different places.
+        toast.error("Not saved", res.detail);
       }
     } catch (err) {
       toast.error(
@@ -297,8 +299,9 @@ export function EmailComposer({
       />
 
       {/* The draft deliberately ends at the sign-off: the signature block is appended from the
-          sending mailbox (Settings → Sending mailboxes), so one rep's draft cannot go out under
-          another's details, and regenerating never loses it. */}
+          sending mailbox (My mailboxes for Gmail/Outlook, Settings → Sending mailboxes for SMTP),
+          so one rep's draft cannot go out under another's details, and regenerating never loses
+          it. */}
       <p className={styles.hint}>
         Your signature is added from your sending mailbox when this goes out.
       </p>
@@ -325,8 +328,8 @@ export function EmailComposer({
           Copy
         </Button>
         {/* The other half of the choice: keep it for a last read in the mail client the rep lives
-            in. Same mailbox, same signature, nothing sent and nothing charged. Refused with a
-            reason when the mailbox has no IMAP host (Settings → Sending mailboxes). */}
+            in. Same mailbox, same signature, nothing sent and nothing charged. A Gmail or Outlook
+            mailbox always can; an SMTP one is refused with a reason when it has no IMAP host. */}
         <Button
           variant="secondary"
           loading={saving}

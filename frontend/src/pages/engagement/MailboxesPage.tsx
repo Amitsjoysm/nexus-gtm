@@ -99,7 +99,10 @@ export function MailboxesPage() {
     const error = params.get("error");
     if (!connected && !error) return;
     if (connected) {
-      toast.success("Mailbox connected", "Campaign email will send from it and replies will be read in it.");
+      toast.success(
+        "Mailbox connected",
+        "Emails you send or save as drafts from a contact now go through it.",
+      );
     } else if (error) {
       toast.error("Mailbox not connected", CONNECT_ERRORS[error] ?? "Something went wrong. Try again.");
     }

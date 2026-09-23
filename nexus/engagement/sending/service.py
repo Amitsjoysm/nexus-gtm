@@ -112,7 +112,19 @@ async def send(
     if row.status == "failed":
         return SendResult("failed", message_id=row.id, reason=row.error or "")
 
-    provider = await open_provider(ts, mailbox)
+    # Opening the provider refreshes the access token, which is itself a call to Google or
+    # Microsoft and fails in the same three ways a send does. Outside this handling, an expired
+    # grant raised out of the worker instead of holding the message and asking for a reconnect.
+    try:
+        provider = await open_provider(ts, mailbox)
+    except AuthExpired:
+        return SendResult("held", message_id=row.id, reason="the mailbox needs reconnecting")
+    except (TransientError, TimeoutError):
+        return SendResult("held", message_id=row.id,
+                          reason="the provider did not answer; the send will be retried")
+    except ProviderError as exc:
+        # `fresh_access_token` has already marked the mailbox `error` with the provider's words.
+        return SendResult("held", message_id=row.id, reason=f"the mailbox cannot sign in: {exc}")
 
     if existing:
         # This row has been through a provider call before. Ask the Sent folder first: a timeout is

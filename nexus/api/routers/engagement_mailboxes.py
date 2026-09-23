@@ -185,7 +185,7 @@ async def oauth_callback(
     from nexus.engagement.mailboxes.provider import ProviderError
     from nexus.engagement.mailboxes.registry import make_provider
     from nexus.engagement.mailboxes.service import MailboxOwnedByColleague, upsert_connection
-    from nexus.models.identity import Membership
+    from nexus.models.identity import Membership, User
 
     def _to(query: str) -> RedirectResponse:
         return RedirectResponse(f"{public_base_url()}/mailboxes?{query}", status_code=302)
@@ -223,11 +223,17 @@ async def oauth_callback(
         ))).first()
         if member is None:
             return _to("error=not_a_member")
+        # Gmail's profile carries no name, so a Google mailbox would send as a bare address. The
+        # member's own name is the one the buyer should see beside it.
+        display_name = profile.display_name
+        if not display_name:
+            person = await session.get(User, user_id)
+            display_name = getattr(person, "full_name", "") or ""
         ts = TenantSession(session, tenant_id)
         try:
             await upsert_connection(
                 ts, owner_user_id=user_id, provider=provider, email=profile.email,
-                display_name=profile.display_name, bundle=bundle,
+                display_name=display_name, bundle=bundle,
                 scopes=(data.get("scope") or "").split(), timezone=claims.get("tz", "UTC"),
             )
             await session.commit()
