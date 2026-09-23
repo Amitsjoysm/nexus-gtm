@@ -12,6 +12,7 @@ from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
     AccountIn,
     AccountOut,
+    CompanyDomainOut,
     ContactIn,
     ContactLookalikeOut,
     ContactLookalikeResponse,
@@ -241,6 +242,28 @@ async def list_accounts(
         _account_out(a, fit_score=scores.get(a.id), owner_name=names.get(a.owner_user_id or ""))
         for a in rows
     ]
+
+
+@router.get("/company-domain", response_model=CompanyDomainOut)
+async def company_domain(
+    name: str,
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> CompanyDomainOut:
+    """The website domain of a company named in plain text, for the Similar-people add form.
+
+    Declared BEFORE ``/{account_id}``: routes match in declaration order, so the dynamic one would
+    otherwise swallow this path and look up an account called "company-domain".
+
+    Returns the search result that matched as well as the domain, because a name is not an identity
+    and the rep is the one confirming it. Empty when nothing matched — a blank field a person can
+    fill is better than a wrong domain they have to notice.
+    """
+    from nexus.enrichment.company_domain import resolve_company_domain
+
+    found = await resolve_company_domain(name)
+    if found is None:
+        return CompanyDomainOut()
+    return CompanyDomainOut(domain=found.domain, url=found.url, title=found.title)
 
 
 @router.get("/{account_id}", response_model=AccountOut)
@@ -665,6 +688,14 @@ async def add_similar_person(
                 "Choose an account for this person, or name the company they work at.",
             )
         domain = (body.new_account_domain or "").strip() or None
+        if not domain:
+            # Nobody typed one, so resolve the employer's own site from its name. STRICT: this is
+            # filed without a person confirming it, and an account under the wrong domain collects
+            # another company's signals and guesses email addresses there.
+            from nexus.enrichment.company_domain import resolve_company_domain
+
+            found = await resolve_company_domain(name, strict=True)
+            domain = found.domain if found else None
         account = await find_existing_account(ts, domain=domain, name=name)
         if account is None:
             account = Account(

@@ -530,6 +530,14 @@ class SimilarPersonIn(BaseModel):
     new_account_domain: str | None = Field(default=None, max_length=253)
 
 
+class CompanyDomainOut(BaseModel):
+    """A company's website domain resolved from its name, with the result that proved it."""
+
+    domain: str | None = None
+    url: str = ""
+    title: str = ""
+
+
 class SimilarPersonAddedOut(BaseModel):
     contact: ContactOut
     account_id: str
