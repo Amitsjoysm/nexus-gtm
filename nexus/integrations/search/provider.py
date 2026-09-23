@@ -28,10 +28,14 @@ class SearchHit:
     url: str
     snippet: str = ""
     source: str = ""
+    # The provider's own publish date, AS THE PROVIDER WROTE IT ("2025-03-04T10:00:00Z", "3 days
+    # ago", "Mar 4, 2025"). Kept raw so there is one parser (`nexus.core.dates.parse_when`) rather
+    # than one per engine. Empty when the provider gives none, which DuckDuckGo HTML never does.
+    published_at: str = ""
 
     def as_dict(self) -> dict:
         return {"title": self.title, "url": self.url, "snippet": self.snippet,
-                "source": self.source}
+                "source": self.source, "published_at": self.published_at}
 
 
 class SearchProvider(abc.ABC):

@@ -93,6 +93,7 @@ class IngestionService:
                 strength=r.resolved_strength(),
                 dedupe_key=dedupe_key,
                 occurred_at=r.occurred_at,
+                dated=getattr(r, "dated", None) or "found",
             )
             ts.add(ev)
             created.append(ev)

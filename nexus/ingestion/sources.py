@@ -184,6 +184,26 @@ def names_account(text: str, account: Account) -> bool:
     return len(tokens) == 1 and tokens[0] in hay
 
 
+def hit_date(hit: dict) -> tuple[datetime, str]:
+    """``(occurred_at, dated)`` for one search hit: the provider's publish date, else a date in the
+    article URL, else the moment we found it - labelled as such.
+
+    Shared by both search-backed sources so a dated result reads the same whichever one found it.
+    """
+    from nexus.core.dates import date_from_url, parse_when
+
+    when = parse_when(hit.get("published_at")) or date_from_url(hit.get("url"))
+    return (when, "event") if when else (utcnow(), "found")
+
+
+def _dated(value, now: datetime) -> dict:
+    """``occurred_at``/``dated`` kwargs for a source that carries its own date string."""
+    from nexus.core.dates import parse_when
+
+    when = parse_when(value)
+    return {"occurred_at": when, "dated": "event"} if when else {"occurred_at": now, "dated": "found"}
+
+
 def event_dedupe_key(kind: str, anchor: str, strength: float, now: datetime) -> str:
     """Event-bucketed dedupe key, NOT per-URL.
 
@@ -238,6 +258,11 @@ class RawSignal:
     strength: float | None = None  # falls back to library default
     occurred_at: datetime = field(default_factory=utcnow)
     contact_id: str | None = None
+    # "event": occurred_at is when it happened - the source's own date, or an observation of the
+    # present (open roles, a changed page). "found": the source gave no date, so occurred_at is only
+    # when we collected it. The default is "found" because that is what a source that says nothing
+    # about dates has always meant; every source that knows better sets it.
+    dated: str = "found"
 
     def resolved_strength(self) -> float:
         if self.strength is not None:
@@ -380,6 +405,10 @@ def _parse_feed(xml_text: str) -> list[dict]:
                     d["link"] = link
             elif lt in ("description", "summary", "content") and child.text and "summary" not in d:
                 d["summary"] = clean_feed_text(child.text)
+            elif lt in ("pubdate", "published", "updated", "date") and child.text and "published" not in d:
+                # RSS <pubDate>, Atom <published>/<updated>, Dublin Core <dc:date>. The first one
+                # wins: Atom lists <published> before <updated>, and a later edit is not the event.
+                d["published"] = child.text.strip()
         if d.get("title"):
             items.append(d)
     return items
@@ -456,6 +485,7 @@ class RssSignalSource(SignalSource):
                         url=link or None,
                         strength=strength,
                         dedupe_key=f"rss:{anchor}:{link or title}"[:200],
+                        **_dated(it.get("published"), utcnow()),
                     )
                 )
             if out:
@@ -581,6 +611,7 @@ class WebNewsSource(SignalSource):
                     url=url,
                     strength=strength,
                     dedupe_key=dedupe_key,
+                    **dict(zip(("occurred_at", "dated"), hit_date(h))),
                 )
             )
         return out[:4]
@@ -878,6 +909,7 @@ class DorkedSearchSource(SignalSource):
             url=url or None,
             strength=strength,
             dedupe_key=dedupe_key,
+            **dict(zip(("occurred_at", "dated"), hit_date(hit))),
         )
 
 
@@ -998,6 +1030,9 @@ class AtsSignalSource(SignalSource):
             # a description of that month's hiring, not a separate event, so letting it into the
             # key would produce two "hiring" signals in a month the character of hiring changed.
             dedupe_key=event_dedupe_key("hiring", anchor, strength, now),
+            # An observation of the present: these roles are open as of the moment we looked.
+            occurred_at=now,
+            dated="event",
         )
 
     @staticmethod
@@ -1071,6 +1106,7 @@ class PublicApiSignalSource(SignalSource):
                 # specific event a funding headline is.
                 strength=0.6,
                 dedupe_key=f"sec:{anchor}:{top['form']}:{top['filed_at']}",
+                **_dated(top.get("filed_at"), now),
             ))
 
         stories = await hn_stories(name, domain=domain, fetch=self._fetch)
@@ -1082,6 +1118,7 @@ class PublicApiSignalSource(SignalSource):
                 title=f"{top['title']} ({top['points']} points on Hacker News)",
                 url=top["url"], strength=0.5,
                 dedupe_key=event_dedupe_key("news", anchor, 0.5, now),
+                **_dated(top.get("created_at"), now),
             ))
 
         # GitHub last: it has the tightest budget, so when the hour's quota is gone the other two
@@ -1106,6 +1143,8 @@ class PublicApiSignalSource(SignalSource):
                             url=repos.items[0].get("url") or "",
                             strength=0.55,
                             dedupe_key=f"tech:{anchor}:{now:%Y-%m}",
+                            # Active repositories, observed now.
+                            occurred_at=now, dated="event",
                         ))
             else:
                 # Not an error: most companies' GitHub org is not their domain root, and an
@@ -1206,6 +1245,8 @@ class WebsiteWatchSignalSource(SignalSource):
                 # Keyed on the page kind and the digest, so re-running the sweep does not re-alert,
                 # but a genuinely new change does.
                 dedupe_key=f"web:{page_kind}:{domain}:{check.digest[:16]}",
+                # Detected now: that is the date the change is known to have happened by.
+                occurred_at=now, dated="event",
             ))
 
         await ts.flush()

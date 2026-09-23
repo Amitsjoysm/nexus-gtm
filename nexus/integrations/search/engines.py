@@ -304,6 +304,7 @@ class ExaSearchProvider(SearchProvider):
                     url=(r.get("url") or "").strip(),
                     snippet=snippet[:_SNIPPET_CAP],
                     source=self.name,
+                    published_at=str(r.get("publishedDate") or ""),
                 )
             )
         return out
@@ -368,6 +369,7 @@ class BraveSearchProvider(SearchProvider):
                     url=(r.get("url") or "").strip(),
                     snippet=_strip_tags(r.get("description") or "")[:_SNIPPET_CAP],
                     source=self.name,
+                    published_at=str(r.get("page_age") or r.get("age") or ""),
                 )
             )
         return out
@@ -428,6 +430,7 @@ class SerperSearchProvider(SearchProvider):
                     url=(r.get("link") or "").strip(),
                     snippet=(r.get("snippet") or "").strip()[:_SNIPPET_CAP],
                     source=self.name,
+                    published_at=str(r.get("date") or ""),
                 )
             )
         return out
@@ -616,6 +619,12 @@ class FirecrawlSearchProvider(SearchProvider):
                     url=(r.get("url") or r.get("link") or "").strip(),
                     snippet=snippet[:_SNIPPET_CAP],
                     source=self.name,
+                    published_at=str(
+                        r.get("date")
+                        or (r.get("metadata") or {}).get("publishedTime")
+                        or (r.get("metadata") or {}).get("article:published_time")
+                        or ""
+                    ),
                 )
             )
         return out

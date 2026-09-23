@@ -40,6 +40,7 @@ def _to_raw(signal):
         url=signal.url,
         strength=signal.strength,
         occurred_at=signal.occurred_at,
+        dated=signal.dated or "found",
     )
 
 

@@ -28,6 +28,7 @@ def _signal_out(s: SignalEvent) -> SignalOut:
         url=s.url,
         strength=s.strength,
         occurred_at=s.occurred_at.isoformat(),
+        dated=s.dated or "found",
     )
 
 

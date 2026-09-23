@@ -89,3 +89,5 @@ class CompanySignal(IdMixin, TimestampMixin, Base):
     strength: Mapped[float] = mapped_column(Float, default=0.5)
     dedupe_key: Mapped[str] = mapped_column(String(200), default="")
     occurred_at: Mapped[datetime] = mapped_column(TZDateTime, index=True)
+    # Carried to every tenant by fan-out, so a shared-crawl signal is labelled like a per-tenant one.
+    dated: Mapped[str | None] = mapped_column(String(8), nullable=True)

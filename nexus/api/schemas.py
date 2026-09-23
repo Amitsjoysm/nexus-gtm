@@ -843,6 +843,10 @@ class SignalOut(BaseModel):
     url: str | None = None
     strength: float
     occurred_at: str
+    # "event": occurred_at is when it happened. "found": only when we collected it, because the
+    # source gave no date. The screens label the second so a rep can tell an old event found today
+    # from a new one. Rows written before the column existed read "found", which is what they were.
+    dated: str = "found"
 
 
 # ---- integrations: CRM ----

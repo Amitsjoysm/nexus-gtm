@@ -56,3 +56,7 @@ class SignalEvent(IdMixin, TimestampMixin, TenantScoped, Base):
     strength: Mapped[float] = mapped_column(Float, default=0.5)  # 0..1 intrinsic importance
     dedupe_key: Mapped[str] = mapped_column(String(200), index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # "event" when occurred_at is the date the source gave; "found" (or NULL, every row written before
+    # this existed) when it is only when we collected it. The day filter compares occurred_at either
+    # way; this is what lets a rep tell an old event found today from a new one (migration 0057).
+    dated: Mapped[str | None] = mapped_column(String(8), nullable=True)

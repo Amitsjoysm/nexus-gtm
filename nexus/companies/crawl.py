@@ -104,6 +104,7 @@ async def crawl_company(company, *, sources=None) -> dict:
                     strength=raw.resolved_strength(),
                     dedupe_key=key,
                     occurred_at=raw.occurred_at,
+                    dated=getattr(raw, "dated", None) or "found",
                 ))
                 report["new"] += 1
             # Stamped whether or not anything was found: the stamp means "we looked", and without
