@@ -75,6 +75,23 @@ import type {
   EngagementSetup,
   ConnectedMailbox,
   MailboxProviderState,
+  EngagementStatus,
+  EngagementStep,
+  EngagementCampaign,
+  EngagementCampaignInput,
+  EngagementCandidate,
+  EnrollResult,
+  ReviewItem,
+  EngagementEnrollment,
+  CampaignEstimate,
+  SequenceTemplate,
+  TimelineEntry,
+  DeskQueueItem,
+  DeskItemDetail,
+  DeskScheduledItem,
+  DeskDecision,
+  ReplyCategory,
+  WorkspaceEngagementSettings,
   DoNotContactEntry,
   LedgerStatus,
   LedgerStoreStatus,
@@ -1229,6 +1246,174 @@ export class ApiClient {
   engagementSetup(signal?: AbortSignal) {
     return this.request<EngagementSetup>("/admin/engagement/setup", { signal });
   }
+
+  // ---- engagement: the engine switch and workspace reply settings ----
+  engagementStatus(signal?: AbortSignal) {
+    return this.request<EngagementStatus>("/engagement/settings/status", { signal });
+  }
+  engagementSettings(signal?: AbortSignal) {
+    return this.request<WorkspaceEngagementSettings>("/engagement/settings", { signal });
+  }
+  updateEngagementSettings(body: Partial<Omit<WorkspaceEngagementSettings, "can_edit">>) {
+    return this.request<WorkspaceEngagementSettings>("/engagement/settings", {
+      method: "PUT", body,
+    });
+  }
+
+  // ---- engagement: campaigns ----
+  listEngagementCampaigns(team = false, signal?: AbortSignal) {
+    return this.request<EngagementCampaign[]>("/engagement/campaigns", { query: { team }, signal });
+  }
+  createEngagementCampaign(body: EngagementCampaignInput) {
+    return this.request<EngagementCampaign>("/engagement/campaigns", { method: "POST", body });
+  }
+  getEngagementCampaign(id: string, signal?: AbortSignal) {
+    return this.request<EngagementCampaign>(`/engagement/campaigns/${id}`, { signal });
+  }
+  replaceCampaignSteps(id: string, steps: EngagementStep[]) {
+    return this.request<EngagementCampaign>(`/engagement/campaigns/${id}/steps`, {
+      method: "PUT", body: steps,
+    });
+  }
+  engagementCandidates(
+    params: { list_id?: string; q?: string; title?: string; seniority?: string },
+    signal?: AbortSignal,
+  ) {
+    return this.request<EngagementCandidate[]>("/engagement/candidates", { query: params, signal });
+  }
+  addCampaignContacts(id: string, contactIds: string[]) {
+    return this.request<EnrollResult>(`/engagement/campaigns/${id}/contacts`, {
+      method: "POST", body: { contact_ids: contactIds },
+    });
+  }
+  draftCampaign(id: string, limit = 25) {
+    return this.request<{
+      drafted: number; failed: number; errors: { contact_id: string; error: string }[];
+    }>(`/engagement/campaigns/${id}/draft`, { method: "POST", query: { limit } });
+  }
+  campaignReview(id: string, signal?: AbortSignal) {
+    return this.request<ReviewItem[]>(`/engagement/campaigns/${id}/review`, { signal });
+  }
+  approveCampaignMessage(messageId: string, body: { subject?: string; body?: string } = {}) {
+    return this.request<null>(`/engagement/messages/${messageId}/approve`, {
+      method: "POST", body,
+    });
+  }
+  regenerateCampaignMessage(messageId: string) {
+    return this.request<ReviewItem>(`/engagement/messages/${messageId}/regenerate`, {
+      method: "POST",
+    });
+  }
+  approveAllPassing(id: string) {
+    return this.request<{ approved: number }>(`/engagement/campaigns/${id}/approve-all`, {
+      method: "POST",
+    });
+  }
+  campaignEstimate(id: string, signal?: AbortSignal) {
+    return this.request<CampaignEstimate>(`/engagement/campaigns/${id}/estimate`, { signal });
+  }
+  launchCampaign(id: string) {
+    return this.request<{ status: string; estimate: CampaignEstimate }>(
+      `/engagement/campaigns/${id}/launch`, { method: "POST" },
+    );
+  }
+  campaignAction(id: string, action: "pause" | "resume" | "stop") {
+    return this.request<null>(`/engagement/campaigns/${id}/${action}`, { method: "POST" });
+  }
+  campaignEnrollments(id: string, signal?: AbortSignal) {
+    return this.request<EngagementEnrollment[]>(`/engagement/campaigns/${id}/enrollments`, {
+      signal,
+    });
+  }
+  moveEnrollment(enrollmentId: string, when: string) {
+    return this.request<null>(`/engagement/enrollments/${enrollmentId}/move`, {
+      method: "POST", body: { when },
+    });
+  }
+  enrollmentAction(
+    enrollmentId: string, action: "pause" | "resume" | "stop" | "send-now" | "remove",
+  ) {
+    return this.request<null>(`/engagement/enrollments/${enrollmentId}/${action}`, {
+      method: "POST",
+    });
+  }
+  engagementTimeline(
+    params: { contact_id?: string; account_id?: string }, signal?: AbortSignal,
+  ) {
+    return this.request<TimelineEntry[]>("/engagement/timeline", { query: params, signal });
+  }
+
+  // ---- engagement: sequence templates ----
+  listSequenceTemplates(signal?: AbortSignal) {
+    return this.request<SequenceTemplate[]>("/engagement/templates", { signal });
+  }
+  createSequenceTemplate(body: { name: string; description?: string; steps: EngagementStep[] }) {
+    return this.request<SequenceTemplate>("/engagement/templates", { method: "POST", body });
+  }
+  updateSequenceTemplate(
+    id: string, body: { name: string; description?: string; steps: EngagementStep[] },
+  ) {
+    return this.request<SequenceTemplate>(`/engagement/templates/${id}`, { method: "PUT", body });
+  }
+  deleteSequenceTemplate(id: string) {
+    return this.request<null>(`/engagement/templates/${id}`, { method: "DELETE" });
+  }
+
+  // ---- engagement: the reply desk ----
+  deskQueue(tab: "needs_action" | "handled", team = false, signal?: AbortSignal) {
+    return this.request<DeskQueueItem[]>("/engagement/desk", { query: { tab, team }, signal });
+  }
+  deskScheduled(team = false, signal?: AbortSignal) {
+    return this.request<DeskScheduledItem[]>("/engagement/desk/scheduled", {
+      query: { team }, signal,
+    });
+  }
+  deskItem(id: string, signal?: AbortSignal) {
+    return this.request<DeskItemDetail>(`/engagement/desk/${id}`, { signal });
+  }
+  deskDraft(id: string) {
+    return this.request<{ subject: string; body: string; quality_problems: string[] }>(
+      `/engagement/desk/${id}/draft`, { method: "POST" },
+    );
+  }
+  deskSend(id: string, body: { subject: string; body: string }) {
+    return this.request<{ outcome: string; reason: string; message_id: string }>(
+      `/engagement/desk/${id}/send`, { method: "POST", body },
+    );
+  }
+  deskSaveDraft(id: string, body: { subject: string; body: string }) {
+    return this.request<{ provider_draft_id: string }>(`/engagement/desk/${id}/save-draft`, {
+      method: "POST", body,
+    });
+  }
+  deskDecide(id: string, body: { decision: DeskDecision; reengage_on?: string; note?: string }) {
+    return this.request<null>(`/engagement/desk/${id}/decide`, { method: "POST", body });
+  }
+  deskCorrect(id: string, category: ReplyCategory) {
+    return this.request<null>(`/engagement/desk/${id}/correct`, {
+      method: "POST", body: { category },
+    });
+  }
+  deskAssign(id: string, userId: string) {
+    return this.request<null>(`/engagement/desk/${id}/assign`, {
+      method: "POST", query: { user_id: userId },
+    });
+  }
+  rescheduleScheduled(enrollmentId: string, when: string) {
+    return this.request<null>(`/engagement/desk/scheduled/${enrollmentId}/reschedule`, {
+      method: "POST", body: { when },
+    });
+  }
+  cancelScheduled(enrollmentId: string) {
+    return this.request<null>(`/engagement/desk/scheduled/${enrollmentId}/cancel`, {
+      method: "POST",
+    });
+  }
+  deskColleague(enrollmentId: string, action: "resume" | "stop") {
+    return this.request<null>(`/engagement/desk/colleagues/${enrollmentId}/${action}`, {
+      method: "POST",
+    });
+  }
   supportedProviders(signal?: AbortSignal) {
     return this.request<SupportedProvider[]>("/admin/provider-keys/providers", { signal });
   }
@@ -2022,6 +2207,14 @@ export function errorDetail(data: unknown, statusText = ""): string {
   if (!data || typeof data !== "object") return fallback;
   const detail = (data as { detail?: unknown }).detail;
   if (typeof detail === "string" && detail.trim()) return detail;
+  // A structured refusal: the launch gate sends `{detail, estimate}` and an unconfigured mailbox
+  // provider sends `{message, missing}`. Read the sentence out of it rather than falling back to
+  // the status text, which would show "Payment Required" for "not enough credits to launch".
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const inner = detail as { detail?: unknown; message?: unknown };
+    const sentence = typeof inner.detail === "string" ? inner.detail : inner.message;
+    if (typeof sentence === "string" && sentence.trim()) return sentence;
+  }
   if (Array.isArray(detail)) {
     const parts = detail
       .map((e) => {

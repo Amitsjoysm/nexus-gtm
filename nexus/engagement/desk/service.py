@@ -334,6 +334,47 @@ async def stop_colleague(ts, enrollment, *, user_id: str) -> None:
     await stop_enrollment(ts, enrollment, "manual", user_id=user_id)
 
 
+def _is_scheduled(enrollment) -> bool:
+    return enrollment.status == "snoozed" or (
+        enrollment.status == "paused" and enrollment.status_reason == "out_of_office")
+
+
+async def reschedule(ts, enrollment, when: datetime, *, user_id: str) -> None:
+    """Move a scheduled contact's return date: a re-engagement they asked for, or the day they are
+    back from leave. The worker wakes both on ``snoozed_until``, so that is the one field moved."""
+    from nexus.core.db import utcnow
+    from nexus.engagement.ledger.emit import emit
+
+    if not _is_scheduled(enrollment):
+        raise DeskError("Only a contact waiting for a date can be given a new one.")
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    if when <= utcnow():
+        raise DeskError("Choose a date in the future, or resume the contact instead.")
+    previous = enrollment.snoozed_until
+    enrollment.snoozed_until = when
+    await ts.flush()
+    # A new date is a new snooze, so it is recorded as one: same event, same shape as
+    # `set_status` writes, with the date it replaced.
+    await emit(ts, "enrollment.snoozed", actor_user_id=user_id,
+               refs={"enrollment_id": enrollment.id, "campaign_id": enrollment.campaign_id,
+                     "contact_id": enrollment.contact_id, "account_id": enrollment.account_id},
+               payload={"from": enrollment.status, "to": enrollment.status,
+                        "reason": enrollment.status_reason or "",
+                        "step_index": enrollment.current_step_index,
+                        "until": when.isoformat(),
+                        "rescheduled_from": previous.isoformat() if previous else ""})
+
+
+async def cancel_scheduled(ts, enrollment, *, user_id: str) -> None:
+    """The date is not wanted after all: stop the contact, so nothing more is sent."""
+    from nexus.engagement.sequences.service import stop_enrollment
+
+    if not _is_scheduled(enrollment):
+        raise DeskError("Only a contact waiting for a date can be cancelled here.")
+    await stop_enrollment(ts, enrollment, "manual", user_id=user_id)
+
+
 async def remind_unanswered(ts, *, now: datetime) -> int:
     """Nudge the SDR when an interested buyer has been waiting (§19 reply-speed reminder).
 

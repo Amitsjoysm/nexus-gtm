@@ -85,6 +85,10 @@ class ContactsIn(BaseModel):
 class ReviewItemOut(BaseModel):
     enrollment_id: str
     contact_id: str
+    contact_name: str = ""
+    contact_email: str = ""
+    contact_title: str = ""
+    account_name: str = ""
     message_id: str | None
     subject: str
     body: str
@@ -109,6 +113,10 @@ class EnrollmentOut(BaseModel):
     id: str
     contact_id: str
     account_id: str
+    contact_name: str = ""
+    contact_email: str = ""
+    contact_title: str = ""
+    account_name: str = ""
     status: str
     status_reason: str | None
     current_step_index: int
@@ -155,6 +163,89 @@ async def _out(ts: TenantSession, campaign) -> CampaignOut:
 
 def _refuse(exc: Exception) -> HTTPException:
     return HTTPException(status.HTTP_409_CONFLICT, str(exc))
+
+
+async def _people(ts: TenantSession, contact_ids, account_ids) -> tuple[dict, dict]:
+    """Contacts and accounts by id, in two queries for the whole page rather than two per row."""
+    from nexus.models.account import Account, Contact
+
+    contact_ids = {c for c in contact_ids if c}
+    account_ids = {a for a in account_ids if a}
+    contacts = {c.id: c for c in await ts.list(Contact, Contact.id.in_(contact_ids))} \
+        if contact_ids else {}
+    account_ids |= {c.account_id for c in contacts.values() if c.account_id}
+    accounts = {a.id: a for a in await ts.list(Account, Account.id.in_(account_ids))} \
+        if account_ids else {}
+    return contacts, accounts
+
+
+def _named(contact, account) -> dict:
+    return {"contact_name": getattr(contact, "full_name", "") or "",
+            "contact_email": getattr(contact, "email", "") or "",
+            "contact_title": getattr(contact, "title", "") or "",
+            "account_name": getattr(account, "name", "") or ""}
+
+
+class CandidateOut(BaseModel):
+    contact_id: str
+    full_name: str
+    title: str
+    seniority: str
+    email: str
+    email_status: str
+    account_id: str
+    account_name: str
+    blocked: bool
+
+
+class TimelineEntryOut(BaseModel):
+    message_id: str
+    direction: str
+    kind: str
+    status: str
+    subject: str
+    preview: str
+    at: datetime | None
+    contact_id: str | None
+    contact_name: str
+    campaign_id: str | None
+    campaign_name: str
+    category: str | None
+
+
+@router.get("/candidates", response_model=list[CandidateOut])
+async def list_candidates(
+    list_id: str | None = None, q: str | None = None, title: str | None = None,
+    seniority: str | None = None, limit: int = 500,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.run_engagement)),
+) -> list[CandidateOut]:
+    """People who could be added to a campaign: from a saved list, by title and seniority."""
+    from dataclasses import asdict
+
+    from nexus.engagement.sequences.candidates import candidates
+
+    rows = await candidates(ts, list_id=list_id, q=q, title=title, seniority=seniority,
+                            limit=limit)
+    return [CandidateOut(**asdict(r)) for r in rows]
+
+
+@router.get("/timeline", response_model=list[TimelineEntryOut])
+async def get_timeline(
+    contact_id: str | None = None, account_id: str | None = None,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.run_engagement)),
+) -> list[TimelineEntryOut]:
+    """Everything sent to and received from a contact, or everyone at an account."""
+    from dataclasses import asdict
+
+    from nexus.engagement.sequences.candidates import timeline
+
+    if not contact_id and not account_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Name a contact_id or an account_id")
+    rows = await timeline(ts, contact_id=contact_id, account_id=account_id)
+    return [TimelineEntryOut(**asdict(r)) for r in rows]
 
 
 @router.get("/campaigns", response_model=list[CampaignOut])
@@ -255,11 +346,15 @@ async def get_review(
     from nexus.engagement.sequences.service import review_queue
 
     campaign = await _campaign(ts, campaign_id, principal)
+    rows = await review_queue(ts, campaign)
+    contacts, accounts = await _people(ts, [e.contact_id for e, _m in rows],
+                                       [e.account_id for e, _m in rows])
     return [ReviewItemOut(
         enrollment_id=e.id, contact_id=e.contact_id, message_id=getattr(m, "id", None),
+        **_named(contacts.get(e.contact_id), accounts.get(e.account_id)),
         subject=getattr(m, "subject", "") or "", body=getattr(m, "body_text", "") or "",
         quality_problems=list(getattr(m, "quality_problems", None) or []),
-        status=getattr(m, "status", "undrafted")) for e, m in await review_queue(ts, campaign)]
+        status=getattr(m, "status", "undrafted")) for e, m in rows]
 
 
 async def _message(ts: TenantSession, message_id: str, principal: Principal):
@@ -301,7 +396,10 @@ async def regenerate_message(
         await regenerate(ts, message, user_id=principal.user_id)
     except CampaignError as exc:
         raise _refuse(exc) from exc
+    contacts, accounts = await _people(ts, [message.contact_id], [])
+    contact = contacts.get(message.contact_id)
     return ReviewItemOut(enrollment_id=message.enrollment_id, contact_id=message.contact_id,
+                         **_named(contact, accounts.get(getattr(contact, "account_id", None))),
                          message_id=message.id, subject=message.subject, body=message.body_text,
                          quality_problems=list(message.quality_problems or []),
                          status=message.status)
@@ -393,8 +491,11 @@ async def list_enrollments(
 
     campaign = await _campaign(ts, campaign_id, principal)
     rows = await ts.list(EngagementEnrollment, EngagementEnrollment.campaign_id == campaign.id)
+    contacts, accounts = await _people(ts, [e.contact_id for e in rows],
+                                       [e.account_id for e in rows])
     return [EnrollmentOut(
-        id=e.id, contact_id=e.contact_id, account_id=e.account_id, status=e.status,
+        id=e.id, contact_id=e.contact_id, account_id=e.account_id,
+        **_named(contacts.get(e.contact_id), accounts.get(e.account_id)), status=e.status,
         status_reason=e.status_reason, current_step_index=e.current_step_index,
         next_action_at=e.next_action_at, snoozed_until=e.snoozed_until,
         contact_timezone=e.contact_timezone) for e in rows]

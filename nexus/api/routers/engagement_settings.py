@@ -51,6 +51,13 @@ class EngagementSettingsOut(BaseModel):
     can_edit: bool
 
 
+class EngagementStatusOut(BaseModel):
+    #: The engine's switch. While it is off every campaign, reply desk and template route 404s,
+    #: so the screens hide rather than offer pages that cannot load.
+    engine_on: bool
+    can_manage: bool
+
+
 class EngagementSettingsPatch(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -123,6 +130,20 @@ async def _tenant(ts: TenantSession):
     if tenant is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Workspace not found")
     return tenant
+
+
+@router.get("/status", response_model=EngagementStatusOut)
+async def get_engagement_status(
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> EngagementStatusOut:
+    """Answered whatever the switch says. Everything else about campaigns is dark while it is
+    off, so this is the one route the navigation can ask."""
+    from nexus.engagement import config
+
+    return EngagementStatusOut(
+        engine_on=config.campaigns_enabled(),
+        can_manage=has_permission(Role(principal.role), Permission.manage_engagement),
+    )
 
 
 @router.get("", response_model=EngagementSettingsOut)

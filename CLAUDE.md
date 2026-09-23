@@ -1871,6 +1871,17 @@ plans: `docs/superpowers/plans/2026-09-17-sdr-engagement/`. Ships dark behind
   `build_ledger_datasets` derives the training and insights stores from it, so both are
   rebuildable. The Gmail push URL carries no token of ours — `tests/test_credential_leaks.py`
   refuses a credential in a query string, and the Pub/Sub OIDC signature is the trust.
+- **The screens gate on the engine, not on a plan.** `GET /engagement/settings/status` is the one
+  engagement route that answers while the engine is dark; `EngagementProvider` reads it once at the
+  shell. Nav items carry `engine: "on" | "off"`: the new Campaigns, Replies and Sequence templates
+  appear only when it is confirmed on, and the old Campaigns and Cadences leave at that moment.
+  Unknown or unreadable reads as OFF, because the new routes 404 while dark and the old ones work
+  either way. Every `/engagement/*` route is wrapped in `RequireEngine` as well as its module gate.
+- **A connected Gmail/Outlook mailbox is what the contact composer uses**, ahead of any SMTP
+  app-password mailbox (`outreach/send.py`). Send goes through `engagement.sending.send` (do-not-
+  contact check, exactly-once row, one `outreach.email_send` charge, a thread so replies reach the
+  desk); Save to Drafts goes through `engagement.sending.drafts.save_draft`, unmetered, which the
+  reply desk uses too. SMTP remains the fallback and behaves as before.
 
 ## Frontend skills — USE THESE for any UI work
 

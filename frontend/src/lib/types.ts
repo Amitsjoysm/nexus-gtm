@@ -2269,3 +2269,225 @@ export interface LedgerStatus {
   opted_out_workspaces: number;
   undecided_workspaces: number;
 }
+
+// ---- engagement: campaigns, sequences and the reply desk (phase 11) ----------------------------
+
+/** GET /engagement/settings/status — the engine switch, answered even while it is off. */
+export interface EngagementStatus {
+  engine_on: boolean;
+  can_manage: boolean;
+}
+
+export type StepChannel = "email" | "call";
+export type StepTiming = "auto" | "manual";
+
+export interface EngagementStep {
+  step_index?: number;
+  channel: StepChannel;
+  angle: string;
+  timing_mode: StepTiming;
+  delay_business_days: number;
+  send_time_local: string | null;
+  allowed_weekdays: number[];
+}
+
+/** draft → reviewing (first emails drafted) → active → paused / completed; stop ends it as completed. */
+export type EngagementCampaignStatus = "draft" | "reviewing" | "active" | "paused" | "completed";
+
+export interface EngagementCampaign {
+  id: string;
+  name: string;
+  owner_user_id: string;
+  mailbox_connection_id: string | null;
+  status: EngagementCampaignStatus;
+  pause_reason: string | null;
+  review_every_touch: boolean;
+  first_send_mode: "on_approval" | "scheduled";
+  first_send_at: string | null;
+  timezone_mode: "contact" | "sdr";
+  launched_at: string | null;
+  steps: Required<EngagementStep>[];
+  /** Enrollment count by status. */
+  counts: Record<string, number>;
+}
+
+export interface EngagementCampaignInput {
+  name: string;
+  mailbox_id: string;
+  steps?: EngagementStep[];
+  template_id?: string | null;
+  review_every_touch?: boolean;
+  first_send_mode?: "on_approval" | "scheduled";
+  first_send_at?: string | null;
+  timezone_mode?: "contact" | "sdr";
+  source_list_id?: string | null;
+}
+
+export interface EngagementCandidate {
+  contact_id: string;
+  full_name: string;
+  title: string;
+  seniority: string;
+  email: string;
+  email_status: string;
+  account_id: string;
+  account_name: string;
+  /** On the do-not-contact list: shown so the SDR knows why, refused if added. */
+  blocked: boolean;
+}
+
+export interface EnrollResult {
+  added: string[];
+  /** reason: not_found | already_enrolled | no_email | do_not_contact:<why> */
+  skipped: { contact_id: string; reason: string }[];
+  /** The person is already in a colleague's (or another) live campaign. Added anyway. */
+  warnings: { contact_id: string; campaign_id: string; campaign_name: string; owner: string }[];
+}
+
+export interface ReviewItem {
+  enrollment_id: string;
+  contact_id: string;
+  contact_name: string;
+  contact_email: string;
+  contact_title: string;
+  account_name: string;
+  message_id: string | null;
+  subject: string;
+  body: string;
+  quality_problems: string[];
+  /** undrafted | draft | approved | ... */
+  status: string;
+}
+
+export type EngagementEnrollmentStatus =
+  | "awaiting_review" | "active" | "paused" | "snoozed" | "stopped" | "completed";
+
+export interface EngagementEnrollment {
+  id: string;
+  contact_id: string;
+  account_id: string;
+  contact_name: string;
+  contact_email: string;
+  contact_title: string;
+  account_name: string;
+  status: EngagementEnrollmentStatus;
+  status_reason: string | null;
+  current_step_index: number;
+  next_action_at: string | null;
+  snoozed_until: string | null;
+  contact_timezone: string;
+}
+
+export interface CapabilityLine {
+  units: number;
+  credits: number;
+  likely_units: number;
+  likely_credits: number;
+}
+
+/** GET /engagement/campaigns/{id}/estimate (spec §10, D18). */
+export interface CampaignEstimate {
+  contacts: number;
+  email_steps: number;
+  worst_credits: number;
+  likely_credits: number;
+  balance: number;
+  gate_applies: boolean;
+  covered: boolean;
+  shortfall: number;
+  per_capability: Record<string, CapabilityLine>;
+  /** Non-empty above 50 sends a day from one mailbox (D10). Never a block. */
+  volume_warning: string;
+}
+
+export interface SequenceTemplate {
+  id: string;
+  name: string;
+  description: string;
+  steps: EngagementStep[];
+  created_at: string;
+}
+
+export interface TimelineEntry {
+  message_id: string;
+  direction: "out" | "in";
+  kind: string;
+  status: string;
+  subject: string;
+  preview: string;
+  at: string | null;
+  contact_id: string | null;
+  contact_name: string;
+  campaign_id: string | null;
+  campaign_name: string;
+  category: string | null;
+}
+
+export type ReplyCategory =
+  | "interested" | "question" | "referral" | "later" | "out_of_office" | "declined"
+  | "unsubscribe" | "unclear";
+
+export type DeskDecision = "reengage" | "block" | "close" | "meeting";
+
+export interface DeskQueueItem {
+  id: string;
+  message_id: string;
+  category: ReplyCategory;
+  corrected_category: ReplyCategory | null;
+  confidence: number;
+  resolved_date: string | null;
+  status: "open" | "done";
+  decision: DeskDecision | null;
+  assigned_user_id: string | null;
+  contact_id: string | null;
+  account_id: string | null;
+  contact_name: string;
+  contact_email: string;
+  account_name: string;
+  subject: string;
+  preview: string;
+  received_at: string | null;
+  responded_at: string | null;
+}
+
+export interface DeskConversationMessage {
+  id: string;
+  direction: "out" | "in";
+  subject: string;
+  body: string;
+  at: string | null;
+}
+
+export interface DeskItemDetail extends DeskQueueItem {
+  body: string;
+  suggested_response: string | null;
+  conversation: DeskConversationMessage[];
+  paused_colleagues: {
+    enrollment_id: string;
+    contact_id: string;
+    contact_name: string;
+    campaign_id: string;
+    /** False when the colleague is in someone else's campaign: shown, not steerable. */
+    actionable: boolean;
+  }[];
+}
+
+export interface DeskScheduledItem {
+  enrollment_id: string;
+  contact_id: string;
+  contact_name: string;
+  account_name: string;
+  campaign_id: string;
+  status: string;
+  status_reason: string | null;
+  due_at: string | null;
+}
+
+export interface WorkspaceEngagementSettings {
+  reply_confidence_default: number;
+  reply_confidence_min: number;
+  reply_confidence_max: number;
+  reply_reminder_business_hours: number;
+  ooo_default_days: number;
+  can_edit: boolean;
+}

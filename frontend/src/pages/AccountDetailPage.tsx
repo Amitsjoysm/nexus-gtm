@@ -28,6 +28,8 @@ import {
 } from "@/components/AddSimilarPerson";
 import { CallConsole } from "@/components/CallConsole";
 import { EmailComposer } from "@/components/EmailComposer";
+import { AccountConversations } from "@/components/engagement/AccountConversations";
+import { useEngineOn } from "@/app/EngagementContext";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { useSignalWindow } from "@/app/SignalWindowContext";
@@ -51,7 +53,7 @@ import type {
 } from "@/lib/types";
 import styles from "./AccountDetailPage.module.css";
 
-type Tab = "overview" | "contacts" | "signals" | "lookalikes" | "actions";
+type Tab = "overview" | "contacts" | "signals" | "emails" | "lookalikes" | "actions";
 
 interface LookalikeState {
   loading: boolean;
@@ -103,6 +105,7 @@ export function AccountDetailPage() {
   const { session } = useAuth();
   const { windowDays } = useSignalWindow();
   const [tab, setTab] = useState<Tab>("overview");
+  const engineOn = useEngineOn() === true;
   const [running, setRunning] = useState(false);
   const [findingContacts, setFindingContacts] = useState(false);
   const [addingLookalike, setAddingLookalike] = useState<string | null>(null);
@@ -627,6 +630,8 @@ export function AccountDetailPage() {
           { value: "overview", label: "Overview" },
           { value: "contacts", label: "Contacts", count: contacts.data?.length },
           { value: "signals", label: "Signals", count: signals.data?.length },
+          // Every email to and from this account's people, once the engagement engine is on.
+          ...(engineOn ? [{ value: "emails", label: "Emails" }] : []),
           { value: "lookalikes", label: "Lookalikes" },
           { value: "actions", label: "AI Actions" },
         ]}
@@ -992,6 +997,12 @@ export function AccountDetailPage() {
           </Card>
         </div>
       </TabPanel>
+
+      {engineOn && (
+        <TabPanel id="panel-emails" active={tab === "emails"}>
+          <AccountConversations accountId={id} />
+        </TabPanel>
+      )}
 
       <TabPanel id="panel-lookalikes" active={tab === "lookalikes"}>
         <div className={styles.panel}>

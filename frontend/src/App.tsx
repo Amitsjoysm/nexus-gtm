@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/app/ThemeContext";
 import { SignalWindowProvider } from "@/app/SignalWindowContext";
 import { AuthProvider, useAuth } from "@/app/AuthContext";
 import { isLocked, switchNotice, useEntitlements } from "@/app/EntitlementsContext";
+import { RequireEngine } from "@/app/EngagementContext";
 import { FeatureUnavailable } from "@/components/FeatureUnavailable";
 import { RequirePlatformAdmin } from "@/app/RequirePlatformAdmin";
 import { ToastProvider } from "@/components/ui";
@@ -66,6 +67,24 @@ const CampaignsPage = lazyPage(() => import("@/pages/CampaignsPage"), "Campaigns
 const CadencesPage = lazyPage(() => import("@/pages/CadencesPage"), "CadencesPage");
 const MailboxesPage = lazyPage(() => import("@/pages/engagement/MailboxesPage"), "MailboxesPage");
 const DataUsePage = lazyPage(() => import("@/pages/DataUsePage"), "DataUsePage");
+// The engagement engine's screens (spec §9). Each route is behind `RequireEngine` as well as its
+// module gate: while the engine is dark every API behind them answers 404.
+const EngagementCampaignsPage = lazyPage(
+  () => import("@/pages/engagement/CampaignsPage"), "EngagementCampaignsPage",
+);
+const CampaignBuilder = lazyPage(
+  () => import("@/pages/engagement/CampaignBuilder"), "CampaignBuilder",
+);
+const CampaignDetailPage = lazyPage(
+  () => import("@/pages/engagement/CampaignDetailPage"), "CampaignDetailPage",
+);
+const ReplyDeskPage = lazyPage(() => import("@/pages/engagement/ReplyDeskPage"), "ReplyDeskPage");
+const SequenceTemplatesPage = lazyPage(
+  () => import("@/pages/engagement/SequenceTemplatesPage"), "SequenceTemplatesPage",
+);
+const EngagementSettingsPage = lazyPage(
+  () => import("@/pages/settings/EngagementSettings"), "EngagementSettingsPage",
+);
 const DoNotContactPage = lazyPage(
   () => import("@/pages/engagement/DoNotContactPage"), "DoNotContactPage",
 );
@@ -325,6 +344,68 @@ export function App() {
                     <RequireCapability capability="module.outreach" name="Do not contact">
                       <DoNotContactPage />
                     </RequireCapability>
+                  }
+                />
+                {/* The engagement engine. Every member works their own campaigns and replies; the
+                    server scopes each read to the caller's mailboxes. */}
+                <Route
+                  path="/engagement/campaigns"
+                  element={
+                    <RequireEngine>
+                      <RequireCapability capability="module.campaigns" name="Campaigns">
+                        <EngagementCampaignsPage />
+                      </RequireCapability>
+                    </RequireEngine>
+                  }
+                />
+                <Route
+                  path="/engagement/campaigns/new"
+                  element={
+                    <RequireEngine>
+                      <RequireCapability capability="module.campaigns" name="Campaigns">
+                        <CampaignBuilder />
+                      </RequireCapability>
+                    </RequireEngine>
+                  }
+                />
+                <Route
+                  path="/engagement/campaigns/:campaignId"
+                  element={
+                    <RequireEngine>
+                      <RequireCapability capability="module.campaigns" name="Campaigns">
+                        <CampaignDetailPage />
+                      </RequireCapability>
+                    </RequireEngine>
+                  }
+                />
+                <Route
+                  path="/engagement/replies"
+                  element={
+                    <RequireEngine>
+                      <RequireCapability capability="module.campaigns" name="Replies">
+                        <ReplyDeskPage />
+                      </RequireCapability>
+                    </RequireEngine>
+                  }
+                />
+                <Route
+                  path="/engagement/replies/settings"
+                  element={
+                    <RequireEngine>
+                      <RequireCapability capability="module.campaigns" name="Reply settings">
+                        <EngagementSettingsPage />
+                      </RequireCapability>
+                    </RequireEngine>
+                  }
+                />
+                <Route
+                  path="/engagement/templates"
+                  element={
+                    <RequireEngine fallback="/cadences">
+                      <RequireCapability capability="module.cadences" name="Sequence templates">
+                        <SequenceTemplatesPage />
+                      </RequireCapability>
+                    </RequireEngine>
                   }
                 />
                 <Route

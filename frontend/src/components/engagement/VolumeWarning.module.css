@@ -1,0 +1,10 @@
+.volume {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--warning-quiet);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+}

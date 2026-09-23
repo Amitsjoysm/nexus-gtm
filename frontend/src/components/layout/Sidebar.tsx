@@ -4,6 +4,7 @@ import { NAV_ITEMS, canSee, navState } from "@/app/nav";
 import { usePlatformIdentity } from "@/app/RequirePlatformAdmin";
 import { useEntitlements, isLocked, switchNotice } from "@/app/EntitlementsContext";
 import { useAuth } from "@/app/AuthContext";
+import { useEngineOn } from "@/app/EngagementContext";
 import { Icons } from "@/components/ui";
 import styles from "./Sidebar.module.css";
 
@@ -25,6 +26,9 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
   // Null until loaded, and null on error — `isLocked` reads that as "nothing is locked", so a
   // slow or failing billing endpoint never deletes the customer's navigation.
   const entitlements = useEntitlements();
+  // Which engagement engine the workspace is on: the new Campaigns, Replies and Sequence templates
+  // replace the old Campaigns and Cadences only once the switch is confirmed on.
+  const engineOn = useEngineOn();
 
   return (
     <aside
@@ -55,7 +59,7 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
       </div>
 
       <nav className={styles.nav} aria-label="Main navigation">
-        {NAV_ITEMS.filter((item) => canSee(item, role, isPlatformAdmin)).map((item) => {
+        {NAV_ITEMS.filter((item) => canSee(item, role, isPlatformAdmin, engineOn)).map((item) => {
           const notice = switchNotice(entitlements, item.capability);
           const state = navState(role, isLocked(entitlements, item.capability), notice !== null);
           if (state === "hidden") return null;

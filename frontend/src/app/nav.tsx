@@ -7,6 +7,7 @@ import {
   BuildingIcon,
   CreditCardIcon,
   DashboardIcon,
+  FileTextIcon,
   InboxIcon,
   ListIcon,
   MailIcon,
@@ -50,6 +51,13 @@ export interface NavItem {
    * lying about a feature the customer still has.
    */
   capability?: string;
+  /**
+   * Which engagement engine the item belongs to. `"on"` items (the new Campaigns, Replies and
+   * Sequence templates) appear only once the engine is confirmed switched on; `"off"` items (the
+   * old Campaigns and Cadences) disappear at that moment. Before phase 15 removes the old engine,
+   * this is the whole of the switch-over in the navigation: one flag, two sets of pages, never both.
+   */
+  engine?: "on" | "off";
 }
 
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
@@ -65,6 +73,21 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/accounts", label: "Accounts", icon: <BuildingIcon /> },
   { to: "/contacts", label: "Contacts", icon: <UsersIcon /> },
   { to: "/mailboxes", label: "My mailboxes", icon: <MailIcon />, capability: "module.outreach" },
+  // The engagement engine (spec §9). An SDR builds and runs their own campaigns and works their own
+  // replies, so none of these carries a `minRole`; the server scopes every read to the caller's
+  // mailboxes, and a manager sees the team through a toggle on the page.
+  {
+    to: "/engagement/campaigns", label: "Campaigns", icon: <SendIcon />,
+    capability: "module.campaigns", engine: "on",
+  },
+  {
+    to: "/engagement/replies", label: "Replies", icon: <MessageIcon />,
+    capability: "module.campaigns", engine: "on",
+  },
+  {
+    to: "/engagement/templates", label: "Sequence templates", icon: <FileTextIcon />,
+    capability: "module.cadences", engine: "on",
+  },
   { to: "/network", label: "Network", icon: <NetworkIcon />, capability: "module.network" },
   { to: "/lists", label: "Lists", icon: <ListIcon />, capability: "module.lists" },
   { to: "/signals", label: "Signals", icon: <SignalIcon />, capability: "module.signals" },
@@ -86,11 +109,11 @@ export const NAV_ITEMS: NavItem[] = [
   // the email composer a rep uses one contact at a time.
   {
     to: "/campaigns", label: "Campaigns", icon: <SendIcon />, minRole: "manager",
-    capability: "module.campaigns",
+    capability: "module.campaigns", engine: "off",
   },
   {
     to: "/cadences", label: "Cadences", icon: <MessageIcon />, minRole: "manager",
-    capability: "module.cadences",
+    capability: "module.cadences", engine: "off",
   },
   {
     to: "/plays", label: "Plays", icon: <BoltIcon />, minRole: "manager",
@@ -123,10 +146,19 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-export function canSee(item: NavItem, role: Role | undefined, isPlatformAdmin = false): boolean {
+export function canSee(
+  item: NavItem,
+  role: Role | undefined,
+  isPlatformAdmin = false,
+  engineOn: boolean | null = null,
+): boolean {
   // A platform-only item is invisible to every workspace member, including an owner. The server
   // enforces this regardless — the nav entry only decides whether the link is offered.
   if (item.platformOnly) return isPlatformAdmin;
+  // New-engine pages only once the switch is CONFIRMED on; old-engine pages until it is. Unknown
+  // (still loading) keeps the old ones, which work either way.
+  if (item.engine === "on" && engineOn !== true) return false;
+  if (item.engine === "off" && engineOn === true) return false;
   if (!item.minRole) return true;
   if (!role) return false;
   return ROLE_RANK[role] >= ROLE_RANK[item.minRole];

@@ -63,7 +63,11 @@ class ConversationMessageOut(BaseModel):
 class ColleagueOut(BaseModel):
     enrollment_id: str
     contact_id: str
+    contact_name: str = ""
     campaign_id: str
+    #: False when the colleague is in a campaign sending from someone else's mailbox: shown, so the
+    #: SDR knows why they went quiet, but only that mailbox's owner or a manager can resume them.
+    actionable: bool = True
 
 
 class ItemOut(QueueItemOut):
@@ -216,9 +220,9 @@ async def read_item(
 
     classification = await _classification(ts, classification_id, principal)
     detail = await service.item(ts, classification)
-    names = _Names(
-        contacts={detail.contact.id: detail.contact} if detail.contact else {},
-        accounts={detail.account.id: detail.account} if detail.account else {})
+    names = await _names(
+        ts, [classification.contact_id, *(e.contact_id for e in detail.paused_colleagues)],
+        [classification.account_id])
     return ItemOut(
         **_row(classification, detail.message, names),
         body=getattr(detail.message, "body_text", "") or "",
@@ -226,9 +230,12 @@ async def read_item(
         conversation=[ConversationMessageOut(
             id=m.id, direction=m.direction, subject=m.subject or "", body=m.body_text or "",
             at=m.sent_at or m.received_at or m.created_at) for m in detail.conversation],
-        paused_colleagues=[ColleagueOut(enrollment_id=e.id, contact_id=e.contact_id,
-                                        campaign_id=e.campaign_id)
-                           for e in detail.paused_colleagues])
+        paused_colleagues=[ColleagueOut(
+            enrollment_id=e.id, contact_id=e.contact_id, campaign_id=e.campaign_id,
+            contact_name=getattr(names.contact(e.contact_id), "full_name", "") or "",
+            actionable=_is_manager(principal)
+            or e.mailbox_connection_id == classification.mailbox_connection_id)
+            for e in detail.paused_colleagues])
 
 
 @router.post("/{classification_id}/draft")
@@ -323,6 +330,56 @@ async def assign(
     await service.reassign(ts, classification, user_id=user_id)
 
 
+class RescheduleIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    when: datetime
+
+
+async def _owned_enrollment(ts: TenantSession, enrollment_id: str, principal: Principal):
+    """An enrollment sending from one of the caller's mailboxes (or any, for a manager). 404, not
+    403, otherwise: a 403 would confirm the id exists."""
+    from nexus.models.engagement import EngagementEnrollment, MailboxConnection
+
+    enrollment = await ts.get(EngagementEnrollment, enrollment_id)
+    mailbox = await ts.get(MailboxConnection, enrollment.mailbox_connection_id) \
+        if enrollment is not None and enrollment.mailbox_connection_id else None
+    if enrollment is None or mailbox is None or (
+            mailbox.owner_user_id != principal.user_id and not _is_manager(principal)):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    return enrollment
+
+
+@router.post("/scheduled/{enrollment_id}/reschedule", status_code=204, response_model=None)
+async def reschedule(
+    enrollment_id: str, body: RescheduleIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> None:
+    from nexus.engagement.desk import service
+
+    enrollment = await _owned_enrollment(ts, enrollment_id, principal)
+    try:
+        await service.reschedule(ts, enrollment, body.when, user_id=principal.user_id)
+    except service.DeskError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.post("/scheduled/{enrollment_id}/cancel", status_code=204, response_model=None)
+async def cancel_scheduled(
+    enrollment_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> None:
+    from nexus.engagement.desk import service
+
+    enrollment = await _owned_enrollment(ts, enrollment_id, principal)
+    try:
+        await service.cancel_scheduled(ts, enrollment, user_id=principal.user_id)
+    except service.DeskError as exc:
+        raise _refuse(exc) from exc
+
+
 @router.post("/colleagues/{enrollment_id}/{action}", status_code=204, response_model=None)
 async def colleague(
     enrollment_id: str, action: str,
@@ -330,11 +387,8 @@ async def colleague(
     principal: Principal = Depends(require(Permission.run_engagement)),
 ) -> None:
     from nexus.engagement.desk import service
-    from nexus.models.engagement import EngagementEnrollment
 
-    enrollment = await ts.get(EngagementEnrollment, enrollment_id)
-    if enrollment is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    enrollment = await _owned_enrollment(ts, enrollment_id, principal)
     try:
         if action == "resume":
             await service.resume_colleague(ts, enrollment, user_id=principal.user_id)

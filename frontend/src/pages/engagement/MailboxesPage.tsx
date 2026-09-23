@@ -125,7 +125,7 @@ export function MailboxesPage() {
     <div>
       <PageHeader
         title="My mailboxes"
-        description="Connect the Gmail or Microsoft 365 mailbox you prospect from. Campaign emails send from it, replies are read in it, and nothing else in it is stored."
+        description="Connect the Gmail or Microsoft 365 mailbox you prospect from. Emails you send from here, one at a time or in a campaign, go out from it. Replies are read in it, and nothing else in it is stored."
         actions={
           <>
             <Link to="/do-not-contact" className={styles.link}>Do-not-contact list</Link>
@@ -176,7 +176,7 @@ export function MailboxesPage() {
           <EmptyState
             icon={<Icons.MailIcon />}
             title={team ? "Nobody on the team has connected a mailbox" : "No mailbox connected yet"}
-            description="Connect one above. Until then campaigns cannot send on your behalf."
+            description="Connect one above. Until then nothing can be sent from here on your behalf."
           />
         }
       >
