@@ -214,8 +214,8 @@ PSP references) -> `0055` (`feature_switches`) -> `0056` (`accounts.owner_user_i
 `notification_preferences.scope`, `alert_channel_rules`) -> `0057` (engagement engine + training
 ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_enrollment_id`) ->
 `0058` (`crm_logged_at` on `engagement_messages` and `reply_classifications`) -> `0059`
-(`signal_events.dated`, `company_signals.dated`) -> `0060` (`integration_connections.config`).
-Every tenant-scoped table gets RLS via
+(`signal_events.dated`, `company_signals.dated`) -> `0060` (`integration_connections.config`) -> `0061` (`placed_calls`,
+`tenants.platform_caller_id`). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -1561,8 +1561,8 @@ product owner: **both, like CRM.**
   before the rep's phone rings — once it rings the minutes are spent) and charged at disposition on
   Twilio's MEASURED duration, in started minutes, keyed on the call id so logging a second outcome
   cannot charge twice. The typed duration is a note; it bills only when Twilio could not be asked. A
-  workspace on its own Twilio pays Twilio directly, so charging it would bill one call twice. Known
-  gap: a platform call nobody ever dispositions is not charged.
+  workspace on its own Twilio pays Twilio directly, so charging it would bill one call twice. A call
+  nobody dispositions is charged by the sweep below.
 - **The platform credential is `ACCOUNT_SID:AUTH_TOKEN`** in Provider keys — the pair Twilio
   authenticates with, so they are stored and rotated together. `ProviderSpec.key_format` serves that
   sentence to the Add-a-key form. Probe reads the account; verify also checks the account owns (or
@@ -1577,6 +1577,17 @@ product owner: **both, like CRM.**
   `0058`), never in the sealed bundle: showing it from there would mean unsealing inside the response
   builder, the one place that keeps "the secret never leaves the server" checkable. The SID comes back
   only as `AC...1234`, and a blank SID or token keeps what is saved.
+- **Every platform call is charged, logged or not** (decided 2026-09-23). A live platform call is
+  recorded at dial in `placed_calls` (migration `0059`). The `charge_unlogged_calls` sweep, enqueued
+  every tick beside the billing sweeps, charges any still uncharged two hours on, on Twilio's
+  measured duration, under the same `call:<id>` key as the disposition — whichever runs first stamps
+  `charged_at`, and the other charges nothing. It asks the PLATFORM provider
+  (`platform_call_provider`), never a workspace's. Live calls wait until finished; one Twilio still
+  cannot describe after 7 days is given up on, nothing charged.
+- **Each workspace can have its own number on the platform account** (`tenants.platform_caller_id`,
+  `PUT /admin/billing/customers/{id}/caller-id`, `providers.manage`, the customer directory's Caller
+  ID panel). One shared number let one heavy customer's spam flag lower answer rates for all. Checked
+  against the platform account before saving; blank is the platform default.
 
 ## Provider keys and models (`nexus/providers/`) — superadmin, no redeploy
 
@@ -1939,10 +1950,22 @@ collected and none older than the day collection began. Every window showed the 
   signals, not where the context loads them, because that same list feeds scoring.
 - `scripts/repair_signal_dates.py` re-dates stored rows from a URL date, an SEC key, or (`--feeds`,
   fetches) the post date in the company feed. Dry run by default.
-- **Open, not fixed here:** `event_dedupe_key` buckets news on the month we FOUND it, so an old
-  funding article found this month takes this month's `funding` slot and a real round found later in
-  the month is deduped away. Bucketing dated events by their own month closes it; it changes source
-  behaviour, so it waits for the trade-off to be agreed.
+- **A dated event is de-duplicated by its own month** (`event_bucket`, decided 2026-09-23).
+  Bucketing on the month we FOUND it let an old article found this month take this month's `funding`
+  slot, and a real round found later in the month was dropped with no trace. Undated items keep the
+  found month, the only date they have; job boards stay on the current month, being observations of
+  now. One-time effect on deploy: an event stored under its old found-month key can be stored once
+  more under its event month.
+- **An old event goes on the timeline, not into anyone's attention** (`asks_for_attention`,
+  `signal_alert_max_age_days`, default 30). An event older than that by its own date raises no
+  alert, no channel ping and no Inbox task; undated signals always may, and Plays are untouched. One
+  check read by both `raise_alerts_for` and the pipeline's Inbox loop, so they cannot disagree.
+- **Latest event on top, ties to the most recently found** (decided 2026-09-23). Every newest-first
+  read orders by `occurred_at` then `created_at`. A 2023 round found this morning sits among 2023
+  items: it is history, and it no longer alerts.
+- `signal_age` says "date unknown" for a recent undated find, and "date unknown, found over six
+  months ago" for an old one: the day we found it is the LATEST it can have happened, so an old
+  find is known to be old. Saying only "date unknown" threw that away; the full suite caught it.
 
 ## Person-level personalization (`nexus/personalization/`)
 
