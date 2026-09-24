@@ -204,6 +204,17 @@ def _dated(value, now: datetime) -> dict:
     return {"occurred_at": when, "dated": "event"} if when else {"occurred_at": now, "dated": "found"}
 
 
+def event_bucket(when: datetime, dated: str, now: datetime) -> datetime:
+    """The date a signal is grouped by for de-duplication: when it HAPPENED, if we know that.
+
+    Grouping by the month we found it let an old article found this month take this month's
+    funding slot, and a real round found later in the month was dropped without a word (decided
+    with the product owner 2026-09-23). An undated item keeps `now`: the day we found it is the
+    only date it has.
+    """
+    return when if dated == "event" and when is not None else now
+
+
 def event_dedupe_key(kind: str, anchor: str, strength: float, now: datetime) -> str:
     """Event-bucketed dedupe key, NOT per-URL.
 
@@ -596,7 +607,8 @@ class WebNewsSource(SignalSource):
             # an old round was stored as a funding event. The snippet is still read below for
             # display, just not for deciding what kind of event this is.
             kind, strength = _classify_news(title)
-            dedupe_key = event_dedupe_key(kind, anchor, strength, now)
+            when, dated = hit_date(h)
+            dedupe_key = event_dedupe_key(kind, anchor, strength, event_bucket(when, dated, now))
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -611,7 +623,8 @@ class WebNewsSource(SignalSource):
                     url=url,
                     strength=strength,
                     dedupe_key=dedupe_key,
-                    **dict(zip(("occurred_at", "dated"), hit_date(h))),
+                    occurred_at=when,
+                    dated=dated,
                 )
             )
         return out[:4]
@@ -897,7 +910,8 @@ class DorkedSearchSource(SignalSource):
             if kind == dork.kind:
                 strength = max(strength, dork.strength)
 
-        dedupe_key = event_dedupe_key(kind, anchor, strength, now)
+        when, dated = hit_date(hit)
+        dedupe_key = event_dedupe_key(kind, anchor, strength, event_bucket(when, dated, now))
         if dedupe_key in seen:
             return None
         seen.add(dedupe_key)
@@ -909,7 +923,8 @@ class DorkedSearchSource(SignalSource):
             url=url or None,
             strength=strength,
             dedupe_key=dedupe_key,
-            **dict(zip(("occurred_at", "dated"), hit_date(hit))),
+            occurred_at=when,
+            dated=dated,
         )
 
 
@@ -1117,8 +1132,10 @@ class PublicApiSignalSource(SignalSource):
                 kind="news", source=self.name,
                 title=f"{top['title']} ({top['points']} points on Hacker News)",
                 url=top["url"], strength=0.5,
-                dedupe_key=event_dedupe_key("news", anchor, 0.5, now),
-                **_dated(top.get("created_at"), now),
+                **(hn := _dated(top.get("created_at"), now)),
+                dedupe_key=event_dedupe_key(
+                    "news", anchor, 0.5, event_bucket(hn["occurred_at"], hn["dated"], now)
+                ),
             ))
 
         # GitHub last: it has the tightest budget, so when the hour's quota is gone the other two
