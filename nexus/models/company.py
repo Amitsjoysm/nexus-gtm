@@ -28,7 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from nexus.core.db import Base, IdMixin, TimestampMixin, TZDateTime
 
 # Where a company record came from, for provenance when two sources disagree.
-COMPANY_SOURCES = ("crawl", "account_backfill", "source_db", "import")
+COMPANY_SOURCES = ("crawl", "account_backfill", "source_db", "import", "linkedin")
 
 
 class Company(TimestampMixin, Base):
