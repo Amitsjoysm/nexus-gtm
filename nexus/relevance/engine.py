@@ -101,6 +101,23 @@ class RelevanceContext:
         )
 
 
+def _same_linkedin_industry(industry: str | None, icp_codes) -> bool:
+    """Does this industry name map to one of the ICP's LinkedIn industry codes, or a child of one?
+
+    Deterministic (whole-word label match and a fixed synonym list); no LLM runs while scoring.
+    An ICP saved before codes were stored has none, and matches exactly as before.
+    """
+    if not industry or not icp_codes:
+        return False
+    from nexus.prospecting.industries import descendants, match_term
+
+    try:
+        wanted = descendants([int(c) for c in icp_codes])
+    except (TypeError, ValueError):
+        return False
+    return bool(set(match_term(industry)) & wanted)
+
+
 def _band_score(value: int | None, lo: int | None, hi: int | None) -> float:
     """1.0 inside [lo, hi]; decays linearly to 0 over one band-width outside; neutral if unset."""
     if value is None or (lo is None and hi is None):
@@ -142,6 +159,12 @@ class RelevanceEngine:
         elif account.industry and account.industry.lower() in industries:
             sub["industry"] = 1.0
             reasons.append(f"industry '{account.industry}' is in ICP")
+        elif _same_linkedin_industry(account.industry, icp.get("linkedin_industry_ids")):
+            # The ICP says "SaaS"; LinkedIn files the same company as "Software Development". Saving
+            # the ICP stored the codes its words map to, and an account whose industry maps into
+            # them (a child code counts for its parent) is the industry the ICP asked for.
+            sub["industry"] = 1.0
+            reasons.append(f"industry '{account.industry}' matches the ICP's industries")
         else:
             sub["industry"] = 0.0
             reasons.append(f"industry '{account.industry or 'unknown'}' not in ICP")

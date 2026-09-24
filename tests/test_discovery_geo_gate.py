@@ -91,11 +91,12 @@ def test_discovery_applies_the_geo_gate_beside_the_size_gate():
     that exists and is never called is the failure this codebase keeps finding."""
     import inspect
 
-    from nexus.discovery import auto
+    from nexus.prospecting import deliver
 
-    src = inspect.getsource(auto)
-    assert "_within_geo(" in src
-    persist = src[src.index("# 3) Hard size-band gate"):]
+    # Accounts persist in `prospecting/deliver.py` since discovery became the prospecting chain.
+    src = inspect.getsource(deliver)
+    persist = src[src.index("# The persist loop"):]
+    assert "_within_size_band(" in persist
     assert "_within_geo(" in persist, "the geo gate is defined but not applied where accounts persist"
 
 

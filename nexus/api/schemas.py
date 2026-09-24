@@ -174,6 +174,8 @@ class RelevanceProfileIn(BaseModel):
 
 class RelevanceProfileOut(RelevanceProfileIn):
     id: str
+    #: Set on a save that changed the ICP: the screen asks "how many companies now?".
+    icp_changed: bool = False
 
 
 class TitleRecommendationIn(BaseModel):

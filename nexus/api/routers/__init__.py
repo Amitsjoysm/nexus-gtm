@@ -40,6 +40,7 @@ from nexus.api.routers import (
     network,
     orchestration,
     outcomes,
+    prospecting,
     relevance,
     signals,
     unsubscribe,
@@ -50,6 +51,7 @@ from nexus.api.routers import (
 all_routers = [
     auth.router,
     relevance.router,
+    prospecting.router,
     accounts.router,
     contacts.router,
     agents.router,

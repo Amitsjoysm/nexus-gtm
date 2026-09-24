@@ -462,6 +462,23 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
     return {"discovered": discovered, "tenants": len(tenant_ids)}
 
 
+async def handle_populate_accounts(payload: dict) -> dict:
+    """A person's "add N companies now" (``nexus/prospecting/populate.py``).
+
+    The run is committed before this job is queued; if a worker still cannot see it, raising lets
+    the durability layer retry with backoff rather than dropping the request with the run stuck at
+    "queued" forever.
+    """
+    from nexus.models.prospecting import ProspectRun
+    from nexus.prospecting.populate import execute
+
+    tenant_id, run_id = payload["tenant_id"], payload["run_id"]
+    async with tenant_session(tenant_id) as ts:
+        if await ts.get(ProspectRun, run_id) is None:
+            raise RuntimeError(f"populate run {run_id} is not visible yet")
+    return await execute(tenant_id, run_id)
+
+
 async def handle_sync_network_account(payload: dict) -> dict:
     """Pull a member's network source via its connector and fold the batch into the graph.
 
@@ -1259,6 +1276,7 @@ HANDLERS: dict[str, Handler] = {
     "send_daily_digests": handle_send_daily_digests,
     "alert_digests": handle_alert_digests,
     "discover_icp_accounts": handle_discover_icp_accounts,
+    "populate_accounts": handle_populate_accounts,
     "crawl_companies": handle_crawl_companies,
     "backfill_companies": handle_backfill_companies,
     "sync_network_account": handle_sync_network_account,
@@ -1334,6 +1352,15 @@ async def enqueue_alert_digests(*, queue: TaskQueue | None = None) -> None:
 async def enqueue_send_daily_digests(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="send_daily_digests", payload={}))
+
+
+async def enqueue_populate_accounts(
+    tenant_id: str, run_id: str, *, queue: TaskQueue | None = None
+) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(
+        Job(name="populate_accounts", payload={"tenant_id": tenant_id, "run_id": run_id})
+    )
 
 
 async def enqueue_discover_icp_accounts(*, queue: TaskQueue | None = None) -> None:

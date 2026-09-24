@@ -52,6 +52,8 @@ class ProspectRun(IdMixin, TimestampMixin, TenantScoped, Base):
     sources: Mapped[dict] = mapped_column(JSON, default=dict)
     #: Everything found and not delivered, by reason: {"no_website": n, "already_held": n, ...}.
     discarded: Mapped[dict] = mapped_column(JSON, default=dict)
+    #: Why a source contributed nothing: {"linkedin": "not_configured" | "failed" | ...}.
+    notes: Mapped[dict] = mapped_column(JSON, default=dict)
     account_ids: Mapped[list] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)

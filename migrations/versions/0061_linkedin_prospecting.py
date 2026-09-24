@@ -77,6 +77,7 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=16), nullable=False),
         sa.Column("sources", sa.JSON(), nullable=False),
         sa.Column("discarded", sa.JSON(), nullable=False),
+        sa.Column("notes", sa.JSON(), nullable=False),
         sa.Column("account_ids", sa.JSON(), nullable=False),
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),

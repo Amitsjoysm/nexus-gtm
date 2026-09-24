@@ -6,7 +6,9 @@ filter, then an ICP-fit score that must clear ``min_fit``. Sub-threshold candida
 persisted, so the SDR's list fills with high-fit accounts and nothing else. Dedup is by domain
 across all accounts (incl. archived), so a company is never surfaced twice.
 
-Pipeline: search (Exa) → build transient candidates → **enrich (our web crawler)** → score → keep.
+Pipeline: the prospecting chain (shared database → LinkedIn → web search, in
+``nexus/prospecting/companies.py``) → for web candidates only, **enrich (our web crawler)** → score →
+keep (``nexus/prospecting/deliver.py``).
 Enrichment matters because search returns domain/industry/geo but not headcount/tech/revenue, so
 without it every candidate scores identically; crawling fills those blanks so the score actually
 ranks. It's gated + bounded + best-effort, so offline/CI it's a no-op and a crawl outage can't block
@@ -23,22 +25,14 @@ from typing import Awaitable, Callable
 
 from sqlalchemy import select
 
-from nexus.core.config import get_settings
 from nexus.core.tenancy import TenantSession
 from nexus.integrations.company_search import CompanyCandidate
 from nexus.models.account import Account
-from nexus.models.intelligence import AccountScore
-from nexus.relevance import get_relevance_engine
 from nexus.relevance.engine import get_profile
 
 logger = logging.getLogger("nexus.discovery.auto")
 
 Search = Callable[..., Awaitable[list[CompanyCandidate]]]
-
-# Cap the excludeDomains list sent to the search backend (Exa caps the request size). The local
-# domain dedup below is the backstop for anything beyond the cap, so correctness never depends on it.
-_EXCLUDE_CAP = 256
-
 
 async def _enrich_candidates(
     ts: TenantSession, accounts: list[Account], *, concurrency: int
@@ -252,117 +246,23 @@ async def auto_discover_for_tenant(
         logger.info("icp discovery skipped for %s: plan does not include it", ts.tenant_id)
         return {"discovered": 0, "screened": 0, "account_ids": [], "skipped": "not_entitled"}
 
-    if search is None:
-        from nexus.integrations.registry import build_registry_from_settings
+    # Database first, then LinkedIn, then web search (nexus/prospecting/companies.py). The web
+    # step is the one this sweep used to be, and keeps its pool: its candidates must still clear
+    # the fit threshold after enrichment, so it needs more than it will deliver.
+    from collections import Counter
 
-        search = build_registry_from_settings().company_search
+    from nexus.prospecting.companies import find_icp_companies
+    from nexus.prospecting.deliver import deliver
 
-    # Tell the search backend which companies we already track so it returns NET-NEW ones instead of
-    # re-surfacing the same top-N every run (the reason daily discovery dried up after a few days).
-    # Column-projected (no ORM hydration) and capped to stay within the backend's request limit.
-    tracked = {
-        d.lower()
-        for d in (
-            await ts.session.scalars(
-                select(Account.domain).where(
-                    Account.tenant_id == ts.tenant_id, Account.domain.isnot(None)
-                )
-            )
-        ).all()
-        if d
-    }
-    exclude = sorted(tracked)[:_EXCLUDE_CAP] if tracked else None
-
-    icp = _profile_to_search_icp(profile)
-    from nexus.integrations.search.provider import SearchUnavailable
-
-    try:
-        candidates = await search(icp, limit=pool_limit, exclude_domains=exclude)
-    except SearchUnavailable as exc:
-        # Still never crashes the heartbeat — but it says WHY, rather than reporting a day with
-        # nothing new in the market. Discovery is strictly Exa; there is no fallback to try.
-        logger.warning("icp auto-discovery skipped for %s: %s", ts.tenant_id, exc)
-        return {"discovered": 0, "screened": 0, "account_ids": [],
-                "skipped": "search_unavailable", "reason": str(exc)}
-    except Exception as exc:  # a search outage must not crash the heartbeat
-        logger.warning("icp auto-discovery search failed: %r", exc)
-        candidates = []
-
-    relevance = get_relevance_engine()
-    settings = get_settings()
-
-    # 1) Build distinct, net-new candidate accounts (transient — not persisted yet). Dedup in-memory
-    #    against everything we already track (the `tracked` set) + within-run dups, so a company is
-    #    never re-surfaced. Building is cheap, so we build the whole pool; cost is bounded at enrich.
-    built: list[Account] = []
-    seen: set[str] = set()
-    for cand in candidates:
-        # Normalised on both sides, or the same company is discovered again every day under a
-        # slightly different spelling and the rep's "net-new" list is mostly duplicates.
-        from nexus.accounts.dedupe import normalise_on_write
-
-        domain = normalise_on_write(cand.domain) or ""
-        if not domain or domain in tracked or domain in seen:
-            continue
-        seen.add(domain)
-        built.append(
-            Account(
-                tenant_id=ts.tenant_id,
-                name=(cand.name or domain).strip(),
-                domain=domain,
-                # Left BLANK when the search backend did not report one, never defaulted to
-                # the ICP's own first industry/country. `apply()` fills blanks only (so a
-                # tenant's CRM data is never overwritten), which means a stamped value is
-                # permanent — and `score_icp_fit` would then award the industry and geo weights
-                # for values the ICP supplied itself. Measured: a steel supplier and a
-                # steelmaker were both stored as "Software & SaaS" and scored 80/100 against a
-                # SaaS ICP, with "industry 'Software & SaaS' is in ICP" given as the reason.
-                industry=cand.industry,
-                country=cand.country,
-                employee_count=cand.employee_count,
-                source="auto_discovery",
-            )
-        )
-
-    # 2) Crawl firmographics for the top candidates BEFORE scoring so the ICP-fit score can actually
-    #    rank them (search gives industry/geo but not headcount/tech). Gated + bounded + best-effort;
-    #    offline/CI it's a no-op, so the strict-match logic below is unchanged.
-    enrich = settings.icp_discovery_enrich_candidates
-    if enrich is None:
-        enrich = settings.account_enrich_enabled
-    if enrich and built:
-        await _enrich_candidates(
-            ts,
-            built[: settings.icp_discovery_enrich_max],
-            concurrency=settings.icp_discovery_enrich_concurrency,
-        )
-
-    # 3) Hard size-band gate (now using crawled headcount) + strict ICP-fit; persist the matches up
-    #    to target_count. Sub-threshold candidates are never persisted.
-    account_ids: list[str] = []
-    screened = 0
-    for account in built:
-        if len(account_ids) >= target_count:
-            break
-        if not _within_size_band(account.employee_count, profile.icp):
-            continue
-        # A country the ICP excludes is a definitive non-match, not a low score. Without this a UK
-        # company against a USA-only ICP scored 75 and was persisted as a discovery result.
-        if not _within_geo(account.country, profile.icp):
-            continue
-        fit = relevance.score_icp_fit(profile, account)
-        screened += 1
-        if fit.score < min_fit:
-            continue  # strict ICP gate — sub-threshold candidates are never persisted
-        ts.add(account)
-        await ts.flush()
-        ts.add(
-            AccountScore(
-                tenant_id=ts.tenant_id, account_id=account.id, composite=round(fit.score)
-            )
-        )
-        await ts.flush()
-        account_ids.append(account.id)
-
+    chain = await find_icp_companies(
+        ts, profile.icp, target_count, web_search=search, web_pool=pool_limit,
+        product_context=getattr(profile, "product_context", "") or "",
+    )
+    discarded = Counter(chain.discarded)
+    account_ids, screened = await deliver(
+        ts, profile, chain.candidates, limit=target_count, source="auto_discovery",
+        min_fit=min_fit, discarded=discarded,
+    )
     await _meter_discovered(ts, len(account_ids))
-    return {"discovered": len(account_ids), "screened": screened, "account_ids": account_ids}
+    return {"discovered": len(account_ids), "screened": screened, "account_ids": account_ids,
+            "sources": chain.sources, "discarded": dict(discarded), "notes": chain.notes}

@@ -422,10 +422,18 @@ async def _take(ts, companies, want: int, result: ChainResult, taken: set[str]) 
 
 # ---- step 3: web search ------------------------------------------------------------------------
 
-async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainResult,
-                    taken: set[str], web_search: WebSearch | None, product_context: str) -> None:
-    from nexus.discovery.auto import _within_geo, _within_size_band
+#: Held domains sent to web search as exclusions, so it spends its results on companies the
+#: workspace does not have. A request-size cap on the search side; the check that decides is ours.
+_WEB_EXCLUDE_CAP = 256
 
+
+async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainResult,
+                    taken: set[str], web_search: WebSearch | None, product_context: str,
+                    pool: int | None = None) -> None:
+    from nexus.discovery.auto import _within_geo, _within_size_band
+    from nexus.models.account import Account
+
+    keep = max(need, pool or 0)
     if web_search is None:
         from nexus.integrations.registry import build_registry_from_settings
 
@@ -436,8 +444,12 @@ async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainRes
         "company_size": {"min": icp.get("employee_min"), "max": icp.get("employee_max")},
         "icp_description": product_context,
     }
+    held_domains = sorted({d.lower() for d in (await ts.session.scalars(
+        select(Account.domain).where(Account.tenant_id == ts.tenant_id,
+                                     Account.domain.isnot(None)))).all() if d})
     try:
-        found = await web_search(search_icp, limit=max(need * 3, 10), exclude_domains=None)
+        found = await web_search(search_icp, limit=max(pool or 0, need * 3, 10),
+                                 exclude_domains=held_domains[:_WEB_EXCLUDE_CAP] or None)
     except Exception as exc:
         logger.warning("web company search failed: %r", exc)
         result.notes["web"] = "failed"
@@ -457,9 +469,9 @@ async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainRes
             result.discarded["already_held"] += 1
         elif domain in taken:
             result.discarded["duplicate"] += 1
-        elif need > 0:
+        elif keep > 0:
             taken.add(domain)
-            need -= 1
+            keep -= 1
             result.candidates.append(Candidate(
                 domain=domain, name=(cand.name or domain).strip(), source="web",
                 industry=cand.industry, country=cand.country,
@@ -470,10 +482,14 @@ async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainRes
 
 async def find_icp_companies(
     ts, icp: dict, n: int, *, client=None, web_search: WebSearch | None = None,
-    product_context: str = "",
+    product_context: str = "", web_pool: int | None = None,
 ) -> ChainResult:
     """Up to ``n`` companies matching the ICP that this workspace does not hold. Never raises for
-    a source failing: that source is noted and the next one is asked."""
+    a source failing: that source is noted and the next one is asked.
+
+    ``web_pool`` lets web search return MORE than ``n``: its candidates still face the fit
+    threshold at delivery, so the caller needs a pool to choose from. LinkedIn and database
+    candidates do not, and never exceed ``n``."""
     from nexus.integrations.apify import ApifyError, ApifyNotConfigured
 
     result = ChainResult()
@@ -507,5 +523,6 @@ async def find_icp_companies(
 
     need = n - len(result.candidates)
     if need > 0 and not linkedin_delivered:
-        await _from_web(ts, icp or {}, q, need, result, taken, web_search, product_context)
+        await _from_web(ts, icp or {}, q, need, result, taken, web_search, product_context,
+                        pool=web_pool)
     return result

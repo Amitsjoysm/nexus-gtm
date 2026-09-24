@@ -45,45 +45,50 @@ async def update_profile(
     _: Principal = Depends(require(Permission.manage_relevance)),
 ) -> RelevanceProfileOut:
     profile = await get_or_create_profile(ts)
-    icp_changed = (profile.icp or {}) != (body.icp or {})
-    profile.icp = body.icp
+    saved = dict(profile.icp or {})
+    icp = await _with_linkedin_codes(dict(body.icp or {}), saved)
+    icp_changed = _without_codes(saved) != _without_codes(icp)
+    profile.icp = icp
     profile.value_props = body.value_props
     profile.product_context = body.product_context
     await ts.flush()
-    # Saving an ICP is the moment someone expects accounts to start appearing. Without this the
-    # first batch waits for the daily discovery heartbeat — up to 24 hours of an empty Accounts
-    # list, which reads as a broken product rather than a scheduled job.
-    if icp_changed and body.icp:
-        await _kick_off_discovery(ts)
+    # A changed ICP no longer starts discovery by itself. The screen asks how many companies to
+    # add now (`POST /discovery/populate`) and charges for exactly that many; a batch started here
+    # as well would add, and bill, companies nobody asked for. The daily sweep still runs as before.
     return RelevanceProfileOut(
         id=profile.id,
         icp=profile.icp,
         value_props=profile.value_props,
         product_context=profile.product_context,
+        icp_changed=bool(icp_changed and icp),
     )
 
 
-async def _kick_off_discovery(ts) -> None:
-    """Clear the daily stamp and enqueue discovery so the first batch starts now.
+def _without_codes(icp: dict) -> dict:
+    return {k: v for k, v in (icp or {}).items() if k != "linkedin_industry_ids"}
 
-    Clearing ``icp_discovery_last_run_at`` is what lets the handler through: it is the idempotency
-    guard that stops the heartbeat re-running discovery every tick, and a freshly-defined ICP is
-    exactly the case where re-running is correct.
 
-    Best-effort — a queue failure must not fail the ICP save that succeeded. The heartbeat picks it
-    up on the next tick regardless, so the worst case is the old behaviour rather than a lost ICP.
+async def _with_linkedin_codes(icp: dict, saved: dict) -> dict:
+    """The ICP with ``linkedin_industry_ids``: the LinkedIn industry codes its industries map to.
+
+    Derived here, never taken from the request, so the codes always describe the words beside them.
+    Unchanged industries keep the codes already stored (no LLM call on every save); changed ones are
+    mapped again. Mapping never raises: a term nothing can place costs that term, not the save.
     """
+    icp.pop("linkedin_industry_ids", None)
+    industries = list(icp.get("industries") or [])
+    if not industries:
+        return icp
+    if industries == list(saved.get("industries") or []) and saved.get("linkedin_industry_ids"):
+        icp["linkedin_industry_ids"] = list(saved["linkedin_industry_ids"])
+        return icp
     try:
-        from nexus.models.identity import Tenant
-        from nexus.workers.tasks import enqueue_discover_icp_accounts
+        from nexus.prospecting.industries import map_industries
 
-        tenant = await ts.session.get(Tenant, ts.tenant_id)
-        if tenant is not None:
-            tenant.icp_discovery_last_run_at = None
-            await ts.flush()
-        await enqueue_discover_icp_accounts()
+        icp["linkedin_industry_ids"] = await map_industries(industries)
     except Exception:
-        logger.warning("could not kick off ICP discovery for %s", ts.tenant_id, exc_info=True)
+        logger.warning("could not map ICP industries to LinkedIn codes", exc_info=True)
+    return icp
 
 
 @router.post("/title-recommendations", response_model=list[TitleRecommendationOut])

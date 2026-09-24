@@ -108,26 +108,40 @@ def _by_norm_label() -> dict[str, int]:
 
 def descendants(ids) -> set[int]:
     """These codes and every code filed beneath them — for matching stored companies, whose code is
-    often a child ("Capital Markets") of the ICP's ("Financial Services")."""
+    often a child ("Capital Markets") of the ICP's ("Financial Services"). Memoised: scoring asks
+    this for every account it scores, with the same few codes."""
+    return set(_descendants(tuple(sorted({int(i) for i in ids}))))
+
+
+@lru_cache(maxsize=256)
+def _descendants(ids: tuple[int, ...]) -> frozenset[int]:
     wanted = {all_industries()[i].label for i in ids if i in all_industries()}
     out = set(ids)
     for industry in all_industries().values():
         path = [p.strip() for p in industry.hierarchy.split(">")]
         if wanted.intersection(path):
             out.add(industry.id)
-    return out
+    return frozenset(out)
 
 
 def match_term(term: str) -> list[int]:
     """Deterministic codes for ONE term, or [] when nothing matches cleanly (then the LLM is asked)."""
-    key = _norm(term)
+    return list(_match_term(_norm(term)))
+
+
+@lru_cache(maxsize=4096)
+def _match_term(key: str) -> tuple[int, ...]:
+    return tuple(_match_normalised(key))
+
+
+def _match_normalised(key: str) -> list[int]:
     if not key:
         return []
     if key in _by_norm_label():
         return [_by_norm_label()[key]]
     if key in SYNONYMS:
         return list(SYNONYMS[key])
-    wanted = _tokens(term)
+    wanted = _tokens(key)
     if not wanted:
         return []
     # Whole-word containment: every word of the term appears in the label. The label with the fewest

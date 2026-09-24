@@ -22,8 +22,12 @@ from pathlib import Path
 
 
 def _discovery_source() -> str:
-    return (Path(__file__).resolve().parents[1] / "nexus/discovery/auto.py").read_text(
-        encoding="utf-8"
+    # Discovery builds its accounts in `prospecting/deliver.py` since it became the prospecting
+    # chain; both files are read so a fallback reintroduced in either is caught.
+    root = Path(__file__).resolve().parents[1]
+    return "\n".join(
+        (root / rel).read_text(encoding="utf-8")
+        for rel in ("nexus/discovery/auto.py", "nexus/prospecting/deliver.py")
     )
 
 
