@@ -160,6 +160,8 @@ import type {
   OutcomeSummary,
   Play,
   PlayInput,
+  PopulateQuote,
+  PopulateRun,
   ProspectList,
   RelevanceProfile,
   RelevanceProfileInput,
@@ -701,6 +703,23 @@ export class ApiClient {
       body,
       signal,
     });
+  }
+
+  // ---- Populate: add N ICP companies now (nexus/prospecting) ----
+  getPopulateQuote(count: number, signal?: AbortSignal) {
+    return this.request<PopulateQuote>("/discovery/populate/quote", { query: { count }, signal });
+  }
+  startPopulate(count: number) {
+    return this.request<PopulateRun>("/discovery/populate", {
+      method: "POST",
+      body: { count },
+    });
+  }
+  getPopulateRun(id: string, signal?: AbortSignal) {
+    return this.request<PopulateRun>(`/discovery/populate/${encodeURIComponent(id)}`, { signal });
+  }
+  getLatestPopulate(signal?: AbortSignal) {
+    return this.request<PopulateRun | null>("/discovery/populate/latest", { signal });
   }
   suggestBuyerTitles(
     icp: {

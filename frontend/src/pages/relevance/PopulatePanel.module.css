@@ -1,0 +1,248 @@
+/* "How many companies now?" on the Relevance page. Sits above the form at full width rather than in
+   its masonry columns: it is a question about the whole profile, not one of its sections. */
+.panel {
+  margin-bottom: var(--space-4);
+  animation: panel-in var(--dur-slow) var(--ease-out);
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Reduced motion: the panel simply appears. Nothing here is a loading indicator (the
+   WorkingIndicator inside keeps its own slowed animation), so stopping it loses nothing. */
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    animation: none;
+  }
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--text);
+  text-wrap: balance;
+}
+
+.desc {
+  margin-top: var(--space-1);
+  max-width: 68ch;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-muted);
+}
+
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+/* The segmented switch from the plan picker, so the same control reads the same everywhere:
+   selection shown by surface, border and shadow together, and by aria-checked, never colour alone. */
+.switch {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.segment {
+  /* 44px: the touch target DESIGN.md commits to. */
+  min-height: calc(var(--space-10) + var(--space-1));
+  min-width: calc(var(--space-12) + var(--space-2));
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.segment:hover:not(.segmentOn) {
+  color: var(--text);
+}
+
+.segment:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.segmentOn {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+}
+
+.custom {
+  width: calc(var(--space-12) * 3);
+}
+
+.cost {
+  margin-top: var(--space-4);
+  min-height: calc(var(--text-sm) * 1.5);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.costStrong {
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.costPending {
+  color: var(--text-muted);
+}
+
+/* A status line: icon plus words, so the tint is never the only thing carrying the meaning. */
+.inlineNote {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.inlineNote :global(svg) {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--text-muted);
+}
+
+.inlineNote a {
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+  text-underline-offset: 2px;
+}
+
+.warning {
+  background: var(--warning-quiet);
+}
+
+.warning :global(svg) {
+  color: var(--warning);
+}
+
+.danger {
+  background: var(--danger-quiet);
+}
+
+.danger :global(svg) {
+  color: var(--danger);
+}
+
+.working {
+  margin-top: var(--space-3);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+  max-width: 72ch;
+}
+
+.line {
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text);
+}
+
+.charge {
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+/* A link that leads somewhere, styled as the secondary action beside it. */
+.linkButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: calc(var(--space-10) + var(--space-1));
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.linkButton:hover {
+  background: var(--surface-2);
+}
+
+.linkButton:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.linkButton :global(svg) {
+  width: 16px;
+  height: 16px;
+}
+
+@media (max-width: 640px) {
+  .switch {
+    width: 100%;
+  }
+  /* Sized to their labels and sharing what is left, so "Custom" never clips at 375px while the
+     numbers stay wide enough to tap. */
+  .segment {
+    flex: 1 1 auto;
+    min-width: calc(var(--space-10) + var(--space-1));
+    padding: 0 var(--space-2);
+  }
+  .custom {
+    width: 100%;
+  }
+}

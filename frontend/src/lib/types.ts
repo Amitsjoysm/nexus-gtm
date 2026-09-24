@@ -611,9 +611,42 @@ export interface RelevanceProfile {
   icp: IcpDefinition;
   value_props: ValueProp[];
   product_context: string;
+  /** Set on a save that changed the ICP: the page then asks how many companies to add now. */
+  icp_changed?: boolean;
 }
 
-export type RelevanceProfileInput = Omit<RelevanceProfile, "id">;
+export type RelevanceProfileInput = Omit<RelevanceProfile, "id" | "icp_changed">;
+
+/** What adding N ICP companies would cost, against the workspace's credit balance. */
+export interface PopulateQuote {
+  count: number;
+  credits_per_company: number;
+  total_credits: number;
+  /** Null when the balance could not be read; the server still refuses what it cannot cover. */
+  balance: number | null;
+  enough: boolean;
+}
+
+export type PopulateStatus = "queued" | "running" | "done" | "failed";
+
+/** One "add N companies now" request and how it went. */
+export interface PopulateRun {
+  id: string;
+  status: PopulateStatus;
+  requested: number;
+  delivered: number;
+  /** Companies added per source: `database`, `linkedin`, `web`. */
+  sources: Record<string, number>;
+  /** Companies found and not added, by reason: `no_website`, `already_held`, ... */
+  discarded: Record<string, number>;
+  /** Why a source added nothing: `{ linkedin: "not_configured" | "failed" | ... }`. */
+  notes: Record<string, string>;
+  account_ids: string[];
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string | null;
+}
 
 // ---- lists / segments ----
 export interface ListFilter {

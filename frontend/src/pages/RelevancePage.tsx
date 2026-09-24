@@ -29,6 +29,7 @@ import type {
   ValueProp,
 } from "@/lib/types";
 import styles from "./RelevancePage.module.css";
+import { PopulatePanel } from "./relevance/PopulatePanel";
 
 const ROLE_RANK: Record<Role, number> = { owner: 3, admin: 2, manager: 1, rep: 0 };
 
@@ -130,6 +131,9 @@ export function RelevancePage() {
   const profile = useApi<RelevanceProfile>((signal) => api.getRelevanceProfile(signal), []);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
+  // "How many companies now?" is asked after a save that changed the ICP, or from the header.
+  const [askingPopulate, setAskingPopulate] = useState(false);
+  const hasIcp = !!profile.data && hasAnyIcp(profile.data.icp);
 
   // Hydrate the editable draft once the profile loads (and after a save refetch).
   useEffect(() => {
@@ -333,6 +337,7 @@ export function RelevancePage() {
       const updated = await api.updateRelevanceProfile(body);
       profile.setData(updated);
       toast.success("Relevance saved", "New accounts will be scored against this profile.");
+      if (updated.icp_changed) setAskingPopulate(true);
     } catch (err) {
       toast.error(
         "Couldn't save",
@@ -350,18 +355,34 @@ export function RelevancePage() {
         description="Define your ideal customer and value props. This drives fit scoring across every account."
         actions={
           canEdit ? (
-            <Button
-              form="relevance-form"
-              type="submit"
-              iconLeft={<Icons.CheckIcon />}
-              loading={saving}
-              disabled={!draft}
-            >
-              Save changes
-            </Button>
+            <>
+              {hasIcp && !askingPopulate && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  iconLeft={<Icons.PlusIcon />}
+                  onClick={() => setAskingPopulate(true)}
+                >
+                  Add companies
+                </Button>
+              )}
+              <Button
+                form="relevance-form"
+                type="submit"
+                iconLeft={<Icons.CheckIcon />}
+                loading={saving}
+                disabled={!draft}
+              >
+                Save changes
+              </Button>
+            </>
           ) : undefined
         }
       />
+
+      {canEdit && (
+        <PopulatePanel asking={askingPopulate} onClose={() => setAskingPopulate(false)} />
+      )}
 
       {!canEdit && (
         <div className={styles.notice} role="note">
@@ -886,6 +907,17 @@ function LearnedWeightsCard() {
         }}
       </DataState>
     </Card>
+  );
+}
+
+/** Does the saved ICP say anything a company search could match on? */
+function hasAnyIcp(icp: IcpDefinition | null | undefined): boolean {
+  if (!icp) return false;
+  return Boolean(
+    icp.industries?.length ||
+      icp.countries?.length ||
+      icp.employee_min != null ||
+      icp.employee_max != null,
   );
 }
 
