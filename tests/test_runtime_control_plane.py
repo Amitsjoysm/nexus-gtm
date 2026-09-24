@@ -21,20 +21,24 @@ NEXUS = pathlib.Path("nexus")
 
 
 @pytest.fixture(autouse=True)
-def _restore_settings_and_caches():
+def _restore_settings_and_caches(monkeypatch):
     """Same guard as test_runtime_config.py: `set_override` mutates the cached Settings for the
-    whole worker process, and monkeypatch cannot undo a mutation made before it snapshots."""
+    whole worker process, and monkeypatch cannot undo a mutation made before it snapshots.
+
+    The pristine values go on the `monkeypatch` stack FIRST, so they are undone last whatever order
+    pytest tears fixtures down in; see the fixture in test_runtime_config.py for the leak a
+    `finally` restore caused once `conftest.offline_services` started requesting monkeypatch."""
     from nexus.runtime_config import service
     from nexus.runtime_config.catalog import CATALOG
 
     settings = get_settings()
-    before = {k: getattr(settings, k) for k in CATALOG if hasattr(settings, k)}
+    for key in CATALOG:
+        if hasattr(settings, key):
+            monkeypatch.setattr(settings, key, getattr(settings, key))
     service._overridden_here.clear()
     try:
         yield
     finally:
-        for key, value in before.items():
-            setattr(settings, key, value)
         service._overridden_here.clear()
         service._reset_providers()
 

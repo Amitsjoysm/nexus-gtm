@@ -16,7 +16,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _restore_runtime_overridable_settings():
+def _restore_runtime_overridable_settings(monkeypatch):
     """Undo every settings mutation this module's endpoints make.
 
     `get_settings()` is an `lru_cache` over a MUTABLE object, and `apply_overrides` reaches all 142
@@ -33,18 +33,29 @@ def _restore_runtime_overridable_settings():
 
     Snapshot every catalog key rather than the ones today's tests happen to touch: a test added
     later would otherwise reintroduce exactly this, and the symptom lands in somebody else's file.
+
+    **The snapshot goes on the `monkeypatch` stack, not in a `finally`.** It used to be restored
+    after `yield`, which only works if this fixture is torn down LAST — and that stopped being true
+    the day `conftest.offline_services` (autouse) started requesting `monkeypatch`: from then on
+    monkeypatch was set up before this fixture and torn down after it, so a test that PUT
+    `metrics_enabled=False` and then monkeypatched it back to True had this fixture restore True
+    and monkeypatch's undo then put False back. `test_metrics` failed in the next file on the same
+    worker. Patching the pristine values FIRST puts them at the bottom of the one LIFO undo stack,
+    so they are undone last whatever order pytest chooses for the fixtures.
     """
     from nexus.core.config import get_settings
     from nexus.runtime_config.catalog import CATALOG
 
+    from nexus.runtime_config import service
+
     settings = get_settings()
-    keys = list(CATALOG)  # CATALOG is a dict keyed by setting name
-    before = {k: getattr(settings, k) for k in keys if hasattr(settings, k)}
-    try:
-        yield
-    finally:
-        for key, value in before.items():
-            setattr(settings, key, value)
+    for key in CATALOG:  # CATALOG is a dict keyed by setting name
+        if hasattr(settings, key):
+            monkeypatch.setattr(settings, key, getattr(settings, key))
+    yield
+    # A key this module overrode must not stay marked as overridden: the next refresh would
+    # "restore" it to the environment in the middle of some later test's monkeypatch.
+    service._overridden_here.clear()
 
 
 
