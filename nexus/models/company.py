@@ -38,8 +38,8 @@ class Company(TimestampMixin, Base):
         Index("ix_company_due", "last_crawled_at"),
         # The fan-out sweep's only scan: which companies have earned delivery.
         Index("ix_company_verdict", "crawl_verdict"),
-        # The prospecting database step: ICP industry codes and HQ country, before the actor.
-        Index("ix_company_prospect", "linkedin_industry_id", "hq_country_code"),
+        # The prospecting database step starts from the ICP's industry codes.
+        Index("ix_company_linkedin_industry", "linkedin_industry_id"),
     )
 
     # sha1 of the normalised domain. Deterministic, so two concurrent resolvers racing on the same
@@ -75,12 +75,26 @@ class Company(TimestampMixin, Base):
     # (measured: 286 employees in 51-200), so matching an ICP size reads the band.
     employee_range_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
     employee_range_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Where the company is headquartered. Matching an ICP's countries reads `company_countries`
+    # instead, because LinkedIn's location filter matches ANY office (measured: a UK search returned
+    # US-headquartered companies with a London office), and the database step has to offer what the
+    # actor would have.
     hq_country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     linkedin_fetched_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
     # LinkedIn's "similar pages": [{name, linkedin_url, industry}]. They carry no website, so
     # none becomes an account until a details lookup proves its domain.
     similar_linkedin: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+
+class CompanyCountry(Base):
+    """One country a company has an office in, from its LinkedIn locations. Platform-global like
+    ``companies``: the database step joins it to answer "in the ICP's countries" on an index."""
+
+    __tablename__ = "company_countries"
+
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), primary_key=True)
+    country_code: Mapped[str] = mapped_column(String(2), primary_key=True, index=True)
 
 
 class CompanySignal(IdMixin, TimestampMixin, Base):

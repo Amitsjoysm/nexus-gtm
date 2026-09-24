@@ -12,7 +12,7 @@ from __future__ import annotations
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from nexus.models import Company, ProspectCursor, ProspectRun
+from nexus.models import Company, CompanyCountry, ProspectCursor, ProspectRun
 
 
 def test_linkedin_facts_live_on_the_shared_company_row():
@@ -27,8 +27,13 @@ def test_linkedin_facts_live_on_the_shared_company_row():
 
 def test_the_database_step_can_filter_by_industry_and_country_on_an_index():
     indexed = {tuple(c.name for c in ix.columns) for ix in Company.__table__.indexes}
-    assert ("linkedin_industry_id", "hq_country_code") in indexed
+    assert ("linkedin_industry_id",) in indexed
     assert ("linkedin_url",) in indexed, "similar companies resolve by LinkedIn URL"
+    # Every office country, not only the HQ: LinkedIn's location filter matches any office, and
+    # the database step must offer what the actor would have.
+    country_indexed = {tuple(c.name for c in ix.columns) for ix in CompanyCountry.__table__.indexes}
+    assert ("country_code",) in country_indexed
+    assert "tenant_id" not in CompanyCountry.__table__.columns
 
 
 def test_a_cursor_is_shared_and_a_run_belongs_to_one_workspace():
