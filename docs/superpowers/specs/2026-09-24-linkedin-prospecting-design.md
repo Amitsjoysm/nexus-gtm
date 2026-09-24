@@ -46,8 +46,8 @@ companies and contact sourcing.
 
 ## Components
 
-1. **Industry codes** (`nexus/prospecting/industries.py`): the 433 LinkedIn v2 industries, vendored as
-   `nexus/data/linkedin_industries_v2.csv`, loaded once into an in-memory cache (433 fixed rows is
+1. **Industry codes** (`nexus/prospecting/industries.py`): the 434 LinkedIn v2 industries, vendored as
+   `nexus/data/linkedin_industries_v2.csv`, loaded once into an in-memory cache (434 fixed rows is
    faster from memory than a table). `map_industries(terms)`: deterministic label/hierarchy match
    first; the LLM only for terms that miss, choosing from a ~20-label shortlist; the result is stored
    on the ICP (`icp.linkedin_industry_ids`) when the ICP is saved.
