@@ -363,7 +363,7 @@ async def test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled(monkeypatch):
     # crm-sync opt-in.
     assert {j.name for j in jobs} == {
         "sync_crm_due_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
-        "billing_reconcile", "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
+        "billing_reconcile", "expire_trials", "charge_unlogged_calls", "alert_digests", "backfill_companies", "crawl_companies",
         # The mailbox refresh rides along too: a revoked grant must show Reconnect whether or
         # not this workspace switched automation on.
         "refresh_mailbox_tokens",
@@ -386,7 +386,7 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
     assert {j.name for j in jobs} == {
         "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
-        "billing_reconcile", "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
+        "billing_reconcile", "expire_trials", "charge_unlogged_calls", "alert_digests", "backfill_companies", "crawl_companies",
         # The mailbox refresh rides along too: a revoked grant must show Reconnect whether or
         # not this workspace switched automation on.
         "refresh_mailbox_tokens",

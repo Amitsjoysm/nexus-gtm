@@ -43,6 +43,9 @@ class Tenant(IdMixin, TimestampMixin, Base):
     # Per-workspace target for net-new strict-ICP accounts per day (SDR-selectable in Settings).
     # NULL → the platform default (NEXUS_ICP_DISCOVERY_DAILY_COUNT, 20).
     icp_daily_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The caller ID this workspace's calls show on the PLATFORM Twilio, assigned by a superadmin.
+    # NULL uses the platform default. A workspace on its own Twilio uses its own number instead.
+    platform_caller_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Per-workspace outbound email (SMTP) config so cadences send from the customer's own
     # Gmail/Outlook mailbox. Shape: {provider, host, port, username, from_email, from_name,
     # password, use_tls, enabled, verified_at}. The password is write-only — never serialized

@@ -194,13 +194,14 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     # backfill_companies and crawl_companies — all enqueued every tick regardless of
     # automation_enabled, because billing accuracy and shared-company maintenance are platform
     # concerns rather than per-workspace opt-ins. +1 for refresh_mailbox_tokens, which keeps SDR
-    # mailbox status honest whether or not automation is on.
-    assert count == 14
+    # mailbox status honest whether or not automation is on; +1 for charge_unlogged_calls,
+    # which charges platform calls nobody logged.
+    assert count == 15
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
-        "billing_reconcile", "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
+        "billing_reconcile", "expire_trials", "charge_unlogged_calls", "alert_digests", "backfill_companies", "crawl_companies",
         "refresh_mailbox_tokens",
         # The ledger ships and builds on the heartbeat too: a workspace that opted in is
         # contributing whether or not it switched automation on.
@@ -220,11 +221,11 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    assert count == 11
+    assert count == 12
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "rollup_usage", "roll_billing_periods", "dunning_sweep", "billing_reconcile",
-        "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
+        "expire_trials", "charge_unlogged_calls", "alert_digests", "backfill_companies", "crawl_companies",
         "refresh_mailbox_tokens",
         # The ledger ships and builds on the heartbeat too: a workspace that opted in is
         # contributing whether or not it switched automation on.

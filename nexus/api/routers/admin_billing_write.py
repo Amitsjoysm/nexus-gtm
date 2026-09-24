@@ -1303,3 +1303,71 @@ async def create_capability_endpoint(
         )
         await session.commit()
     return result
+
+
+# ---- a caller ID per workspace on the platform Twilio -------------------------------------------
+# Decided with the product owner 2026-09-23. Without one, every workspace calling on the platform
+# account showed the same number, and one heavy customer's volume getting it flagged as spam
+# lowered answer rates for everyone. Under providers.manage: whoever manages the platform Twilio
+# assigns its numbers. A workspace on its own Twilio uses its own number and is unaffected.
+
+
+class CallerIdIn(BaseModel):
+    """An E.164 number the platform Twilio owns, or "" to use the platform default."""
+
+    from_number: str = Field(default="", max_length=32)
+
+
+class CallerIdOut(BaseModel):
+    tenant_id: str
+    from_number: str
+    checked: bool
+    detail: str
+
+
+@router.put("/customers/{tenant_id}/caller-id", response_model=CallerIdOut)
+async def set_customer_caller_id(
+    tenant_id: str,
+    body: CallerIdIn,
+    principal: Principal = Depends(require_platform_permission("providers.manage")),
+) -> CallerIdOut:
+    """Assign the number this workspace's platform calls show. Checked against the account first:
+    a number it does not own fails every call with Twilio 21210, after the rep's phone has rung."""
+    from nexus.calling.connection import platform_call_provider
+    from nexus.calling.provider import InvalidPhoneNumber
+    from nexus.calling.twilio import normalize_e164
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.identity import Tenant
+
+    number = (body.from_number or "").strip()
+    checked, detail = False, "Cleared: this workspace uses the platform's default caller ID."
+    if number:
+        try:
+            number = normalize_e164(number, field="the caller ID")
+        except InvalidPhoneNumber as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+        provider = await platform_call_provider()
+        check = getattr(provider, "check_account", None)
+        if check is None:
+            detail = ("Saved, not checked: the platform is on click-to-dial. It is checked when "
+                      "the platform Twilio key is tested.")
+        else:
+            ok, detail = await check(caller_id=number)
+            if not ok:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail)
+            checked = True
+
+    # tenants carries no tenant_id, and an operator writes across workspaces: the platform role.
+    async with get_platform_sessionmaker()() as session:
+        tenant = await session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Workspace not found")
+        before = {"platform_caller_id": tenant.platform_caller_id}
+        tenant.platform_caller_id = number or None
+        await record_admin_action(
+            session, actor=principal.user_id, action="telephony.caller_id.set",
+            target=tenant_id, subject_tenant_id=tenant_id,
+            before=before, after={"platform_caller_id": tenant.platform_caller_id},
+        )
+        await session.commit()
+    return CallerIdOut(tenant_id=tenant_id, from_number=number, checked=checked, detail=detail)

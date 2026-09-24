@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import AsyncIterator, Awaitable, Callable
 
 from nexus.core.db import get_sessionmaker
@@ -699,6 +700,73 @@ async def handle_dunning_sweep(payload: dict) -> dict:
     return totals
 
 
+#: A call younger than this may still be about to be logged by the rep, who charges it then.
+UNLOGGED_CALL_GRACE = timedelta(hours=2)
+#: After this, a call Twilio still cannot describe is given up on: nothing measured, nothing charged.
+UNLOGGED_CALL_GIVE_UP = timedelta(days=7)
+#: Twilio statuses that mean the call is over and its duration final.
+_FINISHED = {"completed", "busy", "no-answer", "failed", "canceled"}
+
+
+async def handle_charge_unlogged_calls(payload: dict) -> dict:
+    """Charge platform calls nobody logged an outcome for (decided with the product owner 2026-09-23).
+
+    A platform call was charged only at disposition, so a call nobody logged was free. Every live
+    platform call is recorded at dial (`placed_calls`); this charges the ones still uncharged two
+    hours on, on Twilio's MEASURED duration, under the same `call:<id>` key the disposition uses —
+    so the two can never both charge. Self-filtering and idempotent, so the scheduler enqueues it
+    every tick like the other billing sweeps.
+
+    Asks the PLATFORM provider, never a workspace's: these calls were placed on our account, and a
+    workspace that has since connected its own Twilio has no record of them.
+    """
+    from sqlalchemy import select
+
+    from nexus.calling.connection import platform_call_provider
+    from nexus.calling.service import _charge_minutes, _mark_charged
+    from nexus.core.db import ensure_aware, get_platform_sessionmaker, utcnow
+    from nexus.models.calling import PlacedCall
+
+    now = utcnow()
+    # Cross-tenant, so the platform role: under the RLS-bound one this would see zero rows and
+    # report nothing owed. Ids only; the charging happens in each tenant's own session below.
+    async with get_platform_sessionmaker()() as session:
+        rows = (await session.execute(
+            select(PlacedCall.tenant_id, PlacedCall.provider_call_id)
+            .where(PlacedCall.charged_at.is_(None),
+                   PlacedCall.placed_at <= now - UNLOGGED_CALL_GRACE)
+            .order_by(PlacedCall.placed_at.asc())
+            .limit(200)
+        )).all()
+    if not rows:
+        return {"charged": 0}
+
+    provider = await platform_call_provider()
+    charged = given_up = 0
+    by_tenant: dict[str, list[str]] = {}
+    for tenant_id, call_id in rows:
+        by_tenant.setdefault(tenant_id, []).append(call_id)
+    for tenant_id, call_ids in by_tenant.items():
+        async with tenant_session(tenant_id) as ts:
+            for call_id in call_ids:
+                row = await ts.first(PlacedCall, PlacedCall.provider_call_id == call_id)
+                if row is None or row.charged_at is not None:
+                    continue
+                status = await provider.get_call_status(call_id)
+                if not status:
+                    if ensure_aware(row.placed_at) <= now - UNLOGGED_CALL_GIVE_UP:
+                        await _mark_charged(ts, call_id, None)
+                        given_up += 1
+                    continue
+                if str(status.get("status") or "").lower() not in _FINISHED:
+                    continue   # still ringing or talking: its duration is not final yet
+                await _charge_minutes(ts, call_id, status.get("duration_s"), user_id=row.user_id)
+                # A call Twilio measured at 0s was never answered: settled, nothing to charge.
+                await _mark_charged(ts, call_id, None)
+                charged += 1
+    return {"charged": charged, "given_up": given_up}
+
+
 async def handle_expire_trials(payload: dict) -> dict:
     """Periodic driver: resolve trials whose end date has passed.
 
@@ -1200,6 +1268,7 @@ HANDLERS: dict[str, Handler] = {
     "build_ledger_datasets": handle_build_ledger_datasets,
     "ledger_delete_workspace": handle_ledger_delete_workspace,
     "ledger_erase_person": handle_ledger_erase_person,
+    "charge_unlogged_calls": handle_charge_unlogged_calls,
 }
 
 
@@ -1303,6 +1372,11 @@ async def enqueue_billing_reconcile(*, queue: TaskQueue | None = None) -> None:
 async def enqueue_expire_trials(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="expire_trials", payload={}))
+
+
+async def enqueue_charge_unlogged_calls(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="charge_unlogged_calls", payload={}))
 
 
 async def dispatch(job: Job) -> dict:

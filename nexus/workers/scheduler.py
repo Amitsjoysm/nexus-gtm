@@ -28,6 +28,7 @@ from nexus.workers.tasks import (
     enqueue_log_engagement_crm,
     enqueue_alert_digests,
     enqueue_expire_trials,
+    enqueue_charge_unlogged_calls,
     enqueue_dunning_sweep,
     enqueue_refresh_due_accounts,
     enqueue_build_ledger_datasets,
@@ -85,6 +86,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             # A trial ends on a date, not when somebody opts into automation. Leaving this behind
             # the automation gate is how a trial runs forever in a workspace that never enabled it.
             await enqueue_expire_trials(queue=queue)
+            count += 1
+            # Minutes on the platform Twilio are owed whether or not anyone logged the call, and
+            # whether or not the workspace opted into automation. Self-filters to calls 2h+ old.
+            await enqueue_charge_unlogged_calls(queue=queue)
             count += 1
             # A digest a user asked for is due on a clock, not when somebody enables automation.
             # The handler self-filters to preferences whose interval has actually elapsed.

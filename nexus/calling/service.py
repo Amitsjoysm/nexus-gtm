@@ -63,15 +63,47 @@ async def _charge_minutes(ts, provider_call_id: str, seconds, *, user_id: str | 
         return
     from nexus.billing.meter import metered
 
+    minutes = math.ceil(seconds / 60)
     try:
         async with metered(
-            ts, MINUTES_CAPABILITY, quantity=math.ceil(seconds / 60), user_id=user_id,
+            ts, MINUTES_CAPABILITY, quantity=minutes, user_id=user_id,
             source="calling", idempotency_key=f"call:{provider_call_id}",
             attrs={"provider_call_id": provider_call_id, "seconds": seconds},
         ):
             pass
     except Exception:
         logger.warning("could not charge minutes for call %s", provider_call_id, exc_info=True)
+        return
+    await _mark_charged(ts, provider_call_id, minutes)
+
+
+async def _record_placed(ts, provider_call_id: str, *, task_id: str, user_id: str | None) -> None:
+    """Remember a platform call at dial, so the sweep can charge it if nobody logs it. Never raises."""
+    from nexus.core.db import utcnow
+    from nexus.models.calling import PlacedCall
+
+    try:
+        if await ts.first(PlacedCall, PlacedCall.provider_call_id == provider_call_id):
+            return   # a replayed dial (idempotency key) must not record the call twice
+        ts.add(PlacedCall(
+            tenant_id=ts.tenant_id, call_task_id=task_id, provider_call_id=provider_call_id,
+            source="platform", user_id=user_id, placed_at=utcnow(),
+        ))
+        await ts.flush()
+    except Exception:
+        # A dial that already rang must not fail because the bookkeeping did.
+        logger.warning("could not record placed call %s", provider_call_id, exc_info=True)
+
+
+async def _mark_charged(ts, provider_call_id: str, minutes: int | None) -> None:
+    from nexus.core.db import utcnow
+    from nexus.models.calling import PlacedCall
+
+    row = await ts.first(PlacedCall, PlacedCall.provider_call_id == provider_call_id)
+    if row is not None and row.charged_at is None:
+        row.charged_at = utcnow()
+        row.minutes = minutes
+        await ts.flush()
 
 class CallQueueService:
     async def enqueue(
@@ -272,7 +304,8 @@ class CallQueueService:
         }
 
     async def place_call(
-        self, ts: TenantSession, task_id: str, *, agent_number: str | None = None
+        self, ts: TenantSession, task_id: str, *, agent_number: str | None = None,
+        user_id: str | None = None,
     ) -> CallHandle | None:
         """Dial the task's contact through the configured telephony provider.
 
@@ -311,7 +344,7 @@ class CallQueueService:
             from nexus.billing.entitlements import preflight
 
             (await preflight(ts, MINUTES_CAPABILITY, quantity=1)).raise_if_blocked()
-        return await provider.place_call(
+        handle = await provider.place_call(
             to=phone,
             from_=from_number,
             context={
@@ -321,6 +354,9 @@ class CallQueueService:
                 "contact_id": task.contact_id,
             },
         )
+        if resolved.source == "platform" and handle is not None and handle.provider_call_id:
+            await _record_placed(ts, handle.provider_call_id, task_id=task.id, user_id=user_id)
+        return handle
 
     async def log_disposition(
         self,

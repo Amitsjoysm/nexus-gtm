@@ -103,10 +103,30 @@ async def platform_provider() -> CallProvider | None:
     return None
 
 
-async def resolve_call_provider(ts: TenantSession) -> ResolvedTelephony:
+async def platform_caller_id(ts: TenantSession) -> str:
+    """This workspace's number on the platform account: its assignment, else the platform default."""
     from nexus.core.config import get_settings
+    from nexus.models.identity import Tenant
 
-    platform_number = (get_settings().telephony_from_number or "").strip()
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    assigned = (getattr(tenant, "platform_caller_id", None) or "").strip()
+    return assigned or (get_settings().telephony_from_number or "").strip()
+
+
+async def platform_call_provider() -> CallProvider:
+    """The platform's own provider, whatever any workspace has connected.
+
+    For the work that is about the PLATFORM account in particular: the sweep charging calls placed
+    on it, and checking a caller ID a superadmin assigns from it.
+    """
+    override = get_override()
+    if override is not None:
+        return override
+    return await platform_provider() or get_call_provider()
+
+
+async def resolve_call_provider(ts: TenantSession) -> ResolvedTelephony:
+    platform_number = await platform_caller_id(ts)
 
     override = get_override()
     if override is not None:

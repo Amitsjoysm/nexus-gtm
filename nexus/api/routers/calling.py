@@ -202,7 +202,7 @@ async def dial_call_task(
     task_id: str,
     body: DialIn,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> DialOut:
     """Start the call.
 
@@ -215,7 +215,7 @@ async def dial_call_task(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Call task not found")
     try:
         handle = await get_call_queue_service().place_call(
-            ts, task_id, agent_number=body.agent_number
+            ts, task_id, agent_number=body.agent_number, user_id=principal.user_id
         )
     except TelephonyError as exc:
         raise _telephony_http_error(exc) from None

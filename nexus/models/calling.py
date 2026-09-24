@@ -18,6 +18,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -105,3 +106,29 @@ class CallActivity(IdMixin, TimestampMixin, TenantScoped, Base):
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     sentiment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     provider_call_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class PlacedCall(IdMixin, TimestampMixin, TenantScoped, Base):
+    """One live call placed on the PLATFORM Twilio, so its minutes are charged even if nobody logs it.
+
+    A platform call was charged only at disposition, so a call nobody logged was free. Written at
+    dial; `charged_at` is stamped by whichever charges it first — the disposition or the sweep two
+    hours on (decided with the product owner 2026-09-23). Both charge under the key
+    `call:<provider_call_id>`, so they can never both charge. Calls on a workspace's own Twilio
+    are not recorded: that workspace pays Twilio directly.
+    """
+
+    __tablename__ = "placed_calls"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "provider_call_id", name="uq_placed_call"),
+        Index("ix_placed_calls_uncharged", "charged_at", "placed_at"),
+    )
+
+    call_task_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provider_call_id: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(16), default="platform")
+    user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    placed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Started minutes charged. NULL with charged_at set: given up, nothing could be measured.
+    minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
