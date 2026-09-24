@@ -95,6 +95,16 @@ ACTORS: dict[str, str] = {
     #
     # LIMITED_PERMISSIONS, so no per-account console approval.
     "b2b_enrichment": "teodor_banea~b2b-lead-enrichment-free",
+    # The three harvestapi LinkedIn actors behind prospecting (nexus/prospecting/linkedin.py), each
+    # run once against real input before a parser was written (2026-09-24).
+    # Companies by industry code, location and size band; 50 a page, 20 pages at most.
+    # `harvestapi/linkedin-company-search`.
+    "linkedin_company_search": "taHaRcqil3scbchuI",
+    # One company page by LinkedIn URL or by name, in bulk: a similar company's website, an
+    # account's own page. `harvestapi/linkedin-company`.
+    "linkedin_company": "UwSdACBp7ymaGUJjS",
+    # People at one company page, filtered by job title. `harvestapi/linkedin-company-employees`.
+    "linkedin_company_employees": "Vb6LZkh4EqRlR0Ka9",
 }
 
 

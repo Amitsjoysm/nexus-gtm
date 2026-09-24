@@ -61,6 +61,10 @@ CONSUMERS = {
     # Structured firmographics with no LLM extraction step, tried AHEAD of the search+LLM
     # path — see enrichment/b2b_actor.py for why that ordering is deliberate.
     "b2b_enrichment": "enrichment/b2b_actor.py",
+    # Prospecting: database first, then these, then web search (see prospecting/linkedin.py).
+    "linkedin_company_search": "prospecting/linkedin.py",
+    "linkedin_company": "prospecting/linkedin.py",
+    "linkedin_company_employees": "prospecting/linkedin.py",
 }
 
 
