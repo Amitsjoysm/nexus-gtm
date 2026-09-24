@@ -330,11 +330,14 @@ async def draft_campaign(
     principal: Principal = Depends(require(Permission.run_engagement)),
 ) -> dict:
     """Draft up to ``limit`` first emails. The screen calls again until nothing is left."""
-    from nexus.engagement.sequences.service import draft_first_emails
+    from nexus.engagement.sequences.service import CampaignError, draft_first_emails
 
     campaign = await _campaign(ts, campaign_id, principal)
-    return await draft_first_emails(ts, campaign, user_id=principal.user_id,
-                                     limit=max(1, min(limit, 50)))
+    try:
+        return await draft_first_emails(ts, campaign, user_id=principal.user_id,
+                                         limit=max(1, min(limit, 50)))
+    except CampaignError as exc:
+        raise _refuse(exc) from exc
 
 
 @router.get("/campaigns/{campaign_id}/review", response_model=list[ReviewItemOut])

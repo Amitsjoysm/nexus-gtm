@@ -20,6 +20,7 @@ const KIND: Record<TodayKind, { label: string; icon: JSX.Element }> = {
   colleagues: { label: "Colleagues", icon: <Icons.UsersIcon /> },
   call: { label: "Call", icon: <Icons.PhoneIcon /> },
   review: { label: "Review", icon: <Icons.CheckIcon /> },
+  restart: { label: "Write again", icon: <Icons.SignalIcon /> },
   returning: { label: "Returning", icon: <Icons.RefreshIcon /> },
 };
 

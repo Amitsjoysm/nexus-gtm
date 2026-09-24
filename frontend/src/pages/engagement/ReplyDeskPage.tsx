@@ -17,19 +17,23 @@ import { useEngagementStatus } from "@/app/EngagementContext";
 import { ApiError } from "@/lib/api";
 import type {
   DeskDecision, DeskItemDetail, DeskQueueItem, DeskScheduledItem, Member, ReplyCategory,
+  RestartSuggestion,
 } from "@/lib/types";
 import styles from "./Engagement.module.css";
+import { ReferralPanel } from "./ReferralPanel";
+import { WriteAgain } from "./WriteAgain";
 
 /**
  * The reply desk (spec §9, D22): every reply to a campaign, read and sorted, and nothing sent
  * without a person pressing Send.
  *
  * Needs action holds what a person must answer or decide. Scheduled holds people who asked to hear
- * back on a date or are out of office; their date can be moved or cancelled. Handled is the record
- * of who declined, unsubscribed or was closed, and why.
+ * back on a date or are out of office; their date can be moved or cancelled. Write again holds people
+ * who went quiet or asked for later, at a company where something has happened since (§19). Handled
+ * is the record of who declined, unsubscribed or was closed, and why.
  */
 
-type TabKey = "needs_action" | "scheduled" | "handled";
+type TabKey = "needs_action" | "scheduled" | "restart" | "handled";
 
 function replySubject(subject: string): string {
   const s = subject.trim();
@@ -56,6 +60,7 @@ export function ReplyDeskPage() {
     (s) => (tab === "handled" ? api.deskQueue("handled", team, s) : Promise.resolve([])), [tab, team],
   );
   const scheduled = useApi<DeskScheduledItem[]>((s) => api.deskScheduled(team, s), [team]);
+  const restart = useApi<RestartSuggestion[]>((s) => api.restartSuggestions(s), []);
 
   function go(next: Partial<{ tab: TabKey; reply: string | null }>) {
     const p = new URLSearchParams(params);
@@ -68,6 +73,7 @@ export function ReplyDeskPage() {
   const tabs = [
     { value: "needs_action", label: "Needs action", count: open.data?.length },
     { value: "scheduled", label: "Scheduled", count: scheduled.data?.length },
+    { value: "restart", label: "Write again", count: restart.data?.length },
     { value: "handled", label: "Handled" },
   ];
 
@@ -107,6 +113,10 @@ export function ReplyDeskPage() {
 
       <TabPanel id="desk-panel-scheduled" active={tab === "scheduled"}>
         <Scheduled state={scheduled} onChanged={scheduled.refetch} />
+      </TabPanel>
+
+      <TabPanel id="desk-panel-restart" active={tab === "restart"}>
+        <WriteAgain state={restart} onChanged={restart.refetch} />
       </TabPanel>
 
       <TabPanel id="desk-panel-handled" active={tab === "handled"}>
@@ -353,6 +363,8 @@ function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () => void
           </div>
         </section>
       )}
+
+      {openItem && category === "referral" && <ReferralPanel id={id} />}
 
       {d.paused_colleagues.length > 0 && (
         <section className={styles.colleagues} aria-labelledby="colleagues-title">

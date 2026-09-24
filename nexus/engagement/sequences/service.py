@@ -242,8 +242,11 @@ async def set_status(ts, enrollment, status: str, reason: str | None = None, *,
 # ---- first emails and the review queue ----------------------------------------------------------
 
 async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
-                             limit: int | None = None) -> dict:
-    """Draft every step-0 email that has no draft yet. Idempotent: a second run drafts nothing."""
+                             limit: int | None = None, only: set[str] | None = None) -> dict:
+    """Draft every step-0 email that has no draft yet. Idempotent: a second run drafts nothing.
+
+    ``only`` limits it to those enrollments: a referral adds one person to a running campaign and
+    must not pay to draft anyone else who happens to be waiting."""
     from nexus.engagement.drafting.drafter import draft
     from nexus.models.account import Account, Contact
     from nexus.models.engagement import (
@@ -253,12 +256,18 @@ async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
     )
 
     steps = await steps_of(ts, campaign)
+    if not steps:
+        # Every campaign is created with a step, but a hand-built or migrated one may have none,
+        # and an opening email has nothing to be written from.
+        raise CampaignError("This campaign has no steps yet. Add one before drafting.")
     mailbox = await ts.get(MailboxConnection, campaign.mailbox_connection_id)
     pending = await ts.list(EngagementEnrollment, EngagementEnrollment.campaign_id == campaign.id,
                             EngagementEnrollment.status == "awaiting_review")
     drafted = failed = 0
     errors: list[dict] = []
     for enrollment in pending:
+        if only is not None and enrollment.id not in only:
+            continue
         if limit is not None and drafted >= limit:
             break
         if await first_draft(ts, enrollment) is not None:

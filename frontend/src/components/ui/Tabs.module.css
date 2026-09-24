@@ -1,20 +1,28 @@
+/* A strip wider than its pane scrolls sideways, rather than widening the page or being clipped by
+   it (four tabs on a phone-width reply desk did both). The divider is an inset shadow, not a border:
+   a scrolling box clips its children at the padding edge, which would cut the selected tab's
+   underline where it used to overlap the border, and a child always paints over its parent's shadow. */
 .tabs {
   display: flex;
   gap: var(--space-1);
-  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 -1px 0 var(--border);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
 
 .tab {
   position: relative;
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-3);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: var(--text-muted);
+  white-space: nowrap;
   border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
   transition: color var(--dur-fast) var(--ease-out);
 }
 .tab:hover {
@@ -32,6 +40,7 @@
    flip. The track is `--bg`, not `--surface-3`: `--text-muted` measures 4.25:1 on light
    `--surface-3` and 4.62:1 on `--bg`, so only the second keeps the unchosen label at AA. */
 .segmented {
+  box-shadow: none;
   gap: var(--space-1);
   padding: var(--space-1);
   background: var(--bg);

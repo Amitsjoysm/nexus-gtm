@@ -32,6 +32,13 @@ export function useContactInsights(contactIds: string[]): Map<string, ContactIns
   return useMemo(() => new Map((state.data ?? []).map((i) => [i.contact_id, i])), [state.data]);
 }
 
+/** The likelihood band alone, for a list that already has the band and nothing else. */
+export function LikelihoodBadge({ band }: { band: ReplyLikelihood["band"] }) {
+  if (band === "unknown") return null;
+  const like = LIKELIHOOD[band];
+  return <Badge tone={like.tone}>{like.label}</Badge>;
+}
+
 /** Whether the full (non-compact) badge would show anything for this insight. */
 export function hasInsight(insight?: ContactInsight): boolean {
   if (!insight) return false;

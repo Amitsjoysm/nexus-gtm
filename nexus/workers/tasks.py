@@ -1115,6 +1115,65 @@ async def handle_sync_mailboxes(payload: dict) -> dict:
     return {"synced": synced, "renewed": renewed}
 
 
+async def handle_log_engagement_crm(payload: dict) -> dict:
+    """Write sent emails, replies and booked meetings to each workspace's CRM (spec §19).
+
+    Behind the same two switches as every other CRM write: the deployment's `crm_sync_enabled`
+    ("Push to CRM") and the workspace's `automation_enabled`. Dark with the engagement engine. The
+    connector is resolved once per workspace, inside that workspace's session, for the reason
+    `handle_sync_crm_due_accounts` gives: resolving once for the sweep sent every tenant's writes
+    to whichever CRM the deployment named.
+    """
+    from sqlalchemy import select
+
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_platform_sessionmaker, utcnow
+    from nexus.engagement import config
+    from nexus.engagement.enhancements.crm_log import LOOKBACK, log_pending
+    from nexus.ingestion import crm_credentials
+    from nexus.models.engagement import EngagementMessage, ReplyClassification
+    from nexus.models.identity import Tenant
+
+    if not get_settings().crm_sync_enabled:
+        return {"skipped": "crm_sync_disabled"}
+    if not config.campaigns_enabled():
+        return {"skipped": "engagement campaigns are switched off"}
+    now = utcnow()
+    since = now - LOOKBACK
+    async with get_platform_sessionmaker()() as session:
+        opted_in = select(Tenant.id).where(Tenant.automation_enabled == True)  # noqa: E712
+        tenants = set((await session.execute(
+            select(EngagementMessage.tenant_id).distinct()
+            .where(EngagementMessage.tenant_id.in_(opted_in))
+            .where(EngagementMessage.crm_logged_at.is_(None))
+            .where((EngagementMessage.sent_at >= since) | (EngagementMessage.received_at >= since))
+        )).scalars().all())
+        tenants |= set((await session.execute(
+            select(ReplyClassification.tenant_id).distinct()
+            .where(ReplyClassification.tenant_id.in_(opted_in))
+            .where(ReplyClassification.decision == "meeting")
+            .where(ReplyClassification.crm_logged_at.is_(None))
+            .where(ReplyClassification.decided_at >= since))).scalars().all())
+    totals = {"tenants": 0, "logged": 0, "waiting": 0, "failed": 0}
+    for tenant_id in sorted(tenants):
+        try:
+            async with tenant_session(tenant_id) as ts:
+                connector = await crm_credentials.resolve_crm_connector(ts)
+                result = await log_pending(ts, connector, now=now)
+        except Exception:
+            logger.warning("CRM activity log failed for tenant %s", tenant_id, exc_info=True)
+            continue
+        totals["tenants"] += 1
+        for key in ("logged", "waiting", "failed"):
+            totals[key] += result[key]
+    return totals
+
+
+async def enqueue_log_engagement_crm(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="log_engagement_crm", payload={}))
+
+
 async def enqueue_sync_mailbox(tenant_id: str, mailbox_id: str, *,
                               queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
@@ -1201,6 +1260,7 @@ HANDLERS: dict[str, Handler] = {
     "advance_engagement": handle_advance_engagement,
     "sync_mailbox": handle_sync_mailbox,
     "sync_mailboxes": handle_sync_mailboxes,
+    "log_engagement_crm": handle_log_engagement_crm,
     "remind_replies": handle_remind_replies,
     "build_ledger_datasets": handle_build_ledger_datasets,
     "ledger_delete_workspace": handle_ledger_delete_workspace,

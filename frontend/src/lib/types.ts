@@ -2531,7 +2531,8 @@ export interface ResponseTimeRow {
   p90_hours: number | null;
 }
 
-export type TodayKind = "reply" | "decide" | "colleagues" | "call" | "review" | "returning";
+export type TodayKind =
+  | "reply" | "decide" | "colleagues" | "call" | "review" | "restart" | "returning";
 
 export interface TodayItem {
   kind: TodayKind;
@@ -2578,4 +2579,44 @@ export interface ContactInsight {
   company: ProspectInsight;
   likelihood: ReplyLikelihood;
   best_time: BestTimeSuggestion;
+}
+
+// ---- engagement: enhancements (phase 14) -------------------------------------------------------
+
+/** Someone a referral reply points to, and whether the workspace already has them. */
+export interface ReferralCandidate {
+  name: string;
+  email: string;
+  evidence: string;
+  contact_id: string | null;
+  contact_name: string | null;
+  contact_email: string | null;
+}
+
+export interface ReferralResult {
+  contact_id: string;
+  contact_name: string;
+  email: string;
+  campaign_id: string;
+  campaign_name: string;
+  enrollment_id: string;
+  drafted: boolean;
+  error: string;
+}
+
+/** Someone worth writing to again because something happened at their company (spec §19). */
+export interface RestartSuggestion {
+  enrollment_id: string;
+  contact_id: string;
+  contact_name: string;
+  account_id: string;
+  account_name: string;
+  campaign_id: string;
+  campaign_name: string;
+  reason: "quiet" | "later";
+  signal_id: string;
+  signal_kind: string;
+  signal_title: string;
+  signal_at: string;
+  likelihood: ReplyLikelihood["band"];
 }

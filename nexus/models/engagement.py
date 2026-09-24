@@ -276,6 +276,8 @@ class EngagementMessage(IdMixin, TimestampMixin, TenantScoped, Base):
     sent_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     received_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When this email or reply was written to the workspace's CRM as an activity (§19).
+    crm_logged_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
 
 
 class ReplyClassification(IdMixin, TimestampMixin, TenantScoped, Base):
@@ -310,6 +312,8 @@ class ReplyClassification(IdMixin, TimestampMixin, TenantScoped, Base):
     responded_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     reminded_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     status: Mapped[str] = mapped_column(String(8), default="open")
+    # When a meeting decided here was written to the workspace's CRM as an activity (§19).
+    crm_logged_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
 
 
 class DoNotContact(IdMixin, TimestampMixin, TenantScoped, Base):

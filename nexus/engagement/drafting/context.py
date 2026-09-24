@@ -150,18 +150,33 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
     if contact.seniority:
         person.append(f"- Seniority: {contact.seniority}")
     parts.append("THE PERSON\n" + "\n".join(person) + "\n")
+    referral = (contact.custom_fields or {}).get("referred_by") \
+        if isinstance(contact.custom_fields, dict) else None
+    referrer = (referral.get("name") or "").strip() if isinstance(referral, dict) else ""
+    if referrer:
+        # Who made the introduction, never what they wrote to us (spec §19).
+        title = (referral.get("title") or "").strip()
+        parts.append("REFERRAL\n- " + referrer + (f" ({title})" if title else "")
+                     + f" at {account.name} suggested we speak with this person.\n")
+        facts.append(f"{referrer.split()[0]} suggested we talk")
     parts.append("THE COMPANY\n" + account_facts(account) + "\n")
     rendered_signals = signal_facts(signals)
     if rendered_signals:
         parts.append("LIVE SIGNALS (strongest first)\n" + rendered_signals + "\n")
 
     instructions = {
-        "first": "This is the FIRST email to this person.",
+        "first": "This is the FIRST email to this person." + (
+            f" Say in one short line that {referrer.split()[0]} suggested you get in touch; do "
+            "not quote or paraphrase anything else they said." if referrer else ""),
         "followup": ("This is a FOLLOW-UP in the same thread. Do not repeat the earlier email; add "
                      "one new, specific reason to reply. Never pretend they answered."),
         "reengage": ("They asked us to get back in touch around now. Reference that they asked, in "
                      "one short line, and make it easy to pick the conversation back up."),
         "response": "They replied. Answer what they actually said, then propose one next step.",
+        "signal": ("Our earlier emails went unanswered, or they asked to talk later. Something new "
+                   "has happened at their company (the angle below): open with it in one line as "
+                   "the reason for writing now. Never pretend they replied, and if they asked for "
+                   "later, say you are early because of this news."),
     }.get(kind, "")
     angle = (getattr(step, "angle", "") or "").strip()
     block = ["INSTRUCTIONS", f"- {instructions}"]

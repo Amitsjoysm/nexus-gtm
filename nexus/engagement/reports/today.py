@@ -3,7 +3,8 @@
 One ordered list per SDR, built from what the engine already knows. The order is the order of cost
 if left: a buyer who said yes and is waiting goes cold fastest, then replies only a person can
 decide, then colleagues a reply paused, then calls due, then opening emails waiting for approval,
-then the people coming back today, who need nothing but are worth knowing about.
+then people worth writing to again because something happened at their company, then the people
+coming back today, who need nothing but are worth knowing about.
 
 Within a kind, ranked by reply likelihood (§18.5), and by its BAND rather than its score: people in
 one band stay longest-waiting first, which is what the reply-speed reminder measures, and a
@@ -19,7 +20,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 
 #: The order kinds appear in, and what each one asks of the SDR.
-KINDS = ("reply", "decide", "colleagues", "call", "review", "returning")
+KINDS = ("reply", "decide", "colleagues", "call", "review", "restart", "returning")
 #: Likelihood bands, likeliest first. `unknown` (nothing to go on) ranks with the unrated items.
 _BAND_RANK = {"high": 0, "medium": 1, "low": 2, "unknown": 3}
 
@@ -151,7 +152,15 @@ async def today(ts, *, user_id: str, now: datetime) -> list[TodayItem]:
                 items.append(TodayItem(
                     "review", f"Review {n} opening {'email' if n == 1 else 'emails'} in {campaign.name}",
                     "Nothing sends until you approve it.",
-                    f"/engagement/campaigns/{campaign.id}", campaign.created_at, count=n))
+                    f"/engagement/campaigns/{campaign.id}?tab=review", campaign.created_at, count=n))
+
+    restart = await _worth_writing_again(ts, user_id=user_id, now=now)
+    if restart:
+        n = len(restart)
+        items.append(TodayItem(
+            "restart", f"Write again to {n} {'person' if n == 1 else 'people'}",
+            "Something happened at their company since they went quiet or asked for later.",
+            "/engagement/replies?tab=restart", restart[0].signal_at, count=n))
 
     for e in sorted(returning, key=lambda e: _aware(e.snoozed_until)):
         items.append(TodayItem("returning", f"{who(e.contact_id)} comes back today",
@@ -163,6 +172,17 @@ async def today(ts, *, user_id: str, now: datetime) -> list[TodayItem]:
     # A stable sort: within one kind and one band, the age order built above survives.
     return sorted(items, key=lambda i: (order[i.kind],
                                         _BAND_RANK[bands.get(i.contact_id or "", "unknown")]))
+
+
+async def _worth_writing_again(ts, *, user_id: str, now: datetime) -> list:
+    """Signal re-engagement suggestions (§19). A suggestion is optional, so failing to build them
+    leaves them off the list rather than taking the list down."""
+    from nexus.engagement.enhancements.signal_reengage import suggestions
+
+    try:
+        return await suggestions(ts, user_id=user_id, now=now)
+    except Exception:  # noqa: BLE001 - optional line on a list that must load
+        return []
 
 
 async def _likelihood_bands(ts, contact_ids: list[str], now: datetime) -> dict[str, str]:

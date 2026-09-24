@@ -153,3 +153,32 @@ def test_a_set_time_step_offers_the_best_time():
     assert "bestTime={best.data ?? undefined}" in detail
     # Moving one person converts THEIR clock into the viewer's local input.
     assert "zonedClockToLocalInput(" in detail and "moving.contact_timezone" in detail
+
+
+# ---- enhancements (phase 14) ---------------------------------------------------------------------
+
+def test_a_referral_reply_offers_the_intro_and_nothing_else_does():
+    desk = _read(PAGES / "ReplyDeskPage.tsx")
+    assert '{openItem && category === "referral" && <ReferralPanel id={id} />}' in desk
+    panel = _read(PAGES / "ReferralPanel.tsx")
+    # Spending is announced where it happens: a blank address is looked up, and that costs.
+    assert "uses an enrichment credit" in panel
+    assert "?tab=review" in panel, "the done state goes straight to where the intro is approved"
+
+
+def test_writing_again_is_its_own_tab_and_sends_only_on_send():
+    desk = _read(PAGES / "ReplyDeskPage.tsx")
+    assert '{ value: "restart", label: "Write again"' in desk
+    again = _read(PAGES / "WriteAgain.tsx")
+    assert again.count("api.restartSend(") == 1
+    assert "onClick={send}" in again
+    today = _read(COMPONENTS / "TodayPlan.tsx")
+    assert 'restart: { label: "Write again"' in today
+
+
+def test_a_tab_strip_scrolls_rather_than_widening_the_page():
+    css = _read(SRC / "components" / "ui" / "Tabs.module.css")
+    assert "overflow-x: auto;" in css and "white-space: nowrap;" in css
+    # The divider cannot be a border: a scrolling box would clip the selected tab's underline.
+    tabs_rule = css.split(".tabs {", 1)[1].split("}", 1)[0]
+    assert "border-bottom" not in tabs_rule and "inset 0 -1px 0 var(--border)" in tabs_rule

@@ -26,6 +26,7 @@ from nexus.workers.tasks import (
     enqueue_advance_engagement,
     enqueue_remind_replies,
     enqueue_sync_mailboxes,
+    enqueue_log_engagement_crm,
     enqueue_alert_digests,
     enqueue_expire_trials,
     enqueue_dunning_sweep,
@@ -119,6 +120,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
                 # The reply-speed reminder: a buyer who said yes is waiting on a person.
                 await enqueue_remind_replies(queue=queue)
                 count += 3
+                if settings.crm_sync_enabled:
+                    # Sent emails, replies and meetings into each workspace's CRM (§19).
+                    await enqueue_log_engagement_crm(queue=queue)
+                    count += 1
             if settings.automation_enabled:
                 await enqueue_advance_cadences(queue=queue)
                 await enqueue_refresh_due_accounts(queue=queue)

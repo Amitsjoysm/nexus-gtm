@@ -398,3 +398,52 @@ async def colleague(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown action")
     except (service.DeskError, ValueError) as exc:
         raise _refuse(exc) from exc
+
+
+# ---- referral follow-through (spec §19) ----------------------------------------------------------
+
+class ReferralCandidateOut(BaseModel):
+    name: str
+    email: str
+    evidence: str
+    contact_id: str | None
+    contact_name: str | None
+    contact_email: str | None
+
+
+class ReferralIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    name: str = ""
+    email: str = ""
+
+
+@router.get("/{classification_id}/referral", response_model=list[ReferralCandidateOut])
+async def referral_candidates(
+    classification_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> list[ReferralCandidateOut]:
+    """Who the reply points to. Reading costs nothing; only Draft intro spends."""
+    from nexus.engagement.enhancements import referral
+
+    classification = await _classification(ts, classification_id, principal)
+    return [ReferralCandidateOut(**c) for c in await referral.candidates(ts, classification)]
+
+
+@router.post("/{classification_id}/referral")
+async def referral_follow_through(
+    classification_id: str, body: ReferralIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> dict:
+    """Find or enrich the person named, add them to the referrer's campaign, draft the intro for
+    review. A plan that cannot pay for the enrichment gets the 402 with its upsell."""
+    from nexus.engagement.enhancements import referral
+
+    classification = await _classification(ts, classification_id, principal)
+    try:
+        return await referral.follow_through(ts, classification, name=body.name,
+                                             email=body.email, user_id=principal.user_id)
+    except referral.ReferralError as exc:
+        raise _refuse(exc) from exc

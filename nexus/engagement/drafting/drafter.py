@@ -73,7 +73,7 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
 
     subject = (output.get("subject") or "").strip()
     body = (output.get("body") or "").strip()
-    if kind in ("followup", "reengage", "response") and thread is not None:
+    if kind in ("followup", "reengage", "response", "signal") and thread is not None:
         # Exactly one "Re:", on the thread's own subject (D16): whatever the model wrote on the
         # subject line, a follow-up in a thread keeps the thread's subject.
         subject = reply_subject(thread.base_subject or subject)

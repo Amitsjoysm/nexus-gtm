@@ -200,7 +200,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0057_engagement`. The chain is
+Alembic under `migrations/versions/`. Head: `0058_engagement_crm_log`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -212,7 +212,8 @@ Alembic under `migrations/versions/`. Head: `0057_engagement`. The chain is
 `0051`-`0054` (account geo/revenue, signal preferences, `users.token_version`, indexed invoice
 PSP references) -> `0055` (`feature_switches`) -> `0056` (`accounts.owner_user_id`,
 `notification_preferences.scope`, `alert_channel_rules`) -> `0057` (engagement engine + training
-ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_enrollment_id`).
+ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_enrollment_id`) ->
+`0058` (`crm_logged_at` on `engagement_messages` and `reply_classifications`).
 Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
@@ -1885,6 +1886,13 @@ plans: `docs/superpowers/plans/2026-09-17-sdr-engagement/`. Ships dark behind
   signals; with neither it is `unknown` and no badge shows, because a neutral fit alone read as
   "less likely to reply" for every unscored prospect. Today ranks within a kind by likelihood BAND,
   then age.
+- **The §19 enhancements (`nexus/engagement/enhancements/`) never act on a guess or send on their
+  own.** A referral's person comes from the Cc line or an address on the account's own domain, a
+  name is matched only among that account's contacts, and the intro waits in the review queue. The
+  CRM activity log writes only against an account the account sync already put in that CRM
+  (`crm_id` + `crm_source`), once per row (`crm_logged_at`, migration `0058`), behind "Push to CRM".
+  Signal re-engagement is a suggestion: never someone who declined, unsubscribed, was emailed in the
+  last 14 days, or is live in another campaign, and the send is keyed on the enrollment and signal.
 - **A connected Gmail/Outlook mailbox is what the contact composer uses**, ahead of any SMTP
   app-password mailbox (`outreach/send.py`). Send goes through `engagement.sending.send` (do-not-
   contact check, exactly-once row, one `outreach.email_send` charge, a thread so replies reach the

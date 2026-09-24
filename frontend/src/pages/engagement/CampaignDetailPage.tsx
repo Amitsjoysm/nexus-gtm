@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge, Button, Card, DataTable, EmptyState, ErrorState, Field, Icons, Input, Modal, Skeleton,
@@ -54,7 +54,13 @@ export function CampaignDetailPage() {
     (s) => api.campaignEnrollments(campaignId, s), [campaignId],
   );
   const mailboxes = useApi<ConnectedMailbox[]>((s) => api.listConnectedMailboxes(false, s), []);
-  const [tab, setTab] = useState<TabKey | null>(null);
+  const [search] = useSearchParams();
+  // A link can ask for a tab ("Review the intro" from the reply desk); otherwise open where the work is.
+  const [tab, setTab] = useState<TabKey | null>(() => {
+    const asked = search.get("tab");
+    return asked === "people" || asked === "results" || asked === "review" || asked === "launch"
+      || asked === "steps" ? asked : null;
+  });
   const [acting, setActing] = useState<string | null>(null);
   const [lastAdd, setLastAdd] = useState<EnrollResult | null>(null);
 

@@ -198,7 +198,9 @@
 
 .fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  /* min(): a column never asks for more than the space there is, so a narrow pane stacks the
+     fields instead of pushing them past its edge. */
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
   gap: var(--space-3) var(--space-4);
 }
 
@@ -588,7 +590,7 @@
 
 .correctRow {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 18rem));
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 18rem));
   gap: var(--space-3) var(--space-4);
 }
 
@@ -655,4 +657,96 @@
   .reviewCard {
     padding: var(--space-4);
   }
+}
+
+/* ---- referral follow-through and writing again (phase 14) ---- */
+
+.candidates,
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suggestions {
+  gap: var(--space-3);
+}
+
+.candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.candidate:hover {
+  background: var(--surface-2);
+}
+
+.candidate[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-quiet);
+}
+
+.candidate:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.candidate:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.suggestionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.badgeRow {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* The news, with its icon in a column of its own so a wrapped headline stays beside it. */
+.signalLine {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text);
+  line-height: var(--leading);
+}
+
+.signalText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.inlineIcon {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--text-muted);
 }

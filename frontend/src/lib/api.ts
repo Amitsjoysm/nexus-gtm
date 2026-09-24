@@ -97,6 +97,9 @@ import type {
   TodayItem,
   ContactInsight,
   BestTimeSuggestion,
+  ReferralCandidate,
+  ReferralResult,
+  RestartSuggestion,
   DoNotContactEntry,
   LedgerStatus,
   LedgerStoreStatus,
@@ -1428,6 +1431,29 @@ export class ApiClient {
     return this.request<null>(`/engagement/desk/${id}/assign`, {
       method: "POST", query: { user_id: userId },
     });
+  }
+  deskReferralCandidates(id: string, signal?: AbortSignal) {
+    return this.request<ReferralCandidate[]>(`/engagement/desk/${id}/referral`, { signal });
+  }
+  deskReferral(id: string, body: { name: string; email: string }) {
+    return this.request<ReferralResult>(`/engagement/desk/${id}/referral`, {
+      method: "POST", body,
+    });
+  }
+
+  // ---- engagement: signal re-engagement ----
+  restartSuggestions(signal?: AbortSignal) {
+    return this.request<RestartSuggestion[]>("/engagement/restart", { signal });
+  }
+  restartDraft(enrollmentId: string, signalId: string) {
+    return this.request<{ subject: string; body: string; quality_problems: string[] }>(
+      `/engagement/restart/${enrollmentId}/${signalId}/draft`, { method: "POST" },
+    );
+  }
+  restartSend(enrollmentId: string, signalId: string, body: { subject: string; body: string }) {
+    return this.request<{ outcome: string; reason: string; message_id: string }>(
+      `/engagement/restart/${enrollmentId}/${signalId}/send`, { method: "POST", body },
+    );
   }
   rescheduleScheduled(enrollmentId: string, when: string) {
     return this.request<null>(`/engagement/desk/scheduled/${enrollmentId}/reschedule`, {
