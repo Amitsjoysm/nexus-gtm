@@ -54,13 +54,15 @@ companies and contact sourcing.
 2. **Shared store fields** (migration `0061`): `companies.linkedin_url`, `linkedin_id`,
    `linkedin_industry_id` (indexed), `employee_range_min/max`, `hq_country_code` (indexed),
    `description`, `linkedin_fetched_at`, `similar_linkedin` (JSON). Plus `prospect_cursors`
-   (tenant-scoped: which result pages of which query this workspace has consumed) and `prospect_runs`
-   (a populate request's progress and outcome).
+   (platform-global: how far through each actor query anyone has read — every page lands in the
+   shared store, so a second workspace gets those companies from the database step and must never
+   pay to read the page again) and `prospect_runs` (tenant-scoped: a populate request's progress and
+   outcome).
 3. **Actor clients and parsers** (`nexus/prospecting/linkedin.py`), on the existing `ApifyClient`
    (key rotation, refusal detection). Parsers are tested against the captured output's shape.
 4. **The company chain** (`nexus/prospecting/companies.py`) `find_icp_companies(ts, n)`:
    database (ICP codes, country, size band, NOT held by this workspace — a SQL anti-join) → actor
-   pages from the workspace's cursor, every page's companies stored in the shared store, only the
+   pages from the query's shared cursor, every page's companies stored in the shared store, only the
    shortfall delivered → Exa. Past the 1,000-result ceiling the search splits by country and size
    band, each variant with its own cursor. Used by populate and by the daily discovery sweep.
 5. **Populate on ICP save**: `POST /discovery/populate {count}` preflights `count` x 5 credits,
@@ -87,6 +89,6 @@ dropped. Credits: preflight for N before any spend; charge only what was deliver
 Today: dedupe is correct (every candidate is checked against all held domains) but discovery
 starves — only 256 held domains reach the search as exclusions, so the same top results return each
 day and nearly all are already held. After: the database step is an anti-join against the
-workspace's accounts (indexed, unbounded); the actor step starts from the workspace's own cursor so
-it never re-reads pages it has consumed, and splits past the 1,000 ceiling; the normalised-domain
+workspace's accounts (indexed, unbounded); the actor step starts from the query's shared cursor so
+no page is ever bought twice, and splits past the 1,000 ceiling; the normalised-domain
 check stays as the backstop at insert.

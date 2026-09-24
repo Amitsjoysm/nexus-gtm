@@ -38,6 +38,8 @@ class Company(TimestampMixin, Base):
         Index("ix_company_due", "last_crawled_at"),
         # The fan-out sweep's only scan: which companies have earned delivery.
         Index("ix_company_verdict", "crawl_verdict"),
+        # The prospecting database step: ICP industry codes and HQ country, before the actor.
+        Index("ix_company_prospect", "linkedin_industry_id", "hq_country_code"),
     )
 
     # sha1 of the normalised domain. Deterministic, so two concurrent resolvers racing on the same
@@ -62,6 +64,23 @@ class Company(TimestampMixin, Base):
     # and not the other leaves an account with no crawl at all, which looks like a quiet market.
     crawl_verdict: Mapped[str] = mapped_column(String(20), default="unknown", index=True)
     verdict_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+
+    # LinkedIn's view of the company, from the company-search and company-details actors
+    # (migration 0061). Written only onto a row whose DOMAIN came from the company's own website:
+    # the domain is the identity, and a LinkedIn page is attached to it, never the other way round.
+    linkedin_url: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    linkedin_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    linkedin_industry_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The size BAND LinkedIn filtered on. The headcount beside it can sit outside its own band
+    # (measured: 286 employees in 51-200), so matching an ICP size reads the band.
+    employee_range_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    employee_range_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hq_country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    linkedin_fetched_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    # LinkedIn's "similar pages": [{name, linkedin_url, industry}]. They carry no website, so
+    # none becomes an account until a details lookup proves its domain.
+    similar_linkedin: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class CompanySignal(IdMixin, TimestampMixin, Base):
