@@ -53,6 +53,11 @@ class MailboxOut(BaseModel):
     # Sent since the owner's local midnight, and the warning above 50 (D10). Never a block.
     sent_today: int = 0
     volume_warning: str = ""
+    # Bounces over the last seven days, and the warning above 3% (spec §19). Never a block either.
+    sent_7d: int = 0
+    bounced_7d: int = 0
+    bounce_rate_7d: float = 0.0
+    health_warning: str = ""
 
 
 class ProviderStateOut(BaseModel):
@@ -89,11 +94,14 @@ async def _settings(ts: TenantSession):
 
 
 async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal) -> MailboxOut:
+    from nexus.core.db import utcnow
+    from nexus.engagement.reports.health import mailbox_health
     from nexus.engagement.sending.limits import sent_today, volume_warning
     from nexus.engagement.settings import effective_confidence
 
     settings = await _settings(ts)
     today = await sent_today(ts, row)
+    health = await mailbox_health(ts, row, now=utcnow())
     return MailboxOut(
         id=row.id, provider=row.provider, email=row.email, display_name=row.display_name or "",
         owner_user_id=row.owner_user_id, mine=row.owner_user_id == principal.user_id,
@@ -105,6 +113,8 @@ async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal) 
         paused_until=row.paused_until, last_synced_at=row.last_synced_at,
         created_at=row.created_at, sent_today=today,
         volume_warning=volume_warning(row.email, today),
+        sent_7d=health.sent_7d, bounced_7d=health.bounced_7d,
+        bounce_rate_7d=health.bounce_rate_7d, health_warning=health.warning,
     )
 
 

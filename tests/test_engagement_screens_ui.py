@@ -83,10 +83,14 @@ def test_launch_is_held_while_the_balance_cannot_cover_the_worst_case():
 
 
 def test_the_engagement_pages_use_tokens_not_inline_styles():
-    offenders = [p.name for p in list(PAGES.glob("*.tsx"))
-                 + list((SRC / "components" / "engagement").glob("*.tsx"))
-                 + [SRC / "pages" / "settings" / "EngagementSettings.tsx"]
-                 if "style={{" in _read(p)]
+    """The one inline style allowed passes DATA to CSS as a custom property (a bar's length);
+    every look comes from the CSS modules and tokens."""
+    offenders = []
+    for p in (list(PAGES.glob("*.tsx")) + list((SRC / "components" / "engagement").glob("*.tsx"))
+              + [SRC / "pages" / "settings" / "EngagementSettings.tsx"]):
+        for match in re.finditer(r"style=\{\{([^}]*)\}", _read(p)):
+            if not match.group(1).strip().startswith('"--'):
+                offenders.append(p.name)
     assert not offenders, f"inline styles in {offenders}: use the CSS modules and tokens"
 
 
@@ -94,3 +98,29 @@ def test_the_account_page_offers_emails_only_with_the_engine_on():
     page = _read(SRC / "pages" / "AccountDetailPage.tsx")
     assert '...(engineOn ? [{ value: "emails", label: "Emails" }] : [])' in page
     assert "<AccountConversations accountId={id} />" in page
+
+
+# ---- reporting (phase 12) ------------------------------------------------------------------------
+
+def test_results_appear_once_a_campaign_has_launched():
+    page = _read(PAGES / "CampaignDetailPage.tsx")
+    assert '...(settingUp ? [] : [{ value: "results", label: "Results" }])' in page
+    assert "<ReportsPanel campaignId={c.id} />" in page
+
+
+def test_today_is_on_the_dashboard_only_with_the_engine_on():
+    assert "{engineOn && <TodayPlan />}" in _read(SRC / "pages" / "DashboardPage.tsx")
+
+
+def test_the_funnel_is_one_hue_with_bounces_beside_it_not_in_it():
+    """One series, so one colour and no legend; a bounce is a problem, not a funnel stage."""
+    panel = _read(PAGES / "ReportsPanel.tsx")
+    funnel = panel[panel.index("const funnel"):panel.index("const widest")]
+    assert "bounced" not in funnel.lower()
+    assert "styles.bounced" in panel and "AlertTriangleIcon" in panel
+    css = _read(PAGES / "ReportsPanel.module.css")
+    assert css.count("background: var(--accent)") == 1
+
+
+def test_my_mailboxes_shows_this_weeks_bounce_rate():
+    assert "<MailboxHealth mailbox={mailbox} />" in _read(PAGES / "MailboxesPage.tsx")

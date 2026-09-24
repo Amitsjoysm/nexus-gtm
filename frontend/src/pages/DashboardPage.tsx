@@ -22,6 +22,8 @@ import { useHotSignalNotifications } from "@/hooks/useHotSignalNotifications";
 import { useLivePoll } from "@/hooks/useLivePoll";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { useSignalWindow } from "@/app/SignalWindowContext";
+import { useEngineOn } from "@/app/EngagementContext";
+import { TodayPlan } from "@/components/engagement/TodayPlan";
 import { ApiError } from "@/lib/api";
 import { formatNumber, formatPercent, humanize, timeAgo } from "@/lib/format";
 import {
@@ -88,6 +90,7 @@ export function DashboardPage() {
   // A rep's overview is their own queue and AI work beside the shared book (the server scopes it).
   const isRep = session?.role === "rep";
   const [seeding, setSeeding] = useState(false);
+  const engineOn = useEngineOn() === true;
 
   const overview = useApi<AnalyticsOverview>((signal) => api.analyticsOverview(signal), []);
   const inbox = useApi<InboxTask[]>((signal) => api.listInbox(undefined, signal), []);
@@ -177,6 +180,9 @@ export function DashboardPage() {
           </>
         }
       />
+
+      {/* Where to start today: replies waiting, decisions, calls, drafts to approve (spec §19). */}
+      {engineOn && <TodayPlan />}
 
       {/* Workspace setup (ICP, plays) is not a rep's to do, and they cannot open either page. Reps
           only ever missed it because their overview used to 403; with a real one it would nag

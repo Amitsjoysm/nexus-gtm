@@ -19,6 +19,7 @@ import type {
   ConnectedMailbox, EngagementCampaign, EngagementEnrollment, EngagementStep, EnrollResult,
 } from "@/lib/types";
 import { LaunchPanel } from "./LaunchPanel";
+import { ReportsPanel } from "./ReportsPanel";
 import { ReviewQueue } from "./ReviewQueue";
 import styles from "./Engagement.module.css";
 
@@ -31,7 +32,7 @@ import styles from "./Engagement.module.css";
  * anyone added later is read and approved the same way.
  */
 
-type TabKey = "people" | "review" | "launch" | "steps";
+type TabKey = "people" | "results" | "review" | "launch" | "steps";
 const SETTING_UP = new Set(["draft", "reviewing"]);
 
 function toLocalInput(iso: string | null): string {
@@ -114,6 +115,8 @@ export function CampaignDetailPage() {
   const total = Object.values(c.counts).reduce((a, b) => a + b, 0);
   const tabs = [
     { value: "people", label: "People", count: total },
+    // Once anything could have gone out, what came of it.
+    ...(settingUp ? [] : [{ value: "results", label: "Results" }]),
     { value: "review", label: "Review", count: awaiting },
     ...(canLaunch ? [{ value: "launch", label: c.status === "paused" ? "Resume" : "Launch" }] : []),
     { value: "steps", label: "Steps", count: c.steps.length },
@@ -180,6 +183,12 @@ export function CampaignDetailPage() {
           />
         </div>
       </TabPanel>
+
+      {!settingUp && (
+        <TabPanel id="campaign-panel-results" active={tab === "results"}>
+          <ReportsPanel campaignId={c.id} />
+        </TabPanel>
+      )}
 
       <TabPanel id="campaign-panel-review" active={tab === "review"}>
         <ReviewQueue campaignId={c.id} onChanged={refresh} />

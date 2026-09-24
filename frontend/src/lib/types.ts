@@ -2210,6 +2210,11 @@ export interface ConnectedMailbox {
   sent_today: number;
   /** Non-empty above 50 a day (D10). A warning, never a block. */
   volume_warning: string;
+  /** This week's sends and bounces, and the warning above 3% (spec §19). Never a block. */
+  sent_7d: number;
+  bounced_7d: number;
+  bounce_rate_7d: number;
+  health_warning: string;
   created_at: string;
 }
 
@@ -2490,4 +2495,49 @@ export interface WorkspaceEngagementSettings {
   reply_reminder_business_hours: number;
   ooo_default_days: number;
   can_edit: boolean;
+}
+
+// ---- engagement: reporting (phase 12) ----------------------------------------------------------
+
+export interface CampaignStepResult {
+  step_index: number;
+  channel: StepChannel;
+  sent: number;
+  replies: number;
+  reply_rate: number;
+}
+
+/** GET /engagement/reports/campaigns/{id}: counted in people, not messages. */
+export interface CampaignReport {
+  contacts: number;
+  sent: number;
+  bounced: number;
+  replied: number;
+  positive: number;
+  meetings: number;
+  reply_rate: number;
+  positive_rate: number;
+  steps: CampaignStepResult[];
+  categories: Record<string, number>;
+}
+
+export interface ResponseTimeRow {
+  user_id: string;
+  name: string;
+  answered: number;
+  waiting: number;
+  /** Business hours, in the mailbox's own zone. */
+  median_hours: number | null;
+  p90_hours: number | null;
+}
+
+export type TodayKind = "reply" | "decide" | "colleagues" | "call" | "review" | "returning";
+
+export interface TodayItem {
+  kind: TodayKind;
+  title: string;
+  detail: string;
+  link: string;
+  at: string | null;
+  count: number;
 }

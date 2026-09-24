@@ -1,0 +1,137 @@
+.panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: var(--space-5);
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+/* ---- bars: one series, one hue, direct labels ---- */
+
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.label {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.track {
+  display: block;
+  height: 12px;
+  border-radius: 0 4px 4px 0;
+  background: var(--surface-3);
+}
+
+.bar {
+  display: block;
+  width: var(--w, 0%);
+  min-width: 2px;
+  height: 100%;
+  border-radius: 0 4px 4px 0;
+  background: var(--accent);
+  transition: width var(--dur-slow) var(--ease-out);
+}
+
+.value {
+  min-width: 5.5rem;
+  text-align: right;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.rate {
+  color: var(--text-muted);
+}
+
+.bounced {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--warning-quiet);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text);
+}
+
+.statusIcon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+/* ---- table ---- */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.caption {
+  padding-bottom: var(--space-2);
+  text-align: left;
+  color: var(--text-muted);
+  line-height: var(--leading);
+}
+
+.table th,
+.table td {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-weight: var(--weight-normal);
+  color: var(--text);
+}
+
+.table thead th {
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+}
+
+.table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar {
+    transition: none;
+  }
+}

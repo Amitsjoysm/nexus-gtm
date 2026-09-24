@@ -547,6 +547,9 @@ class OutcomeIn(BaseModel):
     account_id: str | None = None
     contact_id: str | None = None
     campaign_id: str | None = None  # attribute this outcome to the campaign that drove it
+    # A campaign on the engagement engine. `campaign_id` is the old campaigns table's foreign key and
+    # stays so (spec §13), so the new one is validated and carried in `meta` instead.
+    engagement_campaign_id: str | None = None
     meta: dict = Field(default_factory=dict)
 
 

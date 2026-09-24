@@ -16,6 +16,7 @@ import {
 } from "@/components/ui";
 import type { BadgeTone } from "@/components/ui";
 import { DataState } from "@/components/DataState";
+import { MailboxHealth } from "@/components/engagement/MailboxHealth";
 import { useToast } from "@/components/ui/Toast";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
@@ -253,6 +254,7 @@ function MailboxCard({
             {mailbox.volume_warning}
           </p>
         )}
+        <MailboxHealth mailbox={mailbox} />
 
         {mailbox.mine && mailbox.status !== "revoked" && (
           <div className={styles.fields}>

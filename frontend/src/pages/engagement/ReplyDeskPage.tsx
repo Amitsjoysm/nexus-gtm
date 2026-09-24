@@ -8,6 +8,7 @@ import {
 import type { Column } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import { ConversationTimeline } from "@/components/engagement/ConversationTimeline";
+import { ResponseTimes } from "@/components/engagement/ResponseTimes";
 import { CATEGORY, CATEGORY_OPTIONS, reasonText, when, whenDay } from "@/components/engagement/labels";
 import { useApi } from "@/hooks/useApi";
 import type { AsyncState } from "@/hooks/useApi";
@@ -88,6 +89,8 @@ export function ReplyDeskPage() {
           </>
         }
       />
+
+      <ResponseTimes team={team} />
 
       <Tabs items={tabs} value={tab} onChange={(v) => go({ tab: v as TabKey, reply: null })} idPrefix="desk" />
 

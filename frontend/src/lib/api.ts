@@ -92,6 +92,9 @@ import type {
   DeskDecision,
   ReplyCategory,
   WorkspaceEngagementSettings,
+  CampaignReport,
+  ResponseTimeRow,
+  TodayItem,
   DoNotContactEntry,
   LedgerStatus,
   LedgerStoreStatus,
@@ -1341,6 +1344,19 @@ export class ApiClient {
     params: { contact_id?: string; account_id?: string }, signal?: AbortSignal,
   ) {
     return this.request<TimelineEntry[]>("/engagement/timeline", { query: params, signal });
+  }
+
+  // ---- engagement: reporting ----
+  campaignReport(id: string, signal?: AbortSignal) {
+    return this.request<CampaignReport>(`/engagement/reports/campaigns/${id}`, { signal });
+  }
+  responseTimes(team = false, signal?: AbortSignal) {
+    return this.request<ResponseTimeRow[]>("/engagement/reports/response-times", {
+      query: { team }, signal,
+    });
+  }
+  engagementToday(signal?: AbortSignal) {
+    return this.request<TodayItem[]>("/engagement/today", { signal });
   }
 
   // ---- engagement: sequence templates ----

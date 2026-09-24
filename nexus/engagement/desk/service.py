@@ -265,10 +265,14 @@ async def decide(ts, classification, decision: str, *, user_id: str,
             if enrollment.status not in ("stopped", "completed"):
                 await set_status(ts, enrollment, "stopped", "manual", user_id=user_id)
     elif decision == "meeting":
+        from nexus.engagement.reports.outcomes import attribution
+
+        enrollment = await ts.get(EngagementEnrollment, classification.enrollment_id)             if classification.enrollment_id else None
         await get_outcome_service().record(
             ts, stage="meeting", account_id=classification.account_id,
             contact_id=classification.contact_id,
-            meta={"source": "engagement_reply_desk", "message_id": classification.message_id,
+            meta={**attribution(enrollment), "source": "engagement_reply_desk",
+                  "message_id": classification.message_id,
                   "classification_id": classification.id})
         for enrollment in enrollments:
             if enrollment.status not in ("stopped", "completed"):

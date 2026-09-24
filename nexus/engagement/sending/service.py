@@ -399,6 +399,10 @@ async def _record(ts, row, *, mailbox, contact, enrollment, user_id, context: di
         "mailbox_provider": mailbox.provider,
     }
     payload.update(context or {})
+    from nexus.engagement.reports.outcomes import record_sent
+
+    # The dashboards, the ROI rollup and account tiering read `outcomes` (spec §11).
+    await record_sent(ts, row, enrollment)
     await emit(ts, "message.sent", actor_user_id=user_id,
                refs={"contact_id": contact.id, "account_id": getattr(contact, "account_id", None),
                      "enrollment_id": getattr(enrollment, "id", None),

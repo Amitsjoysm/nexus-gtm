@@ -302,9 +302,11 @@ async def test_a_meeting_is_recorded_as_an_outcome_the_dashboards_can_see(
     async with tenant_session(tid) as ts:
         classification = await _fetch(ts, classification_id)
         await decide(ts, classification, "meeting", user_id=owner)
-        outcomes = await ts.list(Outcome)
-    assert [o.stage for o in outcomes] == ["meeting"]
-    assert outcomes[0].meta["source"] == "engagement_reply_desk"
+        meetings = await ts.list(Outcome, Outcome.stage == "meeting")
+    # Sends and replies write their own outcomes (phase 12); this is about the meeting.
+    assert len(meetings) == 1
+    assert meetings[0].meta["source"] == "engagement_reply_desk"
+    assert meetings[0].meta["engagement_campaign_id"]
     assert (await _enrollment(tid)).status == "stopped"
 
 

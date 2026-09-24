@@ -58,6 +58,13 @@ async def record_outcome(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
     if body.campaign_id is not None and await ts.get(Campaign, body.campaign_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Campaign not found")
+    meta = dict(body.meta)
+    if body.engagement_campaign_id is not None:
+        from nexus.models.engagement import EngagementCampaign
+
+        if await ts.get(EngagementCampaign, body.engagement_campaign_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Campaign not found")
+        meta["engagement_campaign_id"] = body.engagement_campaign_id
     outcome = await get_outcome_service().record(
         ts,
         stage=body.stage,
@@ -65,7 +72,7 @@ async def record_outcome(
         account_id=body.account_id,
         contact_id=body.contact_id,
         campaign_id=body.campaign_id,
-        meta=body.meta,
+        meta=meta,
     )
     return _outcome_out(outcome)
 

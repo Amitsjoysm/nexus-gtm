@@ -186,6 +186,9 @@ async def _classify_and_act(ts, row, found, mailbox, parsed) -> str:
                                      mailbox=mailbox, classification=classification)
     classification.action_taken = action[:40]
     await ts.flush()
+    from nexus.engagement.reports.outcomes import record_replied
+
+    await record_replied(ts, row, classification)
     await emit(ts, "reply.classified", refs=_refs(row, found, mailbox, classification),
                payload={"category": verdict.category, "confidence": verdict.confidence,
                         "date_phrase": verdict.date_phrase,
