@@ -47,7 +47,11 @@ async def raise_alerts_for(ts, account, signals) -> list:
     registry: list = []  # resolved lazily, once per batch, and only if something is routed
     try:
         service = get_alert_service()
+        from nexus.ingestion.window import asks_for_attention
+
         for signal in signals:
+            if not asks_for_attention(signal):
+                continue          # old news: on the timeline, not in anyone's attention
             decision = decide(
                 signal.kind, float(signal.strength or 0), floor=settings.signal_alert_floor
             )

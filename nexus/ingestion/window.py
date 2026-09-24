@@ -82,6 +82,26 @@ def within_ai_window(signals):
     return [s for s in (signals or []) if (ensure_aware(s.occurred_at) or cutoff) >= cutoff]
 
 
+def asks_for_attention(signal) -> bool:
+    """Should this signal raise an alert, an Inbox task, a channel ping? Only if it is news.
+
+    Decided with the product owner 2026-09-23: an event older than `signal_alert_max_age_days`
+    (by when it HAPPENED) goes on the timeline and nowhere else — a 2023 round found this morning
+    is history. An undated signal always may: the day we found it is all we know, and it may be
+    new. Plays do not ask this; they were kept out of the window when it was decided.
+    """
+    if (getattr(signal, "dated", None) or "found") != "event":
+        return True
+    from nexus.core.config import get_settings
+    from nexus.core.db import ensure_aware, utcnow
+
+    when = ensure_aware(getattr(signal, "occurred_at", None))
+    if when is None:
+        return True
+    limit = int(getattr(get_settings(), "signal_alert_max_age_days", 30) or 30)
+    return when >= utcnow() - timedelta(days=limit)
+
+
 def since(days: int | None) -> datetime | None:
     if not days:
         return None

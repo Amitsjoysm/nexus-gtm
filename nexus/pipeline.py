@@ -170,8 +170,11 @@ async def process_account(
     min_strength = get_settings().inbox_min_signal_strength
     task_ids: list[str] = []
     play_run_ids: list[str] = []
+    from nexus.ingestion.window import asks_for_attention
+
     for sig in new_signals:
-        if sig.strength >= min_strength:
+        # An old event found today still reaches the timeline and Plays, not the Inbox.
+        if sig.strength >= min_strength and asks_for_attention(sig):
             task = await inbox.create_from_signal(ts, sig, account, composite_score=composite)
             task_ids.append(task.id)
         for run in await plays.evaluate(

@@ -304,6 +304,17 @@ _SPECS: tuple[SettingSpec, ...] = (
         risk="medium", minimum=0.0, maximum=1.0,
     ),
     SettingSpec(
+        key="signal_alert_max_age_days", label="Only alert on events newer than (days)",
+        group=SIGNALS, kind="int", minimum=1, maximum=365,
+        effect="An event that happened longer ago than this, by its own date, goes on the "
+               "account timeline but raises no alert, Inbox task or channel ping. Signals with no "
+               "date always may.",
+        warning="Higher lets old news found for the first time (a company's feed history, a "
+                "years-old round) ping reps as if it were new. Lower can quiet a real event whose "
+                "source dated it late.",
+        risk="medium",
+    ),
+    SettingSpec(
         key="signal_window_user_choice", label="Let users pick their signal window",
         group=SIGNALS, kind="bool",
         effect="On: everyone chooses how far back signals go from the top bar, starting at the "
