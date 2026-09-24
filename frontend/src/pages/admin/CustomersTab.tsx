@@ -254,6 +254,7 @@ function CustomerDetail({
           />
           <Usage usage={usage} />
           <Credits tenantId={row.tenant_id} workspace={row.workspace} usage={usage} onAct={act} busy={busy} />
+          <CallerId row={row} onAct={act} busy={busy} />
         </div>
       )}
     </section>
@@ -581,6 +582,75 @@ function Credits({
           }}
         >
           Grant credits
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The number this workspace's calls show on the PLATFORM Twilio (decided 2026-09-23).
+ *
+ * One shared number meant every customer's prospects saw the same caller, and one heavy customer
+ * getting it flagged as spam lowered answer rates for all. The server checks the platform account
+ * owns the number before saving; blank returns the workspace to the platform default. A workspace
+ * that connected its own Twilio under Integrations uses its own number and is unaffected.
+ */
+function CallerId({
+  row,
+  onAct,
+  busy,
+}: {
+  row: CustomerRow;
+  onAct: <T>(title: string, fn: () => Promise<T>) => Promise<void>;
+  busy: boolean;
+}) {
+  const api = useApiClient();
+  const [number, setNumber] = useState(row.platform_caller_id ?? "");
+  // Held here, not read from `row`: the parent refreshes its table after a save, not the row it
+  // passed in, so reading `row` would keep describing the number that was just replaced.
+  const [current, setCurrent] = useState(row.platform_caller_id ?? "");
+  const [detail, setDetail] = useState("");
+
+  return (
+    <section>
+      <h4 className={styles.panelTitle}>Caller ID</h4>
+      <p className={styles.note}>
+        {current ? (
+          <>
+            Platform calls from <strong>{row.workspace}</strong> show <strong>{current}</strong>.
+          </>
+        ) : (
+          <>Platform calls from {row.workspace} show the platform default number.</>
+        )}
+        {detail && <> {detail}</>}
+      </p>
+      <div className={styles.row}>
+        <Field
+          label="Number on the platform Twilio"
+          hint="Checked against the platform account before saving. Leave blank for the default."
+        >
+          <Input
+            type="tel"
+            inputMode="tel"
+            value={number}
+            onChange={(e) => setNumber(e.target.value)}
+            placeholder="+15551234567"
+          />
+        </Field>
+        <Button
+          size="sm"
+          disabled={busy || number.trim() === current}
+          onClick={() =>
+            onAct("Couldn't set the caller ID", async () => {
+              const res = await api.setCustomerCallerId(row.tenant_id, number.trim());
+              setCurrent(res.from_number);
+              setNumber(res.from_number);
+              setDetail(res.detail);
+            })
+          }
+        >
+          {number.trim() ? "Set caller ID" : "Use platform default"}
         </Button>
       </div>
     </section>

@@ -282,3 +282,11 @@ async def test_clearing_the_assignment_returns_to_the_platform_number(
     assert r.status_code == 200
     await _dial(client, token, task)
     assert platform.last_from == "+15557770000"
+
+
+def test_the_customer_directory_offers_the_caller_id():
+    # No frontend test runner, so this reads the source, like the other UI tests.
+    from pathlib import Path
+
+    src = Path("frontend/src/pages/admin/CustomersTab.tsx").read_text(encoding="utf-8")
+    assert "<CallerId row={row}" in src and "setCustomerCallerId" in src

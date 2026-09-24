@@ -1476,6 +1476,8 @@ export interface CustomerRow {
    * rather than a workspace that merely contains a similar address.
    */
   matched_email: string;
+  /** The number this workspace's platform-account calls show; "" is the platform default. */
+  platform_caller_id?: string;
   requests_this_period: number;
   credits_balance: number;
 }

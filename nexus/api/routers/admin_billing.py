@@ -492,6 +492,8 @@ class CustomerRowOut(BaseModel):
     matched_email: str = ""
     requests_this_period: int
     credits_balance: float
+    # The caller ID this workspace's PLATFORM calls show; "" uses the platform default.
+    platform_caller_id: str = ""
 
 
 @router.get("/customers", response_model=list[CustomerRowOut])
@@ -595,6 +597,7 @@ async def list_customers(
             matched_email=matched.get(t.id, ""),
             requests_this_period=int(reqs.get(t.id, 0)),
             credits_balance=float(credits.get(t.id, 0.0) or 0.0),
+            platform_caller_id=t.platform_caller_id or "",
         ))
     out.sort(key=lambda r: (-r.requests_this_period, r.workspace.lower()))
     return out

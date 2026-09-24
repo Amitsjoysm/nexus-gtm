@@ -1684,6 +1684,13 @@ export class ApiClient {
   adminCustomers(q = "", signal?: AbortSignal) {
     return this.request<CustomerRow[]>("/admin/billing/customers", { query: { q }, signal });
   }
+  /** Assign (or clear, with "") the caller ID a workspace's platform-account calls show. */
+  setCustomerCallerId(tenantId: string, fromNumber: string, signal?: AbortSignal) {
+    return this.request<{ tenant_id: string; from_number: string; checked: boolean; detail: string }>(
+      `/admin/billing/customers/${tenantId}/caller-id`,
+      { method: "PUT", body: { from_number: fromNumber }, signal },
+    );
+  }
   adminCustomerUsage(tenantId: string, signal?: AbortSignal) {
     return this.request<CustomerUsage>(
       `/admin/billing/customers/${tenantId}/usage`, { signal },
