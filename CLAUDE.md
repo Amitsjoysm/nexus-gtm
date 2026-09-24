@@ -224,9 +224,9 @@ table gets RLS via
 renumbering one chain to `0047`–`0049` and rebasing it onto the other's head, rather than adding a
 merge revision — neither had been applied anywhere, so no stamped database remembered the old ids.
 If you branch for more than a day, check `ScriptDirectory.get_heads()` returns exactly one before
-merging; the collision is invisible until a deploy. **It is live again:** the unmerged
-`feat/self-hosted-signal-fetching` branch carries `0057_web_cache` on the same `0056` parent as
-`0057_signal_dated`. Whichever merges second renumbers and re-parents its revision.
+merging; the collision is invisible until a deploy. **It happened again, 2026-09-24:** `feat/self-hosted-signal-fetching` carried `0057_web_cache` on
+the same `0056` parent as `0057_signal_dated`. Resolved the same way: merged last, it was renumbered
+to `0060_web_cache` and re-parented on `0059_calling_billing`.
 
 **It happened again, found 2026-09-24 before anything merged.** `feat/sdr-engagement` (`0057_engagement`,
 `0058_engagement_crm_log`) and the stacked `fix/signals-credits-telephony` →
