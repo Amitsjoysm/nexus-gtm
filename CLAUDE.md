@@ -215,8 +215,9 @@ PSP references) -> `0055` (`feature_switches`) -> `0056` (`accounts.owner_user_i
 ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_enrollment_id`) ->
 `0058` (`crm_logged_at` on `engagement_messages` and `reply_classifications`) -> `0059`
 (`signal_events.dated`, `company_signals.dated`) -> `0060` (`integration_connections.config`) -> `0061` (`placed_calls`,
-`tenants.platform_caller_id`) -> `0062` (`web_cache`, platform-global). Every tenant-scoped
-table gets RLS via
+`tenants.platform_caller_id`) -> `0062` (`web_cache`, platform-global) -> `0063` (LinkedIn
+fields on `companies`, `company_countries` and `prospect_cursors`, all platform-global;
+`prospect_runs`, tenant-scoped). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -927,6 +928,8 @@ exhausted quickly.
 `NEXUS_SIGNAL_SEARCH_PROVIDER` selects a backend for **signals alone**; empty means "use
 `search_provider`". Keep them separate: `search_provider` is global, and lookalikes
 (`find_similar`) plus company/ICP discovery (`search_companies`) are **Exa-only capabilities**.
+Both now ask LinkedIn first and Exa only when LinkedIn gives nothing (see *LinkedIn prospecting*
+below), so Exa is the fallback there rather than the only source; the warning still holds for it.
 Repointing the global setting to diversify signal collection takes those down silently — the base
 `find_similar` returns `[]`, so lookalikes report "no results" with nothing in the logs.
 
@@ -1327,6 +1330,72 @@ the account under a domain a person already refused. A name match cannot say whi
 are excluded by the same `_NON_COMPANY_HOSTS` discovery uses.
 
 `scripts/clean_invalid_emails.py` clears what was saved before all of this — dry run by default.
+
+## LinkedIn prospecting (`nexus/prospecting/`)
+
+ICP companies, Find similar and Find contacts ask, in order, **the shared database, then the
+harvestapi LinkedIn actors, then Exa** (decided with the product owner 2026-09-24). Spec and plan:
+`docs/superpowers/{specs,plans}/2026-09-24-linkedin-prospecting*`. Every actor was run once against
+real input before its parser was written; the fixtures in the tests are synthetic.
+
+**The domain defines the account** (product owner). `linkedin.company_domain` accepts a row's own
+website only: not a social profile, directory, app store, link-in-bio page or shared host
+(`sites.google.com`, `github.com`). A row with no usable website is counted as `no_website` and is
+**neither delivered nor stored**. A LinkedIn page belongs to an account only when `page_is_for`
+says its website IS the account's domain. Measured: `linkedin.com/company/vanta` is *VANTA -
+Chauffeurs* (vantaexec.co.uk); Vanta the security company is `vanta-security`. Asked about the
+first, the employees actor returned a fleet coordinator at a leasing firm, which is what an
+unproven page does to a contact list.
+
+**ICP companies** (`companies.find_icp_companies`), used by populate and by the daily sweep:
+
+1. The shared store, on the ICP's LinkedIn industry codes (a parent code covers its children), any
+   office in the ICP's countries (`company_countries`: LinkedIn's location filter matches ANY
+   office, measured — a UK search returned US-headquartered companies with a London office), and an
+   overlapping size band. "Not held" is an SQL anti-join against the workspace's accounts. The old
+   discovery sent at most 256 held domains to Exa as exclusions, so a 3,500-account workspace got
+   the same top results every day; pinned with 299 held and the new one still found.
+2. LinkedIn for the shortfall, from `prospect_cursors`, which is **shared by every workspace**:
+   every company on a page read is stored, so the next workspace with the same ICP gets it from
+   step 1 and never pays to read the page again. A page is claimed by compare-and-set and released
+   if the read fails. Past the 1,000-result ceiling (20 pages of 50) a query splits by size band,
+   then country, then industry. An exhausted cursor reopens after 30 days. Page budget
+   `1 + need/10`, at most 10.
+3. Exa only when LinkedIn delivered nothing or could not be asked, through the same gates, with
+   the old sweep's pool, enrichment and fit threshold. LinkedIn and database candidates are ICP
+   matches by construction and skip the threshold (`deliver.py`, shared by both callers).
+
+**Industry codes** (`industries.py`): the 434 v2 codes are vendored and held in memory. Mapping is
+whole-word (a substring match filed "Artificial Intelligence" under *Artificial Rubber
+Manufacturing*), synonym-led ("SaaS", "fintech", "AI" match no label), and asks the LLM only for
+misses, from a ~20-label shortlist, discarding any id not on it. Saving an ICP stores the result as
+`icp.linkedin_industry_ids`, derived and never taken from the request. The relevance engine counts
+an account whose industry maps into those codes as an industry match: without it every
+LinkedIn-sourced account ("Software Development") scored 0 on industry against "SaaS".
+
+**Populate** (`populate.py`, `POST /discovery/populate`, `manage_relevance`): the Relevance page
+asks "how many companies now?" after a save that changed the ICP (`icp_changed`). The balance is
+preflighted for the WHOLE count (402 before anything is bought), one populate runs at a time (409),
+and `discovery.account_added` (5 credits) is charged once for the companies delivered, keyed on the
+run, in the transaction that creates them. **Saving an ICP no longer starts a discovery batch by
+itself**: that batch would add, and bill, companies nobody asked for on top of the number chosen.
+Free does not include `module.discovery`, so under the default `shadow` its charge is recorded and
+burns nothing; with enforcement on it is refused with the upsell. Verified on Launch: 2 delivered
+moved the balance 200 -> 190.
+
+**Find similar** (`similar.py`, first in `LookalikeService.find`): the seed's proven page, its
+similar pages (LinkedIn lists ~12 and **none carries a website**, 0 of 72 observed), each resolved
+to a domain from the shared store or ONE bulk details run, stored for everyone. A page with no
+website is remembered in `web_cache` for 30 days so it is not re-bought on every click. 90s budget,
+then Exa. **Find contacts** (`contacts.py`, first in `campaigns/sourcing.source_account_contacts`):
+the proven page's people with the ICP's titles only (no titles, no LinkedIn call: the only request
+left is "everyone"); each row must name this company and fit a title; deduped by normalised
+LinkedIn profile and by name, which the web path now also does. Emails come from our verified
+finder, which charges `enrich.contact` as before.
+
+Measured prices (Apify, 2026-09-24): company search $0.004 a company in full mode ($0.20 a page),
+details $0.004 a company, employees $0.003 a profile plus $0.02 a run. **The first of the two
+configured Apify keys answers 401** and rotation skips it; replace it.
 
 ## Pay-per-result searches ask first (`preflight`)
 
@@ -1768,6 +1837,9 @@ Registered actors and their state:
 |---|---|---|
 | `phone_finder` | `code_crafter/mobile-finder` | `people/enrich.py` — live, verified end-to-end |
 | `linkedin_profile` | `dev_fusion/Linkedin-Profile-Scraper` | `personalization/apify_provider.py` |
+| `linkedin_company_search` | `harvestapi/linkedin-company-search` | `prospecting/linkedin.py` — run once, 2026-09-24 |
+| `linkedin_company` | `harvestapi/linkedin-company` | `prospecting/linkedin.py` — run once, 2026-09-24 |
+| `linkedin_company_employees` | `harvestapi/linkedin-company-employees` | `prospecting/linkedin.py` — run once, 2026-09-24 |
 
 **Every registered actor has a consumer, and that is now a test**
 (`test_every_registered_actor_has_a_real_caller`) rather than a habit. It resolves the argument
