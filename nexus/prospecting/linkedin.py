@@ -357,18 +357,19 @@ async def company_employees(
     return [p for p in (parse_employee(i) for i in items) if p is not None]
 
 
-def employee_fits(person: LinkedInPerson, company_name: str, targets) -> tuple[bool, str]:
+def employee_fits(person: LinkedInPerson, company_names, targets) -> tuple[bool, str]:
     """Does this row prove it is a buyer at THIS company? ``(ok, reason_if_not)``.
 
-    The company must be named exactly (after legal suffixes) — the actor is scoped to one page, so
-    any other name is a row that leaked from somewhere else. The title must fit the ICP when the ICP
-    names titles, and must not be one it excludes.
+    The company must be named exactly (after legal suffixes) as one of the names it goes by — the
+    actor is scoped to one page, so any other name is a row that leaked from somewhere else. The
+    title must fit the ICP when the ICP names titles, and must not be one it excludes.
     """
     from nexus.accounts.dedupe import normalise_name
     from nexus.lookalike.contacts import _is_excluded, icp_title_fit
 
-    if not normalise_name(person.company_name) \
-            or normalise_name(person.company_name) != normalise_name(company_name):
+    names = [company_names] if isinstance(company_names, str) else list(company_names)
+    wanted = {normalise_name(n) for n in names} - {""}
+    if normalise_name(person.company_name) not in wanted:
         return False, "wrong_company"
     if _is_excluded(person.title, targets):
         return False, "wrong_title"

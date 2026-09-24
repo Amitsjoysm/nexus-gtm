@@ -86,6 +86,44 @@ async def _link_account(ts, account, company_id: str | None) -> None:
         await ts.flush()
 
 
+@dataclass
+class VerifiedPage:
+    """An account's own LinkedIn page, proven by its website being the account's domain."""
+
+    url: str
+    #: The shared company row for the account's domain (None only if storing it failed).
+    company: object | None
+    #: Names the company goes by: the shared row's and the account's own.
+    names: tuple[str, ...]
+    similar: list[dict]
+
+
+async def verified_page(account, *, client) -> tuple[VerifiedPage | None, str]:
+    """The account's own LinkedIn page, or ``(None, reason)``. Raises the Apify errors.
+
+    The page stored on the account's shared company row is used as is: it was attached there under
+    the domain its own website gave. Otherwise LinkedIn is searched by name, and the answer is used
+    ONLY when its website is the account's domain. Whatever the search returns is stored either
+    way: it is a real company under its own domain, just not necessarily this one.
+    """
+    domain = normalise_domain(account.domain)
+    if not domain:
+        return None, "no_domain"
+    company = await _company_by_domain(domain)
+    page = company.linkedin_url if company is not None else None
+    similar = list(company.similar_linkedin or []) if company is not None else []
+    if not page:
+        found = await li.find_company_page(account.name or domain, client=client)
+        if found is not None:
+            await store_companies([found])
+        if not li.page_is_for(found, domain):
+            return None, "no_verified_page"
+        page, similar = found.linkedin_url, list(found.similar)
+        company = await _company_by_domain(domain)
+    names = tuple(n for n in {getattr(company, "name", "") or "", account.name or ""} if n)
+    return VerifiedPage(url=page, company=company, names=names, similar=similar), ""
+
+
 async def similar_companies(ts, account, *, limit: int, client=None) -> SimilarResult:
     from nexus.integrations.apify import ApifyError, ApifyNotConfigured
 
@@ -96,21 +134,11 @@ async def similar_companies(ts, account, *, limit: int, client=None) -> SimilarR
         return result
     client = _client_for(client)
     try:
-        company = await _company_by_domain(domain)
-        page = company.linkedin_url if company is not None else None
-        similar = list(company.similar_linkedin or []) if company is not None else []
-
-        if not page:
-            found = await li.find_company_page(account.name or domain, client=client)
-            if found is not None:
-                # Stored whoever it turns out to be: it is a real company under its own domain.
-                await store_companies([found])
-            if not li.page_is_for(found, domain):
-                result.notes["linkedin"] = "no_verified_page"
-                return result
-            page, similar = found.linkedin_url, list(found.similar)
-            company = await _company_by_domain(domain)
-
+        found_page, reason = await verified_page(account, client=client)
+        if found_page is None:
+            result.notes["linkedin"] = reason
+            return result
+        page, similar, company = found_page.url, found_page.similar, found_page.company
         link_to = company.id if company is not None else None
 
         if not similar:

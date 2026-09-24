@@ -121,22 +121,43 @@ def get_contact_sourcing_service() -> ContactSourcingService:
 
 
 async def source_account_contacts(
-    ts: TenantSession, account: Account, *, limit: int = 5
+    ts: TenantSession, account: Account, *, limit: int = 5, linkedin_client=None,
 ) -> list[Contact]:
-    """Source the buying committee for one account: net-new people via the contact-search
-    registry, deduped against existing contacts, persisted, and email-verified. Never raises —
-    returns the contacts created (possibly empty). Used by the account "Find contacts" action
-    and the manual Run-pipeline button (not the automated sweep, which stays cheap)."""
-    from nexus.integrations.registry import get_registry
+    """Source the buying committee for one account: net-new people, deduped against existing
+    contacts, persisted, and email-verified. Never raises — returns the contacts created (possibly
+    empty). Used by the account "Find contacts" action and the manual Run-pipeline button (not the
+    automated sweep, which stays cheap).
+
+    LinkedIn first (``nexus/prospecting/contacts.py``): people at the account's own page with the
+    ICP's titles. The contact-search registry (web search) only when that finds nobody.
+    """
     from nexus.relevance.engine import get_profile
 
     profile = await get_profile(ts)
     icp = (getattr(profile, "icp", None) or {}) if profile else {}
+
+    from nexus.prospecting.contacts import linkedin_contacts
+
+    linkedin = await linkedin_contacts(ts, account, icp, limit=limit, client=linkedin_client)
+    if linkedin.notes or linkedin.discarded:
+        logger.info("LinkedIn contacts for %s: notes=%s discarded=%s", account.id,
+                    linkedin.notes, dict(linkedin.discarded))
+    if linkedin.people:
+        return await _persist_linkedin_people(ts, account, linkedin.people)
+
+    from nexus.integrations.registry import get_registry
+
     registry = get_registry()
+
+    from nexus.people.store import normalise_linkedin
+    from nexus.prospecting.contacts import _name_key
 
     existing = await ts.list(Contact, Contact.account_id == account.id)
     seen_emails = {(c.email or "").lower() for c in existing if c.email}
-    seen_names = {(c.full_name or "").lower() for c in existing if c.full_name}
+    seen_names = {_name_key(c.full_name) for c in existing if c.full_name}
+    # One profile shared four ways (uk.linkedin.com, a trailing slash, tracking parameters) is
+    # one person; the email and the name alone let the same human in twice.
+    seen_profiles = {normalise_linkedin(c.linkedin_url) for c in existing} - {""}
 
     from nexus.integrations.search.provider import SearchUnavailable
 
@@ -162,8 +183,9 @@ async def source_account_contacts(
         if (cand.source or "").lower() == "stub":
             continue
         email = (cand.email or "").lower()
-        name = (cand.full_name or "").lower()
-        if (email and email in seen_emails) or (name and name in seen_names):
+        name = _name_key(cand.full_name)
+        profile_url = normalise_linkedin(cand.linkedin_url)
+        if (email and email in seen_emails) or (name and name in seen_names)                 or (profile_url and profile_url in seen_profiles):
             continue
         person = Contact(
             tenant_id=ts.tenant_id, account_id=account.id, full_name=cand.full_name,
@@ -183,7 +205,32 @@ async def source_account_contacts(
             pass
         seen_emails.add(email)
         seen_names.add(name)
+        if profile_url:
+            seen_profiles.add(profile_url)
         created.append(person)
+    return created
+
+
+async def _persist_linkedin_people(ts: TenantSession, account: Account, people) -> list[Contact]:
+    """LinkedIn people as contacts, each then given a work email by the verified finder (the
+    waterfall enricher, which also charges for it). Already deduped by the caller."""
+    from nexus.enrichment.waterfall import get_enricher
+
+    enricher = get_enricher()
+    created: list[Contact] = []
+    for person in people:
+        contact = Contact(
+            tenant_id=ts.tenant_id, account_id=account.id, full_name=person.full_name,
+            title=person.title or None, linkedin_url=person.linkedin_url,
+            enrichment_source="sourcing:linkedin",
+        )
+        ts.add(contact)
+        await ts.flush()
+        try:
+            await enricher.enrich_contact(ts, contact, account)
+        except Exception:  # enrichment is best-effort, as for every other sourced contact
+            pass
+        created.append(contact)
     return created
 
 
