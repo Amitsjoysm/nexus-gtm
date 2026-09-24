@@ -98,12 +98,23 @@ _SEED_ENRICH_BUDGET_S = 12.0
 #: Together these cap the request at roughly 12 + 20 seconds of enrichment plus the search itself.
 _CANDIDATE_ENRICH_BUDGET_S = 20.0
 
+#: How long LinkedIn's similar pages may take before web search is asked instead: a name lookup
+#: and one bulk details run, each an actor session. A person is waiting on a button, and a slow
+#: answer that never arrives is worse than the web search's.
+_LINKEDIN_BUDGET_S = 90.0
+
 
 class LookalikeService:
     async def find(
         self, ts: TenantSession, account: Account, *, limit: int = 10
     ) -> list[Lookalike]:
         seed_domain = (account.domain or "").strip().lower()
+
+        # 0) LinkedIn's own "similar pages" first (product owner, 2026-09-24), each resolved to a
+        #    domain its own website gave. Web search below only when this finds nothing.
+        linkedin = await self._from_linkedin(ts, account, limit=limit)
+        if linkedin:
+            return linkedin
 
         # 1) Make sure we actually know what this company is. Enrich blank firmographics from the
         #    web first (industry/description/geo/tech) so the similarity query is rich, not bare.
@@ -261,6 +272,63 @@ class LookalikeService:
                 )
             )
 
+        out.sort(key=lambda lk: lk.score, reverse=True)
+        return out[:limit]
+
+    async def _from_linkedin(
+        self, ts: TenantSession, account: Account, *, limit: int
+    ) -> list[Lookalike]:
+        """Similar companies from LinkedIn, ranked like every other lookalike. [] means "ask web
+        search": LinkedIn unavailable, too slow, no proven page for the seed, or nothing found."""
+        from nexus.prospecting.similar import similar_companies
+
+        try:
+            found = await run_with_timeout(
+                similar_companies(ts, account, limit=limit), _LINKEDIN_BUDGET_S
+            )
+        except TimeoutError:
+            logger.info("LinkedIn similar companies exceeded %ss; asking web search",
+                        _LINKEDIN_BUDGET_S)
+            return []
+        except Exception:
+            logger.warning("LinkedIn similar companies failed; asking web search", exc_info=True)
+            return []
+        if found.notes:
+            logger.info("LinkedIn similar companies for %s: %s", account.id, found.notes)
+        if not found.companies:
+            return []
+
+        from nexus.accounts.dedupe import normalise_on_write
+
+        domain_stmt = select(Account.domain).where(
+            Account.tenant_id == ts.tenant_id, Account.domain.isnot(None)
+        )
+        tracked = {d.lower() for d in (await ts.session.scalars(domain_stmt)).all() if d}
+        profile = await get_profile(ts)
+        engine = get_relevance_engine()
+        learned = (await get_outcome_service().learned_weights(ts)).weights
+        w = max(0.0, min(1.0, get_settings().lookalike_similarity_weight))
+        seed_feat = prepare_company(account)
+        out: list[Lookalike] = []
+        for company in found.companies:
+            description = (company.description or "").strip()
+            # Transient, never persisted: LinkedIn's firmographics are what the ranking reads.
+            candidate = Account(
+                tenant_id=ts.tenant_id, name=company.name or company.domain,
+                domain=normalise_on_write(company.domain), industry=company.industry,
+                country=company.country, employee_count=company.employee_count,
+            )
+            if description:
+                candidate.custom_fields = {"description": description[:500]}
+            sim = company_similarity(account, candidate, seed_features=seed_feat)
+            fit = engine.score_icp_fit(profile, candidate, learned_weights=learned)
+            out.append(Lookalike(
+                name=candidate.name, domain=candidate.domain, url=f"https://{company.domain}",
+                snippet=description[:300],
+                score=round(w * sim.score + (1.0 - w) * fit.score),
+                reasons=sim.reasons[:5] or ["Listed by LinkedIn as a similar company"],
+                source="linkedin", already_tracked=candidate.domain in tracked,
+            ))
         out.sort(key=lambda lk: lk.score, reverse=True)
         return out[:limit]
 
