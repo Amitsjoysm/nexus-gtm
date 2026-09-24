@@ -6,6 +6,7 @@ import type { Column } from "@/components/ui";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import type { EngagementCandidate, ProspectList } from "@/lib/types";
+import { InsightBadge, useContactInsights } from "./InsightBadge";
 import styles from "./ContactPicker.module.css";
 
 /**
@@ -67,6 +68,8 @@ export function ContactPicker({ enrolledIds, onAdd }: ContactPickerProps) {
   );
 
   const rows = found.data ?? [];
+  // The likelihood badge for the first hundred shown: one request, not one per row.
+  const insights = useContactInsights(rows.slice(0, 100).map((r) => r.contact_id));
   const selectable = useMemo(
     () => rows.filter((r) => !r.blocked && !enrolledIds.has(r.contact_id)),
     [rows, enrolledIds],
@@ -131,6 +134,7 @@ export function ContactPicker({ enrolledIds, onAdd }: ContactPickerProps) {
         <div className={styles.person}>
           <span className={styles.name}>{r.full_name}</span>
           {r.title && <span className={styles.sub}>{r.title}</span>}
+          <InsightBadge insight={insights.get(r.contact_id)} compact />
         </div>
       ),
     },

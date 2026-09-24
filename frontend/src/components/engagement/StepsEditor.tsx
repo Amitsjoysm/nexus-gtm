@@ -1,5 +1,6 @@
 import { Button, Field, IconButton, Icons, Input, Select, Textarea } from "@/components/ui";
-import type { EngagementStep } from "@/lib/types";
+import type { BestTimeSuggestion, EngagementStep } from "@/lib/types";
+import { BestTimeHint } from "./BestTimeHint";
 import { WEEKDAYS } from "./labels";
 import styles from "./StepsEditor.module.css";
 
@@ -46,9 +47,11 @@ export interface StepsEditorProps {
   steps: EngagementStep[];
   onChange: (steps: EngagementStep[]) => void;
   disabled?: boolean;
+  /** When the people are known (a campaign, not a template), when most of them reply. */
+  bestTime?: BestTimeSuggestion;
 }
 
-export function StepsEditor({ steps, onChange, disabled = false }: StepsEditorProps) {
+export function StepsEditor({ steps, onChange, disabled = false, bestTime }: StepsEditorProps) {
   function update(index: number, patch: Partial<EngagementStep>) {
     onChange(steps.map((s, i) => (i === index ? { ...s, ...patch } : s)));
   }
@@ -158,6 +161,11 @@ export function StepsEditor({ steps, onChange, disabled = false }: StepsEditorPr
                     </Field>
                   )}
                 </div>
+
+                {step.timing_mode === "manual" && (
+                  <BestTimeHint suggestion={bestTime} current={step.send_time_local}
+                    onUse={(clock) => update(index, { send_time_local: clock })} />
+                )}
 
                 {step.channel === "email" && (
                   <Field

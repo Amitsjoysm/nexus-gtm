@@ -312,3 +312,38 @@ async def test_a_store_that_refuses_leaves_the_rows_to_retry_with_backoff(stores
     assert row.shipped_archive_at is None and row.attempts == 1 and row.last_error
     assert shipper.is_due(row.attempts, row.updated_at, row.updated_at + timedelta(minutes=1)) \
         is False
+
+
+async def test_the_insights_client_reads_profiles_without_their_workspace_keys(stores):
+    """Phase 13: the app reads profiles back from the real store; the key list stays in the store,
+    a miss is remembered, and an unconfigured store is simply no answer."""
+    from nexus.core.config import get_settings
+    from nexus.engagement.insights import client
+    from nexus.engagement.ledger import stores as ledger_stores
+    from nexus.providers import resolver
+
+    await _apply_all()
+    client.clear_cache()
+    async with ledger_stores.connect("insights") as conn:
+        await conn.execute(
+            "INSERT INTO nexus_ledger.person_profiles (person_email, person_key, company_domain,"
+            " best_weekday, best_hour, median_response_s, reply_propensity, last_reply_band,"
+            " sends, replies, workspace_count, workspace_keys) VALUES ('jane@acme.io', 'pk',"
+            " 'acme.io', 1, 10, 14400, 0.2, 'same_day', 10, 2, 3, ARRAY['w1','w2','w3'])")
+
+    found = await client.person_profiles(["Jane@Acme.io", "nobody@acme.io"])
+    assert list(found) == ["jane@acme.io"]
+    assert found["jane@acme.io"]["workspace_count"] == 3
+    assert "workspace_keys" not in found["jane@acme.io"]
+
+    # Remembered for a few minutes, the miss included: no second query for either person.
+    async with ledger_stores.connect("insights") as conn:
+        await conn.execute("DELETE FROM nexus_ledger.person_profiles")
+    assert list(await client.person_profiles(["jane@acme.io", "nobody@acme.io"])) == ["jane@acme.io"]
+    client.clear_cache()
+    assert await client.person_profiles(["jane@acme.io"]) == {}
+
+    get_settings().ledger_insights_dsn = ""
+    resolver.invalidate()
+    client.clear_cache()
+    assert await client.person_profiles(["jane@acme.io"]) == {}

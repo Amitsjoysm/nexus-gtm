@@ -6,7 +6,8 @@ import { useToast } from "@/components/ui/Toast";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import type { ReviewItem } from "@/lib/types";
+import type { ContactInsight, ReviewItem } from "@/lib/types";
+import { InsightBadge, useContactInsights } from "@/components/engagement/InsightBadge";
 import styles from "./Engagement.module.css";
 
 /**
@@ -40,6 +41,8 @@ export function ReviewQueue({ campaignId, onChanged }: ReviewQueueProps) {
   const [approvingAll, setApprovingAll] = useState(false);
 
   const items = review.data ?? [];
+  // How likely each person is to reply, and how they reply where that may be shown (D26).
+  const insights = useContactInsights(items.map((i) => i.contact_id));
   const undrafted = items.filter((i) => i.status === "undrafted").length;
   const passing = items.filter((i) => i.status === "draft" && i.quality_problems.length === 0).length;
   const flagged = items.filter((i) => i.status === "draft" && i.quality_problems.length > 0).length;
@@ -146,7 +149,7 @@ export function ReviewQueue({ campaignId, onChanged }: ReviewQueueProps) {
 
       <ol className={styles.reviewList}>
         {items.map((item) => (
-          <ReviewCard key={item.enrollment_id} item={item}
+          <ReviewCard key={item.enrollment_id} item={item} insight={insights.get(item.contact_id)}
             onChanged={() => { review.refetch(); onChanged(); }} />
         ))}
       </ol>
@@ -154,7 +157,11 @@ export function ReviewQueue({ campaignId, onChanged }: ReviewQueueProps) {
   );
 }
 
-function ReviewCard({ item, onChanged }: { item: ReviewItem; onChanged: () => void }) {
+function ReviewCard({ item, insight, onChanged }: {
+  item: ReviewItem;
+  insight?: ContactInsight;
+  onChanged: () => void;
+}) {
   const api = useApiClient();
   const toast = useToast();
   const [subject, setSubject] = useState(item.subject);
@@ -186,6 +193,7 @@ function ReviewCard({ item, onChanged }: { item: ReviewItem; onChanged: () => vo
             {[item.contact_title, item.account_name].filter(Boolean).join(" · ")}
           </span>
           <span className={styles.muted}>{item.contact_email}</span>
+          <InsightBadge insight={insight} />
         </div>
         <Badge tone={status.tone} dot>{status.label}</Badge>
       </header>

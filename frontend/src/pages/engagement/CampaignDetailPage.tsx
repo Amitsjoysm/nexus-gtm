@@ -7,7 +7,10 @@ import {
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
+import { BestTimeHint } from "@/components/engagement/BestTimeHint";
 import { ContactPicker } from "@/components/engagement/ContactPicker";
+import { useContactInsights } from "@/components/engagement/InsightBadge";
+import { zonedClockToLocalInput } from "@/components/engagement/zonedTime";
 import { StepsEditor, stepsProblem } from "@/components/engagement/StepsEditor";
 import {
   CAMPAIGN_STATUS, ENROLLMENT_STATUS, WEEKDAYS, reasonText, when,
@@ -16,7 +19,8 @@ import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import type {
-  ConnectedMailbox, EngagementCampaign, EngagementEnrollment, EngagementStep, EnrollResult,
+  BestTimeSuggestion, ConnectedMailbox, EngagementCampaign, EngagementEnrollment, EngagementStep,
+  EnrollResult,
 } from "@/lib/types";
 import { LaunchPanel } from "./LaunchPanel";
 import { ReportsPanel } from "./ReportsPanel";
@@ -264,6 +268,8 @@ function PeopleTable({
   const [busy, setBusy] = useState<string | null>(null);
   const [moving, setMoving] = useState<EngagementEnrollment | null>(null);
   const [moveTo, setMoveTo] = useState("");
+  // When this person usually replies, in their own time (D26 applied on the server).
+  const movingInsight = useContactInsights(moving ? [moving.contact_id] : []).get(moving?.contact_id ?? "");
 
   async function act(row: EngagementEnrollment, action: "pause" | "resume" | "stop" | "send-now") {
     setBusy(`${row.id}:${action}`);
@@ -407,6 +413,13 @@ function PeopleTable({
         <Field label="Send the next step at" hint="Your local time.">
           <Input type="datetime-local" value={moveTo} onChange={(e) => setMoveTo(e.target.value)} />
         </Field>
+        {moving && movingInsight && movingInsight.best_time.source !== "default" && (
+          <BestTimeHint
+            suggestion={movingInsight.best_time}
+            onUse={(clock) => setMoveTo(zonedClockToLocalInput(
+              moveTo.slice(0, 10), clock, moving.contact_timezone))}
+          />
+        )}
       </Modal>
     </>
   );
@@ -421,6 +434,11 @@ function StepsPanel({ campaign, editable, onSaved }: {
   const toast = useToast();
   const [steps, setSteps] = useState<EngagementStep[]>(() => campaign.steps.map((s) => ({ ...s })));
   const [saving, setSaving] = useState(false);
+  // Only while the steps can still change: a launched campaign's set times are fixed.
+  const best = useApi<BestTimeSuggestion | null>(
+    (s) => (editable ? api.campaignBestTime(campaign.id, s) : Promise.resolve(null)),
+    [campaign.id, editable],
+  );
   const problem = stepsProblem(steps);
   const dirty = JSON.stringify(steps) !== JSON.stringify(campaign.steps);
 
@@ -462,7 +480,7 @@ function StepsPanel({ campaign, editable, onSaved }: {
   }
   return (
     <Card padding="lg" className={styles.section}>
-      <StepsEditor steps={steps} onChange={setSteps} />
+      <StepsEditor steps={steps} onChange={setSteps} bestTime={best.data ?? undefined} />
       {problem && dirty && <p className={styles.formError} role="alert">{problem}</p>}
       <div className={styles.formActions}>
         <Button onClick={save} loading={saving} disabled={!dirty || Boolean(problem)}>Save steps</Button>

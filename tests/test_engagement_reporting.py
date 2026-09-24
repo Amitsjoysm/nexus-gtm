@@ -283,6 +283,58 @@ async def test_today_puts_waiting_buyers_first_and_returning_people_last(client,
     assert first["title"] == "Answer P5 at Acme" and first["link"].startswith("/engagement/replies?reply=")
 
 
+async def test_within_a_kind_today_ranks_by_reply_likelihood_then_age(client, engine_on):
+    """§19: the list is ranked by reply likelihood (§18.5). By BAND, not raw score, so people in one
+    band stay oldest-first, which is what the reply-speed reminder measures."""
+    from nexus.core.db import utcnow
+    from nexus.engagement.insights.client import clear_cache
+    from nexus.models.account import Account, Contact
+    from nexus.models.calling import CallTask
+    from nexus.models.engagement import EngagementCampaign, EngagementEnrollment, MailboxConnection
+    from nexus.models.intelligence import AccountScore
+    from nexus.models.signal import SignalEvent
+
+    clear_cache()
+    token = await signup(client, slug="reprank", email="sam@reprank.com", company="R")
+    me = principal_from_token(token)
+    now = utcnow()
+    async with tenant_session(me.tenant_id) as ts:
+        mailbox = MailboxConnection(owner_user_id=me.user_id, provider="google",
+                                    email="sam@reprank.com", status="connected", timezone="UTC")
+        strong, fresh = Account(name="Acme", domain="acme.io"), Account(name="Globex", domain="globex.com")
+        for row in (mailbox, strong, fresh):
+            ts.add(row)
+        await ts.flush()
+        ts.add(AccountScore(account_id=strong.id, composite=90, computed_at=now))
+        for i in range(3):
+            ts.add(SignalEvent(account_id=strong.id, kind="funding", source="web", title=f"Round {i}",
+                               strength=0.9, occurred_at=now - timedelta(days=2),
+                               dedupe_key=f"rank-{i}"))
+        campaign = EngagementCampaign(name="Q4", owner_user_id=me.user_id,
+                                      mailbox_connection_id=mailbox.id, status="active")
+        ts.add(campaign)
+        await ts.flush()
+        # Globex has no score and no signals; Acme is a strong fit with three recent signals.
+        for name, account, hours_ago in (("Gia", fresh, 2), ("Ada", strong, 1), ("Gus", fresh, 3)):
+            person = Contact(account_id=account.id, full_name=name, email=f"{name.lower()}@x.io")
+            ts.add(person)
+            await ts.flush()
+            enrollment = EngagementEnrollment(campaign_id=campaign.id, contact_id=person.id,
+                                              account_id=account.id, mailbox_connection_id=mailbox.id,
+                                              status="active")
+            ts.add(enrollment)
+            await ts.flush()
+            ts.add(CallTask(account_id=account.id, contact_id=person.id, reason="Call step",
+                            owner_user_id=me.user_id, due_at=now - timedelta(hours=hours_ago),
+                            engagement_enrollment_id=enrollment.id))
+
+    r = await client.get("/api/engagement/today", headers=auth(token))
+    assert r.status_code == 200, r.text
+    calls = [i["title"] for i in r.json() if i["kind"] == "call"]
+    # Ada is the newest call but the likeliest reply; Gus and Gia tie (no evidence) and stay by age.
+    assert calls == ["Call Ada at Acme", "Call Gus at Globex", "Call Gia at Globex"]
+
+
 # ---- mailbox health, where the SDR already looks -------------------------------------------------
 
 async def test_my_mailboxes_reports_this_weeks_bounce_rate(client, engine_on):

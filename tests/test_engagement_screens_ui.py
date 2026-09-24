@@ -124,3 +124,32 @@ def test_the_funnel_is_one_hue_with_bounces_beside_it_not_in_it():
 
 def test_my_mailboxes_shows_this_weeks_bounce_rate():
     assert "<MailboxHealth mailbox={mailbox} />" in _read(PAGES / "MailboxesPage.tsx")
+
+
+# ---- insights (phase 13) -------------------------------------------------------------------------
+
+COMPONENTS = SRC / "components" / "engagement"
+
+
+def test_the_screens_never_handle_anything_that_could_name_another_workspace():
+    """The server applies D26; the client must not even have the fields that would undo it."""
+    for path in list(COMPONENTS.glob("*.ts*")) + list(PAGES.glob("*.tsx")) + [SRC / "lib" / "types.ts"]:
+        source = _read(path)
+        assert "workspace_count" not in source and "workspace_keys" not in source, path.name
+
+
+def test_insights_are_fetched_once_per_list_not_once_per_row():
+    for path in (PAGES / "ReviewQueue.tsx", COMPONENTS / "ContactPicker.tsx",
+                 COMPONENTS / "AccountConversations.tsx"):
+        assert "useContactInsights(" in _read(path), path.name
+    api = _read(SRC / "lib" / "api.ts")
+    assert 'query: { ids: contactIds.slice(0, 100).join(",") }' in api
+
+
+def test_a_set_time_step_offers_the_best_time():
+    editor = _read(COMPONENTS / "StepsEditor.tsx")
+    assert '{step.timing_mode === "manual" && (\n                  <BestTimeHint' in editor
+    detail = _read(PAGES / "CampaignDetailPage.tsx")
+    assert "bestTime={best.data ?? undefined}" in detail
+    # Moving one person converts THEIR clock into the viewer's local input.
+    assert "zonedClockToLocalInput(" in detail and "moving.contact_timezone" in detail

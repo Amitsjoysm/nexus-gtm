@@ -1877,6 +1877,14 @@ plans: `docs/superpowers/plans/2026-09-17-sdr-engagement/`. Ships dark behind
   appear only when it is confirmed on, and the old Campaigns and Cadences leave at that moment.
   Unknown or unreadable reads as OFF, because the new routes 404 while dark and the old ones work
   either way. Every `/engagement/*` route is wrapped in `RequireEngine` as well as its module gate.
+- **Insights (`nexus/engagement/insights/`) apply D26 on the server; the screens only render.** A
+  pattern needs history from three or more workspaces, below that only the last reply's speed band,
+  and nothing for a workspace that has not opted in. The client selects named columns so the
+  profiles' `workspace_keys` never enter the process, and `test_engagement_screens_ui.py` refuses
+  `workspace_count` anywhere in the engagement screens. Likelihood is the viewer's own fit and
+  signals; with neither it is `unknown` and no badge shows, because a neutral fit alone read as
+  "less likely to reply" for every unscored prospect. Today ranks within a kind by likelihood BAND,
+  then age.
 - **A connected Gmail/Outlook mailbox is what the contact composer uses**, ahead of any SMTP
   app-password mailbox (`outreach/send.py`). Send goes through `engagement.sending.send` (do-not-
   contact check, exactly-once row, one `outreach.email_send` charge, a thread so replies reach the

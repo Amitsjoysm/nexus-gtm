@@ -95,6 +95,8 @@ import type {
   CampaignReport,
   ResponseTimeRow,
   TodayItem,
+  ContactInsight,
+  BestTimeSuggestion,
   DoNotContactEntry,
   LedgerStatus,
   LedgerStoreStatus,
@@ -1357,6 +1359,18 @@ export class ApiClient {
   }
   engagementToday(signal?: AbortSignal) {
     return this.request<TodayItem[]>("/engagement/today", { signal });
+  }
+
+  // ---- engagement: insights ----
+  contactInsights(contactIds: string[], signal?: AbortSignal) {
+    return this.request<ContactInsight[]>("/engagement/insights/contacts", {
+      query: { ids: contactIds.slice(0, 100).join(",") }, signal,
+    });
+  }
+  campaignBestTime(id: string, signal?: AbortSignal) {
+    return this.request<BestTimeSuggestion>(`/engagement/insights/campaigns/${id}/best-time`, {
+      signal,
+    });
   }
 
   // ---- engagement: sequence templates ----

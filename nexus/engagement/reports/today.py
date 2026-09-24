@@ -5,8 +5,10 @@ if left: a buyer who said yes and is waiting goes cold fastest, then replies onl
 decide, then colleagues a reply paused, then calls due, then opening emails waiting for approval,
 then the people coming back today, who need nothing but are worth knowing about.
 
-Within a kind, the longest-waiting first. Ranking by reply likelihood is phase 13's (insights); until
-then age is the honest order, and it is also what the reply-speed reminder measures.
+Within a kind, ranked by reply likelihood (§18.5), and by its BAND rather than its score: people in
+one band stay longest-waiting first, which is what the reply-speed reminder measures, and a
+hundredth of a point of fit does not jump someone the queue. Items with no one person behind them
+(colleagues at an account, a campaign's review) keep their age order.
 
 Scoped to the caller's own mailboxes and campaigns: this is a personal list, and a manager's team
 view is the reply desk's toggle.
@@ -18,6 +20,8 @@ from datetime import UTC, datetime, timedelta
 
 #: The order kinds appear in, and what each one asks of the SDR.
 KINDS = ("reply", "decide", "colleagues", "call", "review", "returning")
+#: Likelihood bands, likeliest first. `unknown` (nothing to go on) ranks with the unrated items.
+_BAND_RANK = {"high": 0, "medium": 1, "low": 2, "unknown": 3}
 
 
 def _aware(moment: datetime | None) -> datetime | None:
@@ -35,9 +39,13 @@ class TodayItem:
     link: str
     at: datetime | None
     count: int = 1
+    #: Whose item this is, for ranking; not part of what the screen receives.
+    contact_id: str | None = None
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        out = asdict(self)
+        out.pop("contact_id")
+        return out
 
 
 async def today(ts, *, user_id: str, now: datetime) -> list[TodayItem]:
@@ -104,12 +112,14 @@ async def today(ts, *, user_id: str, now: datetime) -> list[TodayItem]:
         if category == "unclear":
             items.append(TodayItem("decide", f"Decide on {who(r.contact_id)}",
                                    "Their reply needs a person to say what happens next.",
-                                   f"/engagement/replies?reply={r.id}", arrived(r)))
+                                   f"/engagement/replies?reply={r.id}", arrived(r),
+                                   contact_id=r.contact_id))
         else:
             said = {"interested": "They're interested.", "question": "They asked a question.",
                     "referral": "They pointed you to someone else."}.get(category, "They replied.")
             items.append(TodayItem("reply", f"Answer {who(r.contact_id)}", said,
-                                   f"/engagement/replies?reply={r.id}", arrived(r)))
+                                   f"/engagement/replies?reply={r.id}", arrived(r),
+                                   contact_id=r.contact_id))
 
     by_account: dict[str, list] = {}
     for e in paused:
@@ -124,7 +134,7 @@ async def today(ts, *, user_id: str, now: datetime) -> list[TodayItem]:
 
     for c in sorted(calls, key=lambda c: _aware(c.due_at) or now):
         items.append(TodayItem("call", f"Call {who(c.contact_id)}", c.reason or "A call step is due.",
-                               "/calls", c.due_at))
+                               "/calls", c.due_at, contact_id=c.contact_id))
 
     campaigns = await ts.list(EngagementCampaign, EngagementCampaign.owner_user_id == user_id,
                               EngagementCampaign.status.in_(("draft", "reviewing", "active")))
@@ -146,7 +156,24 @@ async def today(ts, *, user_id: str, now: datetime) -> list[TodayItem]:
     for e in sorted(returning, key=lambda e: _aware(e.snoozed_until)):
         items.append(TodayItem("returning", f"{who(e.contact_id)} comes back today",
                                "Their sequence resumes on its own.", "/engagement/replies?tab=scheduled",
-                               e.snoozed_until))
+                               e.snoozed_until, contact_id=e.contact_id))
 
+    bands = await _likelihood_bands(ts, [i.contact_id for i in items if i.contact_id], now)
     order = {kind: i for i, kind in enumerate(KINDS)}
-    return sorted(items, key=lambda i: order[i.kind])
+    # A stable sort: within one kind and one band, the age order built above survives.
+    return sorted(items, key=lambda i: (order[i.kind],
+                                        _BAND_RANK[bands.get(i.contact_id or "", "unknown")]))
+
+
+async def _likelihood_bands(ts, contact_ids: list[str], now: datetime) -> dict[str, str]:
+    """Each person's reply-likelihood band. The Today plan must load even when insights cannot:
+    a failure ranks everyone `unknown`, which is the age order."""
+    from nexus.engagement.insights.service import for_contacts
+
+    if not contact_ids:
+        return {}
+    try:
+        insights = await for_contacts(ts, contact_ids, now=now)
+    except Exception:  # noqa: BLE001 - ranking is a nicety; the list is the product
+        return {}
+    return {i.contact_id: i.likelihood.band for i in insights}

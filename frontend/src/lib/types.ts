@@ -2541,3 +2541,41 @@ export interface TodayItem {
   at: string | null;
   count: number;
 }
+
+// ---- engagement: insights (phase 13) -----------------------------------------------------------
+
+/** What may be shown of a person or company (D26): a pattern at 3+ workspaces, else a speed band. */
+export interface ProspectInsight {
+  level: "pattern" | "band" | "none";
+  text: string;
+  best_weekday: number | null;
+  best_hour: number | null;
+  typical_response_hours: number | null;
+  band: string;
+  propensity: number | null;
+}
+
+export interface ReplyLikelihood {
+  /** `unknown` when there is no fit, no recent signal and no allowed pattern to go on. */
+  band: "high" | "medium" | "low" | "unknown";
+  score: number;
+  reasons: string[];
+}
+
+export interface BestTimeSuggestion {
+  hour: number;
+  minute: number;
+  weekday: number | null;
+  source: "person" | "company" | "campaign" | "default";
+  text: string;
+  /** "HH:MM", in the contact's own timezone. */
+  clock: string;
+}
+
+export interface ContactInsight {
+  contact_id: string;
+  person: ProspectInsight;
+  company: ProspectInsight;
+  likelihood: ReplyLikelihood;
+  best_time: BestTimeSuggestion;
+}
