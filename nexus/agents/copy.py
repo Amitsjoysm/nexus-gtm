@@ -335,12 +335,17 @@ def signal_age(signal) -> str:
     An undated signal is dated at collection, so `_age_phrase` alone would call a two-year-old
     article "in the last few days" and invite the model to open on it as news.
     """
-    dated = getattr(signal, "dated", None) or "found"
-    if dated != "event":
-        return "date unknown"
     from nexus.core.db import ensure_aware
 
-    return _age_phrase(ensure_aware(getattr(signal, "occurred_at", None)))
+    age = _age_phrase(ensure_aware(getattr(signal, "occurred_at", None)))
+    if (getattr(signal, "dated", None) or "found") == "event":
+        return age
+    # Undated: the day we found it is the LATEST it can have happened. A recent find says nothing
+    # about when; an old one is known to be at least that old, and saying so is what stops a rep
+    # opening on it as news.
+    if age in ("", "in the last few days", "in the last month"):
+        return "date unknown"
+    return f"date unknown, found {age}"
 
 
 def signal_facts(signals, *, limit: int = MAX_SIGNALS_IN_PROMPT) -> str:

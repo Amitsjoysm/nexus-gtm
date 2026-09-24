@@ -137,3 +137,16 @@ def test_an_undated_signal_does_not_claim_to_be_recent():
     assert "Acme in the news" in text and "date unknown" in text
     assert "in the last few days" not in text, "an undated signal was presented as fresh"
     assert "over six months ago" in text
+
+
+def test_an_undated_signal_found_long_ago_is_still_known_to_be_old():
+    # The day we found it is the LATEST it can have happened, so a find from nine months ago is at
+    # least nine months old — true, and exactly what keeps a rep from opening on it as news.
+    from nexus.agents.copy import signal_facts
+
+    old_find = SignalEvent(kind="funding", title="Acme raised a Series A", strength=0.9,
+                           occurred_at=utcnow() - timedelta(days=270), dated=None)
+
+    text = signal_facts([old_find])
+
+    assert "date unknown" in text and "over six months ago" in text
