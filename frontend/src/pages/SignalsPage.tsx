@@ -68,7 +68,7 @@ export function SignalsPage() {
     <div>
       <PageHeader
         title="Signals"
-        description="Every buying signal detected across your accounts, ranked by strength."
+        description="Every buying signal detected across your accounts, latest first."
         actions={
           <>
             {(eventsOnly ? hiddenCount > 0 : true) && (

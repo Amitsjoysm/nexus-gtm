@@ -121,7 +121,7 @@ class AgentRuntime:
             contacts = await ts.list(Contact, Contact.account_id == account.id)
             stmt = (
                 ts.select(SignalEvent, SignalEvent.account_id == account.id)
-                .order_by(SignalEvent.occurred_at.desc())
+                .order_by(SignalEvent.occurred_at.desc(), SignalEvent.created_at.desc())
                 .limit(50)
             )
             signals = list((await ts.session.scalars(stmt)).all())

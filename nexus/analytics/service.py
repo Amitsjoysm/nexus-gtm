@@ -168,7 +168,7 @@ class AnalyticsService:
                 SignalEvent.strength,
             )
             .where(SignalEvent.tenant_id == ts.tenant_id)
-            .order_by(SignalEvent.occurred_at.desc())
+            .order_by(SignalEvent.occurred_at.desc(), SignalEvent.created_at.desc())
             .limit(limit)
         ):
             items.append({

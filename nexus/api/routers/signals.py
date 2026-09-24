@@ -71,7 +71,9 @@ async def list_signals(
         where.append(SignalEvent.occurred_at >= utcnow() - timedelta(days=days))
     stmt = (
         ts.select(SignalEvent, *where)
-        .order_by(SignalEvent.occurred_at.desc())
+        # The latest EVENT first (decided with the product owner); an undated signal's date is
+        # when we found it, so today's news is on top too. Ties: the most recently found.
+        .order_by(SignalEvent.occurred_at.desc(), SignalEvent.created_at.desc())
         .limit(limit)
         .offset(offset)
     )

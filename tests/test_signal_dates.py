@@ -328,3 +328,64 @@ def test_a_locked_window_is_shown_not_offered():
 
     src = Path("frontend/src/components/layout/Topbar.tsx").read_text(encoding="utf-8")
     assert "userChoice ?" in src and "set by your administrator" in src
+
+
+# ---- what sorts to the top ------------------------------------------------------------------------
+#
+# Decided with the product owner 2026-09-23: the LATEST EVENT first. An undated signal's date is when
+# we found it, so news found today is on top too; ties go to whichever was found most recently.
+
+
+async def test_the_latest_event_is_on_top_even_when_an_old_one_was_found_later(client):
+    from nexus.core.security import decode_access_token
+    from nexus.models.signal import SignalEvent
+    from tests.conftest import auth, signup, tenant_session
+
+    token = await signup(client, slug="so1", email="o@so1.x", company="SO1")
+    tid = (decode_access_token(token) or {})["tid"]
+    now = utcnow()
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.com")
+        ts.add(acc)
+        await ts.flush()
+        ts.add(SignalEvent(tenant_id=tid, account_id=acc.id, kind="funding", source="rss",
+                           title="Series C two days ago", dedupe_key="c", dated="event",
+                           occurred_at=now - timedelta(days=2), created_at=now - timedelta(days=2)))
+        ts.add(SignalEvent(tenant_id=tid, account_id=acc.id, kind="funding", source="rss",
+                           title="2023 seed round, found just now", dedupe_key="s", dated="event",
+                           occurred_at=now - timedelta(days=900), created_at=now))
+
+    rows = (await client.get("/api/signals", headers=auth(token))).json()
+
+    assert [r["title"] for r in rows] == ["Series C two days ago", "2023 seed round, found just now"]
+
+
+async def test_a_tie_goes_to_the_one_found_most_recently(client):
+    from nexus.core.security import decode_access_token
+    from nexus.models.signal import SignalEvent
+    from tests.conftest import auth, signup, tenant_session
+
+    token = await signup(client, slug="so2", email="o@so2.x", company="SO2")
+    tid = (decode_access_token(token) or {})["tid"]
+    day = utcnow() - timedelta(days=3)
+    async with tenant_session(tid) as ts:
+        acc = Account(tenant_id=tid, name="Acme", domain="acme.com")
+        ts.add(acc)
+        await ts.flush()
+        # Inserted newest-found FIRST, so a descending index scan's natural order is the wrong
+        # answer and only an explicit tie-breaker passes.
+        for title, found in (("found last", day + timedelta(hours=5)), ("found first", day)):
+            ts.add(SignalEvent(tenant_id=tid, account_id=acc.id, kind="news", source="rss",
+                               title=title, dedupe_key=title, dated="event",
+                               occurred_at=day, created_at=found))
+
+    rows = (await client.get("/api/signals", headers=auth(token))).json()
+
+    assert [r["title"] for r in rows] == ["found last", "found first"]
+
+
+def test_the_signals_page_does_not_claim_a_strength_ranking():
+    from pathlib import Path
+
+    src = Path("frontend/src/pages/SignalsPage.tsx").read_text(encoding="utf-8")
+    assert "ranked by strength" not in src, "the list is newest first; the subtitle said otherwise"

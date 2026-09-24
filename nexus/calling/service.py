@@ -182,7 +182,7 @@ class CallQueueService:
             (
                 await ts.session.scalars(
                     ts.select(SignalEvent, SignalEvent.account_id == task.account_id)
-                    .order_by(SignalEvent.occurred_at.desc())
+                    .order_by(SignalEvent.occurred_at.desc(), SignalEvent.created_at.desc())
                     .limit(25)
                 )
             ).all()
