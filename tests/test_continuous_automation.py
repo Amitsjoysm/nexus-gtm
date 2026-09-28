@@ -186,6 +186,8 @@ from nexus.workers.scheduler import _enqueue_due, run_scheduler
 @pytest.mark.asyncio
 async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", True)
+    # The engagement engine's drivers ride their own switch; pinned off to keep this about automation.
+    monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
     # +6 for rollup_usage, roll_billing_periods, dunning_sweep, billing_reconcile,
@@ -193,10 +195,10 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     # automation_enabled, because billing accuracy and shared-company maintenance are platform
     # concerns rather than per-workspace opt-ins. +1 for refresh_mailbox_tokens, which keeps SDR
     # mailbox status honest whether or not automation is on.
-    assert count == 15
+    assert count == 14
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
-        "advance_cadences", "refresh_due_accounts", "send_daily_digests",
+        "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
         "billing_reconcile", "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
         "refresh_mailbox_tokens",
@@ -215,6 +217,7 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
     ends on a date; gating that on automation is how a trial runs forever in a workspace that never
     switched automation on."""
     monkeypatch.setattr(get_settings(), "automation_enabled", False)
+    monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
     assert count == 11

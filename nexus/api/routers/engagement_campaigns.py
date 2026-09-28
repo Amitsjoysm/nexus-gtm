@@ -1,8 +1,8 @@
 """Engagement campaigns: build, draft, review, launch, and steer (spec §9).
 
-Dark until the cutover: every route answers 404 while `engagement_campaigns_enabled` is off, so the
-new engine cannot be reached by URL before it is switched on — the same effect as the hidden nav
-item, enforced where it matters.
+Every route answers 404 while `engagement_campaigns_enabled` is off. Since the cutover (spec §13)
+that switch is on by default and off is the platform's emergency stop, enforced here rather than
+only in the navigation.
 
 An SDR works their own campaigns (`run_engagement`); a manager can act on anyone's
 (`manage_engagement`). A campaign sends from its owner's own mailbox, so ownership is not a label:
@@ -77,9 +77,13 @@ class CampaignOut(BaseModel):
 
 
 class ContactsIn(BaseModel):
+    """People to add, named directly or by company. A company means everyone there with an email
+    address, which is what "add these accounts to a campaign" from discovery or a list means."""
+
     model_config = {"extra": "forbid"}
 
-    contact_ids: list[str] = Field(min_length=1, max_length=2000)
+    contact_ids: list[str] = Field(default_factory=list, max_length=2000)
+    account_ids: list[str] = Field(default_factory=list, max_length=500)
 
 
 class ReviewItemOut(BaseModel):
@@ -262,6 +266,44 @@ async def list_campaigns(
     return [await _out(ts, c) for c in sorted(rows, key=lambda c: c.created_at, reverse=True)]
 
 
+class LegacyCampaignOut(BaseModel):
+    id: str
+    name: str
+    status: str
+    created_at: datetime
+    targets: int
+    sent: int
+
+
+@router.get("/legacy-campaigns", response_model=list[LegacyCampaignOut])
+async def legacy_campaigns(
+    team: bool = False,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> list[LegacyCampaignOut]:
+    """Campaigns the old engine finished (spec §13): read-only history, never moved. What each
+    sent is here; the old tables are kept exactly as they were."""
+    from sqlalchemy import func, select
+
+    from nexus.models.campaign import Campaign, CampaignTarget
+
+    where = [Campaign.status.in_(("completed", "cancelled", "failed"))]
+    if not (team and _is_manager(principal)):
+        where.append(Campaign.created_by_user_id == principal.user_id)
+    rows = await ts.list(Campaign, *where)
+    counts = {} if not rows else {
+        (campaign_id, status_): n for campaign_id, status_, n in (await ts.session.execute(
+            select(CampaignTarget.campaign_id, CampaignTarget.status, func.count())
+            .where(CampaignTarget.tenant_id == ts.tenant_id)
+            .where(CampaignTarget.campaign_id.in_([c.id for c in rows]))
+            .group_by(CampaignTarget.campaign_id, CampaignTarget.status))).all()}
+    return [LegacyCampaignOut(
+        id=c.id, name=c.name, status=c.status, created_at=c.created_at,
+        targets=sum(n for (cid, _s), n in counts.items() if cid == c.id),
+        sent=counts.get((c.id, "sent"), 0))
+        for c in sorted(rows, key=lambda c: c.created_at, reverse=True)]
+
+
 @router.post("/campaigns", response_model=CampaignOut, status_code=201)
 async def create(
     body: CampaignIn,
@@ -307,6 +349,31 @@ async def put_steps(
     return await _out(ts, campaign)
 
 
+class MailboxIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    mailbox_id: str
+
+
+@router.put("/campaigns/{campaign_id}/mailbox", response_model=CampaignOut)
+async def put_mailbox(
+    campaign_id: str, body: MailboxIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> CampaignOut:
+    """Send from this mailbox, and resume whoever was waiting for one (a campaign moved from the old
+    engine before its owner connected a mailbox, or one whose mailbox was disconnected)."""
+    from nexus.engagement.sequences.service import CampaignError, attach_mailbox
+    from nexus.models.engagement import MailboxConnection
+
+    campaign = await _campaign(ts, campaign_id, principal)
+    try:
+        await attach_mailbox(ts, campaign, await ts.get(MailboxConnection, body.mailbox_id))
+    except CampaignError as exc:
+        raise _refuse(exc) from exc
+    return await _out(ts, campaign)
+
+
 @router.post("/campaigns/{campaign_id}/contacts")
 async def add_contacts(
     campaign_id: str, body: ContactsIn,
@@ -315,9 +382,20 @@ async def add_contacts(
 ) -> dict:
     from nexus.engagement.sequences.service import CampaignError, enroll
 
+    from nexus.models.account import Contact
+
     campaign = await _campaign(ts, campaign_id, principal)
+    contact_ids = list(body.contact_ids)
+    if body.account_ids:
+        contact_ids += [c.id for c in await ts.list(
+            Contact, Contact.account_id.in_(body.account_ids), Contact.deleted_at.is_(None),
+            Contact.email.is_not(None)) if (c.email or "").strip()]
+    if not contact_ids:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Nobody to add: choose people, or companies with contacts that have "
+                            "an email address.")
     try:
-        result = await enroll(ts, campaign, body.contact_ids)
+        result = await enroll(ts, campaign, contact_ids[:2000])
     except CampaignError as exc:
         raise _refuse(exc) from exc
     return {"added": result.added, "skipped": result.skipped, "warnings": result.warnings}

@@ -313,8 +313,6 @@ def test_contact_sourcing_settings_defaults():
     assert s.email_verify_timeout_s == 20.0
     assert s.email_finder_max_candidates == 12
     assert s.contact_search_sources == "stub"
-    assert s.campaign_sourcing_enabled is True
-    assert s.campaign_sourced_min_send_confidence == 0.5
     assert s.contact_search_source_list == ["stub"]
 
 

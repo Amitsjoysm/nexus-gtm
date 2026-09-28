@@ -935,161 +935,6 @@ export interface NewWorkspaceRequest {
   slug: string;
 }
 
-// ---- segment campaigns ----
-export type CampaignStatus =
-  | "draft_pending"
-  | "drafting"
-  | "awaiting_approval"
-  | "approved"
-  | "sending"
-  | "completed"
-  | "cancelled"
-  | "failed";
-
-export type CampaignTargetStatus =
-  | "pending"
-  | "drafting"
-  | "drafted"
-  | "skipped"
-  | "approved"
-  | "sent"
-  | "failed";
-
-export interface CampaignTarget {
-  id: string;
-  account_id: string;
-  status: CampaignTargetStatus | string;
-  skip_reason: string | null;
-  draft: Record<string, unknown>;
-  error: string | null;
-}
-
-export interface Campaign {
-  id: string;
-  name: string;
-  list_id: string;
-  status: CampaignStatus | string;
-  sequence: string;
-  icp: Record<string, unknown>;
-  report: Record<string, number>;
-  send_risky: boolean;
-  cadence_id: string | null;
-  review_each_touch: boolean;
-  created_at: string;
-}
-
-export interface CampaignDetail extends Campaign {
-  targets: CampaignTarget[];
-  /** Reply attribution: per-stage outcome counts recorded against this campaign. */
-  outcomes: Record<string, number>;
-}
-
-export interface CampaignPreview {
-  campaign_id: string;
-  status: CampaignStatus | string;
-  report: Record<string, number>;
-  sample: CampaignTarget[];
-}
-
-export interface CampaignInput {
-  name: string;
-  list_id: string;
-  icp?: Record<string, unknown>;
-  sequence?: string;
-  send_risky?: boolean;
-  cadence_id?: string | null;
-  review_each_touch?: boolean;
-}
-
-/** Turn a discovery-results selection into a gated personalized cadence in one call. */
-export interface LaunchFromSelectionInput {
-  name: string;
-  account_ids?: string[];
-  contact_ids?: string[];
-  icp?: Record<string, unknown>;
-  mode: "new_cadence" | "existing_cadence";
-  cadence_id?: string | null;
-  review_each_touch?: boolean;
-}
-
-/** One frame from a campaign's SSE progress stream (status + per-status target counts). */
-export interface CampaignProgress {
-  status: CampaignStatus | string;
-  counts: Record<string, number>;
-  report: Record<string, number>;
-}
-
-// ---- cadences ----
-export type EnrollmentStatus = "active" | "paused" | "completed" | "stopped";
-export type TouchStatus = "sent" | "skipped" | "failed" | "awaiting_approval";
-
-export interface CadenceStep {
-  step_index: number;
-  delay_days: number;
-  angle: string;
-  channel: string;
-}
-
-export interface CadenceStepInput {
-  delay_days: number;
-  angle: string;
-  channel: string;
-}
-
-export interface Cadence {
-  id: string;
-  name: string;
-  description: string | null;
-  is_active: boolean;
-  created_at: string;
-  steps: CadenceStep[];
-}
-
-export interface CadenceInput {
-  name: string;
-  description?: string | null;
-  steps: CadenceStepInput[];
-}
-
-export interface CadenceEnrollment {
-  id: string;
-  campaign_id: string;
-  account_id: string;
-  contact_id: string | null;
-  cadence_id: string;
-  current_step_index: number;
-  status: EnrollmentStatus | string;
-  stop_reason: string | null;
-  next_touch_at: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-}
-
-export interface CadenceTouch {
-  id: string;
-  enrollment_id: string;
-  step_index: number;
-  status: TouchStatus | string;
-  skip_reason: string | null;
-  run_id: string | null;
-  sent_at: string | null;
-  error: string | null;
-}
-
-export interface EnrollmentDetail extends CadenceEnrollment {
-  touches: CadenceTouch[];
-}
-
-export interface CadenceReport {
-  campaign_id: string;
-  cadence_id: string | null;
-  total_enrollments: number;
-  by_status: Record<string, number>;
-  touches_sent: number;
-  touches_skipped: number;
-  stops: Record<string, number>;
-}
-
 // ---- automation + CRM sync (settings) ----
 export interface AutomationSettings {
   automation_enabled: boolean;
@@ -2619,4 +2464,14 @@ export interface RestartSuggestion {
   signal_title: string;
   signal_at: string;
   likelihood: ReplyLikelihood["band"];
+}
+
+/** A campaign the old engine finished, kept read-only as history (spec §13). */
+export interface LegacyCampaign {
+  id: string;
+  name: string;
+  status: "completed" | "cancelled" | "failed";
+  created_at: string;
+  targets: number;
+  sent: number;
 }

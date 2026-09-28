@@ -404,22 +404,12 @@ class Settings(BaseSettings):
     # finder. Defaults stay offline (stub) so CI is zero-network; activation is one env line.
     email_finder_max_candidates: int = 12       # permutation cap per contact (10 patterns + headroom)
     contact_search_sources: str = "stub"        # ordered net-new contact providers
-    campaign_sourcing_enabled: bool = True       # inline auto-retry on SKIP_NO_CONTACT
-    campaign_sourced_min_send_confidence: float = 0.5  # bar a sourced address must clear to send
     crm_provider: str = "stub"                 # outbound CRM connector: stub|salesforce|hubspot
     hubspot_access_token: str = ""             # HubSpot private-app token (when crm_provider=hubspot)
     hubspot_api_base: str = "https://api.hubapi.com"  # override for region/proxy/testing
-    # Channel & Cadence (sub-project C): multi-touch email cadence engine. Disabled by
-    # default (safe opt-in, like campaign_sourcing) so the advance tick is a no-op until a
-    # deployment turns it on with one env line.
-    cadence_enabled: bool = False             # master switch for the advance tick
-    cadence_tick_interval_s: int = 60         # production due-scan cadence (seconds)
-    cadence_batch_size: int = 100             # max enrollments claimed per tick per worker
-    cadence_max_duration_days: int = 30       # duration-cap safety bound (mid-sequence stop)
-
     # Continuous Automation (sub-project D): autonomous heartbeat that drives the recurring
-    # GTM loop (account refresh + cadence advance). OFF by default (safe opt-in, like
-    # cadence_enabled) so the test suite stays deterministic and zero-network.
+    # GTM loop (account refresh, digests, ICP discovery). OFF by default (safe opt-in) so the test
+    # suite stays deterministic and zero-network.
     automation_enabled: bool = False            # global master switch for the heartbeat
     automation_tick_interval_s: int = 60        # heartbeat period (seconds)
     account_refresh_interval_s: int = 21600     # HOT accounts: staleness before re-processing (6h)
@@ -557,9 +547,10 @@ class Settings(BaseSettings):
     # Public https origin Google and Microsoft call back to: OAuth redirects, Gmail push, Graph
     # notifications. Never client-supplied.
     engagement_public_base_url: str = ""
-    # Release B switch: campaigns, the reply desk and their workers. Mailbox connection and the
-    # ledger do not depend on it.
-    engagement_campaigns_enabled: bool = False
+    # Campaigns, the reply desk and their workers. ON since the cutover (spec §13), which removed
+    # the old Campaigns and Cadences; off is now the emergency stop for sending and mailbox reads.
+    # Mailbox connection and the ledger do not depend on it.
+    engagement_campaigns_enabled: bool = True
     # Training & insights ledger stores and the pseudonymisation secret (§18). Managed in
     # Provider keys (ledger_archive, ledger_training, ledger_insights, ledger_pseudonym).
     ledger_archive_dsn: str = ""

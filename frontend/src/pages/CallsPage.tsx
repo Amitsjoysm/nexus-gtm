@@ -85,7 +85,7 @@ export function CallsPage() {
                 <EmptyState
                   icon={<Icons.PhoneIcon />}
                   title="No calls queued"
-                  description="Calls appear here from cadences with a call step, or from the Call button on a contact."
+                  description="Calls appear here from campaigns with a call step, or from the Call button on a contact."
                 />
               }
             />

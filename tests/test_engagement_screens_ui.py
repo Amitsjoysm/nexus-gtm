@@ -26,18 +26,24 @@ def _nav_block(route: str) -> str:
     return match.group(0)
 
 
-def test_the_new_screens_appear_only_when_the_engine_is_on():
+def test_the_engagement_screens_are_the_only_campaign_screens():
+    """Since the cutover (spec §13) the old Campaigns and Cadences are gone. Their addresses forward,
+    because bookmarks and old links still arrive at them."""
     for route in ("/engagement/campaigns", "/engagement/replies", "/engagement/templates"):
-        assert 'engine: "on"' in _nav_block(route), f"{route} must wait for the engine switch"
-    # The old engine's pages leave the menu at the same moment, so a workspace never sees both.
-    for route in ("/campaigns", "/cadences"):
-        assert 'engine: "off"' in _nav_block(route), f"{route} must leave when the engine is on"
+        assert 'engine: "on"' in _nav_block(route), f"{route} must leave when the engine is off"
+    nav = _read(NAV)
+    assert 'to: "/campaigns"' not in nav and 'to: "/cadences"' not in nav
+    app = _read(APP)
+    assert '<Route path="/campaigns" element={<Navigate to="/engagement/campaigns" replace />} />' in app
+    assert '<Route path="/cadences" element={<Navigate to="/engagement/templates" replace />} />' in app
+    for gone in ("CampaignsPage.tsx", "CadencesPage.tsx"):
+        assert not (SRC / "pages" / gone).exists(), f"pages/{gone} belongs to the old engine"
 
 
-def test_can_see_reads_the_engine_and_unknown_keeps_the_old_pages():
+def test_the_engagement_pages_leave_the_menu_only_when_the_engine_is_confirmed_off():
     source = _read(NAV)
-    assert 'item.engine === "on" && engineOn !== true' in source
-    assert 'item.engine === "off" && engineOn === true' in source
+    assert 'item.engine === "on" && engineOn === false' in source
+    assert '"off"' not in source.split("export function canSee", 1)[1].split("\n}\n", 1)[0]
     assert "canSee(item, role, isPlatformAdmin, engineOn)" in _read(
         SRC / "components" / "layout" / "Sidebar.tsx")
 
@@ -54,11 +60,13 @@ def test_every_engagement_route_waits_for_the_engine():
         assert "RequireCapability" in element, f"{route} is not behind its module gate"
 
 
-def test_an_unreadable_engine_status_reads_as_off():
-    """The new pages 404 while the engine is dark, so a status we could not read must not offer
-    them; the old pages work either way."""
+def test_an_unreadable_engine_status_reads_as_on():
+    """After the cutover these are the only campaign screens, so an unreadable status must not
+    delete them; the server is the boundary and answers 404 if the engine really is off. Off is
+    said in place, keeping the URL, since there is no other campaign screen to send anyone to."""
     source = _read(SRC / "app" / "EngagementContext.tsx")
-    assert "state.error ? { engine_on: false" in source
+    assert "state.error ? { engine_on: true" in source
+    assert "<Navigate" not in source and "<FeatureUnavailable" in source
 
 
 def test_a_reply_is_sent_only_by_the_send_button():
@@ -182,3 +190,29 @@ def test_a_tab_strip_scrolls_rather_than_widening_the_page():
     # The divider cannot be a border: a scrolling box would clip the selected tab's underline.
     tabs_rule = css.split(".tabs {", 1)[1].split("}", 1)[0]
     assert "border-bottom" not in tabs_rule and "inset 0 -1px 0 var(--border)" in tabs_rule
+
+
+# ---- the cutover (phase 15) ----------------------------------------------------------------------
+
+def test_discovery_hands_its_selection_to_the_campaign_builder():
+    panel = _read(SRC / "components" / "discovery" / "ResultsPanel.tsx")
+    assert 'navigate("/engagement/campaigns/new", {' in panel
+    assert "state: selectionForCampaign(candidates, selected)" in panel
+    assert "launchFromSelection" not in panel and "Cadence" not in panel
+    builder = _read(PAGES / "CampaignBuilder.tsx")
+    assert "useLocation().state" in builder
+    # Added once the campaign exists; drafting and sending still wait for review.
+    assert "api.addCampaignContacts(campaign.id, handedContacts, handedAccounts)" in builder
+
+
+def test_a_campaign_without_a_mailbox_offers_its_owner_one():
+    detail = _read(PAGES / "CampaignDetailPage.tsx")
+    assert "<MailboxChooser" in detail and "api.setCampaignMailbox(" in detail
+    assert "isOwner={c.owner_user_id === currentUserId}" in detail
+
+
+def test_finished_old_campaigns_are_listed_and_never_opened():
+    page = _read(PAGES / "CampaignsPage.tsx")
+    assert "<LegacyCampaigns team={team} />" in page
+    legacy = page.split("function LegacyCampaigns", 1)[1]
+    assert "onRowClick" not in legacy and "api.legacyCampaigns(" in legacy

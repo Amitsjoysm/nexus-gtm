@@ -713,7 +713,7 @@ async def source_contacts(
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
-    from nexus.campaigns.sourcing import source_account_contacts
+    from nexus.contacts.sourcing import source_account_contacts
 
     created = await source_account_contacts(ts, account, limit=max(1, min(limit, 25)))
     return [_contact_out(c) for c in created]

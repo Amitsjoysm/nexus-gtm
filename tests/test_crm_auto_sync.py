@@ -354,6 +354,8 @@ from nexus.workers.scheduler import _enqueue_due
 async def test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", False)
     monkeypatch.setattr(get_settings(), "crm_sync_enabled", True)
+    # The engagement engine's drivers ride their own switch; pinned off to keep this about CRM.
+    monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     q = InMemoryTaskQueue()
     await _enqueue_due(q)
     jobs = await _drain(q)
@@ -376,12 +378,13 @@ async def test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled(monkeypatch):
 async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", True)
     monkeypatch.setattr(get_settings(), "crm_sync_enabled", False)
+    monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     q = InMemoryTaskQueue()
     await _enqueue_due(q)
     jobs = await _drain(q)
     assert "sync_crm_due_accounts" not in {j.name for j in jobs}
     assert {j.name for j in jobs} == {
-        "advance_cadences", "refresh_due_accounts", "send_daily_digests",
+        "refresh_due_accounts", "send_daily_digests",
         "discover_icp_accounts", "rollup_usage", "roll_billing_periods", "dunning_sweep",
         "billing_reconcile", "expire_trials", "alert_digests", "backfill_companies", "crawl_companies",
         # The mailbox refresh rides along too: a revoked grant must show Reconnect whether or
@@ -392,6 +395,19 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
         "ship_ledger",
         "build_ledger_datasets",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crm, engine, logged", [(True, True, True), (True, False, False),
+                                                 (False, True, False)])
+async def test_the_engagement_crm_log_needs_both_switches(monkeypatch, crm, engine, logged):
+    """Sent emails, replies and meetings reach a CRM only while "Push to CRM" is on AND the
+    engagement engine is running (spec §19)."""
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", crm)
+    monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", engine)
+    q = InMemoryTaskQueue()
+    await _enqueue_due(q)
+    assert ("log_engagement_crm" in {j.name for j in await _drain(q)}) is logged
 
 
 @pytest.mark.asyncio

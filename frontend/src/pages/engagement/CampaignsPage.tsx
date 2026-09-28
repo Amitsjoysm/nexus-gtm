@@ -7,7 +7,8 @@ import { CAMPAIGN_STATUS, reasonText, whenDay } from "@/components/engagement/la
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { useEngagementStatus } from "@/app/EngagementContext";
-import type { ConnectedMailbox, EngagementCampaign } from "@/lib/types";
+import { campaignTone } from "@/lib/display";
+import type { ConnectedMailbox, EngagementCampaign, LegacyCampaign } from "@/lib/types";
 import styles from "./Engagement.module.css";
 
 /**
@@ -142,7 +143,64 @@ export function EngagementCampaignsPage() {
           }
         />
       )}
+
+      <LegacyCampaigns team={team} />
     </div>
+  );
+}
+
+const LEGACY_STATUS: Record<LegacyCampaign["status"], string> = {
+  completed: "Completed",
+  cancelled: "Cancelled",
+  failed: "Failed",
+};
+
+/**
+ * Campaigns the previous engine finished, kept as they were (spec §13). Read-only: no row opens,
+ * nothing here sends, and it is not shown at all for a workspace that never used that engine. An
+ * error hides it too, because it is history beside the page rather than the page itself.
+ */
+function LegacyCampaigns({ team }: { team: boolean }) {
+  const api = useApiClient();
+  const legacy = useApi<LegacyCampaign[]>((s) => api.legacyCampaigns(team, s), [team]);
+  if (!legacy.data || legacy.data.length === 0) return null;
+
+  const columns: Column<LegacyCampaign>[] = [
+    { key: "name", header: "Campaign", render: (c) => c.name },
+    {
+      key: "status",
+      header: "Status",
+      render: (c) => <Badge tone={campaignTone(c.status)}>{LEGACY_STATUS[c.status] ?? c.status}</Badge>,
+    },
+    {
+      key: "sent",
+      header: "Sent",
+      align: "right",
+      render: (c) => <span className={styles.num}>{c.sent} of {c.targets}</span>,
+    },
+    {
+      key: "created",
+      header: "Started",
+      hideOnMobile: true,
+      render: (c) => whenDay(c.created_at),
+    },
+  ];
+
+  return (
+    <section className={styles.section} aria-labelledby="legacy-title">
+      <div>
+        <h2 id="legacy-title" className={styles.sectionTitle}>Earlier campaigns</h2>
+        <p className={styles.muted}>
+          Finished before campaigns moved to your own mailbox. Kept as they were; nothing here sends.
+        </p>
+      </div>
+      <DataTable
+        columns={columns}
+        rows={legacy.data}
+        getRowKey={(c) => c.id}
+        caption="Earlier campaigns"
+      />
+    </section>
   );
 }
 

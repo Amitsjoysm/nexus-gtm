@@ -350,7 +350,7 @@ async def test_a_free_provider_that_only_half_answers_still_falls_through_to_the
 
 
 async def test_a_blocked_contact_enrichment_does_not_break_campaign_sourcing(monkeypatch):
-    """`campaigns/sourcing.py` enriches every sourced persona in a loop. A 402 escaping there
+    """`contacts/sourcing.py` enriches every sourced persona in a loop. A 402 escaping there
     would abort the whole sourcing run over one contact."""
     from nexus.billing import meter
     from nexus.billing.errors import QuotaExceeded

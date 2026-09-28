@@ -26,8 +26,8 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
   // Null until loaded, and null on error — `isLocked` reads that as "nothing is locked", so a
   // slow or failing billing endpoint never deletes the customer's navigation.
   const entitlements = useEntitlements();
-  // Which engagement engine the workspace is on: the new Campaigns, Replies and Sequence templates
-  // replace the old Campaigns and Cadences only once the switch is confirmed on.
+  // The engagement pages (Campaigns, Replies, Sequence templates) leave only while the engine is
+  // confirmed switched off, the platform's emergency stop.
   const engineOn = useEngineOn();
 
   return (

@@ -434,7 +434,8 @@ async def test_the_worker_job_is_dark_until_the_switch_is_on(monkeypatch):
 
 # ---- the API ---------------------------------------------------------------------------------------
 
-async def test_the_campaign_api_is_invisible_while_the_engine_is_dark(client):
+async def test_the_campaign_api_is_invisible_while_the_engine_is_dark(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     token = await signup(client, slug="darkapi", email="owner@darkapi.com", company="Dark")
     assert (await client.get("/api/engagement/campaigns", headers=auth(token))).status_code == 404
     assert (await client.get("/api/engagement/templates", headers=auth(token))).status_code == 404

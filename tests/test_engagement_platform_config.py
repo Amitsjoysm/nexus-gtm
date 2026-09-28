@@ -82,11 +82,15 @@ def test_endpoints_are_derived_from_the_base_url(monkeypatch):
     assert "?" not in config.gmail_push_audience()
 
 
-def test_campaigns_are_off_until_switched_on():
-    from nexus.core.config import Settings
+def test_campaigns_are_on_since_the_cutover_and_off_is_the_emergency_stop(monkeypatch):
+    """The engagement engine replaced the old Campaigns and Cadences (spec §13), so it is on by
+    default; switching it off stops every campaign and every mailbox read."""
+    from nexus.core.config import Settings, get_settings
     from nexus.engagement import config
 
-    assert Settings.model_fields["engagement_campaigns_enabled"].default is False
+    assert Settings.model_fields["engagement_campaigns_enabled"].default is True
+    assert config.campaigns_enabled() is True
+    monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     assert config.campaigns_enabled() is False
 
 

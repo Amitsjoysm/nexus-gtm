@@ -63,8 +63,6 @@ const RunsPage = lazyPage(() => import("@/pages/RunsPage"), "RunsPage");
 const RunDetailPage = lazyPage(() => import("@/pages/RunDetailPage"), "RunDetailPage");
 const ApprovalsPage = lazyPage(() => import("@/pages/ApprovalsPage"), "ApprovalsPage");
 const ChatPage = lazyPage(() => import("@/pages/ChatPage"), "ChatPage");
-const CampaignsPage = lazyPage(() => import("@/pages/CampaignsPage"), "CampaignsPage");
-const CadencesPage = lazyPage(() => import("@/pages/CadencesPage"), "CadencesPage");
 const MailboxesPage = lazyPage(() => import("@/pages/engagement/MailboxesPage"), "MailboxesPage");
 const DataUsePage = lazyPage(() => import("@/pages/DataUsePage"), "DataUsePage");
 // The engagement engine's screens (spec §9). Each route is behind `RequireEngine` as well as its
@@ -318,16 +316,10 @@ export function App() {
                     </RequireRole>
                   }
                 />
-                <Route
-                  path="/campaigns"
-                  element={
-                    <RequireRole minRole="manager">
-                      <RequireCapability capability="module.campaigns" name="Campaigns">
-                        <CampaignsPage />
-                      </RequireCapability>
-                    </RequireRole>
-                  }
-                />
+                {/* The old Campaigns and Cadences were replaced at the cutover (spec §13); their
+                    addresses still arrive from bookmarks and old links, so they forward. */}
+                <Route path="/campaigns" element={<Navigate to="/engagement/campaigns" replace />} />
+                <Route path="/cadences" element={<Navigate to="/engagement/templates" replace />} />
                 {/* Every member: an SDR connects their own mailbox. Gated like the email composer,
                     on module.outreach, so a plan without outreach hides it everywhere. */}
                 <Route
@@ -381,7 +373,7 @@ export function App() {
                 <Route
                   path="/engagement/replies"
                   element={
-                    <RequireEngine>
+                    <RequireEngine name="Replies">
                       <RequireCapability capability="module.campaigns" name="Replies">
                         <ReplyDeskPage />
                       </RequireCapability>
@@ -391,7 +383,7 @@ export function App() {
                 <Route
                   path="/engagement/replies/settings"
                   element={
-                    <RequireEngine>
+                    <RequireEngine name="Reply settings">
                       <RequireCapability capability="module.campaigns" name="Reply settings">
                         <EngagementSettingsPage />
                       </RequireCapability>
@@ -401,21 +393,11 @@ export function App() {
                 <Route
                   path="/engagement/templates"
                   element={
-                    <RequireEngine fallback="/cadences">
+                    <RequireEngine name="Sequence templates">
                       <RequireCapability capability="module.cadences" name="Sequence templates">
                         <SequenceTemplatesPage />
                       </RequireCapability>
                     </RequireEngine>
-                  }
-                />
-                <Route
-                  path="/cadences"
-                  element={
-                    <RequireRole minRole="manager">
-                      <RequireCapability capability="module.cadences" name="Cadences">
-                        <CadencesPage />
-                      </RequireCapability>
-                    </RequireRole>
                   }
                 />
                 <Route

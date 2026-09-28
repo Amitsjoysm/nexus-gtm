@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button, Card, EmptyState, Field, Icons, Input, Select, Skeleton } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
@@ -13,9 +13,17 @@ import styles from "./Engagement.module.css";
 /**
  * Start a campaign: its name, the mailbox it sends from, and its steps (spec §9, step 2).
  *
- * Creating it adds nobody and sends nothing. The campaign page that follows is where people are
- * added, first emails drafted and read, and the campaign launched, in that order.
+ * Creating it sends nothing. The campaign page that follows is where people are added, first
+ * emails drafted and read, and the campaign launched, in that order. Arriving from a selection
+ * elsewhere (discovery's "Add to a campaign") carries that selection in router state, and those
+ * people are added the moment the campaign exists: still nothing is drafted or sent.
  */
+
+/** People handed over from another screen: by id, and companies meaning everyone there. */
+interface Handover {
+  contactIds?: string[];
+  accountIds?: string[];
+}
 
 const CUSTOM = "";
 
@@ -28,6 +36,9 @@ export function CampaignBuilder() {
   const api = useApiClient();
   const toast = useToast();
   const navigate = useNavigate();
+  const handover = (useLocation().state ?? {}) as Handover;
+  const handedContacts = handover.contactIds ?? [];
+  const handedAccounts = handover.accountIds ?? [];
   const mailboxes = useApi<ConnectedMailbox[]>((s) => api.listConnectedMailboxes(false, s), []);
   const templates = useApi<SequenceTemplate[]>((s) => api.listSequenceTemplates(s), []);
 
@@ -85,7 +96,18 @@ export function CampaignBuilder() {
         first_send_at: firstSend === "scheduled" ? new Date(firstSendAt).toISOString() : null,
         timezone_mode: timezoneMode,
       });
-      toast.success("Campaign created", "Now add the people it goes to.");
+      if (handedContacts.length || handedAccounts.length) {
+        try {
+          const added = await api.addCampaignContacts(campaign.id, handedContacts, handedAccounts);
+          toast.success("Campaign created",
+            `${added.added.length} ${added.added.length === 1 ? "person" : "people"} added. Draft their first emails next.`);
+        } catch (err) {
+          toast.error("Campaign created, but nobody was added",
+            err instanceof ApiError ? err.detail : "Add people from the campaign page.");
+        }
+      } else {
+        toast.success("Campaign created", "Now add the people it goes to.");
+      }
       navigate(`/engagement/campaigns/${campaign.id}`, { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : "The campaign could not be created.");
@@ -122,6 +144,17 @@ export function CampaignBuilder() {
         title="New campaign"
         description="Name it, choose where it sends from, and set its steps. People are added next, and nothing sends until you approve it."
       />
+
+      {(handedContacts.length > 0 || handedAccounts.length > 0) && (
+        <p className={styles.notice} role="status">
+          From your selection,{" "}
+          {[
+            handedContacts.length ? `${handedContacts.length} ${handedContacts.length === 1 ? "person" : "people"}` : "",
+            handedAccounts.length ? `everyone with an email address at ${handedAccounts.length} ${handedAccounts.length === 1 ? "company" : "companies"}` : "",
+          ].filter(Boolean).join(" and ")}{" "}
+          will be added when you create it.
+        </p>
+      )}
 
       <form
         className={styles.form}

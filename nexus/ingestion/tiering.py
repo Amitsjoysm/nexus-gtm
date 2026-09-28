@@ -43,13 +43,19 @@ async def _has_recent_signal(ts, account_id: str, since: datetime) -> bool:
     ) is not None
 
 
-async def _in_active_cadence(ts, account_id: str) -> bool:
-    from nexus.models.cadence import CadenceEnrollment, ENROLL_ACTIVE
+#: Engagement enrollments a rep is working: someone is being emailed, or waits to be.
+WORKING = ("active", "awaiting_review", "snoozed")
+
+
+async def _in_active_sequence(ts, account_id: str) -> bool:
+    """Someone at this account is in a live engagement sequence. Snoozed counts: a buyer who asked
+    to hear back in June is exactly the account whose funding round the rep must not miss."""
+    from nexus.models.engagement import EngagementEnrollment
 
     return await ts.first(
-        CadenceEnrollment,
-        CadenceEnrollment.account_id == account_id,
-        CadenceEnrollment.status == ENROLL_ACTIVE,
+        EngagementEnrollment,
+        EngagementEnrollment.account_id == account_id,
+        EngagementEnrollment.status.in_(WORKING),
     ) is not None
 
 
@@ -79,7 +85,7 @@ async def classify(ts, account, *, new_signals: list | None = None) -> str:
             return HOT
         # A rep is actively working this account. Whatever the signal history says, an account
         # someone is emailing today must not go on a three-day crawl cycle.
-        if await _in_active_cadence(ts, account.id):
+        if await _in_active_sequence(ts, account.id):
             return HOT
         # Somebody deliberately put it on a list. That is an explicit statement of interest and is
         # the cheapest possible signal of intent to watch.

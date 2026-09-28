@@ -1,8 +1,12 @@
 /* A strip wider than its pane scrolls sideways, rather than widening the page or being clipped by
    it (four tabs on a phone-width reply desk did both). The divider is an inset shadow, not a border:
    a scrolling box clips its children at the padding edge, which would cut the selected tab's
-   underline where it used to overlap the border, and a child always paints over its parent's shadow. */
+   underline where it used to overlap the border, and a child always paints over its parent's shadow.
+   `position: relative` makes the scroller the containing block of what it scrolls, or an absolutely
+   positioned child (every `.sr-only` label) escapes it and stretches the page
+   (tests/test_scroll_containers.py). */
 .tabs {
+  position: relative;
   display: flex;
   gap: var(--space-1);
   box-shadow: inset 0 -1px 0 var(--border);

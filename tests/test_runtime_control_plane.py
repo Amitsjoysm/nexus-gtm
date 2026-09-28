@@ -55,7 +55,6 @@ OUTREACH = "Outreach & CRM"
 EXTRAS = {
     "email_finder_max_candidates": (EMAIL, "int", 1, 20),
     "email_reverify_cooldown_days": (EMAIL, "int", 0, 365),
-    "campaign_sourced_min_send_confidence": (OUTREACH, "float", 0, 1),
     "personalization_max_posts": ("Personalization", "int", 1, 10),
     "signal_dork_max_queries": (SIGNALS, "int", 0, 10),
     "tenant_daily_source_runs": (SIGNALS, "int", 0, 100000),
@@ -72,8 +71,6 @@ EXTRAS = {
     "icp_discovery_interval_hours": (AUTOMATION, "int", 1, 168),
     "icp_discovery_enrich_max": (AUTOMATION, "int", 0, 200),
     "lookalike_enrich_max": (CONTACTS, "int", 0, 50),
-    "cadence_batch_size": (OUTREACH, "int", 1, 1000),
-    "cadence_max_duration_days": (OUTREACH, "int", 1, 365),
     "crm_sync_batch_size": (OUTREACH, "int", 1, 1000),
     "billing_dunning_schedule_days": ("Billing", "str", None, None),
     "email_verify_url": (EMAIL, "str", None, None),

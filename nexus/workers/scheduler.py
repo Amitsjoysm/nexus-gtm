@@ -2,7 +2,7 @@
 
 A periodic coroutine that runs alongside the pull-only worker loop. Each tick, while the
 global ``automation_enabled`` switch is on, it enqueues the recurring driver jobs
-(``advance_cadences`` + ``refresh_due_accounts``). Both drivers are idempotent and
+(``refresh_due_accounts`` and the engagement drivers). Every driver is idempotent and
 self-filtering, so enqueuing them every tick is safe and needs no per-job bookkeeping.
 
 Run as part of ``python -m nexus.workers.worker`` (see ``worker.py``).
@@ -18,7 +18,6 @@ from nexus.core.config import get_settings
 from nexus.core.db import get_sessionmaker
 from nexus.workers.queue import TaskQueue, get_task_queue
 from nexus.workers.tasks import (
-    enqueue_advance_cadences,
     enqueue_backfill_companies,
     enqueue_crawl_companies,
     enqueue_discover_icp_accounts,
@@ -53,7 +52,7 @@ async def _enqueue_due(queue: TaskQueue) -> int:
     """Enqueue the recurring drivers for whichever switches are on. Returns the count enqueued.
 
     Runs under a per-tick advisory lock so only the leader worker enqueues (see module docstring).
-    The cadence + account-refresh drivers gate on automation_enabled; the CRM sweep gates on its
+    The account-refresh drivers gate on automation_enabled; the CRM sweep gates on its
     own crm_sync_enabled switch. Each handler re-checks its switch, so this is a pre-filter.
 
     Usage rollups and billing-period rolls are enqueued unconditionally (no pre-filter
@@ -125,14 +124,13 @@ async def _enqueue_due(queue: TaskQueue) -> int:
                     await enqueue_log_engagement_crm(queue=queue)
                     count += 1
             if settings.automation_enabled:
-                await enqueue_advance_cadences(queue=queue)
                 await enqueue_refresh_due_accounts(queue=queue)
                 # Digest rides the automation switch; its handler is idempotent per interval.
                 await enqueue_send_daily_digests(queue=queue)
                 # Daily ICP auto-discovery: the handler atomically claims each tenant's per-interval
                 # slot (Tenant.icp_discovery_last_run_at, row-locked), so it can't double-run.
                 await enqueue_discover_icp_accounts(queue=queue)
-                count += 4
+                count += 3
             if settings.crm_sync_enabled:
                 await enqueue_sync_crm_due_accounts(queue=queue)
                 count += 1

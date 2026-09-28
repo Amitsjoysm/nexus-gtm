@@ -35,7 +35,6 @@ be asked:
   permissions decision rather than a runtime setting.
 * ``personalization_posts_window``: passed verbatim to the Apify posts actor, whose accepted values
   nobody has observed.
-* ``cadence_tick_interval_s``: nothing reads it.
 * ``signal_sources``: read once into the ingestion service singleton, which the test suite injects
   its demo source through, so there is no safe rebuild hook for it.
 * ``phone_enrich_auto`` and ``calling_enabled``: REMOVED 2026-09-15, found by the reader-coverage
@@ -161,13 +160,6 @@ _SPECS: tuple[SettingSpec, ...] = (
                 "If a deployment 'finds no contacts', check this first.",
         risk="high", options=("search", "stub"),
         option_labels=(("search", "Exa search"), ("stub", "Off (test double)")),
-    ),
-    SettingSpec(
-        key="campaign_sourcing_enabled", label="Contact sourcing", group=CONTACTS, kind="bool",
-        effect="Enables net-new contact providers and the verifying email finder.",
-        warning="Each sourced contact is a paid lookup plus a verification. Off means the stub, "
-                "which returns nothing rather than costing anything.",
-        risk="medium",
     ),
     SettingSpec(
         key="account_enrich_enabled", label="Fill blank firmographics", group=CONTACTS,
@@ -451,35 +443,6 @@ _SPECS: tuple[SettingSpec, ...] = (
 
     # ---- outreach and CRM -----------------------------------------------------------------------
     SettingSpec(
-        key="cadence_enabled", label="Email cadences", group=OUTREACH, kind="bool",
-        effect="Turns on the multi-touch cadence engine. The advance tick is a no-op until this "
-               "is set.",
-        warning="Cadence steps send real email to real prospects. Check the sending domain and the "
-                "drafted copy before enabling.",
-        risk="high",
-    ),
-    SettingSpec(
-        key="cadence_batch_size", label="Enrollments advanced per tick", group=OUTREACH,
-        kind="int", minimum=1, maximum=1000,
-        effect="Most cadence enrollments one worker advances per tick.",
-    ),
-    SettingSpec(
-        key="cadence_max_duration_days", label="Stop an enrollment after (days)", group=OUTREACH,
-        kind="int", minimum=1, maximum=365,
-        effect="An enrollment running longer than this is stopped mid-sequence.",
-        warning="Lowering it stops long sequences that are already in flight on the next tick.",
-        risk="medium",
-    ),
-    SettingSpec(
-        key="campaign_sourced_min_send_confidence", label="Sourced address send bar",
-        group=OUTREACH, kind="float", minimum=0, maximum=1,
-        effect="The verification confidence an address the product found (rather than one a "
-               "customer imported) must reach before a campaign sends to it.",
-        warning="Lower sends bulk email to less-proven addresses, which raises bounces and can get "
-                "the sending domain blocklisted.",
-        risk="high",
-    ),
-    SettingSpec(
         key="crm_sync_enabled", label="Push to CRM", group=OUTREACH, kind="bool",
         effect="Pushes changed accounts out to each workspace's connected CRM.",
         warning="Writes into the customer's own CRM. Change-aware, so only stale or modified "
@@ -551,8 +514,9 @@ _SPECS: tuple[SettingSpec, ...] = (
         kind="bool",
         effect="Turns on the engagement campaigns, the reply desk and the workers that send "
                "follow-ups and read replies.",
-        warning="Campaign steps send real email from SDR mailboxes and replies are read and "
-                "acted on. Switch on only after the cutover dry run has been reviewed.",
+        warning="On by default since the cutover (spec §13): it replaced the old Campaigns and "
+                "Cadences. Off stops every campaign sending and every mailbox being read, and "
+                "hides the campaign, reply and template screens for every workspace.",
         risk="high",
     ),
     SettingSpec(

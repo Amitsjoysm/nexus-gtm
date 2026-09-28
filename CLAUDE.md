@@ -136,7 +136,7 @@ Superpowers analysis summarizes all major systems so you don't re-derive archite
 
 A tenant-scoped, deduped graph of each rep's real network (contacts + calendar), used for
 NL "who do we know" search (A1) and warm-intro path mapping (A4). Additive subsystem — never
-touches Account/Contact/Inbox/Cadence.
+touches Account/Contact/Inbox/Campaigns.
 
 - **Ingestion is provider-based**: `nexus/network/connectors/` — `google.py` / `microsoft.py`
   are real OAuth connectors (Contacts + Calendar, incremental sync, token refresh);
@@ -223,6 +223,14 @@ renumbering one chain to `0047`–`0049` and rebasing it onto the other's head, 
 merge revision — neither had been applied anywhere, so no stamped database remembered the old ids.
 If you branch for more than a day, check `ScriptDirectory.get_heads()` returns exactly one before
 merging; the collision is invisible until a deploy.
+
+**It happened again, found 2026-09-24 before anything merged.** `feat/sdr-engagement` (`0057_engagement`,
+`0058_engagement_crm_log`) and the stacked `fix/signals-credits-telephony` →
+`feat/self-hosted-signal-fetching` → `feat/linkedin-prospecting` chain (`0057_signal_dated` …
+`0061_linkedin_prospecting`) both start from `0056_alert_routing`. Nothing of either had been applied
+anywhere (local deploy at `0056`, neither pushed). The engagement chain lands first; the other chain
+re-parents `0057_signal_dated` onto `0058_engagement_crm_log` and renumbers to `0059`–`0063` when it
+rebases, the same fix as above.
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —
 `tests/test_migrations_replay.py` builds one from nothing but `alembic upgrade head` and diffs
@@ -1019,7 +1027,8 @@ happened in months. Numbers, method and what is still open: `deploy/loadtest/REA
   the old cycle rather than stalling forever — the tier can only ever push it further out from a
   schedule that already exists.
 - **`tiering.classify` is biased toward hot, deliberately.** Hot if the crawl just found something,
-  or there is a signal in the last `account_hot_signal_window_days`, or it is in an active cadence,
+  or there is a signal in the last `account_hot_signal_window_days`, or someone there is in a live
+  engagement sequence (active, awaiting review or snoozed),
   or it is on a list. Cold is only what is left. Wrongly hot costs one crawl; wrongly cold means a
   rep learns about a funding round three days late, which is the failure the product exists to
   prevent — the same asymmetry as `_NEGATION_CUES` in the signal classifier. A classification
@@ -1848,11 +1857,23 @@ owner control is a `<select>` and a `<p>` may only hold phrasing content.
 Pinned by `tests/test_account_owner.py`, `test_alert_routing_api.py`,
 `test_alert_routing_delivery.py` and `test_alert_routing_ui.py`.
 
-## SDR engagement engine (`nexus/engagement/`) — in progress
+## SDR engagement engine (`nexus/engagement/`)
 
-Replaces Campaigns and Cadences. Spec: `docs/superpowers/specs/2026-09-17-sdr-engagement-design.md`;
-plans: `docs/superpowers/plans/2026-09-17-sdr-engagement/`. Ships dark behind
-`engagement_campaigns_enabled` until the cutover (phase 15).
+Replaced Campaigns and Cadences at the cutover (phase 15): `nexus/campaigns/`, `nexus/cadences/`,
+their routers, workers and pages are gone; their tables stay as read-only history. Spec:
+`docs/superpowers/specs/2026-09-17-sdr-engagement-design.md`; plans:
+`docs/superpowers/plans/2026-09-17-sdr-engagement/`; runbook: `docs/engagement/cutover-runbook.md`.
+`engagement_campaigns_enabled` is **on by default**, and off is the emergency stop.
+
+- **The cutover script is the real run, rolled back, when dry** (`scripts/migrate_engagement.py`,
+  `nexus/engagement/cutover/migrate.py`): both go through one `_apply` in a SAVEPOINT, so the report
+  cannot drift from the run. Idempotent on the legacy ids 0057 added; a re-run after an SDR connects
+  a mailbox attaches it (`sequences.service.attach_mailbox`, which also backs the campaign page's
+  "Send from this mailbox") and imports the old emails' thread history. No ledger events: statuses
+  are assigned directly, because cutover-time "enrollment.started" events describe the migration.
+  Finished old campaigns are listed read-only (`GET /engagement/legacy-campaigns`).
+- **Contact sourcing moved to `nexus/contacts/sourcing.py`**; the orchestrator goal `setup_cadence`
+  keeps its stored name and now creates a sequence template.
 
 - **Rules live in pure modules, and nothing re-derives them.** `subjects.reply_subject` is the only
   way to build a follow-up subject (exactly one "Re:", D16). `dates.resolve_date` is the only way a
@@ -1873,11 +1894,11 @@ plans: `docs/superpowers/plans/2026-09-17-sdr-engagement/`. Ships dark behind
   rebuildable. The Gmail push URL carries no token of ours — `tests/test_credential_leaks.py`
   refuses a credential in a query string, and the Pub/Sub OIDC signature is the trust.
 - **The screens gate on the engine, not on a plan.** `GET /engagement/settings/status` is the one
-  engagement route that answers while the engine is dark; `EngagementProvider` reads it once at the
-  shell. Nav items carry `engine: "on" | "off"`: the new Campaigns, Replies and Sequence templates
-  appear only when it is confirmed on, and the old Campaigns and Cadences leave at that moment.
-  Unknown or unreadable reads as OFF, because the new routes 404 while dark and the old ones work
-  either way. Every `/engagement/*` route is wrapped in `RequireEngine` as well as its module gate.
+  engagement route that answers while the engine is off; `EngagementProvider` reads it once at the
+  shell. Nav items carry `engine: "on"` and leave only while the engine is CONFIRMED off; unknown or
+  unreadable reads as on (fails open, like entitlements) now that there is no other campaign screen,
+  and the server's 404 is the boundary. `RequireEngine` says "switched off" in place rather than
+  redirecting. `/campaigns` and `/cadences` forward to the new pages for old bookmarks.
 - **Insights (`nexus/engagement/insights/`) apply D26 on the server; the screens only render.** A
   pattern needs history from three or more workspaces, below that only the last reply's speed band,
   and nothing for a workspace that has not opted in. The client selects named columns so the

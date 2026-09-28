@@ -12,47 +12,9 @@ from tests.conftest import auth, signup
 # replays onto an empty database and reproduces Base.metadata exactly.
 
 
-async def _seed_campaign(client, token) -> tuple[str, str]:
-    """Account + saved list + campaign (drafts inline to the approval gate)."""
-    acct = await client.post(
-        "/api/accounts", headers=auth(token), json={"name": "Acme", "domain": "acme.sdr"}
-    )
-    assert acct.status_code == 201, acct.text
-    lst = await client.post(
-        "/api/lists", headers=auth(token), json={"name": "All", "filter": {}}
-    )
-    assert lst.status_code == 201, lst.text
-    camp = await client.post(
-        "/api/campaigns",
-        headers=auth(token),
-        json={"name": "Q3 push", "list_id": lst.json()["id"]},
-    )
-    assert camp.status_code == 201, camp.text
-    return acct.json()["id"], camp.json()["id"]
-
-
-@pytest.mark.asyncio
-async def test_outcome_attributes_to_campaign_and_rolls_up(client):
-    token = await signup(client, slug="attr", email="o@attr.x", company="AttrCo")
-    account_id, campaign_id = await _seed_campaign(client, token)
-
-    r = await client.post(
-        "/api/outcomes",
-        headers=auth(token),
-        json={"stage": "replied", "account_id": account_id, "campaign_id": campaign_id},
-    )
-    assert r.status_code == 201, r.text
-    assert r.json()["campaign_id"] == campaign_id
-    r = await client.post(
-        "/api/outcomes",
-        headers=auth(token),
-        json={"stage": "meeting", "account_id": account_id, "campaign_id": campaign_id},
-    )
-    assert r.status_code == 201, r.text
-
-    detail = await client.get(f"/api/campaigns/{campaign_id}", headers=auth(token))
-    assert detail.status_code == 200, detail.text
-    assert detail.json()["outcomes"] == {"replied": 1, "meeting": 1}
+# Attribution to a campaign now runs through the engagement engine: see
+# tests/test_engagement_reporting.py (`test_the_outcomes_api_takes_an_engagement_campaign`). The old
+# `campaign_id` is still accepted for history, and still refuses an id that is not one.
 
 
 @pytest.mark.asyncio

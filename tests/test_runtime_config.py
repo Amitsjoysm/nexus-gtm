@@ -103,13 +103,13 @@ async def test_a_string_false_does_not_switch_something_on(client, monkeypatch):
     from nexus.core.config import get_settings
 
     token = await _superadmin(client, monkeypatch, slug="rc4", email="boss@rc4.com")
-    r = await client.put("/api/admin/runtime/settings/cadence_enabled", headers=auth(token),
+    r = await client.put("/api/admin/runtime/settings/crm_sync_enabled", headers=auth(token),
                          json={"value": "false"})
     assert r.status_code == 200, r.text
     assert r.json()["value"] is False
-    assert get_settings().cadence_enabled is False
+    assert get_settings().crm_sync_enabled is False
 
-    bad = await client.put("/api/admin/runtime/settings/cadence_enabled", headers=auth(token),
+    bad = await client.put("/api/admin/runtime/settings/crm_sync_enabled", headers=auth(token),
                            json={"value": "maybe"})
     assert bad.status_code == 400
 
@@ -136,11 +136,11 @@ async def test_setting_an_override_changes_the_live_settings_object(client, monk
     from nexus.core.config import get_settings
 
     token = await _superadmin(client, monkeypatch, slug="rc7", email="boss@rc7.com")
-    monkeypatch.setattr(get_settings(), "cadence_enabled", False)
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", False)
 
-    await client.put("/api/admin/runtime/settings/cadence_enabled", headers=auth(token),
+    await client.put("/api/admin/runtime/settings/crm_sync_enabled", headers=auth(token),
                      json={"value": True, "note": "pilot customer signed off"})
-    assert get_settings().cadence_enabled is True
+    assert get_settings().crm_sync_enabled is True
 
 
 async def test_an_override_survives_into_a_fresh_process(client, monkeypatch):
@@ -150,29 +150,29 @@ async def test_an_override_survives_into_a_fresh_process(client, monkeypatch):
     from nexus.runtime_config.service import apply_overrides
 
     token = await _superadmin(client, monkeypatch, slug="rc8", email="boss@rc8.com")
-    await client.put("/api/admin/runtime/settings/cadence_enabled", headers=auth(token),
+    await client.put("/api/admin/runtime/settings/crm_sync_enabled", headers=auth(token),
                      json={"value": True})
 
-    monkeypatch.setattr(get_settings(), "cadence_enabled", False)   # a process that never saw it
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", False)   # a process that never saw it
     applied = await apply_overrides()
-    assert applied.get("cadence_enabled") is True
-    assert get_settings().cadence_enabled is True
+    assert applied.get("crm_sync_enabled") is True
+    assert get_settings().crm_sync_enabled is True
 
 
 async def test_clearing_removes_the_override(client, monkeypatch):
     token = await _superadmin(client, monkeypatch, slug="rc9", email="boss@rc9.com")
-    await client.put("/api/admin/runtime/settings/cadence_enabled", headers=auth(token),
+    await client.put("/api/admin/runtime/settings/crm_sync_enabled", headers=auth(token),
                      json={"value": True})
 
-    r = await client.delete("/api/admin/runtime/settings/cadence_enabled", headers=auth(token))
+    r = await client.delete("/api/admin/runtime/settings/crm_sync_enabled", headers=auth(token))
     assert r.status_code == 200
     assert r.json()["overridden"] is False
 
     listed = (await client.get("/api/admin/runtime/settings", headers=auth(token))).json()
-    row = next(x for x in listed if x["key"] == "cadence_enabled")
+    row = next(x for x in listed if x["key"] == "crm_sync_enabled")
     assert row["overridden"] is False
 
-    again = await client.delete("/api/admin/runtime/settings/cadence_enabled", headers=auth(token))
+    again = await client.delete("/api/admin/runtime/settings/crm_sync_enabled", headers=auth(token))
     assert again.status_code == 404, "clearing what is not overridden is not a success"
 
 
@@ -229,14 +229,14 @@ async def test_changing_a_setting_is_audited_with_before_and_after(client, monke
     from nexus.core.config import get_settings
 
     token = await _superadmin(client, monkeypatch, slug="rc11", email="boss@rc11.com")
-    monkeypatch.setattr(get_settings(), "cadence_enabled", False)
-    await client.put("/api/admin/runtime/settings/cadence_enabled", headers=auth(token),
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", False)
+    await client.put("/api/admin/runtime/settings/crm_sync_enabled", headers=auth(token),
                      json={"value": True, "note": "approved by finance for the Q4 push"})
 
     async with get_platform_sessionmaker()() as s:
         rows = list((await s.scalars(select(BillingAuditLog))).all())
     entry = next(r for r in rows if r.action == "runtime_setting.set")
-    assert entry.target == "cadence_enabled"
+    assert entry.target == "crm_sync_enabled"
     assert "approved by finance" in (entry.note or "")
     assert (entry.before or {}).get("value") is False
     assert (entry.after or {}).get("value") is True
@@ -293,15 +293,15 @@ async def test_a_dispatched_job_picks_up_a_changed_setting(fresh_db, monkeypatch
     from nexus.workers.tasks import Job, dispatch
 
     async with get_platform_sessionmaker()() as s:
-        s.add(RuntimeSetting(key="cadence_enabled", value="True"))
+        s.add(RuntimeSetting(key="crm_sync_enabled", value="True"))
         await s.commit()
 
     # A process that has never seen the override, with the TTL clock reset so the next call sweeps.
-    monkeypatch.setattr(get_settings(), "cadence_enabled", False)
+    monkeypatch.setattr(get_settings(), "crm_sync_enabled", False)
     monkeypatch.setattr(service, "_applied_at", 0.0)
 
     await dispatch(Job(name="definitely_not_a_real_job", payload={}))
-    assert get_settings().cadence_enabled is True
+    assert get_settings().crm_sync_enabled is True
 
 
 async def test_a_broken_config_read_does_not_stop_a_job(fresh_db, monkeypatch):
@@ -324,11 +324,11 @@ async def test_a_setting_reports_whether_it_has_taken_effect(client, monkeypatch
     """"Saved" and "in force" are different facts, and a panel showing only the first is how an
     operator concludes a feature is on when it is not."""
     token = await _superadmin(client, monkeypatch, slug="rc20", email="boss@rc20.com")
-    await client.put("/api/admin/runtime/settings/cadence_enabled", headers=auth(token),
+    await client.put("/api/admin/runtime/settings/crm_sync_enabled", headers=auth(token),
                      json={"value": True})
 
     rows = (await client.get("/api/admin/runtime/settings", headers=auth(token))).json()
-    row = next(r for r in rows if r["key"] == "cadence_enabled")
+    row = next(r for r in rows if r["key"] == "crm_sync_enabled")
     assert row["overridden"] is True
     assert row["in_effect"] is True, "set on this process, so it is live here"
 
@@ -374,7 +374,7 @@ async def test_startup_logs_applied_overrides_without_blowing_up(fresh_db, caplo
     from nexus.runtime_config.service import apply_overrides
 
     async with get_platform_sessionmaker()() as s:
-        s.add(RuntimeSetting(key="cadence_enabled", value="True"))
+        s.add(RuntimeSetting(key="crm_sync_enabled", value="True"))
         await s.commit()
 
     applied = await apply_overrides()

@@ -329,44 +329,52 @@ _DEFAULT_CADENCE_STEPS = [
 
 
 class SetupCadenceTool(Tool):
-    """Let the orchestrator define a multi-touch cadence (email + call steps) on its own.
+    """Let the orchestrator define a multi-touch sequence (email + call steps) on its own.
 
-    Reads ``cadence_name`` / ``steps`` / ``description`` from the run's goal_input; when steps
-    aren't specified it picks a sensible cold-calling 3-touch (email -> call -> email). Creating a
-    cadence definition is not outbound, so no approval gate — actual sends/calls still flow through
-    the campaign launch + approval gate."""
+    Creates a **sequence template** (the engagement engine's replacement for cadences, spec §13).
+    The goal and tool keep the name ``setup_cadence`` because it is stored on existing runs. Reads
+    ``cadence_name`` / ``steps`` / ``description`` from the run's goal_input; when steps aren't
+    specified it picks a sensible cold-calling 3-touch (email -> call -> email). Old-style
+    ``delay_days`` are calendar days and are converted like the cutover converts them. Defining a
+    template is not outbound, so no approval gate: every send still goes through a campaign's
+    review queue."""
 
     name = "setup_cadence"
-    description = "Create a multi-touch cadence (email and/or call steps) from a brief."
+    description = "Create a multi-touch sequence template (email and/or call steps) from a brief."
     requires_approval = False
 
     async def run(self, tc: ToolContext) -> dict:
-        from nexus.cadences.service import CadenceError, get_cadence_service
+        from nexus.engagement.cutover.migrate import business_days
+        from nexus.engagement.sequences.service import CampaignError, validate_steps
+        from nexus.models.engagement import SequenceTemplate
 
         gi = {**(tc.run.goal_input or {}), **(tc.inputs or {})}
-        steps = gi.get("steps") or _DEFAULT_CADENCE_STEPS
-        name = gi.get("cadence_name") or gi.get("name") or "AI cadence"
+        raw = gi.get("steps") or _DEFAULT_CADENCE_STEPS
+        name = (gi.get("cadence_name") or gi.get("name") or "AI sequence")[:200]
+        specs = []
+        for i, step in enumerate(raw):
+            wait = step.get("delay_business_days")
+            if wait is None:
+                wait = business_days(int(step.get("delay_days", 0) or 0))
+            specs.append({"channel": step.get("channel", "email"),
+                          "angle": step.get("angle", ""),
+                          "delay_business_days": 0 if i == 0 else int(wait)})
         try:
-            cadence = await get_cadence_service().create_cadence(
-                tc.ts,
-                name=name,
-                description=gi.get("description"),
-                steps=steps,
-                created_by_user_id=getattr(tc.run, "created_by_user_id", None),
-            )
-        except CadenceError as exc:
+            steps = validate_steps(specs)
+        except CampaignError as exc:
             raise ToolError(str(exc))
+        template = SequenceTemplate(name=name, description=gi.get("description") or "",
+                                    steps=steps,
+                                    created_by_user_id=getattr(tc.run, "created_by_user_id", None))
+        tc.ts.add(template)
+        await tc.ts.flush()
         out = {
-            "cadence_id": cadence.id,
-            "name": cadence.name,
-            "steps": [
-                {"channel": s.get("channel", "email"),
-                 "delay_days": int(s.get("delay_days", 0)),
-                 "angle": s.get("angle", "")}
-                for s in steps
-            ],
+            "template_id": template.id,
+            "name": template.name,
+            "steps": [{"channel": s["channel"], "delay_business_days": s["delay_business_days"],
+                       "angle": s["angle"]} for s in steps],
         }
-        tc.blackboard["cadence"] = out
+        tc.blackboard["sequence_template"] = out
         return out
 
 

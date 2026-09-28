@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
-  Badge, Button, Card, DataTable, EmptyState, ErrorState, Field, Icons, Input, Modal, Skeleton,
-  TabPanel, Tabs,
+  Badge, Button, Card, DataTable, EmptyState, ErrorState, Field, Icons, Input, Modal, Select,
+  Skeleton, TabPanel, Tabs,
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
@@ -17,6 +17,7 @@ import {
 } from "@/components/engagement/labels";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
+import { useCurrentUserId } from "@/app/useCurrentUserId";
 import { ApiError } from "@/lib/api";
 import type {
   BestTimeSuggestion, ConnectedMailbox, EngagementCampaign, EngagementEnrollment, EngagementStep,
@@ -54,6 +55,7 @@ export function CampaignDetailPage() {
     (s) => api.campaignEnrollments(campaignId, s), [campaignId],
   );
   const mailboxes = useApi<ConnectedMailbox[]>((s) => api.listConnectedMailboxes(false, s), []);
+  const currentUserId = useCurrentUserId();
   const [search] = useSearchParams();
   // A link can ask for a tab ("Review the intro" from the reply desk); otherwise open where the work is.
   const [tab, setTab] = useState<TabKey | null>(() => {
@@ -145,7 +147,7 @@ export function CampaignDetailPage() {
             {c.status === "paused" && c.pause_reason && c.pause_reason !== "manual" && (
               <span>Paused because {reasonText(c.pause_reason)}</span>
             )}
-            <span>Sends from {mailbox?.email ?? "your mailbox"}</span>
+            <span>{mailbox ? `Sends from ${mailbox.email}` : c.mailbox_connection_id ? "Sends from your mailbox" : "No sending mailbox yet"}</span>
           </span>
         }
         actions={
@@ -168,11 +170,13 @@ export function CampaignDetailPage() {
           Resume tab and it continues from where it stopped.
         </p>
       )}
-      {mailbox && mailbox.status !== "connected" && (
-        <p className={styles.notice} role="alert">
-          {mailbox.email} needs reconnecting before this campaign can send.{" "}
-          <Link to="/mailboxes" className={styles.inlineLink}>Reconnect it on My mailboxes</Link>.
-        </p>
+      {(!c.mailbox_connection_id || (mailbox && mailbox.status !== "connected")) && (
+        <MailboxChooser
+          campaignId={c.id} current={mailbox ?? null}
+          isOwner={c.owner_user_id === currentUserId}
+          mine={(mailboxes.data ?? []).filter((m) => m.mine && m.status === "connected")}
+          onChosen={refresh}
+        />
       )}
 
       <Tabs items={tabs} value={tab ?? "people"} onChange={(v) => setTab(v as TabKey)} idPrefix="campaign" />
@@ -496,3 +500,62 @@ function StepsPanel({ campaign, editable, onSaved }: {
 }
 
 export default CampaignDetailPage;
+
+/**
+ * A campaign with nowhere to send from (spec §13, D14): moved from the old engine before its owner
+ * connected a mailbox, or its mailbox was disconnected. Choosing one resumes everyone who was
+ * waiting for it. A campaign sends from its OWNER's mailbox, so only the owner is offered the choice.
+ */
+function MailboxChooser({ campaignId, current, isOwner, mine, onChosen }: {
+  campaignId: string;
+  current: ConnectedMailbox | null;
+  isOwner: boolean;
+  mine: ConnectedMailbox[];
+  onChosen: () => void;
+}) {
+  const api = useApiClient();
+  const toast = useToast();
+  const [choice, setChoice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const picked = choice || mine[0]?.id || "";
+
+  async function choose() {
+    setBusy(true);
+    try {
+      await api.setCampaignMailbox(campaignId, picked);
+      toast.success("Mailbox set", "Everyone waiting for it is back in sequence.");
+      onChosen();
+    } catch (err) {
+      toast.error("That didn't work", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const problem = current
+    ? `${current.email} needs reconnecting before this campaign can send.`
+    : "This campaign has no mailbox to send from, so nothing is sending.";
+  return (
+    <div className={styles.notice} role="alert">
+      <p className={styles.bodyText}>{problem}</p>
+      {!isOwner ? (
+        <p className={styles.muted}>It sends from its owner's mailbox, so the owner chooses one.</p>
+      ) : mine.length === 0 ? (
+        <p className={styles.muted}>
+          <Link to="/mailboxes" className={styles.inlineLink}>Connect a mailbox on My mailboxes</Link>,
+          then choose it here.
+        </p>
+      ) : (
+        <div className={styles.laterRow}>
+          <Field label="Send from">
+            <Select value={picked} onChange={(e) => setChoice(e.target.value)}
+              options={mine.map((m) => ({ value: m.id, label: m.email }))} />
+          </Field>
+          <Button onClick={choose} loading={busy} disabled={busy || !picked}>
+            Send from this mailbox
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -52,12 +52,12 @@ export interface NavItem {
    */
   capability?: string;
   /**
-   * Which engagement engine the item belongs to. `"on"` items (the new Campaigns, Replies and
-   * Sequence templates) appear only once the engine is confirmed switched on; `"off"` items (the
-   * old Campaigns and Cadences) disappear at that moment. Before phase 15 removes the old engine,
-   * this is the whole of the switch-over in the navigation: one flag, two sets of pages, never both.
+   * The item belongs to the engagement engine (Campaigns, Replies, Sequence templates) and leaves
+   * the navigation only while the engine is confirmed switched off, the platform's emergency stop.
+   * Before the cutover this also carried `"off"` items, the old Campaigns and Cadences; that engine
+   * is gone (spec §13), so only `"on"` remains.
    */
-  engine?: "on" | "off";
+  engine?: "on";
 }
 
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
@@ -104,17 +104,6 @@ export const NAV_ITEMS: NavItem[] = [
     to: "/approvals", label: "Approvals", icon: <ShieldCheckIcon />, minRole: "manager",
     capability: "module.agents",
   },
-  // Their OWN gates, not `module.outreach`. Holding bulk outreach back is a common position, and
-  // while these shared a gate with `ai.email_draft` it could not be taken without also taking down
-  // the email composer a rep uses one contact at a time.
-  {
-    to: "/campaigns", label: "Campaigns", icon: <SendIcon />, minRole: "manager",
-    capability: "module.campaigns", engine: "off",
-  },
-  {
-    to: "/cadences", label: "Cadences", icon: <MessageIcon />, minRole: "manager",
-    capability: "module.cadences", engine: "off",
-  },
   {
     to: "/plays", label: "Plays", icon: <BoltIcon />, minRole: "manager",
     capability: "module.plays",
@@ -155,10 +144,9 @@ export function canSee(
   // A platform-only item is invisible to every workspace member, including an owner. The server
   // enforces this regardless — the nav entry only decides whether the link is offered.
   if (item.platformOnly) return isPlatformAdmin;
-  // New-engine pages only once the switch is CONFIRMED on; old-engine pages until it is. Unknown
-  // (still loading) keeps the old ones, which work either way.
-  if (item.engine === "on" && engineOn !== true) return false;
-  if (item.engine === "off" && engineOn === true) return false;
+  // Engagement pages leave only while the engine is CONFIRMED off. Unknown (still loading) shows
+  // them, so the sidebar does not rearrange itself a moment after every page load.
+  if (item.engine === "on" && engineOn === false) return false;
   if (!item.minRole) return true;
   if (!role) return false;
   return ROLE_RANK[role] >= ROLE_RANK[item.minRole];

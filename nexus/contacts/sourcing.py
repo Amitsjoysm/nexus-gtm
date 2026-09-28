@@ -1,8 +1,9 @@
 """ContactSourcingService: ensure an account has a contact with a (best-effort) email.
 
 Composes the registry (net-new contact search) and the waterfall enricher (verifying email
-finder). Owns no orchestration — the campaign draft phase calls it once when a target would be
-skipped for ``SKIP_NO_CONTACT``. Never raises across its boundary: a no-candidate / failed
+finder). Owns no orchestration: the account's Find contacts action and the account pipeline agent
+call it. (It lived in ``nexus/campaigns/`` because the old campaign draft phase was its first
+caller; that engine is gone, spec §13.) Never raises across its boundary: a no-candidate / failed
 sourcing returns ``SourcingOutcome(None, False, 0.0)`` so the caller can skip cleanly. All
 synthetic personas are provenance-marked (``enrichment_source="sourcing:<provider>"``) and,
 offline, never clear the send bar — so they cannot leak into real outreach.
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Account, Contact
 
-logger = logging.getLogger("nexus.campaigns.sourcing")
+logger = logging.getLogger("nexus.contacts.sourcing")
 
 
 @dataclass(slots=True)

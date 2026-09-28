@@ -1,5 +1,7 @@
 # Connecting Gmail: Google Cloud setup
 
+Every environment's redirect URI, and the scopes, in one table: [oauth-environments.md](oauth-environments.md).
+
 The owner does these steps in Google Cloud. Nobody pastes a secret into chat, a ticket or a file in
 the repo; secrets go only into the Control plane.
 

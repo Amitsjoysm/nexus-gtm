@@ -160,7 +160,7 @@ async def run_pipeline(
             # buying committee for it (contacts would also block any future auto-archive).
             result["new_contacts"] = 0
             return result
-        from nexus.campaigns.sourcing import source_account_contacts
+        from nexus.contacts.sourcing import source_account_contacts
         from nexus.core.config import get_settings
 
         new_contacts = await source_account_contacts(

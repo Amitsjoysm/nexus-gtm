@@ -118,8 +118,8 @@ async def _run_setup_cadence(ts, goal_input):
     return await SetupCadenceTool().run(tc)
 
 
-async def test_orchestrator_sets_up_call_cadence_from_steps():
-    from nexus.cadences.service import get_cadence_service
+async def test_orchestrator_sets_up_a_call_sequence_template_from_steps():
+    from nexus.models.engagement import SequenceTemplate
 
     tid = await make_tenant()
     async with tenant_session(tid) as ts:
@@ -129,19 +129,21 @@ async def test_orchestrator_sets_up_call_cadence_from_steps():
                       {"channel": "call", "delay_days": 2}],
         })
         assert out["name"] == "Cold Call Seq"
-        steps = await get_cadence_service().list_steps(ts, out["cadence_id"])
-        assert [s.channel for s in steps] == ["email", "call"]
+        template = await ts.get(SequenceTemplate, out["template_id"])
+        assert [s["channel"] for s in template.steps] == ["email", "call"]
+        # Calendar days from an old-style brief become business days.
+        assert [s["delay_business_days"] for s in template.steps] == [0, 1]
 
 
 async def test_orchestrator_defaults_to_cold_calling_3touch():
     """No steps given -> the orchestrator picks a sensible email -> call -> email sequence."""
-    from nexus.cadences.service import get_cadence_service
+    from nexus.models.engagement import SequenceTemplate
 
     tid = await make_tenant()
     async with tenant_session(tid) as ts:
         out = await _run_setup_cadence(ts, {})
-        steps = await get_cadence_service().list_steps(ts, out["cadence_id"])
-        assert [s.channel for s in steps] == ["email", "call", "email"]
+        template = await ts.get(SequenceTemplate, out["template_id"])
+        assert [s["channel"] for s in template.steps] == ["email", "call", "email"]
 
 
 def test_stub_call_provider_returns_tel_link():

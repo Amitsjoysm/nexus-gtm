@@ -224,7 +224,7 @@ Mapped with code-review-graph (`importers_of nexus/campaigns/service.py`, `impor
 
 | Consumer | Reference today | Change | Phase | Pinned by |
 |---|---|---|---|---|
-| `nexus/api/routers/campaigns.py` | `CampaignService`, `CampaignTarget`, cadence service | Removed; routes re-served by `engagement_campaigns.py` | 15 | `tests/test_engagement_cutover_routes.py` |
+| `nexus/api/routers/campaigns.py` | `CampaignService`, `CampaignTarget`, cadence service | Removed; routes re-served by `engagement_campaigns.py` | 15 | `tests/test_engagement_cutover.py` |
 | `nexus/api/routers/cadences.py` | `CadenceService`, enrollment ops | Removed; `engagement_templates.py` + enrollment ops in `engagement_campaigns.py` | 15 | same |
 | `nexus/campaigns/service.py`, `schemas.py`, `__init__.py` | old engine | Removed | 15 | `test_old_engine_is_gone` |
 | `nexus/campaigns/sourcing.py` | used by `routers/accounts.py:716`, `routers/agents.py:163` | Moved to `nexus/contacts/sourcing.py`; both imports updated | 15 | `tests/test_contact_sourcing.py` (import path updated) |
@@ -235,7 +235,7 @@ Mapped with code-review-graph (`importers_of nexus/campaigns/service.py`, `impor
 | `nexus/workers/scheduler.py` | `enqueue_advance_cadences` | Engagement jobs enqueued (gated); cadence enqueue removed in 15 | 03–15 | same |
 | `nexus/calling/service.py`, `nexus/models/calling.py` | `cadence_enrollment_id` | `enqueue(..., engagement_enrollment_id=)`; call steps created by the engine | 08 | `tests/test_engagement_call_steps.py` |
 | `nexus/ingestion/tiering.py::_in_active_cadence` | `CadenceEnrollment` active | Also true for an active/paused/snoozed `EngagementEnrollment`; old read removed in 15 | 08, 15 | `tests/test_refresh_tiering.py` + new case |
-| `nexus/orchestration/tools.py::setup_cadence` | `get_cadence_service` | Creates a `SequenceTemplate` | 15 | `tests/test_engagement_orchestrator_setup_sequence.py` |
+| `nexus/orchestration/tools.py::setup_cadence` | `get_cadence_service` | Creates a `SequenceTemplate` | 15 | `tests/test_cold_calling.py` |
 | `nexus/models/__init__.py` | registers old models | Registers new models (kept old) | 01 | `test_migrations_replay.py` |
 | `nexus/runtime_config/catalog.py` | `cadence_enabled`, `cadence_batch_size`, `cadence_max_duration_days`, `campaign_sourced_min_send_confidence` | Removed from catalog in 15 (stored rows are skipped by rule); `campaign_sourcing_enabled` stays (used by contact sourcing); engagement settings added in 02 | 02, 15 | `tests/test_runtime_control_plane.py` updated |
 | `nexus/core/config.py` | cadence fields | Engagement fields added (02); cadence fields removed (15) | 02, 15 | `tests/test_reacher_verifier.py:316` keeps sourcing defaults |
@@ -246,7 +246,7 @@ Mapped with code-review-graph (`importers_of nexus/campaigns/service.py`, `impor
 | Ledger emit seams: `agents/runtime.py::AgentRuntime.run`, `billing/meter.py::metered`, `orchestration/engine.py::execute_run`, `outcomes/service.py::record`, `calling/service.py::log_disposition`, `ingestion/service.py::ingest`, `agents/scoring.py` score write, `enrichment/waterfall.py::enrich_contact`, `enrichment/account.py::enrich`, `research/provider.py` via `agents/research.py`, `core/audit.py::record_audit` | — | One `ledger.emit()` each, inside the existing transaction | 05 | `tests/test_engagement_ledger_seams.py` |
 | Frontend `App.tsx`, `app/nav.tsx`, `components/layout/AppShell.tsx`, `lib/api.ts`, `lib/types.ts`, `lib/display.ts` | old routes/types | New routes behind flag (11); old removed (15) | 11, 15 | `tests/test_plan_gated_nav.py`, `tests/test_engagement_engagement_ui.py` |
 | `pages/CampaignsPage.tsx`, `pages/CadencesPage.tsx` | old pages | Replaced by `pages/engagement/*` | 11, 15 | same |
-| `pages/CallsPage.tsx` | cadence enrollment link | Engagement enrollment link | 15 | `tests/test_engagement_engagement_ui.py` |
+| `pages/CallsPage.tsx` | cadence enrollment link | Engagement enrollment link | 15 | `tests/test_engagement_screens_ui.py` |
 | `pages/ListsPage.tsx`, `pages/AccountsPage.tsx`, `pages/ContactsPage.tsx`, `components/discovery/ResultsPanel.tsx` | "launch campaign" / "add to cadence" | "Add to campaign" opens the new builder with the selection | 11, 15 | same |
 | `pages/SettingsPage.tsx` | SMTP mailboxes | Adds Mailboxes (OAuth), Do-not-contact, engagement settings, training consent; SMTP mailboxes labelled "one-off sends only" | 03, 04, 05, 11 | `tests/test_engagement_engagement_settings_ui.py` |
 | Tests referencing the old engine: `test_cadence_engine.py`, `test_campaign_engine.py`, `test_campaign_sourcing.py`, `test_cold_calling.py`, `test_launch_from_selection.py`, `test_continuous_automation.py`, `test_job_durability.py`, `test_runtime_config.py`, `test_runtime_control_plane.py`, `test_billing_metering_coverage.py`, `test_feature_switches.py`, `test_plan_gated_nav.py`, `test_refresh_tiering.py`, `test_admin_health.py`, `test_sdr_adoption.py`, `test_delete_export.py`, `test_lists_listing.py` | old engine | Each case replaced or retargeted, listed test-by-test in phase 15 | 15 | the suite itself |

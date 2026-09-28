@@ -1,7 +1,7 @@
 """ContactSourcingService.ensure_contact: create persona / fill email / no-candidate. Offline."""
 from __future__ import annotations
 
-from nexus.campaigns.sourcing import ContactSourcingService, SourcingOutcome
+from nexus.contacts.sourcing import ContactSourcingService, SourcingOutcome
 from nexus.enrichment.providers import PatternEmailProvider
 from nexus.enrichment.waterfall import WaterfallEnricher
 from nexus.integrations.contact_search import StubContactSearchProvider

@@ -110,7 +110,7 @@ export function SettingsPage() {
                       Automation is {data.automation_enabled ? "on" : "off"}
                     </span>
                     <span className={styles.controlHint}>
-                      When on, the worker re-scores stale accounts and advances cadences each tick.
+                      When on, the worker re-scores stale accounts and finds new ones each tick.
                       When off, everything waits for a manual run.
                     </span>
                   </div>

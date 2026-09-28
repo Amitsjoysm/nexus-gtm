@@ -144,7 +144,7 @@ export function priorityTone(priority: number): BadgeTone {
   return "neutral";
 }
 
-/** Campaign lifecycle status → tone. */
+/** An old-engine campaign's status → tone (the read-only Legacy list, spec §13). */
 export function campaignTone(status: string): BadgeTone {
   switch (status) {
     case "completed":
@@ -162,49 +162,3 @@ export function campaignTone(status: string): BadgeTone {
   }
 }
 
-/** Campaign target status → tone. */
-export function targetTone(status: string): BadgeTone {
-  switch (status) {
-    case "sent":
-      return "success";
-    case "drafted":
-    case "approved":
-      return "info";
-    case "skipped":
-      return "warning";
-    case "failed":
-      return "danger";
-    default:
-      return "neutral"; // pending, drafting
-  }
-}
-
-/** Cadence enrollment status → tone. */
-export function enrollmentTone(status: string): BadgeTone {
-  switch (status) {
-    case "active":
-      return "success";
-    case "paused":
-      return "warning";
-    case "stopped":
-      return "danger";
-    default:
-      return "neutral"; // completed
-  }
-}
-
-/** Cadence touch status → tone. */
-export function touchTone(status: string): BadgeTone {
-  switch (status) {
-    case "sent":
-      return "success";
-    case "awaiting_approval":
-      return "warning";
-    case "failed":
-      return "danger";
-    case "skipped":
-      return "neutral";
-    default:
-      return "neutral";
-  }
-}

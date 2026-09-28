@@ -402,6 +402,38 @@ async def remove(ts, enrollment, *, user_id: str | None = None) -> None:
     await set_status(ts, enrollment, "stopped", "manual", user_id=user_id)
 
 
+# ---- the sending mailbox ------------------------------------------------------------------------
+
+async def attach_mailbox(ts, campaign, mailbox) -> int:
+    """Send this campaign from ``mailbox``, and resume whoever was waiting for one.
+
+    A campaign moved from the old engine whose owner had no connected mailbox is paused as
+    `mailbox_disconnected` (D14), and so is anyone the advance loop found with a disconnected one.
+    Nothing brought them back: reconnecting a mailbox or choosing another left them paused for
+    good. Returns how many people resumed. Their due times are kept, so anyone overdue goes out on
+    the next tick, in order.
+    """
+    from nexus.models.engagement import EngagementEnrollment
+
+    if mailbox is None or mailbox.status != "connected":
+        raise CampaignError("Choose a connected mailbox.")
+    if mailbox.owner_user_id != campaign.owner_user_id:
+        raise CampaignError("A campaign sends from its owner's own mailbox.")
+    campaign.mailbox_connection_id = mailbox.id
+    resumed = 0
+    for enrollment in await ts.list(EngagementEnrollment,
+                                    EngagementEnrollment.campaign_id == campaign.id,
+                                    EngagementEnrollment.status.notin_(("stopped", "completed"))):
+        enrollment.mailbox_connection_id = mailbox.id
+        if enrollment.status == "paused" and enrollment.status_reason == "mailbox_disconnected":
+            enrollment.status, enrollment.status_reason = "active", None
+            resumed += 1
+    if campaign.status == "paused" and campaign.pause_reason == "mailbox_disconnected":
+        campaign.status, campaign.pause_reason = "active", None
+    await ts.flush()
+    return resumed
+
+
 # ---- launch, pause, overrides -------------------------------------------------------------------
 
 async def launch(ts, campaign, *, user_id: str):

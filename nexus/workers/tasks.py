@@ -65,69 +65,6 @@ async def handle_run_orchestration(payload: dict) -> dict:
         return {"run_id": run.id, "status": run.status}
 
 
-async def handle_run_campaign(payload: dict) -> dict:
-    """Off-request campaign driver. ``phase`` selects the work:
-    ``"draft"`` runs the draft phase; ``"send"`` runs the send phase. Idempotent — a
-    campaign already past the requested phase is a no-op returning its current status."""
-    tenant_id = payload["tenant_id"]
-    campaign_id = payload["campaign_id"]
-    phase = payload.get("phase", "draft")
-    from nexus.models.campaign import Campaign, CAMP_AWAITING_APPROVAL, CAMP_TERMINAL
-    from nexus.campaigns.service import get_campaign_service
-
-    async with tenant_session(tenant_id) as ts:
-        campaign = await ts.get(Campaign, campaign_id)
-        if campaign is None:
-            return {"error": "campaign_not_found", "campaign_id": campaign_id}
-        svc = get_campaign_service()
-        if phase == "draft" and campaign.status not in CAMP_TERMINAL \
-                and campaign.status != CAMP_AWAITING_APPROVAL:
-            await svc.run_draft_phase(ts, campaign)
-        elif phase == "send" and campaign.status == "approved":
-            await svc.run_send_phase(ts, campaign)
-        return {"campaign_id": campaign.id, "status": campaign.status}
-
-
-async def handle_advance_cadences(payload: dict) -> dict:
-    """Periodic cadence driver. Scans globally for tenants with a due enrollment, then
-    advances each tenant's due enrollments inside its own tenant-bound session.
-
-    The scan uses a raw, tenant-agnostic session (it only reads tenant ids, never ORM
-    rows), keeping the per-tenant isolation guarantee for the actual work. Inert unless
-    ``cadence_enabled`` is set."""
-    from datetime import datetime, timezone
-
-    from sqlalchemy import distinct, select
-
-    from nexus.core.config import get_settings
-    from nexus.cadences.service import get_cadence_service
-    from nexus.models.cadence import CadenceEnrollment, ENROLL_ACTIVE
-
-    settings = get_settings()
-    if not settings.cadence_enabled:
-        return {"skipped": "cadence_disabled"}
-
-    now = datetime.now(timezone.utc)
-    batch = settings.cadence_batch_size
-
-    async with get_sessionmaker()() as session:
-        rows = await session.scalars(
-            select(distinct(CadenceEnrollment.tenant_id)).where(
-                CadenceEnrollment.status == ENROLL_ACTIVE,
-                CadenceEnrollment.next_touch_at <= now,
-            )
-        )
-        tenant_ids = list(rows.all())
-
-    processed = 0
-    for tid in tenant_ids:
-        async with tenant_session(tid) as ts:
-            processed += await get_cadence_service().advance_due_for_tenant(
-                ts, now=now, limit=batch
-            )
-    return {"tenants": len(tenant_ids), "processed": processed}
-
-
 async def handle_refresh_due_accounts(payload: dict) -> dict:
     """Periodic account-refresh driver. Scans globally for accounts that are due for a
     refresh (stale or never refreshed) and belong to a tenant that has opted in, stamps
@@ -1236,8 +1173,6 @@ async def enqueue_backfill_companies(*, queue: TaskQueue | None = None) -> None:
 HANDLERS: dict[str, Handler] = {
     "process_account": handle_process_account,
     "run_orchestration": handle_run_orchestration,
-    "run_campaign": handle_run_campaign,
-    "advance_cadences": handle_advance_cadences,
     "refresh_due_accounts": handle_refresh_due_accounts,
     "sync_crm_account": handle_sync_crm_account,
     "sync_crm_due_accounts": handle_sync_crm_due_accounts,
@@ -1288,23 +1223,6 @@ async def enqueue_run_orchestration(
     await queue.enqueue(
         Job(name="run_orchestration", payload={"tenant_id": tenant_id, "run_id": run_id})
     )
-
-
-async def enqueue_run_campaign(
-    tenant_id: str, campaign_id: str, *, phase: str = "draft", queue: TaskQueue | None = None
-) -> None:
-    queue = queue or get_task_queue()
-    await queue.enqueue(
-        Job(
-            name="run_campaign",
-            payload={"tenant_id": tenant_id, "campaign_id": campaign_id, "phase": phase},
-        )
-    )
-
-
-async def enqueue_advance_cadences(*, queue: TaskQueue | None = None) -> None:
-    queue = queue or get_task_queue()
-    await queue.enqueue(Job(name="advance_cadences", payload={}))
 
 
 async def enqueue_refresh_due_accounts(*, queue: TaskQueue | None = None) -> None:

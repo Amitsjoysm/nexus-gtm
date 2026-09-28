@@ -111,7 +111,7 @@ def _discover_plan(goal_input: dict) -> list[PlanStep]:
 
 
 def _setup_cadence_plan(goal_input: dict) -> list[PlanStep]:
-    """Define a multi-touch cadence (email/call). cadence_name/steps/description ride on
+    """Define a multi-touch sequence template (email/call). cadence_name/steps/description ride on
     run.goal_input, which SetupCadenceTool reads. Creating a definition is not outbound — no gate."""
     return [PlanStep(idx=0, tool="setup_cadence", depends_on=[], requires_approval=False)]
 

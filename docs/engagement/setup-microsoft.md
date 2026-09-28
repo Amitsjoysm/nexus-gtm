@@ -1,5 +1,7 @@
 # Connecting Microsoft 365: Azure setup
 
+Every environment's redirect URI, and the scopes, in one table: [oauth-environments.md](oauth-environments.md).
+
 The owner does these steps in the Microsoft Entra admin center. Secrets go only into the Control
 plane, never into chat, tickets or the repo.
 

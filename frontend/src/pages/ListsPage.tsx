@@ -315,8 +315,9 @@ function SavedLists({ refreshKey }: { refreshKey: number }) {
     <Card padding="md" className={styles.saved}>
       <div className={styles.savedHead}>
         <h3 className={styles.savedTitle}>Saved lists</h3>
-        <Button variant="ghost" size="sm" onClick={() => navigate("/campaigns")}>
-          Launch a campaign
+        {/* A new campaign's People tab filters by saved list, so a segment is one choice away. */}
+        <Button variant="ghost" size="sm" onClick={() => navigate("/engagement/campaigns/new")}>
+          Start a campaign
         </Button>
       </div>
       <DataState

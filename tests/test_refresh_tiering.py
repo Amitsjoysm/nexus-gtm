@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from tests.conftest import make_tenant
 
 
@@ -83,32 +85,31 @@ async def test_an_old_signal_does_not_keep_it_hot(fresh_db):
         assert await tiering.classify(ts, acct, new_signals=[]) == tiering.COLD
 
 
-async def test_an_account_in_an_active_cadence_stays_hot(fresh_db):
-    """A rep is emailing this company today. Whatever the signal history says, it must not drop
-    to a three-day crawl cycle."""
+@pytest.mark.parametrize("status, tier", [("active", "hot"), ("snoozed", "hot"),
+                                          ("awaiting_review", "hot"), ("stopped", "cold")])
+async def test_an_account_in_a_live_sequence_stays_hot(fresh_db, status, tier):
+    """A rep is emailing this company, is about to, or promised to write back. Whatever the signal
+    history says, it must not drop to a three-day crawl cycle. A stopped sequence is not work."""
     from nexus.ingestion import tiering
-    from nexus.models.cadence import Cadence, CadenceEnrollment, ENROLL_ACTIVE
-    from nexus.models.campaign import Campaign
-    from nexus.models.workflow import ProspectList
+    from nexus.models.account import Contact
+    from nexus.models.engagement import EngagementCampaign, EngagementEnrollment
+    from nexus.models.identity import User
     from nexus.workers.tasks import tenant_session
 
     tid = await make_tenant()
     async with tenant_session(tid) as ts:
         acct = await _account(ts)
-        lst = ProspectList(name="Targets")
-        cad = Cadence(name="Outbound")
-        ts.add_all([lst, cad])
+        rep = User(email=f"rep-{status}@tier.io", full_name="Rep", password_hash="x")
+        ts.session.add(rep)
+        await ts.session.flush()
+        person = Contact(account_id=acct.id, full_name="Jane", email="jane@tier.io")
+        campaign = EngagementCampaign(name="Q3 push", owner_user_id=rep.id, status="active")
+        ts.add_all([person, campaign])
         await ts.flush()
-        camp = Campaign(name="Q3 push", list_id=lst.id)
-        ts.add(camp)
+        ts.add(EngagementEnrollment(campaign_id=campaign.id, contact_id=person.id,
+                                    account_id=acct.id, status=status))
         await ts.flush()
-        ts.add(CadenceEnrollment(
-            cadence_id=cad.id, campaign_id=camp.id, account_id=acct.id, status=ENROLL_ACTIVE,
-            next_touch_at=datetime.now(timezone.utc) + timedelta(days=1),
-            started_at=datetime.now(timezone.utc),
-        ))
-        await ts.flush()
-        assert await tiering.classify(ts, acct, new_signals=[]) == tiering.HOT
+        assert await tiering.classify(ts, acct, new_signals=[]) == tier
 
 
 async def test_an_account_on_a_list_stays_hot(fresh_db):
