@@ -185,7 +185,12 @@ async def source_account_contacts(
         email = (cand.email or "").lower()
         name = _name_key(cand.full_name)
         profile_url = normalise_linkedin(cand.linkedin_url)
-        if (email and email in seen_emails) or (name and name in seen_names)                 or (profile_url and profile_url in seen_profiles):
+        duplicate = (
+            (email and email in seen_emails)
+            or (name and name in seen_names)
+            or (profile_url and profile_url in seen_profiles)
+        )
+        if duplicate:
             continue
         person = Contact(
             tenant_id=ts.tenant_id, account_id=account.id, full_name=cand.full_name,

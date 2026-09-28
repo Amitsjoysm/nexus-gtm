@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from nexus.campaigns.sourcing import source_account_contacts
+from nexus.contacts.sourcing import source_account_contacts
 from nexus.integrations.apify import ApifyNotConfigured
 from nexus.integrations.contact_search import ContactCandidate
 from nexus.models import Account, Contact
