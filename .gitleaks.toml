@@ -35,6 +35,14 @@
 #                            exercising the Stripe pattern, which is exactly what trips the
 #                            stripe-access-token rule. The other five fakes in that list do not
 #                            match an upstream rule and are deliberately NOT listed here.
+#
+# Added 2026-09-28 (generic-api-key, found when the LinkedIn prospecting chain was rebased onto the
+# engagement engine). Pseudonymisation secrets the ledger-store tests pass in; each is a phrase
+# spelled out in words so it cannot be mistaken for key material:
+#
+#   a-test-pseudonymisation-secret-with-enough-variety-0123456789 tests/test_engagement_ledger_stores.py, and the phase 06 plan doc
+#                            quoting it
+#   an-integration-pseudonymisation-secret-0123456789abcdef tests_integration/test_ledger_stores_pg.py, and the same plan doc
 
 [extend]
 useDefault = true
@@ -49,4 +57,6 @@ regexes = [
   'sk-test-abcdefgh1234',
   's3cr3t-pw-9f2a1c',
   'sk_live_abcdefghijklmnop',
+  'a-test-pseudonymisation-secret-with-enough-variety-0123456789',
+  'an-integration-pseudonymisation-secret-0123456789abcdef',
 ]
