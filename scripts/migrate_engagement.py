@@ -43,7 +43,11 @@ async def main(*, dry_run: bool, tenant: str | None, as_json: bool) -> int:
 
     failures = 0
     reports = []
-    for tenant_id in await _tenants(tenant):
+    tenants = await _tenants(tenant)
+    if not tenants and not as_json:
+        # Silence reads as "did it run?" to the operator following the runbook; say it did.
+        print("No workspace has old Campaigns or Cadences to move. Nothing to do.")
+    for tenant_id in tenants:
         try:
             async with tenant_session(tenant_id) as ts:
                 report = await migrate(ts, dry_run=dry_run)
