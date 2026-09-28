@@ -12,7 +12,7 @@ per company delivered, and discovery that keeps finding new companies at any wor
 | # | Task | Pinned by |
 |---|---|---|
 | 1 | Vendored industry codes, in-memory cache, `map_industries` (deterministic, then LLM shortlist) | `tests/test_linkedin_industries.py` |
-| 2 | Migration 0061: LinkedIn fields on `companies`, `prospect_cursors`, `prospect_runs` | `tests/test_migrations_replay.py`, model tests |
+| 2 | Migration 0063: LinkedIn fields on `companies`, `prospect_cursors`, `prospect_runs` | `tests/test_migrations_replay.py`, model tests |
 | 3 | Actor registry + parsers + the domain gate, against the captured output's shape | `tests/test_linkedin_actors.py` |
 | 4 | The company chain: database anti-join → actor pages from a cursor (store all, deliver the shortfall, split past 1,000) → Exa | `tests/test_prospect_chain.py` |
 | 5 | ICP save maps industries; `POST/GET /discovery/populate`; job; preflight + per-company charge | `tests/test_prospect_populate.py` |

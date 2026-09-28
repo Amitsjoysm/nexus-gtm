@@ -7,8 +7,8 @@ response builder, the one place that keeps "the secret never leaves the server" 
 
 Nullable, no backfill: no existing kind uses it, and NULL reads as an empty config.
 
-Revision ID: 0058_integration_config
-Revises: 0057_signal_dated
+Revision ID: 0060_integration_config
+Revises: 0059_signal_dated
 Create Date: 2026-09-23
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0058_integration_config"
-down_revision = "0057_signal_dated"
+revision = "0060_integration_config"
+down_revision = "0059_signal_dated"
 branch_labels = None
 depends_on = None
 

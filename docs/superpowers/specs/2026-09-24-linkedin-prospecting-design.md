@@ -51,7 +51,7 @@ companies and contact sourcing.
    faster from memory than a table). `map_industries(terms)`: deterministic label/hierarchy match
    first; the LLM only for terms that miss, choosing from a ~20-label shortlist; the result is stored
    on the ICP (`icp.linkedin_industry_ids`) when the ICP is saved.
-2. **Shared store fields** (migration `0061`): `companies.linkedin_url`, `linkedin_id`,
+2. **Shared store fields** (migration `0063`): `companies.linkedin_url`, `linkedin_id`,
    `linkedin_industry_id` (indexed), `employee_range_min/max`, `hq_country_code` (indexed),
    `description`, `linkedin_fetched_at`, `similar_linkedin` (JSON). Plus `prospect_cursors`
    (platform-global: how far through each actor query anyone has read — every page lands in the

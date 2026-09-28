@@ -7,8 +7,8 @@
 * ``tenants.platform_caller_id`` — the number a workspace's platform calls show, assigned by a
   superadmin. NULL uses the platform's default, which is every workspace's behaviour before this.
 
-Revision ID: 0059_calling_billing
-Revises: 0058_integration_config
+Revision ID: 0061_calling_billing
+Revises: 0060_integration_config
 Create Date: 2026-09-24
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0059_calling_billing"
-down_revision = "0058_integration_config"
+revision = "0061_calling_billing"
+down_revision = "0060_integration_config"
 branch_labels = None
 depends_on = None
 

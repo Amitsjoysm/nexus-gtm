@@ -9,8 +9,8 @@ enrols anything with one, and an enrolled cache would return zero rows to the sh
 Additive and empty on upgrade. An empty cache behaves exactly as today: every lookup misses and the
 existing provider is called.
 
-Revision ID: 0060_web_cache
-Revises: 0059_calling_billing
+Revision ID: 0062_web_cache
+Revises: 0061_calling_billing
 Create Date: 2026-09-18
 """
 from __future__ import annotations
@@ -18,8 +18,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0060_web_cache"
-down_revision = "0059_calling_billing"
+revision = "0062_web_cache"
+down_revision = "0061_calling_billing"
 branch_labels = None
 depends_on = None
 

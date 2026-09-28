@@ -14,8 +14,8 @@
 
 Additive only.
 
-Revision ID: 0061_linkedin_prospecting
-Revises: 0060_web_cache
+Revision ID: 0063_linkedin_prospecting
+Revises: 0062_web_cache
 Create Date: 2026-09-24
 """
 from __future__ import annotations
@@ -23,8 +23,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0061_linkedin_prospecting"
-down_revision = "0060_web_cache"
+revision = "0063_linkedin_prospecting"
+down_revision = "0062_web_cache"
 branch_labels = None
 depends_on = None
 

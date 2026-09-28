@@ -10,8 +10,8 @@ before this: no source set ``occurred_at``, so all of them were dated at collect
 local database: 1,099 of 1,112 signals dated within ten minutes of being collected.
 ``scripts/repair_signal_dates.py`` re-dates what it can prove.
 
-Revision ID: 0057_signal_dated
-Revises: 0056_alert_routing
+Revision ID: 0059_signal_dated
+Revises: 0058_engagement_crm_log
 Create Date: 2026-09-23
 """
 from __future__ import annotations
@@ -19,8 +19,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0057_signal_dated"
-down_revision = "0056_alert_routing"
+revision = "0059_signal_dated"
+down_revision = "0058_engagement_crm_log"
 branch_labels = None
 depends_on = None
 

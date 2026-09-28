@@ -45,4 +45,4 @@ def test_a_cursor_is_shared_and_a_run_belongs_to_one_workspace():
 
 def test_there_is_exactly_one_alembic_head():
     script = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert script.get_heads() == ["0061_linkedin_prospecting"]
+    assert script.get_heads() == ["0063_linkedin_prospecting"]

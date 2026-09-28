@@ -200,7 +200,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0058_engagement_crm_log`. The chain is
+Alembic under `migrations/versions/`. Head: `0063_linkedin_prospecting`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -235,7 +235,9 @@ to `0060_web_cache` and re-parented on `0059_calling_billing`.
 `0061_linkedin_prospecting`) both start from `0056_alert_routing`. Nothing of either had been applied
 anywhere (local deploy at `0056`, neither pushed). The engagement chain lands first; the other chain
 re-parents `0057_signal_dated` onto `0058_engagement_crm_log` and renumbers to `0059`–`0063` when it
-rebases, the same fix as above.
+rebases, the same fix as above. **Done 2026-09-28**: the local deploy was by then at
+`0058_engagement_crm_log` and nothing of the other chain had been applied anywhere, so it was
+the one renumbered (`0059_signal_dated` … `0063_linkedin_prospecting`).
 
 Migrations are **additive only**, and the chain **is** replayable onto an empty database —
 `tests/test_migrations_replay.py` builds one from nothing but `alembic upgrade head` and diffs
@@ -942,7 +944,7 @@ bypassed it entirely. Scrapling was already a declared extra with a `ScraplingBr
 inert: the production image never installed it. Spec and plan:
 `docs/superpowers/{specs,plans}/2026-09-18-self-hosted-signal-fetching*`.
 
-- **`web_cache` is platform-global (migration `0057`, no `tenant_id`)**, like `companies` and
+- **`web_cache` is platform-global (migration `0062`, no `tenant_id`)**, like `companies` and
   `people`. Enrolling it in RLS would return zero rows to the shared reader — silently.
 - **The TTL IS the cadence.** Funding and news 6h, everything else searched 24h, pages 24h (all
   runtime settings). No scheduler change: a fresh cached answer short-circuits in
@@ -1699,11 +1701,11 @@ product owner: **both, like CRM.**
   Click-to-dial while a live Twilio kept dialling. `telephony_from_number` is validated E.164 before
   it is stored.
 - **The caller ID is not a secret**, so it lives in `integration_connections.config` (migration
-  `0058`), never in the sealed bundle: showing it from there would mean unsealing inside the response
+  `0060`), never in the sealed bundle: showing it from there would mean unsealing inside the response
   builder, the one place that keeps "the secret never leaves the server" checkable. The SID comes back
   only as `AC...1234`, and a blank SID or token keeps what is saved.
 - **Every platform call is charged, logged or not** (decided 2026-09-23). A live platform call is
-  recorded at dial in `placed_calls` (migration `0059`). The `charge_unlogged_calls` sweep, enqueued
+  recorded at dial in `placed_calls` (migration `0061`). The `charge_unlogged_calls` sweep, enqueued
   every tick beside the billing sweeps, charges any still uncharged two hours on, on Twilio's
   measured duration, under the same `call:<id>` key as the disposition — whichever runs first stamps
   `charged_at`, and the other charges nothing. It asks the PLATFORM provider
