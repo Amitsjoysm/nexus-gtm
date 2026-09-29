@@ -44,5 +44,10 @@ def test_a_cursor_is_shared_and_a_run_belongs_to_one_workspace():
 
 
 def test_there_is_exactly_one_alembic_head():
+    """One head, and this subsystem's revision is on the chain to it. Pinning the head's NAME made
+    every later migration fail this test for a reason that had nothing to do with prospecting."""
     script = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert script.get_heads() == ["0063_linkedin_prospecting"]
+    heads = script.get_heads()
+    assert len(heads) == 1, f"expected one alembic head, got {heads}"
+    chain = {rev.revision for rev in script.walk_revisions(base="base", head=heads[0])}
+    assert "0063_linkedin_prospecting" in chain

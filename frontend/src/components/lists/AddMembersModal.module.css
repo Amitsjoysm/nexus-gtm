@@ -16,7 +16,10 @@
   color: var(--text-muted);
 }
 
+/* A scroller must be a containing block, or each row's absolutely-positioned screen-reader label
+   escapes it and stretches the dialog (tests/test_scroll_containers.py). */
 .results {
+  position: relative;
   list-style: none;
   margin: 0;
   padding: 0;

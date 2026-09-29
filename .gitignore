@@ -53,6 +53,10 @@ backups/
 # *.sql rule exists to keep database exports out; this file is the procedure for a maintenance
 # window and must survive a fresh clone (tests/test_retention.py asserts it is present).
 !scripts/partition_usage_events.sql
+# ...and the training & insights ledger stores' versioned schema, which is code, not a dump. The
+# blanket rule kept it out of every commit, so a fresh clone, CI and the production image had no
+# schema to apply (tests/test_engagement_ledger_stores.py asserts every store has its SQL).
+!nexus/engagement/ledger/sql/**/*.sql
 nexus.db.stale-*
 .audit/
 
