@@ -82,6 +82,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
 # drift, which is the reason `/providers` exists at all rather than the UI knowing the ids.
 MODEL_PROVIDERS: frozenset[str] = frozenset({"groq", "anthropic", "openai_compat"})
 
+# The providers whose ENDPOINT is the operator's to choose. "OpenAI-compatible" names a protocol, not
+# a service: the same key format is spoken by OpenAI, OpenRouter, Together, DeepSeek and a
+# self-hosted vLLM, so a key without an endpoint says nothing. Groq and Anthropic have one endpoint.
+BASE_URL_PROVIDERS: frozenset[str] = frozenset({"openai_compat"})
+
 
 def env_pool(provider: str) -> list[str]:
     """The env-configured keys for a provider — the floor the database layers over.

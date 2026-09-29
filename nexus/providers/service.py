@@ -287,3 +287,80 @@ def _invalidate_models() -> None:
     from nexus.providers.resolver import invalidate_models
 
     invalidate_models()
+
+
+# ---- the endpoint (today: OpenAI-compatible only) -------------------------------------------------
+
+class InvalidBaseUrl(ValueError):
+    """An endpoint the panel will not store, phrased for the operator who typed it."""
+
+
+def normalise_base_url(raw: str) -> str:
+    """The URL every path is appended to: no trailing slash, and never an endpoint path.
+
+    Refusing ``.../chat/completions`` rather than trimming it: the operator pasted a request URL
+    from somebody's docs, and silently keeping part of it would hide which part we kept.
+    """
+    from nexus.runtime_config.service import _validate_service_url
+
+    value = (raw or "").strip().rstrip("/")
+    if not value:
+        return ""
+    lowered = value.lower()
+    for suffix in ("/chat/completions", "/completions", "/models"):
+        if lowered.endswith(suffix):
+            raise InvalidBaseUrl(
+                f"enter the base URL, which ends before {suffix} (for example "
+                "https://openrouter.ai/api/v1)")
+    try:
+        _validate_service_url(value, what="LLM endpoint")
+    except ValueError as exc:
+        raise InvalidBaseUrl(str(exc)) from exc
+    return value
+
+
+async def get_base_url_override(provider: str) -> str:
+    """The operator-chosen endpoint, or ``""`` when the environment value still applies."""
+    from nexus.models.provider_setting import ProviderSetting
+
+    async with get_platform_sessionmaker()() as s:
+        row = (
+            await s.scalars(
+                select(ProviderSetting).where(ProviderSetting.provider == provider)
+            )
+        ).first()
+        return (row.base_url if row else "") or ""
+
+
+async def set_base_url(provider: str, base_url: str, *, user_id: str = "") -> str:
+    """Choose the endpoint. Empty clears the override and ``NEXUS_LLM_BASE_URL`` applies again.
+
+    Validated BEFORE it is written: Test and the model list call this URL and report how it
+    answered, which makes an unguarded field a port scanner. It gets the email verifier URL's
+    guard — http allowed, because a self-hosted model server often has no TLS; private addresses
+    only on a local stack; metadata endpoints never.
+    """
+    from nexus.providers.catalog import BASE_URL_PROVIDERS
+
+    if provider not in PROVIDERS:
+        raise UnknownProvider(f"unknown provider {provider!r}")
+    if provider not in BASE_URL_PROVIDERS:
+        raise InvalidBaseUrl(f"{provider} has a fixed endpoint")
+    value = normalise_base_url(base_url)
+    from nexus.models.provider_setting import ProviderSetting
+
+    async with get_platform_sessionmaker()() as s:
+        row = (
+            await s.scalars(
+                select(ProviderSetting).where(ProviderSetting.provider == provider)
+            )
+        ).first()
+        if row is None:
+            s.add(ProviderSetting(provider=provider, model="", base_url=value,
+                                  updated_by_user_id=user_id or None))
+        else:
+            row.base_url = value
+            row.updated_by_user_id = user_id or None
+        await s.commit()
+    _invalidate_models()
+    return value

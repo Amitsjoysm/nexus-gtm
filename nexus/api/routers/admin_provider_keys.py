@@ -324,12 +324,27 @@ async def list_provider_models(
     # override happen to agree, clearing would look like a no-op right up until someone redeploys
     # with a different NEXUS_GROQ_MODEL and the choice silently changes underneath them.
     overridden = bool(await service.get_model_override(provider))
+    endpoint = await _endpoint_state(provider)
     if not secret:
         return {"provider": provider, "current": current, "overridden": overridden, "models": [],
-                "detail": "no usable key for this provider, so its catalogue cannot be listed"}
+                "detail": "no usable key for this provider, so its catalogue cannot be listed",
+                **endpoint}
     models, detail = await list_models(provider, secret)
     return {"provider": provider, "current": current, "overridden": overridden,
-            "models": models, "detail": detail}
+            "models": models, "detail": detail, **endpoint}
+
+
+async def _endpoint_state(provider: str) -> dict:
+    """Which endpoint is in force and whether it was chosen here. Only an OpenAI-compatible
+    provider has one to choose; for the others the fields say so rather than going missing."""
+    from nexus.providers.catalog import BASE_URL_PROVIDERS
+    from nexus.providers.resolver import base_url_for
+
+    if provider not in BASE_URL_PROVIDERS:
+        return {"base_url": "", "base_url_overridden": False, "base_url_editable": False}
+    return {"base_url": await base_url_for(provider),
+            "base_url_overridden": bool(await service.get_base_url_override(provider)),
+            "base_url_editable": True}
 
 
 @router.put("/{provider}/model", response_model=dict)
@@ -351,3 +366,36 @@ async def set_provider_model(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     await _audit(principal, "provider_model.set", provider, {"model": chosen or "(env default)"})
     return {"provider": provider, "model": chosen}
+
+
+class BaseUrlIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    base_url: str = ""
+
+
+@router.put("/{provider}/base-url", response_model=dict)
+async def set_provider_base_url(
+    provider: str,
+    body: BaseUrlIn,
+    principal: Principal = Depends(require_platform_permission(PROVIDERS_MANAGE)),
+) -> dict:
+    """Choose the endpoint an OpenAI-compatible key belongs to. Empty clears the override and
+    ``NEXUS_LLM_BASE_URL`` applies again.
+
+    Validated before it is written (see `service.set_base_url`): Test and the model list call this
+    URL and report how it answered, so an unguarded field would be a port scanner.
+    """
+    try:
+        chosen = await service.set_base_url(provider, body.base_url, user_id=principal.user_id)
+    except service.UnknownProvider as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except service.InvalidBaseUrl as exc:
+        from nexus.providers.catalog import BASE_URL_PROVIDERS
+
+        code = (status.HTTP_400_BAD_REQUEST if provider not in BASE_URL_PROVIDERS
+                else status.HTTP_422_UNPROCESSABLE_ENTITY)
+        raise HTTPException(code, str(exc)) from exc
+    await _audit(principal, "provider_base_url.set", provider,
+                 {"base_url": chosen or "(env default)"})
+    return {"provider": provider, "base_url": chosen}

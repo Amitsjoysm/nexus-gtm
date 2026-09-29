@@ -21,4 +21,8 @@ class ProviderSetting(IdMixin, TimestampMixin, Base):
     provider: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     # Empty means "no override" — the environment value applies, exactly as before this table.
     model: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    # The endpoint, for a provider whose endpoint is not fixed (today only `openai_compat`; see
+    # `catalog.BASE_URL_PROVIDERS`). Empty means the environment's `llm_base_url` applies.
+    base_url: Mapped[str] = mapped_column(String(300), default="", server_default="",
+                                          nullable=False)
     updated_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

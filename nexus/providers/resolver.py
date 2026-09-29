@@ -197,6 +197,31 @@ _MODEL_ENV_ATTR = {
 
 def invalidate_models() -> None:
     _MODEL_CACHE.clear()
+    _BASE_URL_CACHE.clear()
+
+
+_BASE_URL_CACHE: dict[str, tuple[float, str]] = {}
+
+
+async def base_url_for(provider: str) -> str:
+    """The endpoint an OpenAI-compatible provider should call: the operator's choice, else
+    ``NEXUS_LLM_BASE_URL``. Same TTL as the model, for the same reason — the worker must see a
+    change without a restart."""
+    from nexus.core.config import get_settings
+
+    env_default = (getattr(get_settings(), "llm_base_url", "") or "").rstrip("/")
+    cached = _BASE_URL_CACHE.get(provider)
+    if cached is not None and (time.monotonic() - cached[0]) < POOL_TTL_S:
+        return cached[1] or env_default
+    try:
+        from nexus.providers.service import get_base_url_override
+
+        chosen = await get_base_url_override(provider)
+    except Exception:
+        logger.warning("could not read the endpoint override for %s", provider, exc_info=True)
+        return env_default
+    _BASE_URL_CACHE[provider] = (time.monotonic(), chosen)
+    return chosen or env_default
 
 
 async def model_for(provider: str) -> str:

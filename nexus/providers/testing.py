@@ -75,6 +75,22 @@ async def _resolved_model(provider: str) -> str:
         return env
 
 
+async def _endpoint(provider: str) -> str:
+    """The endpoint the product would call. Only `openai_compat` has one to choose; asking the
+    environment's URL here would test a service the product is not going to use."""
+    from nexus.core.config import get_settings
+
+    s = get_settings()
+    if provider == "groq":
+        return s.groq_base_url
+    try:
+        from nexus.providers.resolver import base_url_for
+
+        return await base_url_for(provider) or s.llm_base_url
+    except Exception:
+        return s.llm_base_url
+
+
 def _unreachable(exc: Exception) -> TestResult:
     return TestResult(False, "failed", f"could not reach the provider: {exc!r}"[:300], None)
 
@@ -100,7 +116,7 @@ async def probe(provider: str, key: str, *, transport=None) -> TestResult:
                                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
                                transport=transport)
         elif provider == "openai_compat":
-            resp = await _call("GET", f"{s.llm_base_url}/models",
+            resp = await _call("GET", f"{await _endpoint(provider)}/models",
                                headers={"Authorization": f"Bearer {key}"}, transport=transport)
         elif provider == "exa":
             resp = await _call("POST", "https://api.exa.ai/search",
@@ -168,7 +184,7 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
     s = get_settings()
     try:
         if provider in ("groq", "openai_compat"):
-            base = s.groq_base_url if provider == "groq" else s.llm_base_url
+            base = await _endpoint(provider)
             # The RESOLVED model, not the environment one. Verifying against a model the app is
             # not going to use would report a green key while real calls fail — precisely the
             # failure this whole feature exists to surface.
@@ -243,7 +259,8 @@ async def list_models(provider: str, key: str, *, transport=None) -> tuple[list[
     s = get_settings()
     urls = {
         "groq": (f"{s.groq_base_url}/models", {"Authorization": f"Bearer {key}"}),
-        "openai_compat": (f"{s.llm_base_url}/models", {"Authorization": f"Bearer {key}"}),
+        "openai_compat": (f"{await _endpoint('openai_compat')}/models",
+                          {"Authorization": f"Bearer {key}"}),
         "anthropic": ("https://api.anthropic.com/v1/models",
                       {"x-api-key": key, "anthropic-version": "2023-06-01"}),
     }

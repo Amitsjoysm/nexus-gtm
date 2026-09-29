@@ -267,6 +267,66 @@ class OpenAICompatProvider(LLMProvider):
         return LLMResponse(text=text, tokens=tokens)
 
 
+class ManagedOpenAICompatProvider(OpenAICompatProvider):
+    """The OpenAI-compatible provider as the Superadmin panel configures it: endpoint, key and model.
+
+    The plain provider is built once from the environment, and the chain added it only when
+    ``NEXUS_LLM_API_KEY`` was set, so a key, model or endpoint saved in the panel for
+    "OpenAI-compatible" did nothing at all (found 2026-09-29, while adding the endpoint field).
+    This one re-reads all three before every call, TTL-cached like Groq's refresh, so a change
+    reaches a running worker without a restart.
+
+    With no key from either source it raises BEFORE sending anything, so the chain moves on to the
+    next provider rather than spending a request that could only be refused.
+    """
+
+    def __init__(self, base_url: str = "", api_key: str = "", model: str = "", transport=None):
+        super().__init__(base_url=base_url, api_key=api_key, model=model, transport=transport)
+        self._env_key = api_key
+
+    async def _refresh(self) -> None:
+        try:
+            from nexus.providers.resolver import base_url_for, managed_pool, model_for
+
+            pool = await managed_pool("openai_compat")
+            model = await model_for("openai_compat")
+            base = await base_url_for("openai_compat")
+        except Exception:  # key management must never break the call it serves
+            return
+        env_key = self._env_key or (getattr(get_settings(), "llm_api_key", "") or "")
+        self.api_key = pool[0] if pool else env_key
+        if model:
+            self.model = model
+        if base:
+            self.base_url = base.rstrip("/")
+
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 800,
+        purpose: str | None = None,
+        variables: dict | None = None,
+    ) -> LLMResponse:
+        await self._refresh()
+        if not self.api_key:
+            raise RuntimeError("no OpenAI-compatible key is configured; add one under Provider keys")
+        try:
+            return await super().complete(
+                messages, temperature=temperature, max_tokens=max_tokens,
+                purpose=purpose, variables=variables,
+            )
+        except httpx.HTTPStatusError as exc:
+            # A key refused mid-flight is marked red on its row, as Groq, Exa and Apify do, so the
+            # panel shows it by morning without anyone pressing Test.
+            if exc.response.status_code in (401, 403):
+                from nexus.providers.service import record_rejection_from_response
+
+                await record_rejection_from_response("openai_compat", self.api_key, exc.response)
+            raise
+
+
 def _prompt_budget() -> int:
     """How many tokens one prompt may spend, from settings when set.
 
@@ -674,8 +734,9 @@ def _build_llm_chain(s) -> LLMProvider:
     _selected = (getattr(s, "llm_provider", "") or "").lstrip("=").lower()
     if s.groq_api_key_list or _selected in ("auto", "groq"):
         chain.append(GroqLLMProvider(s.groq_api_key_list, s.groq_model, s.groq_base_url))
-    if s.llm_api_key:
-        chain.append(OpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model))
+    # Same argument as Groq: it must be in the chain for a panel-only key to ever be used.
+    if s.llm_api_key or _selected in ("auto", "openai_compat"):
+        chain.append(ManagedOpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model))
     chain.append(StubLLMProvider())
     return chain[0] if len(chain) == 1 else FallbackLLMProvider(chain)
 
@@ -697,8 +758,13 @@ def get_llm_provider() -> LLMProvider:
             _provider = FallbackLLMProvider(
                 [GroqLLMProvider(s.groq_api_key_list, s.groq_model, s.groq_base_url), StubLLMProvider()]
             )
-        elif s.llm_provider == "openai_compat" and s.llm_api_key:
-            _provider = OpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model)
+        elif s.llm_provider == "openai_compat":
+            # Built whether or not the environment holds a key: the panel may, and with neither
+            # the managed provider raises before sending and the stub answers.
+            _provider = FallbackLLMProvider([
+                ManagedOpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model),
+                StubLLMProvider(),
+            ])
         else:
             _provider = StubLLMProvider()
         # Measure whatever we ended up with — one wrapper, no bypass. `set_llm_provider` is
