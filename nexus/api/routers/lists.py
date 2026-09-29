@@ -19,6 +19,7 @@ from nexus.api.schemas import (
     ListRenameIn,
     ProspectListOut,
 )
+from nexus.core.db import ensure_aware
 from nexus.core.rbac import Permission, has_permission
 from nexus.core.tenancy import TenantSession
 from nexus.lists import service
@@ -58,8 +59,8 @@ async def _outs(ts: TenantSession, principal: Principal,
             id=pl.id, name=pl.name, kind=pl.kind or "account",
             members=tally.get(pl.id, (0, 0))[0], accounts=tally.get(pl.id, (0, 0))[1],
             owner_user_id=pl.owner_user_id, owner_name=names.get(pl.owner_user_id or ""),
-            can_edit=_can_edit(principal, pl), created_at=pl.created_at,
-            updated_at=pl.updated_at,
+            can_edit=_can_edit(principal, pl), created_at=ensure_aware(pl.created_at),
+            updated_at=ensure_aware(pl.updated_at),
         )
         for pl in lists
     ]
@@ -163,7 +164,7 @@ async def list_members(
             account_id=m.account_id, account_name=m.account_name, domain=m.domain,
             industry=m.industry, country=m.country, employee_count=m.employee_count,
             contact_id=m.contact_id, full_name=m.full_name, title=m.title, email=m.email,
-            email_status=m.email_status, added_at=m.added_at,
+            email_status=m.email_status, added_at=ensure_aware(m.added_at),
         )
         for m in rows
     ])

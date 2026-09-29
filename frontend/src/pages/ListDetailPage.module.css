@@ -1,0 +1,157 @@
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.back:hover {
+  color: var(--text);
+}
+
+.back:focus-visible,
+.link:focus-visible,
+.buttonLink:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.back :global(svg) {
+  width: 16px;
+  height: 16px;
+}
+
+.gap {
+  margin-top: var(--space-4);
+}
+
+.meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  color: var(--text-muted);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.search {
+  flex: 1 1 280px;
+  max-width: 420px;
+}
+
+.refreshing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.toolbar > :last-child {
+  margin-left: auto;
+}
+
+.selectionBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--accent-quiet);
+}
+
+.selectionCount {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.selectionActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.name {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.link {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.sub {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.mono {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.muted {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.range {
+  margin-right: auto;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.buttonLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.deleteNote {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}

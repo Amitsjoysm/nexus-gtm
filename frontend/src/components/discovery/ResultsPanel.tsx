@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Badge,
   Button,
@@ -10,7 +10,6 @@ import {
   Field,
   Icons,
   Input,
-  Modal,
   ScoreMeter,
   Select,
   Spinner,
@@ -19,8 +18,7 @@ import {
 import type { Column } from "@/components/ui";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
-import { ApiError } from "@/lib/api";
-import { humanize } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
 import type {
   CustomFieldEntity,
   DiscoveryCandidate,
@@ -28,6 +26,7 @@ import type {
   ResultsQuery,
   Role,
 } from "@/lib/types";
+import { AddToListModal } from "@/components/lists/AddToListModal";
 import { ImportCsvModal } from "./ImportCsvModal";
 import styles from "./ResultsPanel.module.css";
 
@@ -42,9 +41,14 @@ export interface ResultsPanelProps {
 
 /**
  * Discovery results table for a run: server-side filtered/paginated candidates with a fit meter,
- * dynamic per-tenant custom-field columns, a per-row Research action, multi-select → save the
- * matching accounts as a Relevance list, and (admin+) a CSV import of proprietary data.
- * Reads `GET /orchestration/runs/{id}/results`.
+ * dynamic per-tenant custom-field columns, multi-select → a list or a campaign, and (admin+) a CSV
+ * import of proprietary data. Reads `GET /orchestration/runs/{id}/results`.
+ *
+ * Discovery SAVES what it finds as it runs: new companies land in Accounts and new people in
+ * Contacts. The panel says so and links there, because a results table with no word about that
+ * reads as a preview that still needs an "Add" click. The per-row Research button that used to sit
+ * here started a research-draft-send run through the old sending path; it is gone, and the
+ * account page is where research and drafting happen.
  */
 export function ResultsPanel({ runId }: ResultsPanelProps) {
   const api = useApiClient();
@@ -89,7 +93,6 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
   const refreshing = results.loading && !!data;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [researchingId, setResearchingId] = useState<string | null>(null);
   const [listModalOpen, setListModalOpen] = useState(false);
 
   const candidates = data?.candidates ?? [];
@@ -101,20 +104,6 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
     candidates[0]?.entity ??
     (/contact|people|person|lead/i.test(data?.target ?? "") ? "contact" : "account");
 
-  async function research(candidate: DiscoveryCandidate) {
-    setResearchingId(candidate.id);
-    try {
-      const run = await api.createRun({ goal: "research_account", account_id: candidate.id });
-      navigate(`/runs/${run.id}`);
-    } catch (err) {
-      toast.error(
-        "Couldn't start research",
-        err instanceof ApiError ? err.detail : "Please try again.",
-      );
-      setResearchingId(null);
-    }
-  }
-
   function toggleRow(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -124,8 +113,8 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
     });
   }
 
-  // Selection drives a Relevance list (the backend builds lists from a fit floor, not arbitrary
-  // ids), so only persisted accounts are selectable.
+  // Every row is a saved record (discovery persists what it finds), so every row can go on a list
+  // or into a campaign.
   const selectablePageIds = useMemo(
     () => candidates.filter(isSelectable).map((c) => c.id),
     [candidates],
@@ -155,7 +144,7 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
             indeterminate={!allPageSelected && somePageSelected}
             disabled={selectablePageIds.length === 0}
             onChange={togglePage}
-            label="Select all accounts on this page"
+            label="Select everyone on this page"
           />
         ),
         render: (c) =>
@@ -172,7 +161,13 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
         header: "Name",
         render: (c) => (
           <div className={styles.nameCell}>
-            <span className={styles.name}>{c.name}</span>
+            {c.entity === "account" ? (
+              <Link to={`/accounts/${c.id}`} className={styles.nameLink}>
+                {c.name}
+              </Link>
+            ) : (
+              <span className={styles.name}>{c.name}</span>
+            )}
             {c.industry && <span className={styles.sub}>{c.industry}</span>}
           </div>
         ),
@@ -215,12 +210,14 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
       {
         key: "source",
         header: "Source",
-        width: "92px",
+        width: "124px",
+        // "Added" says what happened: this run created the record. "In CRM" was wrong for anything
+        // typed in by hand or imported from a file, which is most of what a workspace holds.
         render: (c) =>
           c.is_new || c.source === "discovery" ? (
-            <Badge tone="info">New</Badge>
+            <Badge tone="info">Added</Badge>
           ) : (
-            <Badge tone="neutral">In CRM</Badge>
+            <Badge tone="neutral">Already yours</Badge>
           ),
       },
     ];
@@ -234,28 +231,6 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
       });
     }
 
-    if (canRun) {
-      cols.push({
-        key: "actions",
-        header: "",
-        width: "120px",
-        align: "right",
-        render: (c) =>
-          c.entity === "account" ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              iconLeft={<Icons.SparklesIcon />}
-              loading={researchingId === c.id}
-              disabled={researchingId !== null && researchingId !== c.id}
-              onClick={() => research(c)}
-            >
-              Research
-            </Button>
-          ) : null,
-      });
-    }
-
     return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -264,14 +239,18 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
     allPageSelected,
     somePageSelected,
     selectablePageIds,
-    researchingId,
-    canRun,
   ]);
 
   const total = data?.total ?? 0;
   const start = total === 0 ? 0 : offset + 1;
   const end = Math.min(offset + PAGE_SIZE, total);
   const counts = data?.counts ?? {};
+  const added = counts.new ?? 0;
+  const already = counts.own ?? 0;
+  const people = importEntity === "contact";
+  const addedWho = people
+    ? added === 1 ? "person was" : "people were"
+    : added === 1 ? "company was" : "companies were";
 
   return (
     <section className={styles.panel} aria-label="Discovery results">
@@ -292,8 +271,8 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
               onChange={(e) => setSource(e.target.value as SourceFilter)}
               options={[
                 { value: "all", label: "All sources" },
-                { value: "own", label: "In your CRM" },
-                { value: "new", label: "Newly discovered" },
+                { value: "own", label: "Already yours" },
+                { value: "new", label: "Added by this run" },
               ]}
               aria-label="Filter by source"
             />
@@ -358,15 +337,24 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
         </div>
       )}
 
+      {added > 0 && (
+        <div className={styles.addedNotice} role="status">
+          <Icons.CheckIcon />
+          <span>
+            {formatNumber(added)} new {addedWho} added to your {people ? "Contacts" : "Accounts"}.
+          </span>
+          <Link to={people ? "/contacts" : "/accounts?source=found"} className={styles.addedLink}>
+            {people ? "View in Contacts" : "View in Accounts"}
+          </Link>
+        </div>
+      )}
+
       <div className={styles.summary}>
         <span>
           {total === 0 ? "No matches" : `${start}–${end} of ${total}`}
         </span>
-        {Object.entries(counts).map(([key, n]) => (
-          <span key={key} className={styles.count}>
-            {humanize(key)}: {n}
-          </span>
-        ))}
+        {already > 0 && <span className={styles.count}>{formatNumber(already)} already yours</span>}
+        {added > 0 && <span className={styles.count}>{formatNumber(added)} added by this run</span>}
       </div>
 
       {selected.size > 0 && (
@@ -452,15 +440,13 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
         </Button>
       </div>
 
-      <SaveListModal
+      <AddToListModal
         open={listModalOpen}
-        candidates={candidates}
-        selected={selected}
+        kind={people ? "contact" : "account"}
+        contactIds={people ? selectionForCampaign(candidates, selected).contactIds : []}
+        accountIds={people ? [] : selectionForCampaign(candidates, selected).accountIds}
         onClose={() => setListModalOpen(false)}
-        onSaved={() => {
-          setListModalOpen(false);
-          setSelected(new Set());
-        }}
+        onDone={() => setSelected(new Set())}
       />
 
       {canImport && (
@@ -487,90 +473,7 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
 }
 
 function isSelectable(c: DiscoveryCandidate): boolean {
-  return c.entity === "account" && !c.is_new;
-}
-
-/* ------------------------------- save list ------------------------------- */
-
-function SaveListModal({
-  open,
-  candidates,
-  selected,
-  onClose,
-  onSaved,
-}: {
-  open: boolean;
-  candidates: DiscoveryCandidate[];
-  selected: Set<string>;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const api = useApiClient();
-  const toast = useToast();
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  // The lowest fit among the selected accounts becomes the list's fit floor.
-  const floor = useMemo(() => {
-    const fits = candidates.filter((c) => selected.has(c.id)).map((c) => Math.round(c.fit_score));
-    return fits.length > 0 ? Math.min(...fits) : 0;
-  }, [candidates, selected]);
-
-  async function save() {
-    const trimmed = name.trim();
-    if (trimmed === "") return;
-    setBusy(true);
-    try {
-      const res = await api.buildList(trimmed, { min_composite: floor });
-      toast.success(
-        `Saved “${res.name}”`,
-        `${res.accounts} account${res.accounts === 1 ? "" : "s"} scoring ${floor}+ are in this list.`,
-      );
-      setName("");
-      onSaved();
-    } catch (err) {
-      toast.error(
-        "Couldn't save the list",
-        err instanceof ApiError ? err.detail : "Please try again.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Save as list"
-      description={`Builds a Relevance list of every account scoring ${floor} or higher.`}
-      size="sm"
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button onClick={save} loading={busy} disabled={name.trim() === ""}>
-            Create list
-          </Button>
-        </>
-      }
-    >
-      <Field label="List name">
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. High-fit fintech"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              void save();
-            }
-          }}
-        />
-      </Field>
-    </Modal>
-  );
+  return !!c.id;
 }
 
 /* ---------------------------- add to a campaign --------------------------- */

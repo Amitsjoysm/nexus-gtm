@@ -55,6 +55,7 @@ const AlertSettingsPage = lazyPage(
   "AlertSettingsPage",
 );
 const ListsPage = lazyPage(() => import("@/pages/ListsPage"), "ListsPage");
+const ListDetailPage = lazyPage(() => import("@/pages/ListDetailPage"), "ListDetailPage");
 const PlaysPage = lazyPage(() => import("@/pages/PlaysPage"), "PlaysPage");
 const RelevancePage = lazyPage(() => import("@/pages/RelevancePage"), "RelevancePage");
 const IntegrationsPage = lazyPage(() => import("@/pages/IntegrationsPage"), "IntegrationsPage");
@@ -237,6 +238,14 @@ export function App() {
                   element={
                     <RequireCapability capability="module.lists" name="Lists">
                       <ListsPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="/lists/:listId"
+                  element={
+                    <RequireCapability capability="module.lists" name="Lists">
+                      <ListDetailPage />
                     </RequireCapability>
                   }
                 />

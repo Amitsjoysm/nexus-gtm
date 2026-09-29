@@ -150,7 +150,10 @@ import type {
   DiscoveryResult,
   InboxTask,
   LearnedWeights,
+  ListAddResult,
   ListBuildResult,
+  ListKind,
+  ListMembersPage,
   ListFilter,
   LoginRequest,
   Member,
@@ -417,8 +420,9 @@ export class ApiClient {
   }
 
   // ---- accounts ----
-  listAccounts(signal?: AbortSignal) {
-    return this.request<Account[]>("/accounts", { signal });
+  /** The newest 200 accounts, or with `q` a search of name and domain across the workspace. */
+  listAccounts(signal?: AbortSignal, q?: string) {
+    return this.request<Account[]>("/accounts", { query: q ? { q } : undefined, signal });
   }
   /** A company's website domain from its name, for the Similar-people add form. */
   companyDomain(name: string, signal?: AbortSignal) {
@@ -769,8 +773,45 @@ export class ApiClient {
       signal,
     });
   }
-  listSavedLists(signal?: AbortSignal) {
-    return this.request<ProspectList[]>("/lists", { signal });
+  /** Every live list, or only one kind. Feeds the Lists page, Add to list and the campaign picker. */
+  listSavedLists(signal?: AbortSignal, kind?: ListKind) {
+    return this.request<ProspectList[]>("/lists", { query: kind ? { kind } : undefined, signal });
+  }
+  /** A list made by hand, optionally starting with members. */
+  createList(
+    name: string,
+    kind: ListKind,
+    ids: { accountIds?: string[]; contactIds?: string[] } = {},
+  ) {
+    return this.request<ListBuildResult>("/lists", {
+      method: "POST",
+      body: { name, kind, account_ids: ids.accountIds ?? [], contact_ids: ids.contactIds ?? [] },
+    });
+  }
+  getList(id: string, signal?: AbortSignal) {
+    return this.request<ProspectList>(`/lists/${id}`, { signal });
+  }
+  listListMembers(id: string, params: { q?: string; limit?: number; offset?: number }, signal?: AbortSignal) {
+    return this.request<ListMembersPage>(`/lists/${id}/members`, { query: params, signal });
+  }
+  renameList(id: string, name: string) {
+    return this.request<ProspectList>(`/lists/${id}`, { method: "PATCH", body: { name } });
+  }
+  /** Archives it: the members go, the list row stays for campaigns that came from it. */
+  deleteList(id: string) {
+    return this.request<void>(`/lists/${id}`, { method: "DELETE" });
+  }
+  addListMembers(id: string, ids: { accountIds?: string[]; contactIds?: string[] }) {
+    return this.request<ListAddResult>(`/lists/${id}/members`, {
+      method: "POST",
+      body: { account_ids: ids.accountIds ?? [], contact_ids: ids.contactIds ?? [] },
+    });
+  }
+  removeListMembers(id: string, ids: { accountIds?: string[]; contactIds?: string[] }) {
+    return this.request<{ removed: number; members: number }>(`/lists/${id}/members/remove`, {
+      method: "POST",
+      body: { account_ids: ids.accountIds ?? [], contact_ids: ids.contactIds ?? [] },
+    });
   }
 
   // ---- plays ----
@@ -1270,10 +1311,12 @@ export class ApiClient {
   ) {
     return this.request<EngagementCandidate[]>("/engagement/candidates", { query: params, signal });
   }
-  /** Add people by id, and everyone with an email address at the given companies. */
-  addCampaignContacts(id: string, contactIds: string[], accountIds: string[] = []) {
+  /** Add people by id, everyone with an email address at the given companies, and a whole list:
+   *  the people a contact list names, or everyone with an address at an account list's companies. */
+  addCampaignContacts(id: string, contactIds: string[], accountIds: string[] = [], listId?: string) {
     return this.request<EnrollResult>(`/engagement/campaigns/${id}/contacts`, {
-      method: "POST", body: { contact_ids: contactIds, account_ids: accountIds },
+      method: "POST",
+      body: { contact_ids: contactIds, account_ids: accountIds, ...(listId ? { list_id: listId } : {}) },
     });
   }
   setCampaignMailbox(id: string, mailboxId: string) {
@@ -1565,6 +1608,12 @@ export class ApiClient {
   providerModels(provider: string, signal?: AbortSignal) {
     return this.request<ProviderModels>(
       `/admin/provider-keys/${provider}/models`, { signal },
+    );
+  }
+  /** The endpoint an OpenAI-compatible key belongs to. Empty clears it (NEXUS_LLM_BASE_URL). */
+  setProviderBaseUrl(provider: string, baseUrl: string) {
+    return this.request<{ provider: string; base_url: string }>(
+      `/admin/provider-keys/${provider}/base-url`, { method: "PUT", body: { base_url: baseUrl } },
     );
   }
   /** An empty string clears the override and the environment value applies again. */

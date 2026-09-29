@@ -471,17 +471,17 @@ export function AccountDetailPage() {
         parts.push(`${res.new_signals} signal${res.new_signals === 1 ? "" : "s"}`);
       const score = res.composite_score != null ? `Fit ${res.composite_score}.` : "";
       toast.success(
-        "Pipeline complete",
+        "Account refreshed",
         parts.length
           ? `Found ${parts.join(" + ")}. Enriched + scored. ${score}`
-          : `Enriched + scored. ${score} No new contacts or signals this run.`,
+          : `Enriched + scored. ${score} No new contacts or signals this time.`,
       );
       account.refetch();
       contacts.refetch();
       signals.refetch();
     } catch (err) {
       toast.error(
-        "Pipeline failed",
+        "Couldn't refresh this account",
         err instanceof ApiError ? err.detail : "Please try again.",
       );
     } finally {
@@ -616,12 +616,16 @@ export function AccountDetailPage() {
                 >
                   Enrich from web
                 </Button>
+                {/* "Pipeline" read as a sales pipeline. This is the background refresh, now: new
+                    signals, missing company facts, a fresh ICP check and score, then the people
+                    to contact. Charged as one orchestration run plus the enrichment it buys. */}
                 <Button
-                  iconLeft={<Icons.SparklesIcon />}
+                  iconLeft={<Icons.RefreshIcon />}
                   loading={running}
                   onClick={runPipeline}
+                  title="Look for new signals, fill in company facts, re-score against your ICP and find people to contact"
                 >
-                  Run pipeline
+                  Refresh now
                 </Button>
               </>
             }

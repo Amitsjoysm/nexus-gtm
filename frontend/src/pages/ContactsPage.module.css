@@ -210,3 +210,26 @@
   color: var(--text-muted);
   max-inline-size: 62ch;
 }
+
+.selectionBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--accent-quiet);
+}
+
+.selectionCount {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.selectionActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}

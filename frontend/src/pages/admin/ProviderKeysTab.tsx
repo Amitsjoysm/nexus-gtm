@@ -49,18 +49,48 @@ function ModelPicker({ provider }: { provider: string }) {
   const [state, setState] = useState<ProviderModels | null>(null);
   const [choice, setChoice] = useState("");
   const [saving, setSaving] = useState(false);
+  const [endpoint, setEndpoint] = useState("");
+  const [savingEndpoint, setSavingEndpoint] = useState(false);
 
   const load = useCallback(async () => {
     const data = await api.providerModels(provider);
     setState(data);
     setChoice(data.current);
+    setEndpoint(data.base_url ?? "");
   }, [api, provider]);
 
   useEffect(() => {
     load().catch(() =>
-      setState({ provider, current: "", overridden: false, models: [], detail: "" }),
+      setState({
+        provider, current: "", overridden: false, models: [], detail: "",
+        base_url: "", base_url_overridden: false, base_url_editable: false,
+      }),
     );
   }, [load, provider]);
+
+  /**
+   * "OpenAI-compatible" names a protocol, not a service: OpenAI, OpenRouter, Together, DeepSeek and a
+   * self-hosted vLLM all speak it, so a key means nothing until it says where it belongs. Saved
+   * before the model is chosen, because the model list is asked of THIS endpoint.
+   */
+  async function saveEndpoint(value: string) {
+    setSavingEndpoint(true);
+    try {
+      await api.setProviderBaseUrl(provider, value.trim());
+      await load();
+      toast.success(
+        value.trim() ? "Endpoint changed" : "Endpoint reset",
+        "Live on every process, including the worker, within 30 seconds. Choose the model it offers below.",
+      );
+    } catch (err) {
+      toast.error(
+        "Couldn't change the endpoint",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setSavingEndpoint(false);
+    }
+  }
 
   async function save(model: string) {
     setSaving(true);
@@ -89,6 +119,44 @@ function ModelPicker({ provider }: { provider: string }) {
 
   return (
     <div className={styles.model}>
+      {state.base_url_editable && (
+        <>
+          <div className={styles.modelRow}>
+            <Field
+              label="Endpoint URL"
+              hint="The base URL your key belongs to, usually ending in /v1. OpenRouter: https://openrouter.ai/api/v1"
+            >
+              <Input
+                type="url"
+                value={endpoint}
+                onChange={(e) => setEndpoint(e.target.value)}
+                placeholder="https://api.openai.com/v1"
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </Field>
+            <Button
+              size="sm"
+              onClick={() => saveEndpoint(endpoint)}
+              loading={savingEndpoint}
+              disabled={savingEndpoint || !endpoint.trim() || endpoint.trim().replace(/\/+$/, "") === state.base_url}
+            >
+              Use this endpoint
+            </Button>
+            {state.base_url_overridden && (
+              <Button variant="ghost" size="sm" onClick={() => saveEndpoint("")} disabled={savingEndpoint}>
+                Reset to env default
+              </Button>
+            )}
+          </div>
+          <p className={styles.note}>
+            Calling <code className={styles.hint}>{state.base_url || "(none configured)"}</code>
+            {state.base_url_overridden ? ", chosen here." : ", from the environment (NEXUS_LLM_BASE_URL)."}{" "}
+            Used when Runtime settings has LLM provider set to OpenAI-compatible, or to Auto, where it
+            is tried after Anthropic and Groq.
+          </p>
+        </>
+      )}
       <div className={styles.modelRow}>
         <Field label="Model" hint="Applies to every request this provider serves.">
           {options.length > 0 ? (

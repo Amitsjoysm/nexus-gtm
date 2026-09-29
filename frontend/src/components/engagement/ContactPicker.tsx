@@ -11,8 +11,8 @@ import styles from "./ContactPicker.module.css";
 
 /**
  * Choose who a campaign emails (spec §9, step 1): from a saved list, by title and seniority, or by
- * search. A saved list holds accounts, so the server expands it to the people there; this screen
- * only chooses among them.
+ * search. An account list is expanded by the server to the people at its companies; a contact list
+ * names its people. This screen only chooses among them.
  *
  * People on the do-not-contact list are shown and cannot be ticked, so an SDR who expected to see
  * someone learns why they are missing rather than wondering.
@@ -160,7 +160,12 @@ export function ContactPicker({ enrolledIds, onAdd }: ContactPickerProps) {
 
   const listOptions = [
     { value: "", label: "All contacts" },
-    ...(lists.data ?? []).map((l) => ({ value: l.id, label: `${l.name} (${l.accounts} accounts)` })),
+    ...(lists.data ?? []).map((l) => ({
+      value: l.id,
+      label: l.kind === "contact"
+        ? `${l.name} (${l.members} ${l.members === 1 ? "person" : "people"})`
+        : `${l.name} (${l.accounts} ${l.accounts === 1 ? "company" : "companies"})`,
+    })),
   ];
 
   return (

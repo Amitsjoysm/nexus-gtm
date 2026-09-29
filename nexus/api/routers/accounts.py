@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from pydantic import BaseModel
 
@@ -223,6 +223,7 @@ async def list_accounts(
     _: Principal = Depends(require(Permission.manage_accounts)),
     limit: int = Query(default=200, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    q: str | None = Query(default=None, max_length=200),
 ) -> list[AccountOut]:
     """Active (non-archived) accounts, newest first, paginated in SQL.
 
@@ -230,8 +231,15 @@ async def list_accounts(
     Python, which silently returned fewer than ``limit`` results. ``X-Total-Count`` reports the
     full active count so a client can page through all of them (``offset`` is additive; default
     behavior — first 200, no offset — is unchanged for existing callers such as the SPA).
+
+    ``q`` searches name and domain across the whole workspace, so a picker can find an account
+    that is not among the newest 200.
     """
     active = ts.select(Account).where(Account.archived_at.is_(None))
+    if q and q.strip():
+        like = f"%{q.strip().lower()}%"
+        active = active.where(or_(func.lower(Account.name).like(like),
+                                  func.lower(func.coalesce(Account.domain, "")).like(like)))
     total = await ts.session.scalar(select(func.count()).select_from(active.subquery()))
     response.headers["X-Total-Count"] = str(total or 0)
     stmt = active.order_by(Account.created_at.desc()).limit(limit).offset(offset)

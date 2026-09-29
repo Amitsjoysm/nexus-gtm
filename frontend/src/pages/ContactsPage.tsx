@@ -5,6 +5,7 @@ import { RecordImportModal } from "@/components/imports/RecordImportModal";
 import {
   Badge,
   Button,
+  Checkbox,
   DataTable,
   EmptyState,
   ErrorState,
@@ -23,12 +24,14 @@ import { AddSimilarPerson, lookalikeFromAdded } from "@/components/AddSimilarPer
 import { CallConsole } from "@/components/CallConsole";
 import { EmailComposer } from "@/components/EmailComposer";
 import { DncBadge, useDoNotContact } from "@/components/engagement/DncBadge";
+import { AddToListModal } from "@/components/lists/AddToListModal";
 import { useApi } from "@/hooks/useApi";
+import { useSelection } from "@/hooks/useSelection";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { strengthMeta } from "@/lib/display";
 import { describeReverify } from "@/lib/reverify";
-import { timeAgo } from "@/lib/format";
+import { formatNumber, timeAgo } from "@/lib/format";
 import type {
   CallTask,
   ContactLookalike,
@@ -208,6 +211,9 @@ export function ContactsPage() {
       return true;
     });
   }, [rows, query, statusFilter]);
+  const visibleIds = useMemo(() => visible.map((c) => c.id), [visible]);
+  const selection = useSelection(visibleIds);
+  const [listOpen, setListOpen] = useState(false);
 
   async function reverifyAll() {
     setReverifying(true);
@@ -340,6 +346,27 @@ export function ContactsPage() {
 
   const columns: Column<WorkspaceContact>[] = useMemo(
     () => [
+      {
+        key: "select",
+        width: "44px",
+        align: "center",
+        header: (
+          <Checkbox
+            label="Select every contact shown"
+            checked={selection.allVisible}
+            indeterminate={selection.someVisible}
+            disabled={visibleIds.length === 0}
+            onChange={selection.toggleVisible}
+          />
+        ),
+        render: (c) => (
+          <Checkbox
+            label={`Select ${c.full_name}`}
+            checked={selection.selected.has(c.id)}
+            onChange={() => selection.toggle(c.id)}
+          />
+        ),
+      },
       {
         key: "full_name",
         header: "Name",
@@ -545,7 +572,7 @@ export function ContactsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId, callingId, similarId, phoneId, blocked],
+    [busyId, callingId, similarId, phoneId, blocked, selection, visibleIds],
   );
 
   return (
@@ -621,6 +648,30 @@ export function ContactsPage() {
           Re-verify {unverifiedCount > 0 ? `(${unverifiedCount})` : "emails"}
         </Button>
       </div>
+
+      {selection.selected.size > 0 && (
+        <div className={styles.selectionBar} role="region" aria-label="Selection actions">
+          <span className={styles.selectionCount}>
+            {formatNumber(selection.selected.size)} selected
+          </span>
+          <div className={styles.selectionActions}>
+            <Button size="sm" variant="ghost" onClick={selection.clear}>
+              Clear
+            </Button>
+            <Button size="sm" variant="secondary" iconLeft={<Icons.ListIcon />} onClick={() => setListOpen(true)}>
+              Add to list
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <AddToListModal
+        open={listOpen}
+        kind="contact"
+        contactIds={selection.ids}
+        onClose={() => setListOpen(false)}
+        onDone={selection.clear}
+      />
 
       {contacts.error && !contacts.data ? (
         <ErrorState title="Couldn't load contacts" message={contacts.error.detail} onRetry={contacts.refetch} />

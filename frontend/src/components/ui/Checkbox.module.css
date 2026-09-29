@@ -1,0 +1,27 @@
+/* The hit area is larger than the 16px box so a dense table row is still easy to tick. */
+.hit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.box {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.box:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.box:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

@@ -16,13 +16,19 @@ import styles from "./Engagement.module.css";
  * Creating it sends nothing. The campaign page that follows is where people are added, first
  * emails drafted and read, and the campaign launched, in that order. Arriving from a selection
  * elsewhere (discovery's "Add to a campaign") carries that selection in router state, and those
- * people are added the moment the campaign exists: still nothing is drafted or sent.
+ * people are added the moment the campaign exists: still nothing is drafted or sent. A list's
+ * "Start a campaign" hands over the list itself, which the server expands and records as the
+ * campaign's source.
  */
 
-/** People handed over from another screen: by id, and companies meaning everyone there. */
+/** People handed over from another screen: by id, companies meaning everyone there, or a list. */
 interface Handover {
   contactIds?: string[];
   accountIds?: string[];
+  listId?: string;
+  listName?: string;
+  listKind?: "account" | "contact";
+  listMembers?: number;
 }
 
 const CUSTOM = "";
@@ -39,6 +45,7 @@ export function CampaignBuilder() {
   const handover = (useLocation().state ?? {}) as Handover;
   const handedContacts = handover.contactIds ?? [];
   const handedAccounts = handover.accountIds ?? [];
+  const handedList = handover.listId ?? "";
   const mailboxes = useApi<ConnectedMailbox[]>((s) => api.listConnectedMailboxes(false, s), []);
   const templates = useApi<SequenceTemplate[]>((s) => api.listSequenceTemplates(s), []);
 
@@ -96,9 +103,11 @@ export function CampaignBuilder() {
         first_send_at: firstSend === "scheduled" ? new Date(firstSendAt).toISOString() : null,
         timezone_mode: timezoneMode,
       });
-      if (handedContacts.length || handedAccounts.length) {
+      if (handedContacts.length || handedAccounts.length || handedList) {
         try {
-          const added = await api.addCampaignContacts(campaign.id, handedContacts, handedAccounts);
+          const added = await api.addCampaignContacts(
+            campaign.id, handedContacts, handedAccounts, handedList || undefined,
+          );
           toast.success("Campaign created",
             `${added.added.length} ${added.added.length === 1 ? "person" : "people"} added. Draft their first emails next.`);
         } catch (err) {
@@ -145,7 +154,16 @@ export function CampaignBuilder() {
         description="Name it, choose where it sends from, and set its steps. People are added next, and nothing sends until you approve it."
       />
 
-      {(handedContacts.length > 0 || handedAccounts.length > 0) && (
+      {handedList && (
+        <p className={styles.notice} role="status">
+          {handover.listKind === "contact"
+            ? `The ${handover.listMembers ?? ""} ${handover.listMembers === 1 ? "person" : "people"} on “${handover.listName ?? "your list"}” who have an email address`
+            : `Everyone with an email address at the ${handover.listMembers ?? ""} ${handover.listMembers === 1 ? "company" : "companies"} on “${handover.listName ?? "your list"}”`}{" "}
+          will be added when you create it.
+        </p>
+      )}
+
+      {!handedList && (handedContacts.length > 0 || handedAccounts.length > 0) && (
         <p className={styles.notice} role="status">
           From your selection,{" "}
           {[

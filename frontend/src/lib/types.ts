@@ -660,15 +660,58 @@ export interface ListFilter {
 export interface ListBuildResult {
   id: string;
   name: string;
+  kind: ListKind;
   accounts: number;
+  members: number;
+  added?: number;
+  skipped?: number;
 }
 
-/** A saved segment as returned by GET /lists, with its current member count. */
+/** A list holds companies or people, never both. */
+export type ListKind = "account" | "contact";
+
+/** A list as returned by GET /lists. `accounts` is distinct companies; `members` is what it holds,
+ *  which differs on a contact list. */
 export interface ProspectList {
   id: string;
   name: string;
+  kind: ListKind;
   accounts: number;
+  members: number;
+  owner_user_id: string | null;
+  owner_name: string | null;
+  /** The person who made it, or a manager. Decided by the server. */
+  can_edit: boolean;
   created_at: string;
+  updated_at: string | null;
+}
+
+/** One member of a list. On an account list the contact fields are empty. */
+export interface ListMember {
+  account_id: string;
+  account_name: string;
+  domain: string | null;
+  industry: string | null;
+  country: string | null;
+  employee_count: number | null;
+  contact_id: string | null;
+  full_name: string | null;
+  title: string | null;
+  email: string | null;
+  email_status: string | null;
+  added_at: string | null;
+}
+
+export interface ListMembersPage {
+  total: number;
+  items: ListMember[];
+}
+
+export interface ListAddResult {
+  added: number;
+  already: number;
+  skipped: number;
+  members: number;
 }
 
 // ---- plays ----
@@ -1632,6 +1675,10 @@ export interface ProviderModels {
   overridden: boolean;
   models: string[];
   detail: string;
+  /** The endpoint in force. Only an OpenAI-compatible provider has one to choose. */
+  base_url: string;
+  base_url_overridden: boolean;
+  base_url_editable: boolean;
 }
 
 /** One capability that a cost change pushed below the margin floor. */

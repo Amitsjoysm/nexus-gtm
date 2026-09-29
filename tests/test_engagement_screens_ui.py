@@ -201,8 +201,9 @@ def test_discovery_hands_its_selection_to_the_campaign_builder():
     assert "launchFromSelection" not in panel and "Cadence" not in panel
     builder = _read(PAGES / "CampaignBuilder.tsx")
     assert "useLocation().state" in builder
-    # Added once the campaign exists; drafting and sending still wait for review.
-    assert "api.addCampaignContacts(campaign.id, handedContacts, handedAccounts)" in builder
+    # Added once the campaign exists; drafting and sending still wait for review. A list arrives as
+    # itself, so the server expands it and records the campaign's source list.
+    assert "campaign.id, handedContacts, handedAccounts, handedList || undefined," in builder
 
 
 def test_a_campaign_without_a_mailbox_offers_its_owner_one():

@@ -337,8 +337,9 @@ async def set_base_url(provider: str, base_url: str, *, user_id: str = "") -> st
 
     Validated BEFORE it is written: Test and the model list call this URL and report how it
     answered, which makes an unguarded field a port scanner. It gets the email verifier URL's
-    guard — http allowed, because a self-hosted model server often has no TLS; private addresses
-    only on a local stack; metadata endpoints never.
+    guard: http allowed, because a self-hosted model server often has no TLS; private, loopback
+    and link-local addresses (169.254.169.254 among them) only on a local or test stack; cloud
+    metadata host names never, in any environment.
     """
     from nexus.providers.catalog import BASE_URL_PROVIDERS
 

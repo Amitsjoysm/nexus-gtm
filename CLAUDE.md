@@ -200,7 +200,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0063_linkedin_prospecting`. The chain is
+Alembic under `migrations/versions/`. Head: `0065_provider_base_url`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -217,7 +217,8 @@ ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_
 (`signal_events.dated`, `company_signals.dated`) -> `0060` (`integration_connections.config`) -> `0061` (`placed_calls`,
 `tenants.platform_caller_id`) -> `0062` (`web_cache`, platform-global) -> `0063` (LinkedIn
 fields on `companies`, `company_countries` and `prospect_cursors`, all platform-global;
-`prospect_runs`, tenant-scoped). Every tenant-scoped table gets RLS via
+`prospect_runs`, tenant-scoped) -> `0064` (`prospect_lists.kind`, `prospect_lists.archived_at`) ->
+`0065` (`provider_settings.base_url`). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -1770,6 +1771,29 @@ Rules that are load-bearing:
   changed nothing for a deployment that has not used it. The model endpoint falls back the same way,
   or the first thing an operator wants to look at would require adding a key first.
 
+**OpenAI-compatible is configured entirely from the panel: endpoint, key and model** (2026-09-29).
+"OpenAI-compatible" names a protocol, not a service, so a key means nothing without the endpoint it
+belongs to, and the endpoint was `NEXUS_LLM_BASE_URL` only. Worse, found while adding the field:
+nothing read the panel for this provider at all. `_build_llm_chain` added `OpenAICompatProvider`
+only when `NEXUS_LLM_API_KEY` was set, from the env model and URL, so a key and model saved here
+did nothing.
+
+- `provider_settings.base_url` (migration `0065`, `PUT /admin/provider-keys/{provider}/base-url`),
+  offered only for `catalog.BASE_URL_PROVIDERS`. Resolved by `resolver.base_url_for` on the model's
+  30s TTL. Empty means `NEXUS_LLM_BASE_URL`, exactly as an empty model means the env model.
+- **Validated before it is written** with the email verifier URL's guard (`_validate_service_url`):
+  Test and the model list call it and report how it answered. http is allowed (self-hosted model
+  servers often have no TLS); private, loopback and link-local addresses only on a local or test
+  stack; cloud metadata host names never. A pasted request URL (`.../chat/completions`) is refused
+  with the base URL to use, rather than silently trimmed.
+- `ManagedOpenAICompatProvider` (`agents/llm.py`) re-reads endpoint, key (managed pool first, then
+  env) and model before every call, and raises before sending when no key exists, so the chain moves
+  on. It is in the chain whenever `llm_provider` is `auto` or `openai_compat`, like Groq, or a
+  panel-only key could never be used. A 401/403 marks the key red (`record_rejection_from_response`).
+- Probe, verify and the model list ask the chosen endpoint (`testing._endpoint`), never the env URL.
+- **Anthropic has the same gap and is not fixed yet**: `AnthropicLLMProvider` is built only from
+  `NEXUS_ANTHROPIC_API_KEY` and the env model, so an Anthropic key or model saved here is unused.
+
 `GET /admin/billing/overview` is the platform-wide counter beside it: users, workspaces, requests
 this period and all-time, credits granted vs spent. **`requests_with_a_user` is reported separately
 because attribution is partial by construction** — only usage events carry a user id, and background
@@ -2248,6 +2272,44 @@ their routers, workers and pages are gone; their tables stay as read-only histor
   contact check, exactly-once row, one `outreach.email_send` charge, a thread so replies reach the
   desk); Save to Drafts goes through `engagement.sending.drafts.save_draft`, unmetered, which the
   reply desk uses too. SMTP remains the fallback and behaves as before.
+
+## Lists (`nexus/lists/`, `routers/lists.py`, `/lists`, `/lists/:listId`)
+
+A list used to be only a saved filter over accounts: built once from the Relevance filter, never
+opened, never edited, unable to hold a person. It now has a **kind** (`account` | `contact`,
+migration `0064`), holds exactly the members someone put in it, and is the start of a campaign.
+
+- **Membership is fixed.** A filter-built list keeps the accounts that matched when it was saved and
+  never re-runs the filter, so a campaign built from it cannot change underneath its author.
+- **Kinds do not mix** (`service.add_members` 422s). An account list's campaign emails everyone with
+  an address at its companies; a contact list's emails exactly its people. `ListItem.account_id` is
+  set on a contact item too (the person's company), which is what lets `tiering._on_a_list` keep
+  the company hot without knowing the kind.
+- **Ids are validated through the TenantSession; a stranger's id is `skipped`**, never raised, so a
+  300-row bulk add does not fail for one row.
+- **Archive, never delete, the row.** `campaigns.list_id` (old campaigns) is NOT NULL and
+  `engagement_campaigns.source_list_id` points at it. Deleting removes the members and sets
+  `archived_at`, so an archived list stops keeping its companies on the hot refresh cycle.
+- **Changes belong to the list's maker or a manager** (`_can_edit`, served as `can_edit`). Anyone
+  rep+ can make and fill their own lists.
+- **A campaign takes a list as itself**: `POST /engagement/campaigns/{id}/contacts` accepts
+  `list_id`, expands it with `service.campaign_contact_ids` (deleted and address-less contacts
+  never) and records `source_list_id`. The list page's "Start a campaign" hands the id through router
+  state; `CampaignBuilder` adds it once the campaign exists, and nothing is drafted or sent until
+  review, as before.
+- **Add to list** (`components/lists/AddToListModal.tsx`) is the one dialog, offered from Accounts,
+  Contacts and discovery results, and it only offers lists of the matching kind that the viewer can
+  change. `GET /accounts?q=` searches name and domain across the workspace, because the list page's
+  picker would otherwise only ever see the newest 200 accounts.
+
+**Discovery saves what it finds, and its results panel now says so** (2026-09-29). New companies are
+`Account(source="discovery")` and new people are contacts as the run goes, but the panel said
+neither, and offered a per-row **Research** button that started a `research_account` run: research,
+score, draft, then an approval-gated send through the old `SendMessageTool` path, which the
+engagement engine's reply desk never sees. The button is gone; the panel states how many were added
+with a link to `/accounts?source=found` (Accounts' Source filter now groups raw `source` codes into
+Found by AI / Imported / From your CRM / Added by hand), and every row can go on a list.
+The account page's **Run pipeline** is now **Refresh now**: "pipeline" read as a sales pipeline.
 
 ## Frontend skills — USE THESE for any UI work
 
