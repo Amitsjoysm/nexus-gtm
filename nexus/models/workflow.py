@@ -31,12 +31,19 @@ class ProspectList(IdMixin, TimestampMixin, TenantScoped, Base):
     name: Mapped[str] = mapped_column(String(200))
     owner_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     filter: Mapped[dict] = mapped_column(JSON, default=dict)
+    # "account" or "contact" (migration 0064). Every list made before it held accounts.
+    kind: Mapped[str] = mapped_column(String(10), default="account", server_default="account")
+    # Set instead of deleting: `campaigns.list_id` (old campaigns, NOT NULL) and
+    # `engagement_campaigns.source_list_id` still point at the row.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ListItem(IdMixin, TimestampMixin, TenantScoped, Base):
     __tablename__ = "list_items"
 
     list_id: Mapped[str] = mapped_column(ForeignKey("prospect_lists.id"), index=True)
+    # Always set, on a contact list too (the person's company), which is what lets refresh
+    # tiering treat a company as "on a list" without knowing which kind of list it is.
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     contact_id: Mapped[str | None] = mapped_column(ForeignKey("contacts.id"), nullable=True)
 

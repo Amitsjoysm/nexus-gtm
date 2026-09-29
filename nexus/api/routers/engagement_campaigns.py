@@ -84,6 +84,9 @@ class ContactsIn(BaseModel):
 
     contact_ids: list[str] = Field(default_factory=list, max_length=2000)
     account_ids: list[str] = Field(default_factory=list, max_length=500)
+    # A whole list: the people a contact list names, or everyone with an address at the companies
+    # an account list holds. The campaign records it as `source_list_id`.
+    list_id: str | None = None
 
 
 class ReviewItemOut(BaseModel):
@@ -390,6 +393,17 @@ async def add_contacts(
         contact_ids += [c.id for c in await ts.list(
             Contact, Contact.account_id.in_(body.account_ids), Contact.deleted_at.is_(None),
             Contact.email.is_not(None)) if (c.email or "").strip()]
+    if body.list_id:
+        from nexus.lists.service import campaign_contact_ids, get_live
+
+        plist = await get_live(ts, body.list_id)
+        if plist is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "List not found")
+        contact_ids += await campaign_contact_ids(ts, plist)
+        if not campaign.source_list_id:
+            campaign.source_list_id = plist.id
+    # One person named twice (directly and through their company) is added once.
+    contact_ids = list(dict.fromkeys(contact_ids))
     if not contact_ids:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "Nobody to add: choose people, or companies with contacts that have "

@@ -638,17 +638,68 @@ class InboxTaskOut(BaseModel):
 
 # ---- lists ----
 class ListBuildRequest(BaseModel):
+    """Create a list. With ``filter`` it is built from the Relevance filter, over accounts, as it
+    always was (an empty filter means every account). Without one it starts with exactly the ids
+    given, which may be none."""
+
     name: str
-    filter: dict = Field(default_factory=dict)
+    filter: dict | None = None
+    kind: Literal["account", "contact"] = "account"
+    account_ids: list[str] = Field(default_factory=list, max_length=2000)
+    contact_ids: list[str] = Field(default_factory=list, max_length=2000)
 
 
 class ProspectListOut(BaseModel):
-    """A saved segment: its name and how many accounts it currently holds."""
+    """A list: its kind, how many members it holds and across how many companies.
+
+    ``accounts`` keeps its meaning for the campaign picker that already reads it (distinct
+    companies); ``members`` is what the list holds, which differs on a contact list."""
 
     id: str
     name: str
+    kind: str = "account"
     accounts: int
+    members: int = 0
+    owner_user_id: str | None = None
+    owner_name: str | None = None
+    can_edit: bool = False
     created_at: datetime
+    updated_at: datetime | None = None
+
+
+class ListRenameIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ListMembersIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    account_ids: list[str] = Field(default_factory=list, max_length=2000)
+    contact_ids: list[str] = Field(default_factory=list, max_length=2000)
+
+
+class ListMemberOut(BaseModel):
+    """One member. On an account list the contact fields are empty."""
+
+    account_id: str
+    account_name: str
+    domain: str | None = None
+    industry: str | None = None
+    country: str | None = None
+    employee_count: int | None = None
+    contact_id: str | None = None
+    full_name: str | None = None
+    title: str | None = None
+    email: str | None = None
+    email_status: str | None = None
+    added_at: datetime | None = None
+
+
+class ListMembersPageOut(BaseModel):
+    total: int
+    items: list[ListMemberOut]
 
 
 # ---- workspaces ----
