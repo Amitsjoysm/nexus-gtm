@@ -496,3 +496,23 @@ def test_the_settings_screen_shows_today():
     page = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "pages"
             / "SettingsPage.tsx").read_text(encoding="utf-8")
     assert "settings.today" in page
+
+
+async def test_a_plan_without_discovery_says_so_instead_of_still_looking(monkeypatch):
+    """Found on the first live run: a Free workspace read "Today: 0 of 20 ... still looking"."""
+    from nexus.core.db import get_sessionmaker
+    from nexus.discovery.auto import today_summary
+    from nexus.models.identity import Tenant
+
+    tid = await _opted_in(monkeypatch, daily=5)
+    calls: list = []
+    _fake(monkeypatch, [{"discovered": 0, "screened": 0, "account_ids": [],
+                         "skipped": "not_entitled"}], calls)
+    await _tick(T0)
+    await _tick(T0 + timedelta(hours=4))
+    assert len(calls) == 1, "a plan that excludes discovery is not asked again the same day"
+    async with get_sessionmaker()() as sess:
+        tenant = await sess.get(Tenant, tid)
+    async with tenant_session(tid) as ts:
+        today = await today_summary(ts, tenant, target=5)
+    assert "plan does not include" in today["short_reason"]

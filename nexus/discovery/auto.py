@@ -343,8 +343,12 @@ async def today_summary(ts: TenantSession, tenant, *, target: int) -> dict | Non
         discarded.update({k: int(v or 0) for k, v in (r.discarded or {}).items()})
     reason = ""
     if delivered < target:
-        reason = ("the last pass failed: " + (last.error or "unknown error")[:200]
-                  if last.status == "failed" else shortfall_reason(notes, dict(discarded)))
+        if last.status == "not_entitled":
+            reason = "your plan does not include daily discovery"
+        elif last.status == "failed":
+            reason = "the last pass failed: " + (last.error or "unknown error")[:200]
+        else:
+            reason = shortfall_reason(notes, dict(discarded))
     return {
         "window_started_at": tenant.icp_discovery_last_run_at,
         "target": target, "delivered": delivered, "attempts": len(runs),
