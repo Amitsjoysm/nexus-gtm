@@ -132,6 +132,30 @@ Superpowers analysis summarizes all major systems so you don't re-derive archite
 - Reduce external dependencies. Prefer the standard library and what's already vendored.
 - Every endpoint is tenant-scoped and RBAC-gated. Never bypass `TenantSession`.
 
+## CI (`.github/workflows/ci.yml`) and what "passed locally" has to mean
+
+**Every job runs Python 3.11, the version the production image runs** (`deploy/Dockerfile`),
+since 2026-09-30. CI tested 3.10 while production ran 3.11, so the engagement engine's
+`from datetime import UTC` (3.11+) passed every local 3.11 check and failed only on GitHub, for two
+pushes in a row. `requires-python` is still `>=3.10`, so write `timezone.utc` (modules that want the
+short name bind `UTC = timezone.utc` after their imports), never `datetime.UTC`.
+
+A local run only predicts GitHub when it installs what GitHub installs, and the jobs differ:
+
+| Job | Install / tool | Trap it has caught |
+|---|---|---|
+| Tests + coverage | `pip install -e ".[dev,migrate,metrics]"`, **no constraints, no `postgres` extra** | asyncpg is absent: `ledger/stores.connect` imported it before the "no DSN" check, so an unconfigured store read "configured". Import optional drivers only once they are needed. |
+| Integration | `.[dev,postgres,redis]` against `postgres:16-alpine` + `redis:7-alpine` | |
+| Frontend build | Node **20** | |
+| Secret scan | gitleaks **8.24.3** via `gitleaks-action`, over the pushed range | stricter than 8.18.4: flagged `idempotency_key=f"populate:{run_id}"`. False positives go in `.gitleaks.toml` by literal value, never by path. |
+| Image build + Trivy | `aquasec/trivy:0.65.0`, fixable HIGH/CRITICAL, `.trivyignore.yaml` | runs only after tests pass, so a red test job hides it entirely |
+
+The pre-push run is therefore: those installs in `python:3.11-slim` on a `git archive` of the exact
+commit (`--tmpfs /tmp`, `-n 6`, `-o timeout_method=signal` on Docker Desktop), integration on a
+Docker network, frontend on `node:20`, gitleaks 8.24.3 over `<before>..<after>`, and Trivy on the
+image built with `--build-arg SECURITY_REFRESH=<today>`. The live engagement suite needs GitHub's
+secrets and is left to CI.
+
 ## Relationship Graph (`nexus/network/`)
 
 A tenant-scoped, deduped graph of each rep's real network (contacts + calendar), used for
@@ -1387,7 +1411,12 @@ market.
   one-at-a-time guard filters on `kind="populate"`, so the two never block each other).
   `GET /workspace/automation` returns `today` (`target`, `delivered`, `attempts`, `short_reason`)
   and Settings shows it under the daily number: "Today: 2 of 10 ... web search failed; 12 below
-  your fit threshold".
+  your fit threshold". A workspace whose plan excludes `discovery.account_added` is recorded as
+  `not_entitled`, is not asked again that day, and reads "your plan does not include daily
+  discovery" rather than "still looking" (found on the first live run: two Free workspaces).
+- **First live run (local deploy, 2026-09-30):** Nexus Platform 20 of 20 from LinkedIn, whose pages
+  landed in the shared store; Infojoy then 10 of 10 from that store at no cost. Before the change the
+  same workspace had received 1-3 a day for two weeks.
 - **One workspace failing no longer stops the rest.** Each tenant runs in its own try; a pass that
   raised is recorded as `failed` in a fresh transaction, opening the interval, so the retry gap
   applies to it instead of re-running it on every tick.
