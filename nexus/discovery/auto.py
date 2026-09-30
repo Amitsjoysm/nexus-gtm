@@ -21,6 +21,7 @@ Accounts list shows a Fit badge immediately; the regular account-refresh tick la
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from typing import Awaitable, Callable
 
 from sqlalchemy import select
@@ -266,3 +267,86 @@ async def auto_discover_for_tenant(
     await _meter_discovered(ts, len(account_ids))
     return {"discovered": len(account_ids), "screened": screened, "account_ids": account_ids,
             "sources": chain.sources, "discarded": dict(discarded), "notes": chain.notes}
+
+
+# ---- the daily number (2026-09-30) ----------------------------------------------------------------
+# A workspace sets how many new ICP accounts it wants a day. One pass rarely found that many (the
+# strict gates discard most web candidates, a source can fail), and nothing topped it up or said
+# why. Each pass is now a `ProspectRun(kind="daily")`, so "how many today, and why short" is a read
+# of what happened, and the heartbeat can decide whether another pass is worth its cost.
+
+DAILY_KIND = "daily"
+
+#: A source note that means "this could go better on a later pass": a failure or a rate limit,
+#: as opposed to "LinkedIn had nothing new", which a retry an hour later would repeat.
+_RETRYABLE_NOTES = {"failed", "rate_limited", "timeout"}
+
+_NOTE_TEXT = {
+    ("linkedin", "not_configured"): "LinkedIn search is not set up",
+    ("linkedin", "failed"): "LinkedIn search failed",
+    ("linkedin", "no_industry_codes"): "your ICP industries match no LinkedIn industry",
+    ("linkedin", "nothing_new"): "LinkedIn had no new companies",
+    ("web", "failed"): "web search failed",
+}
+
+_DISCARD_TEXT = {
+    "low_fit": "{n} below your fit threshold",
+    "outside_icp": "{n} outside your size or countries",
+    "already_held": "{n} you already have",
+    "no_website": "{n} without a company website",
+    "duplicate": None,
+}
+
+
+def shortfall_reason(notes: dict, discarded: dict) -> str:
+    """One sentence a person can act on: what failed, then where the candidates went."""
+    parts = [_NOTE_TEXT.get((src, note), f"{src} search: {note}")
+             for src, note in sorted((notes or {}).items())]
+    for key, n in sorted((discarded or {}).items(), key=lambda kv: -int(kv[1] or 0)):
+        text = _DISCARD_TEXT.get(key, f"{{n}} {key.replace('_', ' ')}")
+        if text and n:
+            parts.append(text.format(n=n))
+    return "; ".join(parts)
+
+
+def pass_is_worth_repeating(run) -> bool:
+    """Would another pass later today plausibly find more? Yes after progress or a failing source;
+    no when a clean pass found nothing new, because it would find the same nothing again."""
+    if run.status == "failed":
+        return True
+    if (run.delivered or 0) > 0:
+        return True
+    return any(v in _RETRYABLE_NOTES for v in (run.notes or {}).values())
+
+
+async def runs_since(ts: TenantSession, since) -> list:
+    from nexus.models.prospecting import ProspectRun
+
+    if since is None:
+        return []
+    stmt = ts.select(ProspectRun, ProspectRun.kind == DAILY_KIND,
+                     ProspectRun.created_at >= since).order_by(ProspectRun.created_at)
+    return list((await ts.session.scalars(stmt)).all())
+
+
+async def today_summary(ts: TenantSession, tenant, *, target: int) -> dict | None:
+    """What the current interval delivered against the workspace's number. None before any pass."""
+    runs = await runs_since(ts, tenant.icp_discovery_last_run_at)
+    if not runs:
+        return None
+    delivered = sum(r.delivered or 0 for r in runs)
+    last = runs[-1]
+    notes: dict = {}
+    discarded: Counter = Counter()
+    for r in runs:
+        notes.update(r.notes or {})
+        discarded.update({k: int(v or 0) for k, v in (r.discarded or {}).items()})
+    reason = ""
+    if delivered < target:
+        reason = ("the last pass failed: " + (last.error or "unknown error")[:200]
+                  if last.status == "failed" else shortfall_reason(notes, dict(discarded)))
+    return {
+        "window_started_at": tenant.icp_discovery_last_run_at,
+        "target": target, "delivered": delivered, "attempts": len(runs),
+        "last_attempt_at": last.created_at, "short_reason": reason,
+    }

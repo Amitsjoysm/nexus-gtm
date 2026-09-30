@@ -351,3 +351,148 @@ async def test_rescreen_spares_engaged_accounts():
         await ts.flush()
         assert await rescreen_discovered_account(ts, acc) is False
         assert not (acc.custom_fields or {}).get("archived")
+
+
+# ---- reaching the number set in Settings (2026-09-30) ---------------------------------------------
+# Reported: "new accounts matching the ICP are not updating daily to the number set in Settings".
+# Measured on the local deploy: a workspace set to 10 a day received 1-3 a day for two weeks. The
+# sweep ran once, delivered what one pass found, consumed the day's slot and recorded nothing, so a
+# short day was neither topped up nor explained.
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+T0 = datetime(2026, 9, 30, 7, 0, tzinfo=timezone.utc)
+
+
+async def _opted_in(monkeypatch, daily: int = 5, slug: str | None = None) -> str:
+    from nexus.core.config import get_settings
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.identity import Tenant
+
+    s = get_settings()
+    monkeypatch.setattr(s, "automation_enabled", True)
+    monkeypatch.setattr(s, "icp_discovery_enabled", True)
+    monkeypatch.setattr(s, "icp_discovery_max_attempts", 3)
+    monkeypatch.setattr(s, "icp_discovery_retry_hours", 3)
+    tid = await make_tenant(slug) if slug else await make_tenant()
+    async with get_sessionmaker()() as sess:
+        t = await sess.get(Tenant, tid)
+        t.automation_enabled = True
+        t.icp_daily_count = daily
+        await sess.commit()
+    async with tenant_session(tid) as ts:
+        await _with_profile(ts, tid)
+    return tid
+
+
+def _fake(monkeypatch, answers: list, calls: list):
+    """Each call takes the next answer: an int is how many were delivered (with a failed web
+    search, so a retry is worthwhile), a dict is returned as is, an exception is raised."""
+    import nexus.discovery.auto as auto_mod
+
+    async def fake(ts, *, target_count, min_fit, pool_limit, search=None):
+        calls.append((ts.tenant_id, target_count))
+        answer = answers.pop(0) if answers else 0
+        if isinstance(answer, BaseException):
+            raise answer
+        if isinstance(answer, dict):
+            return answer
+        return {"discovered": answer, "screened": answer, "account_ids": [],
+                "sources": {"web": answer}, "discarded": {"low_fit": 4},
+                "notes": {"web": "failed"}}
+
+    monkeypatch.setattr(auto_mod, "auto_discover_for_tenant", fake)
+
+
+async def _tick(at: datetime):
+    await handle_discover_icp_accounts({"now_iso": at.isoformat()})
+
+
+async def test_a_short_day_is_topped_up_later_the_same_day(monkeypatch):
+    tid = await _opted_in(monkeypatch, daily=5)
+    calls: list = []
+    _fake(monkeypatch, [2, 3], calls)
+
+    await _tick(T0)
+    await _tick(T0 + timedelta(hours=1))           # inside the retry gap: nothing
+    await _tick(T0 + timedelta(hours=3, minutes=1))
+    await _tick(T0 + timedelta(hours=7))           # the day's number is met: nothing
+    assert [n for _t, n in calls] == [5, 3]
+
+    await _tick(T0 + timedelta(hours=24, minutes=1))
+    assert [n for _t, n in calls] == [5, 3, 5], "a new day asks for the full number again"
+    assert tid in {t for t, _ in calls}
+
+
+async def test_a_market_with_nothing_new_is_not_asked_again_the_same_day(monkeypatch):
+    await _opted_in(monkeypatch, daily=5)
+    calls: list = []
+    nothing = {"discovered": 0, "screened": 0, "account_ids": [], "sources": {},
+               "discarded": {"already_held": 30}, "notes": {"linkedin": "nothing_new"}}
+    _fake(monkeypatch, [nothing], calls)
+
+    await _tick(T0)
+    await _tick(T0 + timedelta(hours=4))
+    assert len(calls) == 1, "a pass that found nothing new and hit no failure is the answer"
+
+
+async def test_top_ups_are_capped_per_day(monkeypatch):
+    await _opted_in(monkeypatch, daily=10)
+    calls: list = []
+    _fake(monkeypatch, [1, 1, 1, 1, 1], calls)
+    for hours in (0, 3.1, 6.2, 9.3, 12.4):
+        await _tick(T0 + timedelta(hours=hours))
+    assert [n for _t, n in calls] == [10, 9, 8], "at most icp_discovery_max_attempts a day"
+
+
+async def test_one_failing_workspace_does_not_stop_the_others(monkeypatch):
+    a = await _opted_in(monkeypatch, daily=5, slug="icpfaila")
+    b = await _opted_in(monkeypatch, daily=5, slug="icpfailb")
+    calls: list = []
+    import nexus.discovery.auto as auto_mod
+
+    async def fake(ts, *, target_count, min_fit, pool_limit, search=None):
+        calls.append(ts.tenant_id)
+        if ts.tenant_id == a:
+            raise RuntimeError("provider exploded")
+        return {"discovered": 5, "screened": 5, "account_ids": []}
+
+    monkeypatch.setattr(auto_mod, "auto_discover_for_tenant", fake)
+    await _tick(T0)
+    assert set(calls) == {a, b}
+    await _tick(T0 + timedelta(minutes=5))
+    assert calls.count(a) == 1, "a failed workspace waits out the retry gap, it is not hammered"
+
+
+async def test_each_pass_is_recorded_with_its_reasons(monkeypatch):
+    from nexus.models.prospecting import ProspectRun
+
+    tid = await _opted_in(monkeypatch, daily=5)
+    _fake(monkeypatch, [2], [])
+    await _tick(T0)
+    async with tenant_session(tid) as ts:
+        [run] = await ts.list(ProspectRun, ProspectRun.kind == "daily")
+    assert (run.requested, run.delivered, run.status) == (5, 2, "done")
+    assert run.notes == {"web": "failed"} and run.discarded == {"low_fit": 4}
+
+
+async def test_settings_show_what_today_delivered_and_why_it_fell_short(client, monkeypatch):
+    from nexus.core.security import create_access_token
+
+    tid = await _opted_in(monkeypatch, daily=5)
+    _fake(monkeypatch, [2], [])
+    await handle_discover_icp_accounts({})
+    token = create_access_token(user_id="owner-user", tenant_id=tid, role="owner")
+    r = await client.get("/api/workspace/automation", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    today = r.json()["today"]
+    assert (today["target"], today["delivered"], today["attempts"]) == (5, 2, 1)
+    assert "web search" in today["short_reason"] and "below your fit threshold" in today["short_reason"]
+
+
+def test_the_settings_screen_shows_today():
+    from pathlib import Path
+
+    page = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "pages"
+            / "SettingsPage.tsx").read_text(encoding="utf-8")
+    assert "settings.today" in page

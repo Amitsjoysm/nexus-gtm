@@ -24,11 +24,24 @@ def test_the_mailbox_apps_tab_is_offered_to_whoever_manages_provider_keys():
 def test_every_value_an_operator_pastes_can_be_copied_and_no_secret_is_rendered():
     tab = _read("pages/admin/EngagementSetupTab.tsx")
     assert "api.engagementSetup" in tab
-    for label in ("Redirect URI", "Push endpoint", "OIDC audience", "Notification URL", "Scopes"):
-        assert f'<CopyRow label="{label}"' in tab, f"{label} cannot be copied"
+    # Copy rows are built from (label, value) pairs in PasteList since the tab became editable.
+    for label in ("Authorised redirect URI", "Redirect URI (Web)", "Push endpoint (also the OIDC audience)",
+                  "Notification URL", "Scopes", "API permissions"):
+        assert f'["{label}"' in tab, f"{label} cannot be copied"
+    assert "<CopyRow key={label} label={label} value={value} />" in tab
     assert "navigator.clipboard.writeText" in tab
     assert "app.missing.map" in tab, "what is missing is not listed"
-    assert "client_secret" not in tab and "secret}" not in tab
+    # Secrets are write-only: typed into password boxes, never read back from the server. The
+    # response type carries a hint and nothing else.
+    assert "app.client_secret" not in tab
+    # The only `...secret}` in the tab is a password box bound to what the operator typed.
+    bound = [tab[max(0, i - 60):i] for i in range(len(tab)) if tab.startswith("secret}", i)]
+    assert bound and all('type="password" value={f.values.' in b for b in bound), bound
+    assert tab.count('type="password"') == 2 and 'autoComplete="new-password"' in tab
+    types = _read("lib/types.ts")
+    setup = types[types.index("export interface MailboxAppSetup"):]
+    setup = setup[:setup.index("}")]
+    assert "secret_hint" in setup and "client_secret" not in setup
 
 
 def test_the_client_knows_the_setup_shape():

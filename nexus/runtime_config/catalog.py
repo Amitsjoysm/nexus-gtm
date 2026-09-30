@@ -533,6 +533,25 @@ _SPECS: tuple[SettingSpec, ...] = (
         risk="medium",
     ),
     SettingSpec(
+        key="icp_discovery_max_attempts", label="Discovery passes per day", group=AUTOMATION,
+        kind="int", minimum=1, maximum=6,
+        effect="How many passes discovery may make in one interval to reach a workspace's number. "
+               "A pass that finds nothing new, with no source failing, ends the day early.",
+        warning="Each extra pass is another paid LinkedIn page read and web search, plus "
+                "enrichment of web candidates. 1 restores the old single pass, which fell short of "
+                "the number most days.",
+        risk="medium",
+    ),
+    SettingSpec(
+        key="icp_discovery_retry_hours", label="Hours between discovery passes", group=AUTOMATION,
+        kind="int", minimum=1, maximum=24,
+        effect="The least time between two passes for the same workspace in one interval. A pass "
+               "that failed also waits this long before the next try.",
+        warning="Shorter reaches the number sooner and retries a failing provider sooner, which "
+                "costs more when the provider is down or out of credit.",
+        risk="medium",
+    ),
+    SettingSpec(
         key="icp_discovery_enrich_max", label="Discovery candidates enriched", group=AUTOMATION,
         kind="int", minimum=0, maximum=200,
         effect="Most discovery candidates crawled for firmographics per run, before scoring.",

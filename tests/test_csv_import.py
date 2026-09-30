@@ -633,5 +633,8 @@ def test_the_preview_decodes_a_windows_export_the_way_the_server_does():
     src = pathlib.Path("frontend/src/components/imports/RecordImportModal.tsx").read_text(
         encoding="utf-8"
     )
-    assert "windows-1252" in src, "the preview still assumes UTF-8"
+    # The decoder lives in lib/ since 2026-09-30, shared with the do-not-contact upload.
+    lib = pathlib.Path("frontend/src/lib/readCsvText.ts").read_text(encoding="utf-8")
+    assert "windows-1252" in lib, "the preview still assumes UTF-8"
+    assert 'import { readCsvText } from "@/lib/readCsvText"' in src
     assert "await chosen.text()" not in src, "the raw UTF-8 read is back"

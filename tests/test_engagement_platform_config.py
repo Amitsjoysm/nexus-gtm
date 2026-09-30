@@ -45,7 +45,9 @@ async def test_an_unconfigured_provider_names_every_missing_piece():
     assert not app.configured
     assert any("Public base URL" in m for m in app.missing)
     assert any("client id" in m for m in app.missing)
-    assert any("google_oauth" in m for m in app.missing)
+    assert any("client secret" in m for m in app.missing)
+    # Each names where it is set, and that is one screen now (2026-09-30).
+    assert all("Mailbox apps" in m for m in app.missing)
 
 
 async def test_a_managed_secret_and_two_settings_configure_a_provider(monkeypatch):

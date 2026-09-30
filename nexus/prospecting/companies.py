@@ -15,8 +15,10 @@ search (decided with the product owner 2026-09-24).
    need. LinkedIn serves at most 1,000 results for one query, so a bigger result splits by size
    band, then country, then industry, each part with its own cursor. A cursor that reached the end
    is read again after ``REOPEN_AFTER_DAYS``, because new companies appear.
-3. **Web search** only when LinkedIn delivered nothing or could not be asked. Its results pass the
-   same gates: a real company website, the ICP's size and country, and not already held.
+3. **Web search** for whatever the first two left short, including after a partial LinkedIn
+   delivery (2026-09-30; it used to run only when LinkedIn delivered nothing, so a workspace set to
+   10 a day received 2). Its results pass the same gates: a real company website, the ICP's size
+   and country, and not already held.
 
 **No domain, no company.** A row without its own website is counted as ``no_website`` and is
 neither delivered nor stored: the domain is the identity of an account and of a shared company.
@@ -521,8 +523,11 @@ async def find_icp_companies(
                 logger.warning("LinkedIn company search failed: %r", exc)
                 result.notes["linkedin"] = "failed"
 
+    # Web search for whatever is still missing, including after a PARTIAL LinkedIn delivery. It
+    # used to run only when LinkedIn delivered nothing, so a day where LinkedIn found 2 of 10 ended
+    # at 2 and the workspace never reached the number it set (reported 2026-09-30).
     need = n - len(result.candidates)
-    if need > 0 and not linkedin_delivered:
+    if need > 0:
         await _from_web(ts, icp or {}, q, need, result, taken, web_search, product_context,
                         pool=web_pool)
     return result

@@ -1063,6 +1063,19 @@ export interface AutomationSettings {
   /** Per-workspace daily target for net-new ICP accounts. null = platform default. */
   icp_daily_count: number | null;
   icp_daily_default: number;
+  /** What the current discovery interval delivered. Absent before the first pass, or from an older server. */
+  today?: DiscoveryToday | null;
+}
+
+export interface DiscoveryToday {
+  window_started_at: string | null;
+  target: number;
+  delivered: number;
+  /** Passes so far this interval; a short day is topped up a few hours apart. */
+  attempts: number;
+  last_attempt_at: string | null;
+  /** Empty when the number was met. Otherwise what failed and where the candidates went. */
+  short_reason: string;
 }
 
 export interface EmailSettings {

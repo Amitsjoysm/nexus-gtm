@@ -25,6 +25,7 @@ import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatNumber, humanize } from "@/lib/format";
 import type {
+  DiscoveryToday,
   AutomationSettings,
   CRMSyncStatus,
   EmailAccount,
@@ -849,8 +850,9 @@ function IcpDailyCountControl({
         <span className={styles.controlHint}>
           How many net-new accounts that strictly match your ICP the daily discovery adds
           (currently {effective}/day). Needs automation on and an ICP defined on the Relevance
-          page.
+          page. A day that falls short is topped up a few hours later.
         </span>
+        {settings.today && <DiscoveryTodayLine today={settings.today} />}
       </div>
       <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
         <Input
@@ -869,6 +871,28 @@ function IcpDailyCountControl({
       </div>
     </div>
   );
+}
+
+/**
+ * What today's discovery delivered against the number, and in words why it fell short. The daily
+ * sweep used to run once, deliver what one pass found and say nothing, so a workspace set to 10
+ * received 2 with no way to tell a broken provider from a small market (reported 2026-09-30).
+ */
+function DiscoveryTodayLine({ today }: { today: DiscoveryToday }) {
+  const met = today.delivered >= today.target;
+  const passes = `${today.attempts} ${today.attempts === 1 ? "pass" : "passes"}`;
+  return (
+    <span className={styles.todayLine} role="status">
+      <Badge tone={met ? "success" : "warning"} dot>
+        Today: {today.delivered} of {today.target}
+      </Badge>{" "}
+      {met ? `Reached in ${passes}.` : `${passes} so far. ${capitalise(today.short_reason) || "Still looking."}`}
+    </span>
+  );
+}
+
+function capitalise(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) + (/[.!?]$/.test(text) ? "" : ".") : "";
 }
 
 function Switch({

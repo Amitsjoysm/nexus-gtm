@@ -382,3 +382,13 @@
   align-items: center;
   gap: var(--space-2);
 }
+
+/* Today's discovery tally under the daily number: the result sits beside the setting it answers. */
+.todayLine {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text);
+  line-height: var(--leading);
+  max-width: 60ch;
+}

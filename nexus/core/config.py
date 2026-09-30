@@ -479,6 +479,11 @@ class Settings(BaseSettings):
     icp_discovery_min_fit: int = 70            # strict ICP-fit threshold 0-100; below = discarded
     icp_discovery_interval_hours: int = 24     # once per day per tenant
     icp_discovery_pool_multiplier: int = 5     # search pool = daily_count * this (capped at Exa's 100)
+    # A day that falls short of the workspace's number is topped up: at most this many passes per
+    # interval, at least icp_discovery_retry_hours apart. A pass that finds nothing new and hits no
+    # failing source ends the day early, so an exhausted market does not keep spending.
+    icp_discovery_max_attempts: int = 3
+    icp_discovery_retry_hours: int = 3
     # Crawl candidates' firmographics (headcount/tech/revenue) AFTER search, BEFORE scoring, so the
     # ICP-fit score can differentiate them (Exa returns domain/industry/geo but not headcount/tech →
     # otherwise every candidate scores the same). None → follows account_enrich_enabled. Bounded so

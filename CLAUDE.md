@@ -1364,9 +1364,36 @@ unproven page does to a contact list.
    if the read fails. Past the 1,000-result ceiling (20 pages of 50) a query splits by size band,
    then country, then industry. An exhausted cursor reopens after 30 days. Page budget
    `1 + need/10`, at most 10.
-3. Exa only when LinkedIn delivered nothing or could not be asked, through the same gates, with
-   the old sweep's pool, enrichment and fit threshold. LinkedIn and database candidates are ICP
-   matches by construction and skip the threshold (`deliver.py`, shared by both callers).
+3. Web search (Exa) for whatever the first two left short, through the same gates, with the old
+   sweep's pool, enrichment and fit threshold. LinkedIn and database candidates are ICP matches by
+   construction and skip the threshold (`deliver.py`, shared by both callers). **Changed
+   2026-09-30:** it used to run only when LinkedIn delivered NOTHING, so a partial LinkedIn day was
+   never topped up; it now fills any shortfall, which costs one extra web search on a short day.
+
+**The daily sweep reaches the workspace's number, or says why not** (`handle_discover_icp_accounts`,
+2026-09-30). Reported as "new ICP accounts are not updating daily to the number set in Settings";
+measured on the local deploy, a workspace set to 10 a day had received 1-3 a day for two weeks. The
+sweep made ONE pass per interval, took what the strict gates let through (most web candidates fail
+the 70 fit threshold, and the configured web backend was out of credit), consumed the day's slot
+whatever it delivered, and recorded nothing, so nobody could tell a broken provider from a small
+market.
+
+- `Tenant.icp_discovery_last_run_at` is now the START of the interval. A short day gets another
+  pass for the remainder, at most `icp_discovery_max_attempts` (3) passes, at least
+  `icp_discovery_retry_hours` (3) apart, both Runtime settings. A clean pass that found nothing new
+  (no source failed) ends the day early, so an exhausted market does not keep spending.
+- Every pass is a `ProspectRun(kind="daily")` with requested, delivered, sources, discarded and
+  notes. The tally, the retry decision and the reason are all read from those rows (populate's
+  one-at-a-time guard filters on `kind="populate"`, so the two never block each other).
+  `GET /workspace/automation` returns `today` (`target`, `delivered`, `attempts`, `short_reason`)
+  and Settings shows it under the daily number: "Today: 2 of 10 ... web search failed; 12 below
+  your fit threshold".
+- **One workspace failing no longer stops the rest.** Each tenant runs in its own try; a pass that
+  raised is recorded as `failed` in a fresh transaction, opening the interval, so the retry gap
+  applies to it instead of re-running it on every tick.
+- The industry CSV and the ledger SQL are declared as `[tool.setuptools.package-data]`. The
+  pip-installed copy in the image lacked both, and only `/app` coming first on `sys.path` kept the
+  app and worker from raising `FileNotFoundError`; a script run from anywhere else did.
 
 **Industry codes** (`industries.py`): the 434 v2 codes are vendored and held in memory. Mapping is
 whole-word (a substring match filed "Artificial Intelligence" under *Artificial Rubber

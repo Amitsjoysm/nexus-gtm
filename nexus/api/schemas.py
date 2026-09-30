@@ -720,11 +720,26 @@ class AutomationSettingsIn(BaseModel):
     icp_daily_count: int | None = Field(default=None, ge=5, le=100)
 
 
+class DiscoveryTodayOut(BaseModel):
+    """What the current discovery interval delivered against the workspace's number."""
+
+    window_started_at: datetime | None = None
+    target: int
+    delivered: int
+    attempts: int
+    last_attempt_at: datetime | None = None
+    # Empty when the number was met. Otherwise what failed and where the candidates went, in words
+    # ("web search failed; 12 below your fit threshold").
+    short_reason: str = ""
+
+
 class AutomationSettingsOut(BaseModel):
     automation_enabled: bool
     # None -> the platform default applies (shown via icp_daily_default).
     icp_daily_count: int | None = None
     icp_daily_default: int = 20
+    # None until the first pass of an interval has run.
+    today: DiscoveryTodayOut | None = None
 
 
 class EmailSettingsIn(BaseModel):

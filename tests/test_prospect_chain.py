@@ -10,7 +10,8 @@ Decided with the product owner 2026-09-24:
   once read lands in the shared store, and a second workspace gets those companies from the
   database step instead of paying to read the page again. Past LinkedIn's 1,000-result ceiling a
   query splits by size band, then country, then industry, each with its own cursor.
-* **Web search only when LinkedIn delivered nothing or failed.**
+* **Web search for whatever LinkedIn left short** (2026-09-30; it used to run only when LinkedIn
+  delivered nothing, which left short days short).
 * **No domain, no company.** A row without its own website is counted and dropped, never stored.
 """
 from __future__ import annotations
@@ -236,11 +237,20 @@ async def test_a_linkedin_failure_falls_through_to_web_search(error, note):
     assert cursor.next_page == 1, "a page nobody read is released, not skipped"
 
 
-async def test_web_search_is_not_used_when_linkedin_delivered_something():
+async def test_web_search_fills_what_linkedin_could_not():
     tid = await make_tenant("wf3")
     web = Web([CompanyCandidate(name="Webco", domain="webco.io")])
 
     result = await _run(tid, 5, client=PagedClient({1: [_row(1, total=1)]}), web=web)
+
+    assert web.calls == 1 and [c.source for c in result.candidates] == ["linkedin", "web"]
+
+
+async def test_web_search_is_not_used_when_linkedin_fills_the_number():
+    tid = await make_tenant("wf5")
+    web = Web([CompanyCandidate(name="Webco", domain="webco.io")])
+
+    result = await _run(tid, 1, client=PagedClient({1: [_row(1, total=1)]}), web=web)
 
     assert web.calls == 0 and [c.source for c in result.candidates] == ["linkedin"]
 

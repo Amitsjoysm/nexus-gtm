@@ -393,16 +393,28 @@ async def handle_send_daily_digests(payload: dict) -> dict:
 
 
 async def handle_discover_icp_accounts(payload: dict) -> dict:
-    """Daily ICP auto-discovery: for each opted-in tenant, add net-new accounts that strictly
-    match the saved ICP. Idempotent per interval via ``Tenant.icp_discovery_last_run_at`` so the
-    heartbeat can enqueue it every tick. ``now`` is overridable via payload['now_iso'] for tests."""
+    """Daily ICP auto-discovery: for each opted-in tenant, add net-new accounts that strictly match
+    the saved ICP, up to the number the workspace set. ``now`` is overridable via
+    payload['now_iso'] for tests.
+
+    ``Tenant.icp_discovery_last_run_at`` is the START of the current interval. Within it a workspace
+    that is still short of its number gets another pass, at most ``icp_discovery_max_attempts`` in
+    all and ``icp_discovery_retry_hours`` apart, until the number is met or a clean pass finds
+    nothing new. It used to be one pass per interval that consumed the slot whatever it delivered,
+    which is how a workspace set to 10 a day received 1-3 for two weeks with nothing saying why.
+    Every pass is recorded as a ``ProspectRun(kind="daily")``: the tally, the retry decision and
+    the reason Settings shows are all read from those rows.
+
+    One workspace failing never stops the others: each runs in its own try, and a failure is
+    recorded so the retry gap applies to it too rather than re-running it on every tick.
+    """
     from datetime import datetime, timedelta, timezone
 
     from sqlalchemy import select
 
     from nexus.core.config import get_settings
     from nexus.core.db import ensure_aware
-    from nexus.discovery.auto import auto_discover_for_tenant
+    from nexus.discovery import auto
     from nexus.models.identity import Tenant
 
     settings = get_settings()
@@ -415,6 +427,8 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
         else datetime.now(timezone.utc)
     )
     interval = timedelta(hours=settings.icp_discovery_interval_hours)
+    retry_gap = timedelta(hours=max(1, settings.icp_discovery_retry_hours))
+    max_attempts = max(1, settings.icp_discovery_max_attempts)
 
     async with get_sessionmaker()() as session:
         tenant_ids = (
@@ -425,41 +439,92 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
 
     discovered = 0
     for tid in tenant_ids:
-        async with tenant_session(tid) as ts:
-            # Row-lock the tenant so two workers can't both pass the interval check and run
-            # discovery (double LLM/search spend). A concurrent worker blocks on this lock until
-            # we commit our stamp below, then reads the fresh timestamp and skips. On Postgres this
-            # is SELECT ... FOR UPDATE; on SQLite it's a no-op (writes already serialize), and the
-            # dev deploy runs a single worker, so there is no race there anyway.
-            tenant = await ts.session.get(Tenant, tid, with_for_update=True)
-            last = tenant.icp_discovery_last_run_at if tenant else None
-            if last is not None and ensure_aware(last) > now - interval:
-                continue  # already ran this interval (possibly just claimed by another worker)
-            # Per-workspace daily target (SDR-selectable in Settings); NULL -> platform default.
-            target = (
-                tenant.icp_daily_count
-                if tenant is not None and tenant.icp_daily_count
-                else settings.icp_discovery_daily_count
-            )
-            pool = max(target * settings.icp_discovery_pool_multiplier, target)
-            res = await auto_discover_for_tenant(
-                ts,
-                target_count=target,
-                min_fit=settings.icp_discovery_min_fit,
-                pool_limit=pool,
-            )
-            # Only consume the per-interval slot when discovery actually ran. A tenant with no ICP
-            # yet is re-checked cheaply each tick, so discovery fires the moment an ICP is added.
-            if res.get("skipped") == "no_icp":
-                # Surface the paused state in-app instead of skipping silently — the #1 reason
-                # "no new accounts are showing up" reports reach support.
-                await _ensure_icp_paused_alert(ts)
-            else:
-                if tenant is not None:
+        need = 0
+        try:
+            async with tenant_session(tid) as ts:
+                # Row-lock the tenant so two workers can't both decide to run a pass (double search
+                # spend). A concurrent worker blocks here until we commit, then sees the new run.
+                # On SQLite this is a no-op; writes already serialize there.
+                tenant = await ts.session.get(Tenant, tid, with_for_update=True)
+                if tenant is None:
+                    continue
+                target = tenant.icp_daily_count or settings.icp_discovery_daily_count
+                start = tenant.icp_discovery_last_run_at
+                new_window = start is None or ensure_aware(start) <= now - interval
+                runs = [] if new_window else await auto.runs_since(ts, start)
+                if runs:
+                    delivered = sum(r.delivered or 0 for r in runs)
+                    last = runs[-1]
+                    if (delivered >= target or len(runs) >= max_attempts
+                            or not auto.pass_is_worth_repeating(last)
+                            or ensure_aware(last.created_at) > now - retry_gap):
+                        continue
+                    need = target - delivered
+                else:
+                    need = target
+                pool = max(need * settings.icp_discovery_pool_multiplier, need)
+                res = await auto.auto_discover_for_tenant(
+                    ts, target_count=need, min_fit=settings.icp_discovery_min_fit,
+                    pool_limit=pool,
+                )
+                if res.get("skipped") == "no_icp":
+                    # The slot is not consumed: discovery fires the moment an ICP is added. The
+                    # paused state is surfaced in-app, the #1 reason "no new accounts" reaches
+                    # support.
+                    await _ensure_icp_paused_alert(ts)
+                    continue
+                if new_window:
                     tenant.icp_discovery_last_run_at = now
+                ts.add(_daily_run(tid, now, need, res))
                 await _resolve_icp_paused_alert(ts)
-            discovered += res.get("discovered", 0)
+                discovered += res.get("discovered", 0)
+                logger.info(
+                    "icp discovery %s: asked %s, delivered %s, sources %s, discarded %s, notes %s",
+                    tid, need, res.get("discovered", 0), res.get("sources"), res.get("discarded"),
+                    res.get("notes") or res.get("skipped"),
+                )
+        except Exception as exc:
+            logger.exception("icp discovery failed for tenant %s", tid)
+            await _record_failed_pass(tid, now, need, exc, interval)
     return {"discovered": discovered, "tenants": len(tenant_ids)}
+
+
+def _daily_run(tenant_id: str, now, need: int, res: dict):
+    from nexus.models.prospecting import ProspectRun
+
+    return ProspectRun(
+        tenant_id=tenant_id, kind="daily", requested=need,
+        delivered=int(res.get("discovered", 0) or 0),
+        status="done" if not res.get("skipped") else str(res["skipped"])[:16],
+        sources=res.get("sources") or {}, discarded=res.get("discarded") or {},
+        notes=res.get("notes") or {}, account_ids=list(res.get("account_ids") or []),
+        started_at=now, finished_at=now, created_at=now,
+    )
+
+
+async def _record_failed_pass(tenant_id: str, now, need: int, exc: BaseException, interval) -> None:
+    """Record a pass that raised, in its own transaction (the pass's own was rolled back), so the
+    retry gap applies to it. Opens the interval if none is open, or a failing workspace would be
+    re-run on every tick. Never raises."""
+    from nexus.core.db import ensure_aware
+    from nexus.models.identity import Tenant
+    from nexus.models.prospecting import ProspectRun
+
+    try:
+        async with tenant_session(tenant_id) as ts:
+            tenant = await ts.session.get(Tenant, tenant_id)
+            start = tenant.icp_discovery_last_run_at if tenant else None
+            if tenant is not None and (start is None or ensure_aware(start) <= now - interval):
+                tenant.icp_discovery_last_run_at = now
+            ts.add(ProspectRun(
+                tenant_id=tenant_id, kind="daily", requested=need, delivered=0, status="failed",
+                sources={}, discarded={}, notes={}, account_ids=[],
+                error=f"{type(exc).__name__}: {exc}"[:500],
+                started_at=now, finished_at=now, created_at=now,
+            ))
+    except Exception:
+        logger.warning("could not record the failed discovery pass for %s", tenant_id,
+                       exc_info=True)
 
 
 async def handle_populate_accounts(payload: dict) -> dict:

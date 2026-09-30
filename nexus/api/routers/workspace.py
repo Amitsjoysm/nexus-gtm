@@ -6,6 +6,8 @@ demotion/removal so a tenant can never be locked out.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 
@@ -36,6 +38,7 @@ from nexus.core.tenancy import TenantSession
 from nexus.models.audit import AuditLog
 from nexus.models.identity import Membership, Tenant, User, Workspace
 
+logger = logging.getLogger("nexus.api.workspace")
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
 
@@ -124,14 +127,9 @@ async def get_automation(
     _: Principal = Depends(require(Permission.manage_workspace)),
 ) -> AutomationSettingsOut:
     # Tenant is the isolation boundary itself (not TenantScoped); load via the raw session.
-    from nexus.core.config import get_settings
 
     tenant = await ts.session.get(Tenant, ts.tenant_id)
-    return AutomationSettingsOut(
-        automation_enabled=bool(tenant.automation_enabled),
-        icp_daily_count=tenant.icp_daily_count,
-        icp_daily_default=get_settings().icp_discovery_daily_count,
-    )
+    return await _automation_out(ts, tenant)
 
 
 @router.patch("/automation", response_model=AutomationSettingsOut)
@@ -140,7 +138,6 @@ async def set_automation(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_workspace)),
 ) -> AutomationSettingsOut:
-    from nexus.core.config import get_settings
 
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     # Partial update: only fields present in the PATCH body change.
@@ -149,10 +146,26 @@ async def set_automation(
     if body.icp_daily_count is not None:
         tenant.icp_daily_count = body.icp_daily_count
     await ts.flush()
+    return await _automation_out(ts, tenant)
+
+
+async def _automation_out(ts: TenantSession, tenant: Tenant) -> AutomationSettingsOut:
+    """The settings, plus what today's discovery delivered against the number, so a short day
+    explains itself on the screen where the number was set."""
+    from nexus.core.config import get_settings
+    from nexus.discovery.auto import today_summary
+
+    default = get_settings().icp_discovery_daily_count
+    today = None
+    try:
+        today = await today_summary(ts, tenant, target=tenant.icp_daily_count or default)
+    except Exception:  # a report must never break the settings screen
+        logger.warning("could not summarise today's discovery", exc_info=True)
     return AutomationSettingsOut(
-        automation_enabled=tenant.automation_enabled,
+        automation_enabled=bool(tenant.automation_enabled),
         icp_daily_count=tenant.icp_daily_count,
-        icp_daily_default=get_settings().icp_discovery_daily_count,
+        icp_daily_default=default,
+        today=today,
     )
 
 
