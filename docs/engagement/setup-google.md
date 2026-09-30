@@ -45,11 +45,12 @@ Copy button; copy it rather than typing it.
 3. **Authorised redirect URIs → Add URI**: the **Google redirect URI** *(copy)*, which is
    `<public base URL>/api/engagement/mailboxes/oauth/google/callback`. Add one per environment.
 4. Create. Copy the **Client ID** and **Client secret** from the dialog.
-5. In the Control plane:
-   - **Configuration → Mailboxes & engagement → Google OAuth client id**: paste the Client ID, Save.
-   - **Provider keys → Add key**: provider **Google OAuth client secret (mailboxes)**, paste the
-     secret, Save, then press **Test**. Expected: *probe ok — valid client, not yet authorised by a
-     user*. *invalid_client* means the secret or client id is wrong.
+5. In the Control plane, **Mailbox apps → Google (Gmail)**: paste the Client ID into **OAuth
+   client id** and the secret into **Client secret**, then **Save Google settings**. The secret is
+   stored sealed and shown afterwards only as its last four characters. To test it, open **Provider
+   keys**, find the *Google OAuth client secret (mailboxes)* key it created and press **Test**.
+   Expected: *probe ok — valid client, not yet authorised by a user*. *invalid_client* means the
+   secret or client id is wrong.
 
 ## 5. Pub/Sub for reply notifications
 
@@ -70,7 +71,7 @@ It needs a public https base URL; it cannot work against `localhost`.
    - **Enable authentication**, service account `gmail-push@<project-id>.iam.gserviceaccount.com`,
      audience: the **OIDC audience** *(copy)*
    - Acknowledgement deadline 30 s, retry policy *exponential backoff*.
-6. In the Control plane, **Configuration → Mailboxes & engagement**:
+6. In the Control plane, **Mailbox apps → Google (Gmail)**, then **Save Google settings**:
    - **Gmail notification topic**: `projects/<project-id>/topics/gmail-replies`
    - **Gmail push service account**: `gmail-push@<project-id>.iam.gserviceaccount.com`
 

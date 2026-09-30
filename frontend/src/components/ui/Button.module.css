@@ -108,3 +108,12 @@
 .danger:hover:not(:disabled) {
   filter: brightness(1.08);
 }
+
+/* A `ButtonLink`: an anchor wearing the same classes, minus the underline anchors carry. */
+.link {
+  text-decoration: none;
+}
+.link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

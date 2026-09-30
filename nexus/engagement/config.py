@@ -133,11 +133,11 @@ async def oauth_app(provider: str) -> OAuthApp:
     client_secret = await secret(SECRET_KEY_IDS[provider])
     missing: list[str] = []
     if not public_base_url():
-        missing.append("Public base URL (Runtime settings → Mailboxes & engagement)")
+        missing.append("Public base URL (Control plane → Mailbox apps)")
     if not client_id:
-        missing.append(f"{provider.title()} client id (Runtime settings → Mailboxes & engagement)")
+        missing.append(f"{provider.title()} client id (Control plane → Mailbox apps)")
     if not client_secret:
-        missing.append(f"{provider.title()} client secret (Provider keys → {SECRET_KEY_IDS[provider]})")
+        missing.append(f"{provider.title()} client secret (Control plane → Mailbox apps)")
     return OAuthApp(
         provider=provider, client_id=client_id, client_secret=client_secret, tenant=tenant,
         redirect_uri=redirect_uri(provider), scopes=scopes, missing=tuple(missing),

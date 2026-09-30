@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { Button, Field, Icons, Input, WorkingIndicator } from "@/components/ui";
+import { Button, ButtonLink, Field, Icons, Input, WorkingIndicator } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
@@ -65,10 +64,12 @@ export function ReferralPanel({ id }: { id: string }) {
             {done.drafted ? ", with an intro waiting for your review." : ". Their intro still needs drafting."}
           </p>
           <div className={styles.formActions}>
-            <Button variant="ghost" onClick={startOver}>Add someone else</Button>
-            <Link to={`/engagement/campaigns/${done.campaign_id}?tab=review`} className={styles.buttonLink}>
+            <Button variant="secondary" iconLeft={<Icons.PlusIcon />} onClick={startOver}>
+              Add someone else
+            </Button>
+            <ButtonLink to={`/engagement/campaigns/${done.campaign_id}?tab=review`} variant="primary">
               Review the intro
-            </Link>
+            </ButtonLink>
           </div>
         </>
       ) : (

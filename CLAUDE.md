@@ -2285,6 +2285,34 @@ their routers, workers and pages are gone; their tables stay as read-only histor
   desk); Save to Drafts goes through `engagement.sending.drafts.save_draft`, unmetered, which the
   reply desk uses too. SMTP remains the fallback and behaves as before.
 
+**Do-not-contact takes a whole domain, and an uploaded list** (2026-09-30,
+`engagement/suppression/service.py`). A domain block is stored in the same `email` column as
+`@acme.io`, so it shares the one-active-block index and needed no migration. Every READ
+(`active_block`, `active_reasons`, and through them the send gate, enrolment, re-engagement and
+campaign candidates, which used to query the table itself) matches an address against its own row
+and its domain's and every parent domain's (`sam@eu.acme.io` by `@acme.io`). `suppress` matches the
+EXACT key only: otherwise one person unsubscribing under a blocked domain upgraded the domain's
+block to permanent. `POST /engagement/do-not-contact/bulk` takes up to 1,000 lines (the page
+batches), reads each as an address or a domain via `classify_entry`, and reports the rest rather
+than guessing. **The page previews before it blocks, and domains start unticked when the file also
+holds addresses**: a contact export's website column would otherwise block whole companies.
+
+**The Mailbox apps tab is where the Google and Microsoft apps are set up, not only read**
+(`PUT /admin/engagement/setup`, `providers.manage`, audited as `engagement.setup`). It said "set it
+under Configuration" for the ids and Provider keys for the secrets, and the operator who reported
+it could not find Configuration: the Superadmin tab strip scrolled sideways and the last six tabs
+sat past its edge (it now wraps, `Tabs wrap`). The six non-secret settings go through
+`runtime_config.service` (`validate` checks every field before any is written, then
+`set_override`/`clear_override`), the two client secrets through the provider-key service, sealed,
+and PINNED, because `config.secret` takes the first of the pool and would keep using the oldest
+key. A blank secret keeps what is stored; the response carries only `secret_hint`.
+`campaigns_enabled` stays on Configuration: it is the engine's emergency stop.
+
+**Replies uses one set of buttons** (`test_the_reply_desk_actions_are_one_set_of_buttons`). Every
+action is a secondary `Button` with an icon or a `ButtonLink`, Send is the one primary, and ghost is
+only a dialog's Cancel. `ButtonLink` (`components/ui`) exists because a hand-styled `<Link>` never
+matched the button beside it: "Reply settings" sat 8px taller and a size larger than "Show team".
+
 ## Lists (`nexus/lists/`, `routers/lists.py`, `/lists`, `/lists/:listId`)
 
 A list used to be only a saved filter over accounts: built once from the Relevance filter, never

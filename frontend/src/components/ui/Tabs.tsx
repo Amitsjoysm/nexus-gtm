@@ -26,6 +26,11 @@ export interface TabsProps {
    * caller can give its panel the id `aria-controls` points at. Generated when omitted.
    */
   idPrefix?: string;
+  /**
+   * Wrap onto more rows instead of scrolling sideways. For a strip with too many tabs to fit: the
+   * Superadmin console has sixteen, and the last six sat past the edge where nobody found them.
+   */
+  wrap?: boolean;
 }
 
 /** Accessible tablist with roving arrow-key navigation. Render the panel yourself. */
@@ -36,6 +41,7 @@ export function Tabs({
   className,
   variant = "underline",
   idPrefix,
+  wrap = false,
   ...rest
 }: TabsProps) {
   const generatedId = useId();
@@ -58,7 +64,8 @@ export function Tabs({
     <div
       role="tablist"
       aria-label={rest["aria-label"]}
-      className={cn(styles.tabs, variant === "segmented" && styles.segmented, className)}
+      className={cn(styles.tabs, variant === "segmented" && styles.segmented, wrap && styles.wrap,
+        className)}
     >
       {items.map((item, i) => {
         const selected = item.value === value;

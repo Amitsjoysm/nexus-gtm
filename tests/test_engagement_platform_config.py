@@ -168,3 +168,103 @@ async def test_the_setup_screen_is_hidden_from_workspace_members(client):
     assert_staff_surface_hidden(
         await client.get("/api/admin/engagement/setup", headers=auth(token))
     )
+
+
+# ---- set up from the Mailbox apps screen (2026-09-30) ---------------------------------------------
+# Reported: the screen said "Set it under Configuration" and the operator could not find it (the tab
+# sat past the edge of a 16-tab strip) and the secrets were on a third tab. Now one form saves the
+# base URL, both client ids, the tenant, the Gmail push settings and both secrets.
+
+async def _platform_admin(client, monkeypatch, slug: str) -> str:
+    email = f"owner@{slug}.com"
+    monkeypatch.setattr(get_settings(), "platform_admin_emails", email)
+    return await signup(client, slug=slug, email=email, company=slug.title())
+
+
+GOOGLE_ID = "123456789012-abc123.apps.googleusercontent.com"
+MS_ID = "11111111-2222-3333-4444-555555555555"
+
+
+async def test_the_mailbox_apps_can_be_configured_from_one_form(client, monkeypatch):
+    token = await _platform_admin(client, monkeypatch, "oauthform")
+    r = await client.put("/api/admin/engagement/setup", headers=auth(token), json={
+        "public_base_url": "https://app.example.com",
+        "google_client_id": GOOGLE_ID, "google_client_secret": "g-secret-value-1234",
+        "microsoft_client_id": MS_ID, "microsoft_tenant": "organizations",
+        "microsoft_client_secret": "m-secret-value-5678",
+    })
+    assert r.status_code == 200, r.text
+    assert "g-secret-value-1234" not in r.text and "m-secret-value-5678" not in r.text
+    apps = {a["provider"]: a for a in r.json()["mailbox_apps"]}
+    assert apps["google"]["configured"] and apps["microsoft"]["configured"]
+    assert apps["google"]["secret_hint"].endswith("1234")
+    assert apps["microsoft"]["tenant"] == "organizations"
+    assert apps["google"]["redirect_uri"] == (
+        "https://app.example.com/api/engagement/mailboxes/oauth/google/callback")
+
+    from nexus.engagement import config
+    assert (await config.oauth_app("google")).client_secret == "g-secret-value-1234"
+
+
+async def test_a_new_secret_replaces_the_one_in_use(client, monkeypatch):
+    from nexus.engagement import config
+
+    token = await _platform_admin(client, monkeypatch, "oauthrotate")
+    for secret in ("first-secret-aaaa", "second-secret-bbbb"):
+        r = await client.put("/api/admin/engagement/setup", headers=auth(token),
+                             json={"google_client_secret": secret})
+        assert r.status_code == 200, r.text
+    assert (await config.oauth_app("google")).client_secret == "second-secret-bbbb"
+    # A blank secret keeps what is stored, so saving the ids alone never erases it.
+    await client.put("/api/admin/engagement/setup", headers=auth(token),
+                     json={"google_client_secret": "", "google_client_id": GOOGLE_ID})
+    assert (await config.oauth_app("google")).client_secret == "second-secret-bbbb"
+
+
+async def test_a_bad_value_saves_nothing(client, monkeypatch):
+    token = await _platform_admin(client, monkeypatch, "oauthbad")
+    r = await client.put("/api/admin/engagement/setup", headers=auth(token), json={
+        "google_client_id": GOOGLE_ID, "microsoft_client_id": "my-app"})
+    assert r.status_code == 400 and "microsoft" in r.text.lower()
+    assert get_settings().engagement_google_client_id != GOOGLE_ID
+
+
+async def test_clearing_a_setting_returns_it_to_the_environment_value(client, monkeypatch):
+    token = await _platform_admin(client, monkeypatch, "oauthclear")
+    await client.put("/api/admin/engagement/setup", headers=auth(token),
+                     json={"microsoft_tenant": "organizations"})
+    assert get_settings().engagement_microsoft_tenant == "organizations"
+    await client.put("/api/admin/engagement/setup", headers=auth(token), json={"microsoft_tenant": ""})
+    assert get_settings().engagement_microsoft_tenant != "organizations"
+
+
+async def test_every_change_is_audited_without_the_secret(client, monkeypatch):
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingAuditLog
+
+    token = await _platform_admin(client, monkeypatch, "oauthaudit")
+    await client.put("/api/admin/engagement/setup", headers=auth(token), json={
+        "google_client_id": GOOGLE_ID, "google_client_secret": "audited-secret-9876"})
+    async with get_platform_sessionmaker()() as s:
+        rows = (await s.scalars(select(BillingAuditLog).where(
+            BillingAuditLog.action == "engagement.setup"))).all()
+    assert rows
+    text = repr([(r.before, r.after) for r in rows])
+    assert GOOGLE_ID in text and "audited-secret-9876" not in text
+
+
+async def test_members_cannot_change_the_mailbox_apps(client):
+    token = await signup(client, slug="oauthrep", email="rep@oauthrep.com", company="Rep")
+    assert_staff_surface_hidden(await client.put(
+        "/api/admin/engagement/setup", headers=auth(token), json={"microsoft_tenant": "common"}))
+
+
+def test_the_mailbox_apps_screen_edits_in_place():
+    from pathlib import Path
+
+    tab = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "pages" / "admin"
+           / "EngagementSetupTab.tsx").read_text(encoding="utf-8")
+    assert "api.saveEngagementSetup(" in tab
+    assert "Set it under Configuration" not in tab

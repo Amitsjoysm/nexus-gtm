@@ -48,8 +48,8 @@ async def candidates(ts, *, list_id: str | None = None, q: str | None = None,
     a comma-separated set), seniority (any of a set) and free text."""
     from sqlalchemy import func, or_, select
 
+    from nexus.engagement.suppression.service import active_reasons
     from nexus.models.account import Account, Contact
-    from nexus.models.engagement import DoNotContact
     from nexus.models.workflow import ListItem
 
     stmt = (select(Contact, Account)
@@ -90,9 +90,8 @@ async def candidates(ts, *, list_id: str | None = None, q: str | None = None,
     if not rows:
         return []
 
-    addresses = {(c.email or "").strip().lower() for c, _a in rows}
-    blocked = {d.email for d in await ts.list(DoNotContact, DoNotContact.email.in_(addresses),
-                                              DoNotContact.lifted_at.is_(None))}
+    # Through the suppression service, not a query of its own, so a blocked DOMAIN counts too.
+    blocked = set(await active_reasons(ts, [c.email or "" for c, _a in rows]))
     return [Candidate(
         contact_id=c.id, full_name=c.full_name or "", title=c.title or "",
         seniority=c.seniority or "", email=c.email or "", email_status=c.email_status or "",

@@ -2170,6 +2170,24 @@ export interface MailboxAppSetup {
   tenant: string;
   redirect_uri: string;
   scopes: string[];
+  /** Last four characters of the client secret in use, or "" when none is stored. */
+  secret_hint?: string;
+}
+
+/**
+ * PUT /admin/engagement/setup. Omitted fields are left alone. An empty string clears a setting back
+ * to the environment value; an empty secret keeps the stored one.
+ */
+export interface EngagementSetupInput {
+  public_base_url?: string;
+  google_client_id?: string;
+  google_client_secret?: string;
+  google_pubsub_topic?: string;
+  google_push_service_account?: string;
+  microsoft_client_id?: string;
+  microsoft_client_secret?: string;
+  microsoft_tenant?: string;
+  note?: string;
 }
 
 /** GET /admin/engagement/setup — what to paste into Google Cloud and Azure (spec §12). */
@@ -2223,7 +2241,10 @@ export interface MailboxProviderState {
 /** One do-not-contact entry (D7). `liftable` is false for unsubscribes and lifted blocks. */
 export interface DoNotContactEntry {
   id: string;
+  /** For a domain block this is the stored key, `@acme.io`; `kind` says which it is. */
   email: string;
+  /** Optional: a server that predates domain blocks sends nothing, and every row is an address. */
+  kind?: "email" | "domain";
   reason: "unsubscribed" | "declined" | "bounced" | "manual";
   contact_id: string | null;
   source_message_id: string | null;
@@ -2233,6 +2254,16 @@ export interface DoNotContactEntry {
   lifted_by_user_id: string | null;
   lift_note: string;
   liftable: boolean;
+}
+
+/** POST /engagement/do-not-contact/bulk */
+export interface DoNotContactBulkResult {
+  emails_blocked: number;
+  domains_blocked: number;
+  already_blocked: number;
+  /** The first 20 lines that were neither an address nor a domain, as written. */
+  unreadable: string[];
+  unreadable_count: number;
 }
 
 /** GET /engagement/settings/training — the workspace's ledger consent (D24). */

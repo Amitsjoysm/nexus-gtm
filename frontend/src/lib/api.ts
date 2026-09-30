@@ -76,6 +76,7 @@ import type {
   WebhookTestResult,
   SupportedProvider,
   EngagementSetup,
+  EngagementSetupInput,
   ConnectedMailbox,
   MailboxProviderState,
   EngagementStatus,
@@ -105,6 +106,7 @@ import type {
   ReferralResult,
   RestartSuggestion,
   DoNotContactEntry,
+  DoNotContactBulkResult,
   LedgerStatus,
   LedgerStoreStatus,
   TrainingConsentState,
@@ -1248,6 +1250,12 @@ export class ApiClient {
       method: "POST", body: { email },
     });
   }
+  /** Block up to 1,000 addresses and domains from an uploaded list. The page batches longer files. */
+  bulkDoNotContact(entries: string[]) {
+    return this.request<DoNotContactBulkResult>("/engagement/do-not-contact/bulk", {
+      method: "POST", body: { entries },
+    });
+  }
   liftDoNotContact(id: string, note: string) {
     return this.request<DoNotContactEntry>(`/engagement/do-not-contact/${id}/lift`, {
       method: "POST", body: { note },
@@ -1288,6 +1296,10 @@ export class ApiClient {
   }
   engagementSetup(signal?: AbortSignal) {
     return this.request<EngagementSetup>("/admin/engagement/setup", { signal });
+  }
+  /** Save the mailbox apps: base URL, client ids, tenant, Gmail push settings and secrets. */
+  saveEngagementSetup(body: EngagementSetupInput) {
+    return this.request<EngagementSetup>("/admin/engagement/setup", { method: "PUT", body });
   }
 
   // ---- engagement: the engine switch and workspace reply settings ----

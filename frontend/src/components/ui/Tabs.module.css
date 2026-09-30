@@ -15,6 +15,19 @@
   scrollbar-width: thin;
 }
 
+/* Wrapped rather than scrolled. Each tab draws its own 1px divider along its bottom edge, so every
+   row has one and a first-row tab is not left floating above nothing; the selected tab's accent
+   border paints over it. No gap, or the divider would break between tabs. */
+.wrap {
+  flex-wrap: wrap;
+  gap: 0;
+  overflow-x: visible;
+  box-shadow: none;
+}
+.wrap .tab {
+  background: linear-gradient(var(--border), var(--border)) left bottom / 100% 1px no-repeat;
+}
+
 .tab {
   position: relative;
   display: inline-flex;

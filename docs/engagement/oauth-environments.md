@@ -1,9 +1,8 @@
 # Mailbox OAuth: redirect URIs and scopes for every environment
 
 One Google OAuth client and one Microsoft app registration serve every environment. Register
-**every row** below in both; each environment then sends the redirect built from its own **Runtime
-settings → Mailboxes & engagement → Public base URL**, which must match one registered row exactly
-(no trailing slash).
+**every row** below in both; each environment then sends the redirect built from its own **Control plane →
+Mailbox apps → Public base URL**, which must match one registered row exactly (no trailing slash).
 
 The path is fixed by `nexus/engagement/config.py` and must not change once registered:
 `/api/engagement/mailboxes/oauth/{google|microsoft}/callback`.
@@ -30,7 +29,7 @@ hosts reach it; register both and set the Public base URL to the one people actu
 
 | Value | Where |
 |---|---|
-| Public base URL, Google client id, Microsoft client id, Microsoft tenant, Gmail notification topic, Gmail push service account | Runtime settings → Mailboxes & engagement, per environment |
+| Public base URL, Google client id, Microsoft client id, Microsoft tenant, Gmail notification topic, Gmail push service account | Control plane → Mailbox apps, per environment |
 | Google client secret, Microsoft client secret | Superadmin → Provider keys: `google_oauth`, `microsoft_oauth` |
 
 Nobody pastes a secret into chat, a ticket or a file in the repo.

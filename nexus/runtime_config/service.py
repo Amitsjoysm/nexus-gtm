@@ -397,6 +397,17 @@ async def refresh_if_stale(force: bool = False) -> dict[str, object]:
     return await apply_overrides()
 
 
+def validate(key: str, raw_value) -> object:
+    """What ``set_override`` would store for ``raw_value``, or the ``ValueError`` it would raise.
+    Writes nothing, so a form saving several settings can check all of them before any lands."""
+    spec = _spec(key)
+    typed = coerce(spec, raw_value)
+    validator = _VALIDATORS.get(key)
+    if validator is not None:
+        validator(typed)
+    return typed
+
+
 async def set_override(key: str, raw_value, *, note: str = "", user_id: str = "") -> object:
     """Store an override and apply it to this process immediately.
 
@@ -405,13 +416,9 @@ async def set_override(key: str, raw_value, *, note: str = "", user_id: str = ""
     """
     from nexus.core.config import get_settings
 
-    spec = _spec(key)
-    typed = coerce(spec, raw_value)
     # Validate before writing. A value the sink will reject must never reach the table, or the
     # panel shows an override that is stored, reported as set, and applied by nothing.
-    validator = _VALIDATORS.get(key)
-    if validator is not None:
-        validator(typed)
+    typed = validate(key, raw_value)
 
     async with get_platform_sessionmaker()() as s:
         row = (await s.scalars(select(RuntimeSetting).where(RuntimeSetting.key == key))).first()

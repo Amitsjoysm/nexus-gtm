@@ -1,5 +1,7 @@
 /** Public surface of the NEXUS UI component library. */
 export { Button } from "./Button";
+export { ButtonLink } from "./ButtonLink";
+export type { ButtonLinkProps } from "./ButtonLink";
 export type { ButtonProps, ButtonVariant, ButtonSize } from "./Button";
 export { IconButton } from "./IconButton";
 export type { IconButtonProps } from "./IconButton";

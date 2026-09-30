@@ -43,11 +43,12 @@ values marked *(copy)*.
 
 ## 5. Control plane
 
-1. **Configuration → Mailboxes & engagement**:
-   - **Microsoft app (client) id**: the Application (client) ID.
-   - **Microsoft tenant**: `common` (or your tenant id / domain for single tenant).
-2. **Provider keys → Add key**: provider **Microsoft app client secret (mailboxes)**, paste the value,
-   Save, **Test**. Expected: *probe ok — valid client, not yet authorised by a user*.
+1. **Mailbox apps → Microsoft 365 (Outlook)**, then **Save Microsoft settings**:
+   - **Application (client) id**: the Application (client) ID.
+   - **Client secret**: the Value from step 4.2.
+   - **Tenant**: blank for `common`, or your tenant id / domain for single tenant.
+2. To test the secret, open **Provider keys**, find the *Microsoft app client secret (mailboxes)* key
+   it created and press **Test**. Expected: *probe ok — valid client, not yet authorised by a user*.
    `AADSTS7000215` = wrong secret value (you may have copied the Secret ID); `AADSTS7000222` =
    expired; `AADSTS700016` = wrong client id or tenant.
 

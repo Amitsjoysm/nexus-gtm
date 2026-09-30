@@ -328,3 +328,17 @@ export const NetworkIcon = (props: SVGProps<SVGSVGElement>) => (
     <path d="M8 6.4h8M7.4 7.9 10.8 16M16.6 7.9 13.2 16" />
   </Svg>
 );
+
+export const ClockIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </Svg>
+);
+
+export const BanIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="m5.6 5.6 12.8 12.8" />
+  </Svg>
+);

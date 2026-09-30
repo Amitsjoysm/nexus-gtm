@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
-  Badge, Button, DataTable, EmptyState, ErrorState, Field, Icons, Input, Modal, Select, Skeleton,
+  Badge, Button, ButtonLink, DataTable, EmptyState, ErrorState, Field, Icons, Input, Modal, Select, Skeleton,
   TabPanel, Tabs, Textarea, WorkingIndicator,
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
@@ -86,10 +86,13 @@ export function ReplyDeskPage() {
           <>
             {status?.can_manage && (
               <>
-                <Button variant="secondary" size="sm" aria-pressed={team} onClick={() => setTeam((t) => !t)}>
+                <Button variant="secondary" size="sm" iconLeft={<Icons.UsersIcon />}
+                  aria-pressed={team} onClick={() => setTeam((t) => !t)}>
                   {team ? "Show mine" : "Show team"}
                 </Button>
-                <Link to="/engagement/replies/settings" className={styles.buttonLink}>Reply settings</Link>
+                <ButtonLink to="/engagement/replies/settings" size="sm" iconLeft={<Icons.SettingsIcon />}>
+                  Reply settings
+                </ButtonLink>
               </>
             )}
           </>
@@ -376,11 +379,11 @@ function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () => void
                 <span>{c.contact_name || "A colleague"}</span>
                 {c.actionable ? (
                   <span className={styles.rowActions}>
-                    <Button size="sm" variant="ghost" disabled={busy !== null} loading={busy === `resume:${c.enrollment_id}`}
+                    <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `resume:${c.enrollment_id}`}
                       onClick={() => run(`resume:${c.enrollment_id}`, () => api.deskColleague(c.enrollment_id, "resume"), ["Resumed"])}>
                       Resume
                     </Button>
-                    <Button size="sm" variant="ghost" disabled={busy !== null} loading={busy === `stop:${c.enrollment_id}`}
+                    <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `stop:${c.enrollment_id}`}
                       onClick={() => run(`stop:${c.enrollment_id}`, () => api.deskColleague(c.enrollment_id, "stop"), ["Stopped"])}>
                       Stop
                     </Button>
@@ -420,14 +423,17 @@ function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () => void
               Meeting booked
             </Button>
             <Button variant="secondary" disabled={busy !== null} aria-expanded={laterOpen}
+              iconLeft={<Icons.ClockIcon />}
               onClick={() => setLaterOpen((v) => !v)}>
               Come back later
             </Button>
-            <Button variant="ghost" disabled={busy !== null} loading={busy === "close"}
+            <Button variant="secondary" disabled={busy !== null} loading={busy === "close"}
+              iconLeft={<Icons.XIcon />}
               onClick={() => run("close", () => api.deskDecide(id, { decision: "close", note }), ["Closed"], true)}>
               Close
             </Button>
-            <Button variant="ghost" disabled={busy !== null} onClick={() => setConfirmBlock(true)}>
+            <Button variant="secondary" disabled={busy !== null} iconLeft={<Icons.BanIcon />}
+              onClick={() => setConfirmBlock(true)}>
               Do not contact
             </Button>
           </div>
@@ -523,11 +529,11 @@ function Scheduled({ state, onChanged }: {
       align: "right",
       render: (r) => (
         <div className={styles.rowActions}>
-          <Button size="sm" variant="ghost" disabled={busy !== null}
+          <Button size="sm" variant="secondary" disabled={busy !== null}
             onClick={() => { setEditing(r); setDate(toLocalInput(r.due_at)); }}>
             Change date
           </Button>
-          <Button size="sm" variant="ghost" disabled={busy !== null} loading={busy === `cancel:${r.enrollment_id}`}
+          <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `cancel:${r.enrollment_id}`}
             onClick={() => run(`cancel:${r.enrollment_id}`, () => api.cancelScheduled(r.enrollment_id), `Cancelled: ${r.contact_name}`)}>
             Cancel
           </Button>

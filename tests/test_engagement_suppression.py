@@ -157,9 +157,98 @@ async def test_an_unsubscribe_cannot_be_lifted_through_the_api(client):
     assert r.status_code == 409
 
 
+# ---- domains and bulk upload (2026-09-30) -------------------------------------------------------
+
+def test_an_entry_is_read_as_an_address_or_a_domain_or_refused():
+    from nexus.engagement.suppression.service import classify_entry
+
+    assert classify_entry(" Jane@Acme.io ") == ("email", "jane@acme.io")
+    assert classify_entry("acme.io") == ("domain", "acme.io")
+    assert classify_entry("@Acme.io") == ("domain", "acme.io")
+    assert classify_entry("https://www.acme.io/about") == ("domain", "acme.io")
+    for junk in ("", "email", "domain", "acme", "jane@", "@", "not an address", "a@b"):
+        assert classify_entry(junk)[0] is None, junk
+
+
+async def test_a_blocked_domain_blocks_everyone_there_and_its_subdomains(client):
+    from nexus.engagement.suppression.service import active_block, active_reasons, block_entry
+
+    _token, me = await _workspace(client, "dom")
+    async with tenant_session(me.tenant_id) as ts:
+        row, created = await block_entry(ts, "acme.io", created_by_user_id=me.user_id)
+        assert created and row.email == "@acme.io" and row.reason == "manual"
+        assert (await active_block(ts, "anyone@acme.io")).id == row.id
+        assert (await active_block(ts, "sam@eu.acme.io")).id == row.id
+        assert await active_block(ts, "sam@notacme.io") is None
+        assert await active_reasons(ts, ["Pat@Acme.io", "x@other.io"]) == {"pat@acme.io": "manual"}
+        again, created = await block_entry(ts, "@ACME.io")
+        assert not created and again.id == row.id
+
+
+async def test_one_unsubscribe_under_a_blocked_domain_does_not_make_the_domain_permanent(client):
+    from nexus.engagement.suppression.service import active_block, block_entry, lift, suppress
+
+    _token, me = await _workspace(client, "domperm")
+    async with tenant_session(me.tenant_id) as ts:
+        domain, _ = await block_entry(ts, "acme.io")
+        person = await suppress(ts, email="jane@acme.io", reason="unsubscribed")
+        assert person.id != domain.id and domain.reason == "manual"
+        await lift(ts, domain, user_id=me.user_id, note="we signed a partnership")
+        assert await active_block(ts, "sam@acme.io") is None
+        assert (await active_block(ts, "jane@acme.io")).reason == "unsubscribed"
+
+
+async def test_a_blocked_domain_marks_campaign_candidates_blocked(client):
+    from nexus.engagement.sequences.candidates import candidates
+    from nexus.engagement.suppression.service import block_entry
+
+    _token, me = await _workspace(client, "domcand")
+    await _contact(me.tenant_id, email="jane@acme.io")
+    async with tenant_session(me.tenant_id) as ts:
+        await block_entry(ts, "acme.io")
+        [candidate] = await candidates(ts)
+        assert candidate.blocked is True
+
+
+async def test_an_uploaded_list_blocks_addresses_and_domains_and_reports_the_rest(client):
+    token, _me = await _workspace(client, "dncbulk")
+    r = await client.post("/api/engagement/do-not-contact/bulk", headers=auth(token), json={
+        "entries": ["email", "pat@acme.io", "PAT@acme.io", "globex.com", "@initech.com",
+                    "not an address", "pat@acme.io"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["emails_blocked"], body["domains_blocked"], body["already_blocked"]) == (1, 2, 0)
+    assert body["unreadable"] == ["email", "not an address"]
+
+    again = await client.post("/api/engagement/do-not-contact/bulk", headers=auth(token),
+                              json={"entries": ["globex.com", "new@acme.io"]})
+    assert again.json()["already_blocked"] == 1 and again.json()["emails_blocked"] == 1
+
+    listed = await client.get("/api/engagement/do-not-contact", headers=auth(token))
+    kinds = {b["email"]: b["kind"] for b in listed.json()}
+    assert kinds["@globex.com"] == "domain" and kinds["pat@acme.io"] == "email"
+
+    one = await client.post("/api/engagement/do-not-contact", headers=auth(token),
+                            json={"email": "hooli.com"})
+    assert one.status_code == 201 and one.json()["kind"] == "domain"
+
+
+async def test_an_upload_is_capped_per_request(client):
+    token, _me = await _workspace(client, "dnccap")
+    r = await client.post("/api/engagement/do-not-contact/bulk", headers=auth(token),
+                          json={"entries": [f"p{i}@acme.io" for i in range(1001)]})
+    assert r.status_code == 422
+
+
 # ---- UI -----------------------------------------------------------------------------------------
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "frontend" / "src"
+
+
+def test_the_list_page_takes_an_uploaded_list_of_addresses_or_domains():
+    page = (SRC / "pages/engagement/DoNotContactPage.tsx").read_text(encoding="utf-8")
+    assert "api.bulkDoNotContact(" in page
+    assert 'type="file"' in page
 
 
 def test_the_list_page_and_the_contact_badge_are_wired():

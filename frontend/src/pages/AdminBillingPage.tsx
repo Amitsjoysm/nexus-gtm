@@ -839,7 +839,7 @@ export function AdminBillingPage() {
           title="Platform billing"
           subtitle="Visible only to platform administrators, not to workspace owners."
         />
-        <Tabs items={tabs} value={tab} onChange={setTab} aria-label="Billing sections" />
+        <Tabs items={tabs} value={tab} onChange={setTab} aria-label="Billing sections" wrap />
         <div className={styles.panel} role="tabpanel">
           {tab === "rates" && <RateCards />}
           {tab === "plans" && <Plans />}

@@ -217,3 +217,15 @@ def test_finished_old_campaigns_are_listed_and_never_opened():
     assert "<LegacyCampaigns team={team} />" in page
     legacy = page.split("function LegacyCampaigns", 1)[1]
     assert "onRowClick" not in legacy and "api.legacyCampaigns(" in legacy
+
+
+def test_the_reply_desk_actions_are_one_set_of_buttons():
+    """Reported 2026-09-30: the desk mixed a hand-styled link, secondary buttons and ghost buttons in
+    one row. Every action is now a Button or a ButtonLink; ghost is only a dialog's Cancel."""
+    for name in ("ReplyDeskPage.tsx", "ReferralPanel.tsx"):
+        src = _read(PAGES / name)
+        assert "styles.buttonLink" not in src, name
+        for at in [i for i in range(len(src)) if src.startswith('variant="ghost"', i)]:
+            label = src[at:src.index("</Button>", at)]
+            assert label.rstrip().endswith("Cancel"), f"{name}: ghost button that is not Cancel"
+    assert "<ButtonLink" in _read(PAGES / "ReplyDeskPage.tsx")
