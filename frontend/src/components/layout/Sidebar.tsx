@@ -2,7 +2,7 @@ import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { NAV_ITEMS, canSee, navState } from "@/app/nav";
 import { usePlatformIdentity } from "@/app/RequirePlatformAdmin";
-import { useEntitlements, isLocked, switchNotice } from "@/app/EntitlementsContext";
+import { useEntitlements, isLocked, isPageHidden, switchNotice } from "@/app/EntitlementsContext";
 import { useAuth } from "@/app/AuthContext";
 import { useEngineOn } from "@/app/EngagementContext";
 import { Icons } from "@/components/ui";
@@ -59,7 +59,10 @@ export function Sidebar({ open, collapsed = false, onNavigate, onToggleCollapse 
       </div>
 
       <nav className={styles.nav} aria-label="Main navigation">
-        {NAV_ITEMS.filter((item) => canSee(item, role, isPlatformAdmin, engineOn)).map((item) => {
+        {NAV_ITEMS.filter(
+          (item) =>
+            canSee(item, role, isPlatformAdmin, engineOn) && !isPageHidden(entitlements, item.to),
+        ).map((item) => {
           const notice = switchNotice(entitlements, item.capability);
           const state = navState(role, isLocked(entitlements, item.capability), notice !== null);
           if (state === "hidden") return null;

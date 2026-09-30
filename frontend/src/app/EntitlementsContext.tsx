@@ -66,6 +66,16 @@ export function switchNotice(
   return { state: module.switch_state, message: module.switch_message };
 }
 
+/**
+ * Whether a superadmin has hidden this menu page (or the page a sub-route belongs to) from every
+ * workspace. Fails open like `isLocked`: no entitlements yet means nothing is hidden.
+ */
+export function isPageHidden(entitlements: Entitlements | null, path: string): boolean {
+  const hidden = entitlements?.hidden_pages;
+  if (!hidden?.length) return false;
+  return hidden.some((page) => path === page || path.startsWith(`${page}/`));
+}
+
 export function EntitlementsProvider({ children }: { children: ReactNode }) {
   const api = useApiClient();
   const state = useApi<Entitlements>((signal) => api.billingEntitlements(signal), []);

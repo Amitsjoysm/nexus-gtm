@@ -6,6 +6,7 @@ import { SignalWindowProvider } from "@/app/SignalWindowContext";
 import { AuthProvider, useAuth } from "@/app/AuthContext";
 import { isLocked, switchNotice, useEntitlements } from "@/app/EntitlementsContext";
 import { RequireEngine } from "@/app/EngagementContext";
+import { RequirePage } from "@/app/RequirePage";
 import { FeatureUnavailable } from "@/components/FeatureUnavailable";
 import { RequirePlatformAdmin } from "@/app/RequirePlatformAdmin";
 import { ToastProvider } from "@/components/ui";
@@ -209,9 +210,11 @@ export function App() {
                 <Route
                   path="/inbox"
                   element={
-                    <RequireCapability capability="module.signals" name="Inbox">
-                      <InboxPage />
-                    </RequireCapability>
+                    <RequirePage page="/inbox">
+                      <RequireCapability capability="module.signals" name="Inbox">
+                        <InboxPage />
+                      </RequireCapability>
+                    </RequirePage>
                   }
                 />
                 <Route path="/accounts" element={<AccountsPage />} />
@@ -220,69 +223,85 @@ export function App() {
                 <Route
                   path="/network"
                   element={
-                    <RequireCapability capability="module.network" name="Network">
-                      <NetworkPage />
-                    </RequireCapability>
+                    <RequirePage page="/network">
+                      <RequireCapability capability="module.network" name="Network">
+                        <NetworkPage />
+                      </RequireCapability>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/calls"
                   element={
-                    <RequireCapability capability="module.calling" name="Calls">
-                      <CallsPage />
-                    </RequireCapability>
+                    <RequirePage page="/calls">
+                      <RequireCapability capability="module.calling" name="Calls">
+                        <CallsPage />
+                      </RequireCapability>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/lists"
                   element={
-                    <RequireCapability capability="module.lists" name="Lists">
-                      <ListsPage />
-                    </RequireCapability>
+                    <RequirePage page="/lists">
+                      <RequireCapability capability="module.lists" name="Lists">
+                        <ListsPage />
+                      </RequireCapability>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/lists/:listId"
                   element={
-                    <RequireCapability capability="module.lists" name="Lists">
-                      <ListDetailPage />
-                    </RequireCapability>
+                    <RequirePage page="/lists">
+                      <RequireCapability capability="module.lists" name="Lists">
+                        <ListDetailPage />
+                      </RequireCapability>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/orchestrator"
                   element={
-                    <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents" name="Orchestrator">
-                        <ChatPage />
-                      </RequireCapability>
-                    </RequireRole>
+                    <RequirePage page="/orchestrator">
+                      <RequireRole minRole="manager">
+                        <RequireCapability capability="module.agents" name="Orchestrator">
+                          <ChatPage />
+                        </RequireCapability>
+                      </RequireRole>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/orchestrator/:sessionId"
                   element={
-                    <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents" name="Orchestrator">
-                        <ChatPage />
-                      </RequireCapability>
-                    </RequireRole>
+                    <RequirePage page="/orchestrator">
+                      <RequireRole minRole="manager">
+                        <RequireCapability capability="module.agents" name="Orchestrator">
+                          <ChatPage />
+                        </RequireCapability>
+                      </RequireRole>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/signals"
                   element={
-                    <RequireCapability capability="module.signals" name="Signals">
-                      <SignalsPage />
-                    </RequireCapability>
+                    <RequirePage page="/signals">
+                      <RequireCapability capability="module.signals" name="Signals">
+                        <SignalsPage />
+                      </RequireCapability>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/alerts"
                   element={
-                    <RequireCapability capability="module.signals" name="Alerts">
-                      <AlertsPage />
-                    </RequireCapability>
+                    <RequirePage page="/alerts">
+                      <RequireCapability capability="module.signals" name="Alerts">
+                        <AlertsPage />
+                      </RequireCapability>
+                    </RequirePage>
                   }
                 />
                 {/* Every member, like Alerts itself: choosing where your own alerts go is rep-level.
@@ -290,39 +309,47 @@ export function App() {
                 <Route
                   path="/alerts/settings"
                   element={
-                    <RequireCapability capability="module.signals" name="Alert settings">
-                      <AlertSettingsPage />
-                    </RequireCapability>
+                    <RequirePage page="/alerts">
+                      <RequireCapability capability="module.signals" name="Alert settings">
+                        <AlertSettingsPage />
+                      </RequireCapability>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/runs"
                   element={
-                    <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents" name="AI Runs">
-                        <RunsPage />
-                      </RequireCapability>
-                    </RequireRole>
+                    <RequirePage page="/runs">
+                      <RequireRole minRole="manager">
+                        <RequireCapability capability="module.agents" name="AI Runs">
+                          <RunsPage />
+                        </RequireCapability>
+                      </RequireRole>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/runs/:id"
                   element={
-                    <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents" name="AI Runs">
-                        <RunDetailPage />
-                      </RequireCapability>
-                    </RequireRole>
+                    <RequirePage page="/runs">
+                      <RequireRole minRole="manager">
+                        <RequireCapability capability="module.agents" name="AI Runs">
+                          <RunDetailPage />
+                        </RequireCapability>
+                      </RequireRole>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/approvals"
                   element={
-                    <RequireRole minRole="manager">
-                      <RequireCapability capability="module.agents" name="Approvals">
-                        <ApprovalsPage />
-                      </RequireCapability>
-                    </RequireRole>
+                    <RequirePage page="/approvals">
+                      <RequireRole minRole="manager">
+                        <RequireCapability capability="module.agents" name="Approvals">
+                          <ApprovalsPage />
+                        </RequireCapability>
+                      </RequireRole>
+                    </RequirePage>
                   }
                 />
                 {/* The old Campaigns and Cadences were replaced at the cutover (spec §13); their
@@ -334,9 +361,11 @@ export function App() {
                 <Route
                   path="/mailboxes"
                   element={
-                    <RequireCapability capability="module.outreach" name="My mailboxes">
-                      <MailboxesPage />
-                    </RequireCapability>
+                    <RequirePage page="/mailboxes">
+                      <RequireCapability capability="module.outreach" name="My mailboxes">
+                        <MailboxesPage />
+                      </RequireCapability>
+                    </RequirePage>
                   }
                 />
                 <Route
@@ -352,91 +381,109 @@ export function App() {
                 <Route
                   path="/engagement/campaigns"
                   element={
-                    <RequireEngine>
-                      <RequireCapability capability="module.campaigns" name="Campaigns">
-                        <EngagementCampaignsPage />
-                      </RequireCapability>
-                    </RequireEngine>
+                    <RequirePage page="/engagement/campaigns">
+                      <RequireEngine>
+                        <RequireCapability capability="module.campaigns" name="Campaigns">
+                          <EngagementCampaignsPage />
+                        </RequireCapability>
+                      </RequireEngine>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/engagement/campaigns/new"
                   element={
-                    <RequireEngine>
-                      <RequireCapability capability="module.campaigns" name="Campaigns">
-                        <CampaignBuilder />
-                      </RequireCapability>
-                    </RequireEngine>
+                    <RequirePage page="/engagement/campaigns">
+                      <RequireEngine>
+                        <RequireCapability capability="module.campaigns" name="Campaigns">
+                          <CampaignBuilder />
+                        </RequireCapability>
+                      </RequireEngine>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/engagement/campaigns/:campaignId"
                   element={
-                    <RequireEngine>
-                      <RequireCapability capability="module.campaigns" name="Campaigns">
-                        <CampaignDetailPage />
-                      </RequireCapability>
-                    </RequireEngine>
+                    <RequirePage page="/engagement/campaigns">
+                      <RequireEngine>
+                        <RequireCapability capability="module.campaigns" name="Campaigns">
+                          <CampaignDetailPage />
+                        </RequireCapability>
+                      </RequireEngine>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/engagement/replies"
                   element={
-                    <RequireEngine name="Replies">
-                      <RequireCapability capability="module.campaigns" name="Replies">
-                        <ReplyDeskPage />
-                      </RequireCapability>
-                    </RequireEngine>
+                    <RequirePage page="/engagement/replies">
+                      <RequireEngine name="Replies">
+                        <RequireCapability capability="module.campaigns" name="Replies">
+                          <ReplyDeskPage />
+                        </RequireCapability>
+                      </RequireEngine>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/engagement/replies/settings"
                   element={
-                    <RequireEngine name="Reply settings">
-                      <RequireCapability capability="module.campaigns" name="Reply settings">
-                        <EngagementSettingsPage />
-                      </RequireCapability>
-                    </RequireEngine>
+                    <RequirePage page="/engagement/replies">
+                      <RequireEngine name="Reply settings">
+                        <RequireCapability capability="module.campaigns" name="Reply settings">
+                          <EngagementSettingsPage />
+                        </RequireCapability>
+                      </RequireEngine>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/engagement/templates"
                   element={
-                    <RequireEngine name="Sequence templates">
-                      <RequireCapability capability="module.cadences" name="Sequence templates">
-                        <SequenceTemplatesPage />
-                      </RequireCapability>
-                    </RequireEngine>
+                    <RequirePage page="/engagement/templates">
+                      <RequireEngine name="Sequence templates">
+                        <RequireCapability capability="module.cadences" name="Sequence templates">
+                          <SequenceTemplatesPage />
+                        </RequireCapability>
+                      </RequireEngine>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/plays"
                   element={
-                    <RequireRole minRole="manager">
-                      <RequireCapability capability="module.plays" name="Plays">
-                        <PlaysPage />
-                      </RequireCapability>
-                    </RequireRole>
+                    <RequirePage page="/plays">
+                      <RequireRole minRole="manager">
+                        <RequireCapability capability="module.plays" name="Plays">
+                          <PlaysPage />
+                        </RequireCapability>
+                      </RequireRole>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/relevance"
                   element={
-                    <RequireRole minRole="manager">
-                      <RequireCapability capability="module.relevance" name="Relevance">
-                        <RelevancePage />
-                      </RequireCapability>
-                    </RequireRole>
+                    <RequirePage page="/relevance">
+                      <RequireRole minRole="manager">
+                        <RequireCapability capability="module.relevance" name="Relevance">
+                          <RelevancePage />
+                        </RequireCapability>
+                      </RequireRole>
+                    </RequirePage>
                   }
                 />
                 <Route
                   path="/integrations"
                   element={
-                    <RequireRole minRole="admin">
-                      <RequireCapability capability="module.integrations" name="Integrations">
-                        <IntegrationsPage />
-                      </RequireCapability>
-                    </RequireRole>
+                    <RequirePage page="/integrations">
+                      <RequireRole minRole="admin">
+                        <RequireCapability capability="module.integrations" name="Integrations">
+                          <IntegrationsPage />
+                        </RequireCapability>
+                      </RequireRole>
+                    </RequirePage>
                   }
                 />
                 <Route

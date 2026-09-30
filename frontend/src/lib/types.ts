@@ -1801,6 +1801,26 @@ export interface Entitlements {
    */
   gating_active: boolean;
   modules: ModuleEntitlement[];
+  /**
+   * Menu paths a superadmin has hidden from every workspace. Optional because a server that
+   * predates the field sends nothing, which means nothing is hidden.
+   */
+  hidden_pages?: string[];
+}
+
+/** One hideable menu page in the superadmin console (`GET /admin/features/pages`). */
+export interface AdminPageRow {
+  key: string;
+  path: string;
+  label: string;
+  /** The module switch this page sits under. Hiding the page leaves the module running. */
+  module: string;
+  hidden: boolean;
+  updated_by: string;
+}
+
+export interface AdminPageList {
+  pages: AdminPageRow[];
 }
 
 /** Platform health console (`GET /admin/health/endpoints`). */

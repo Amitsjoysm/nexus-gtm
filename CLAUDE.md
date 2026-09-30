@@ -200,7 +200,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0065_provider_base_url`. The chain is
+Alembic under `migrations/versions/`. Head: `0066_page_visibility`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -218,7 +218,7 @@ ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_
 `tenants.platform_caller_id`) -> `0062` (`web_cache`, platform-global) -> `0063` (LinkedIn
 fields on `companies`, `company_countries` and `prospect_cursors`, all platform-global;
 `prospect_runs`, tenant-scoped) -> `0064` (`prospect_lists.kind`, `prospect_lists.archived_at`) ->
-`0065` (`provider_settings.base_url`). Every tenant-scoped table gets RLS via
+`0065` (`provider_settings.base_url`) -> `0066` (`page_visibility`, platform-global). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -1526,6 +1526,18 @@ anyone who cannot upgrade, but a switch is a status message and the person who m
 rep whose daily driver went quiet. `included` + `gating_active` + `switch_state` is folded into a
 server-computed `locked`, because the sidebar and `RequireCapability` are two readers of one
 three-way rule.
+
+**Hiding a page is per PAGE, not per module** (`nexus/features/pages.py`, migration `0066`,
+2026-09-29). Asked for as "I don't want to show Approvals or Network": Approvals shares
+`module.agents` with Orchestrator and AI Runs, so a module switch could not take it alone.
+`PUT /admin/features/pages/{key}` (`features.manage`, audited as `feature.page_visibility`) hides a
+menu page from every workspace; `hidden_pages` rides on `GET /billing/entitlements`, the Sidebar
+leaves it out and `RequirePage` sends the page and every sub-route to Dashboard. **It is
+presentation plus the route only**: the endpoints behind the page keep answering, because taking a
+feature away is the module switch's job. `HIDEABLE_PAGES` is pinned to `nav.tsx` minus the floor
+(Dashboard, Accounts, Contacts, Members, Settings, Billing, the console), and every route under a
+hideable path must carry `RequirePage` (`tests/test_page_visibility.py`). No row means shown, and
+an unreadable table hides nothing.
 
 **`/api/orchestration/runs` had no billing seam at all** — found by testing the endpoint half.
 `workflow.orchestration_run` is catalogued, priced and carried by `module.agents`, and was metered

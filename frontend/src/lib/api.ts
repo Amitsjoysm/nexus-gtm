@@ -40,6 +40,8 @@ import type {
   FeatureSwitchList,
   FeatureSwitchRow,
   FeatureSwitchState,
+  AdminPageList,
+  AdminPageRow,
   BillingUsage,
   Entitlements,
   ProrationPreview,
@@ -1140,6 +1142,17 @@ export class ApiClient {
     return this.request<FeatureSwitchRow>(`/admin/features/${encodeURIComponent(capabilityId)}`, {
       method: "PUT",
       body,
+    });
+  }
+  /** Every menu page a superadmin can hide, in menu order. */
+  adminPages(signal?: AbortSignal) {
+    return this.request<AdminPageList>("/admin/features/pages", { signal });
+  }
+  /** Hide or show one page for every workspace. Idempotent. */
+  setPageHidden(key: string, hidden: boolean, note?: string) {
+    return this.request<AdminPageRow>(`/admin/features/pages/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: { hidden, note: note ?? "" },
     });
   }
   /** Module gates for the current workspace. Drives navigation; see `EntitlementsContext`. */

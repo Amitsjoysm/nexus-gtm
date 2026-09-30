@@ -5,7 +5,13 @@ import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
-import type { FeatureSwitchList, FeatureSwitchRow, FeatureSwitchState } from "@/lib/types";
+import type {
+  AdminPageList,
+  AdminPageRow,
+  FeatureSwitchList,
+  FeatureSwitchRow,
+  FeatureSwitchState,
+} from "@/lib/types";
 import styles from "./FeatureSwitchesTab.module.css";
 
 /**
@@ -250,7 +256,119 @@ function FeatureRow({
   );
 }
 
+function PageRow({ row, onSaved }: { row: AdminPageRow; onSaved: () => void }) {
+  const api = useApiClient();
+  const toast = useToast();
+  const [saving, setSaving] = useState(false);
+
+  async function toggle() {
+    setSaving(true);
+    try {
+      await api.setPageHidden(row.key, !row.hidden);
+      toast.success(
+        row.hidden ? `${row.label} is back in the menu` : `${row.label} is hidden`,
+        "Live within 30 seconds. Open tabs pick it up on their next load.",
+      );
+      onSaved();
+    } catch (err) {
+      toast.error(
+        `Couldn't change ${row.label}`,
+        err instanceof Error ? err.message : "Please try again.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <li className={cn(styles.pageRow, row.hidden && styles.pageRowHidden)}>
+      <div className={styles.rowIdent}>
+        <span className={styles.rowName}>{row.label}</span>
+        <code className={styles.rowId}>{row.path}</code>
+      </div>
+      <div className={styles.rowStatus}>
+        <Badge tone={row.hidden ? "neutral" : "success"} dot>
+          {row.hidden ? "Hidden" : "Shown"}
+        </Badge>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={toggle}
+          loading={saving}
+          disabled={saving}
+          aria-label={`${row.hidden ? "Show" : "Hide"} ${row.label}`}
+        >
+          {row.hidden ? "Show" : "Hide"}
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Hide a menu page from every workspace: out of the sidebar, and its address (sub-pages too) sends
+ * people to Dashboard. Per page, because a module can carry several (Orchestrator, AI Runs and
+ * Approvals share one), and one of them is often the only thing to take away.
+ *
+ * One click, unlike a module switch: nothing stops working, and it undoes the same way.
+ */
+function MenuPagesCard() {
+  const api = useApiClient();
+  const list = useApi<AdminPageList>((signal) => api.adminPages(signal), []);
+
+  return (
+    <Card padding="lg">
+      <CardHeader
+        title="Pages in the menu"
+        subtitle="Hide a page from every workspace. It leaves the menu, and its address opens Dashboard. The feature behind it keeps running; to switch a feature off, use the module above."
+      />
+      <DataState
+        state={list}
+        errorTitle="Couldn't load the menu pages"
+        skeleton={
+          <div className={styles.pageRows}>
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} width="100%" height={52} />
+            ))}
+          </div>
+        }
+      >
+        {(data) => {
+          const hidden = data.pages.filter((p) => p.hidden);
+          return (
+            <>
+              {hidden.length > 0 && (
+                <p className={styles.pageSummary} role="status">
+                  Hidden from every workspace: {hidden.map((p) => p.label).join(", ")}.
+                </p>
+              )}
+              <ul className={styles.pageRows}>
+                {data.pages.map((row) => (
+                  <PageRow key={row.key} row={row} onSaved={list.refetch} />
+                ))}
+              </ul>
+              <p className={styles.floorNote}>
+                Dashboard, Accounts, Contacts, Members, Settings and Billing always stay: they are
+                how a workspace runs, and Billing is where a customer changes plan.
+              </p>
+            </>
+          );
+        }}
+      </DataState>
+    </Card>
+  );
+}
+
 export function FeatureSwitchesTab() {
+  return (
+    <div className={styles.stack}>
+      <ModuleSwitchesCard />
+      <MenuPagesCard />
+    </div>
+  );
+}
+
+function ModuleSwitchesCard() {
   const api = useApiClient();
   const list = useApi<FeatureSwitchList>((signal) => api.adminFeatures(signal), []);
 

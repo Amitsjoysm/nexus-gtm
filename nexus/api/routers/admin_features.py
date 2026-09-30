@@ -19,9 +19,11 @@ from nexus.api.deps import Principal, require_platform_permission
 from nexus.billing.audit import record_admin_action
 from nexus.billing.permissions import FEATURES_MANAGE
 from nexus.core.db import get_platform_sessionmaker
+from nexus.features import pages
 from nexus.features.switches import invalidate
 from nexus.models.billing import BillingCapability
 from nexus.models.feature_switch import SWITCH_STATES, FeatureSwitch
+from nexus.models.page_visibility import PageVisibility
 
 router = APIRouter(prefix="/admin/features", tags=["admin-features"])
 
@@ -77,6 +79,83 @@ def _validate_state(state: str) -> str:
             detail=f"state must be one of {', '.join(SWITCH_STATES)}",
         )
     return state
+
+
+class PageOut(BaseModel):
+    key: str
+    path: str
+    label: str
+    module: str
+    hidden: bool
+    updated_by: str = ""
+
+
+class PageListOut(BaseModel):
+    pages: list[PageOut]
+
+
+class PageIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    hidden: bool
+    note: str = ""
+
+
+def _page_out(spec: pages.PageSpec, row: PageVisibility | None) -> PageOut:
+    return PageOut(
+        key=spec.key, path=spec.path, label=spec.label, module=spec.module,
+        hidden=bool(row is not None and row.hidden),
+        updated_by=(row.updated_by if row is not None else "") or "",
+    )
+
+
+# Declared before `/{capability_id}` so a future GET on that pattern can never shadow them.
+@router.get("/pages", response_model=PageListOut)
+async def list_pages(
+    _: Principal = Depends(require_platform_permission(FEATURES_MANAGE)),
+) -> PageListOut:
+    """Every menu page that can be hidden, in menu order. The floor is not listed at all."""
+    async with get_platform_sessionmaker()() as session:
+        rows = {r.page_key: r for r in (await session.scalars(select(PageVisibility))).all()}
+    return PageListOut(pages=[_page_out(p, rows.get(p.key)) for p in pages.HIDEABLE_PAGES])
+
+
+@router.put("/pages/{page_key}", response_model=PageOut)
+async def set_page_hidden(
+    page_key: str,
+    body: PageIn,
+    principal: Principal = Depends(require_platform_permission(FEATURES_MANAGE)),
+) -> PageOut:
+    """Hide or show one page for every workspace. Hiding changes the menu and the route only; the
+    feature behind it keeps running, and switching a feature off is still the module switch's job."""
+    spec = pages.BY_KEY.get(page_key)
+    if spec is None:
+        # Covers the floor too: Dashboard, Accounts, Billing and the rest are not in the catalog,
+        # so they cannot be hidden by typing their key.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{page_key} is not a page that can be hidden",
+        )
+
+    async with get_platform_sessionmaker()() as session:
+        row = await session.get(PageVisibility, page_key)
+        before = {"hidden": bool(row is not None and row.hidden)}
+        if row is None:
+            row = PageVisibility(page_key=page_key)
+            session.add(row)
+        row.hidden = body.hidden
+        row.updated_by = principal.user_id or ""
+        await session.flush()
+
+        await record_admin_action(
+            session, actor=principal.user_id, action="feature.page_visibility",
+            target=page_key, before=before, after={"hidden": row.hidden}, note=body.note,
+        )
+        await session.commit()
+        out = _page_out(spec, row)
+
+    pages.invalidate()
+    return out
 
 
 @router.get("", response_model=FeatureListOut)

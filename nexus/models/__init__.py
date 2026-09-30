@@ -26,6 +26,7 @@ from nexus.models.audit import AuditLog
 from nexus.models.integration import IntegrationConnection
 from nexus.models.jobs import DeadLetterJob
 from nexus.models.feature_switch import FeatureSwitch
+from nexus.models.page_visibility import PageVisibility
 from nexus.models.mfa import MFARecoveryCode, UserMFA
 from nexus.models.signal_preference import SignalPreference
 from nexus.models.intelligence import AccountScore, AgentRun
@@ -73,6 +74,7 @@ from nexus.models.workflow import InboxTask, ListItem, Play, PlayRun, ProspectLi
 
 __all__ = [
     "FeatureSwitch",
+    "PageVisibility",
     "SignalPreference",
     "Person",
     "PersonIdentity",

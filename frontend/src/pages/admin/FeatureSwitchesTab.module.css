@@ -222,6 +222,59 @@
   }
 }
 
+/* ---- menu pages ---------------------------------------------------------------------------- */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* Two columns where there is room: sixteen one-line rows read faster side by side than as a list
+   that runs past the fold, and each row has nothing to expand. */
+.pageRows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  gap: var(--space-2);
+}
+
+.pageRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* A deliberate product decision, not an incident, so a quiet recessed surface rather than the
+   warning tint a switched-off module gets. The badge carries the meaning. */
+.pageRowHidden {
+  background: var(--surface-2);
+}
+
+.pageRowHidden .rowName {
+  color: var(--text-muted);
+}
+
+.pageSummary {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-default);
+}
+
+.floorNote {
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading);
+  color: var(--text-muted);
+  max-inline-size: 70ch;
+}
+
 /* Hint on the left, counter on the right, baseline-aligned so the counter does not drift as the
    hint wraps to a second line. */
 .fieldFoot {

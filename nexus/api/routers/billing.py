@@ -681,6 +681,11 @@ class EntitlementsOut(BaseModel):
     # `included` alone, or shadow mode starts hiding working features.
     gating_active: bool
     modules: list[EntitlementOut]
+    # Menu paths a superadmin has hidden from every workspace (`nexus/features/pages.py`). Carried
+    # here because the menu and the route guard already read this response; a second request would
+    # be a second thing to be in flight, or failed, when the shell draws the menu. Independent of
+    # billing enforcement: it is a decision about the product, not about a plan.
+    hidden_pages: list[str] = []
 
 
 @router.get("/entitlements", response_model=EntitlementsOut)
@@ -697,6 +702,7 @@ async def get_entitlements(
     """
     from nexus.billing.entitlements import resolve_entitlement
     from nexus.core.config import get_settings
+    from nexus.features.pages import hidden_paths
 
     subs = await ts.list(BillingSubscription, limit=5)
     sub = next((s for s in subs if s.status in ("trialing", "active", "past_due")), None)
@@ -741,6 +747,7 @@ async def get_entitlements(
         enforcement=enforcement,
         gating_active=gating_active,
         modules=modules,
+        hidden_pages=await hidden_paths(),
     )
 
 
