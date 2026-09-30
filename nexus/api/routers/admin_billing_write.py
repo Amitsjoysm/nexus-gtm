@@ -981,7 +981,8 @@ async def cancel_tenant_subscription(
     customer to `free`. That leaves the subscription `active` on a $0 plan, which reads as a live
     customer in revenue, in the directory, and in every count that filters on status.
     """
-    from nexus.billing.subscriptions import cancel_subscription
+    from nexus.billing.payments import PaymentError, PaymentNotConfigured
+    from nexus.billing.subscriptions import ProviderCancelRefused, cancel_subscription
     from nexus.models.billing import BillingSubscription
 
     at_period_end = body.at_period_end if body else True
@@ -992,7 +993,16 @@ async def cancel_tenant_subscription(
         existing = await ts.first(BillingSubscription)
         before = {"status": existing.status,
                   "cancel_at_period_end": bool(existing.cancel_at_period_end)} if existing else {}
-        sub = await cancel_subscription(ts, at_period_end=at_period_end)
+        try:
+            sub = await cancel_subscription(ts, at_period_end=at_period_end)
+        except ProviderCancelRefused as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        except PaymentNotConfigured as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        except PaymentError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Stripe did not cancel it: {exc}. Nothing was changed here.") from exc
         if sub is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 "this workspace has no active subscription")
@@ -1001,7 +1011,9 @@ async def cancel_tenant_subscription(
             target=sub.plan_id, subject_tenant_id=tenant_id,
             before=before,
             after={"status": sub.status,
-                   "cancel_at_period_end": bool(sub.cancel_at_period_end)},
+                   "cancel_at_period_end": bool(sub.cancel_at_period_end),
+                   # Which system was told. "" means admin-managed: cancelled here only.
+                   "provider_subscription": sub.psp_subscription_id or ""},
             note=reason or ("at period end" if at_period_end else "immediate"),
         )
         await session.commit()

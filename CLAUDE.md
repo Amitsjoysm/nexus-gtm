@@ -647,6 +647,29 @@ back to the environment on any failure, which is also what makes the table addit
 that never opens the screen behaves exactly as before. `get_payment_provider()` stays for the
 synchronous callers and for `set_payment_provider` test injection, which always wins.
 
+**Four operator gaps, fixed 2026-09-30** (`tests/test_stripe_operator_fixes.py`):
+
+- **The Payments tab selects Stripe on its own.** `resolve_payment_provider` returned `noop` unless
+  `NEXUS_PAYMENT_PROVIDER=stripe` was ALSO in the deployment env, so an operator could verify and
+  activate a key and every checkout still ran offline. An active (hence verified) credential now
+  selects Stripe; the env var alone still does too, so no deployment that set it changes. The
+  module keeps `_override` (the `set_payment_provider` test seam) apart from the memo, as
+  `ingestion/crm.py` does. Platform health and the webhook panel report the provider in force.
+- **Cancelling in the console cancels at Stripe.** `subscriptions.cancel_subscription` calls
+  `provider.cancel_subscription` FIRST (period end: `cancel_at_period_end=true`; now: `DELETE`) and
+  changes our row only if Stripe agreed. A refusal is a 502 that says nothing changed here; a `sub_`
+  subscription with no Stripe credential in force is a 409 (cancelling locally would stop nothing).
+  Admin-managed subscriptions (no `psp_subscription_id`) cancel here only, as before.
+- **No plan switching in the customer portal.** We learn the plan only at Checkout, so a price
+  changed in the portal was charged while the workspace kept the old plan. Every portal session now
+  names NEXUS's own configuration (`PORTAL_CONFIG_TAG`, found by metadata or created once per
+  account): cards, invoices, address and at-period-end cancellation on, `subscription_update` off.
+  If it cannot be created the portal does not open: failing closed beats charging the wrong price.
+- **The panel tells the truth.** `webhooks.HANDLED_EVENTS` (13) is what the webhook panel lists; it
+  summed two of the three tuples and showed 9, and a test checks every `event_type ==` branch is in
+  it. Live/Test comes from the key prefix (`credentials.stripe_key_mode`: `sk_`/`rk_` x
+  `live_`/`test_`); it was "charges enabled and not `sk_test_`", so a restricted test key read Live.
+
 `stripe_publishable_key` is read with `getattr` — Settings has no such field, because the publishable
 key has never been needed server-side.
 

@@ -41,6 +41,21 @@ def _hint(secret: str) -> str:
     return (secret or "")[-4:]
 
 
+def stripe_key_mode(secret: str) -> str:
+    """``"test"``, ``"live"`` or ``"unknown"``, from the key's own prefix.
+
+    The prefix is Stripe's statement of the mode and covers both key kinds: secret (``sk_``) and
+    restricted (``rk_``). The badge used to be "can charge and not ``sk_test_``", so a restricted
+    TEST key on an account with charges enabled read "Live" (reported 2026-09-30).
+    """
+    key = (secret or "").strip()
+    if key.startswith(("sk_live_", "rk_live_")):
+        return "live"
+    if key.startswith(("sk_test_", "rk_test_")):
+        return "test"
+    return "unknown"
+
+
 async def list_credentials() -> list[PaymentCredential]:
     async with get_platform_sessionmaker()() as s:
         return list((await s.scalars(
@@ -119,9 +134,9 @@ async def verify_credential(credential_id: str) -> dict:
             or account.get("email")
             or ""
         )[:200]
-        row.livemode = bool(account.get("charges_enabled")) and not str(secret).startswith(
-            "sk_test_"
-        )
+        # Live means a live KEY. Whether the account can take charges yet is a different fact,
+        # and folding it in made a live key on an unfinished account read "Test".
+        row.livemode = stripe_key_mode(secret) == "live"
         row.status = "verified"
         row.last_error = ""
         await s.commit()

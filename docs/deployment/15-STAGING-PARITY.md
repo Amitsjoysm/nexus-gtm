@@ -37,7 +37,7 @@ Secrets are never written here. `<secret>` means "set it; the value is yours".
 | `NEXUS_CADENCE_ENABLED` | `false` | `true` | Cadence engine off |
 | `NEXUS_CRM_SYNC_ENABLED` | `false` | `true` | CRM auto-sync off |
 | `NEXUS_OTP_REGISTRATION_ENABLED` | `false` | `true` | Sign-up without email verification |
-| `NEXUS_PAYMENT_PROVIDER` | `noop` | `stripe` | Checkout and invoices do nothing |
+| `NEXUS_PAYMENT_PROVIDER` | `noop` | `stripe` | Checkout and invoices do nothing, unless a verified credential is active on the Payments tab (that alone selects Stripe since 2026-09-30) |
 
 ### Everything else local sets
 

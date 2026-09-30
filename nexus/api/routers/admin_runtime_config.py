@@ -135,16 +135,17 @@ async def webhook_info(
 ) -> dict:
     """What to paste into Stripe, and whether our side is ready to receive it."""
     from nexus.billing.credentials import active_credential, resolve_stripe_secrets
-    from nexus.billing.webhooks import INVOICE_EVENTS, SUBSCRIPTION_EVENTS
-    from nexus.core.config import get_settings
+    from nexus.billing.payments import resolve_payment_provider
+    from nexus.billing.webhooks import HANDLED_EVENTS
 
-    settings = get_settings()
     _secret, webhook_secret, _pub = await resolve_stripe_secrets()
     cred = await active_credential("stripe")
 
     return {
         "path": "/api/billing/webhooks/stripe",
-        "provider": settings.payment_provider,
+        # The provider in force, not the environment variable: an active credential on the
+        # Payments tab selects Stripe on its own.
+        "provider": getattr(await resolve_payment_provider(), "name", "noop"),
         # Which of the two sources the secret came from. An operator who typed one into the panel
         # and is still being served the environment's needs to know that immediately.
         "signing_secret_configured": bool(webhook_secret),
@@ -154,7 +155,7 @@ async def webhook_info(
         ),
         "stripe_account": (cred.account_id if cred is not None else ""),
         "livemode": bool(cred.livemode) if cred is not None else False,
-        "events_handled": sorted(SUBSCRIPTION_EVENTS + INVOICE_EVENTS),
+        "events_handled": sorted(HANDLED_EVENTS),
         # Ordered as the operator will actually do it, and each step says where the thing it names
         # lives. "Paste the URL below" was wrong the moment the URL box rendered above the list.
         "instructions": [

@@ -430,11 +430,35 @@ async def resume_subscription(ts: TenantSession, *, actor: str = "system") -> Bi
     return sub
 
 
+class ProviderCancelRefused(RuntimeError):
+    """The subscription lives at a payment provider this deployment cannot reach, so cancelling it
+    here would stop nothing there."""
+
+
 async def cancel_subscription(ts: TenantSession, *, at_period_end: bool = True):
-    """Cancel. At period end by default — the customer paid through it."""
+    """Cancel. At period end by default — the customer paid through it.
+
+    A subscription bought through Checkout lives at the provider too, and cancelling only our row
+    left Stripe charging the customer (reported 2026-09-30). So the provider is asked FIRST and our
+    row changes only once it agreed: a refusal raises (``PaymentError``) and nothing here moves.
+    The reverse order would record a cancellation Stripe never made. An admin-managed subscription
+    (no ``psp_subscription_id``) has nothing at the provider and cancels here only.
+    """
     sub = await _active(ts)
     if sub is None:
         return None
+    psp_id = (sub.psp_subscription_id or "").strip()
+    if psp_id:
+        from nexus.billing.payments import resolve_payment_provider
+
+        provider = await resolve_payment_provider()
+        if getattr(provider, "name", "") != "stripe" and psp_id.startswith("sub_"):
+            raise ProviderCancelRefused(
+                f"This subscription is billed through Stripe ({psp_id}), but no Stripe credential "
+                "is in force here, so cancelling it would stop nothing at Stripe. Activate the "
+                "credential on the Payments tab, or cancel it in the Stripe dashboard."
+            )
+        await provider.cancel_subscription(subscription_id=psp_id, at_period_end=at_period_end)
     if at_period_end:
         sub.cancel_at_period_end = True
     else:

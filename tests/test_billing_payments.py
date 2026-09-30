@@ -329,7 +329,13 @@ async def test_stripe_portal_posts_the_customer(monkeypatch):
         sent["form"] = form
         return {"id": "bps_1", "url": "https://billing.stripe.com/p/session/bps_1"}
 
+    async def _config(self):
+        return "bpc_nexus"
+
     monkeypatch.setattr(StripePaymentProvider, "_post", _fake_post)
+    # Every session names NEXUS's own portal configuration (plan switching off); how that
+    # configuration is found or created is tested in test_stripe_operator_fixes.py.
+    monkeypatch.setattr(StripePaymentProvider, "_portal_configuration", _config)
     p = StripePaymentProvider("sk_test_x")
     out = await p.create_billing_portal_session(
         customer_id="cus_1", return_url="https://app/settings"
@@ -337,7 +343,8 @@ async def test_stripe_portal_posts_the_customer(monkeypatch):
 
     assert out["id"] == "bps_1" and out["url"].startswith("https://billing.stripe.com/")
     assert sent["path"] == "/billing_portal/sessions"
-    assert sent["form"] == {"customer": "cus_1", "return_url": "https://app/settings"}
+    assert sent["form"] == {"customer": "cus_1", "configuration": "bpc_nexus",
+                            "return_url": "https://app/settings"}
 
 
 def test_every_provider_implements_the_whole_seam():

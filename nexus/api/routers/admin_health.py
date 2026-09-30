@@ -106,26 +106,29 @@ async def _probe_queue() -> tuple[str, str]:
 
 
 async def _probe_payments() -> tuple[str, str]:
-    from nexus.billing.payments import get_payment_provider
-    from nexus.core.config import get_settings
+    # The provider IN FORCE, which an active credential on the Payments tab selects on its own,
+    # and that provider's key. This read the environment's key and provider only, so a panel-only
+    # setup reported "noop" while checkout ran on Stripe (2026-09-30).
+    from nexus.billing.credentials import stripe_key_mode
+    from nexus.billing.payments import resolve_payment_provider
 
-    settings = get_settings()
-    provider = get_payment_provider()
+    provider = await resolve_payment_provider()
     if provider.name == "noop":
-        return UNCONFIGURED, "NEXUS_PAYMENT_PROVIDER=noop — no money moves"
+        return UNCONFIGURED, ("no Stripe credential is active on the Payments tab and "
+                              "NEXUS_PAYMENT_PROVIDER is noop — no money moves")
     if not getattr(provider, "configured", False):
-        return UNCONFIGURED, "stripe selected but NEXUS_STRIPE_SECRET_KEY is unset"
+        return UNCONFIGURED, "stripe selected but no secret key is set (Payments tab or env)"
 
     import httpx
 
-    key = settings.stripe_secret_key
+    key = provider.secret_key
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.get("https://api.stripe.com/v1/account",
                              headers={"Authorization": f"Bearer {key}"})
         if r.status_code != 200:
             return ERROR, f"Stripe rejected the key ({r.status_code})"
         account = r.json()
-        mode = "test" if key.startswith("sk_test") else "live"
+        mode = stripe_key_mode(key)
         notes = [f"{mode} mode", f"account={account.get('id')}"]
         if not account.get("charges_enabled"):
             notes.append("charges_enabled=FALSE — the account cannot take payment")

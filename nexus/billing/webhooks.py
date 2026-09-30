@@ -211,6 +211,19 @@ INVOICE_EVENTS = (
     "invoice.upcoming",
 )
 
+#: One-off payment events, matched to our own invoice by the stored provider reference.
+PAYMENT_EVENTS = (
+    "payment_intent.succeeded",
+    "payment_intent.payment_failed",
+    "charge.refunded",
+    "charge.dispute.created",
+)
+
+#: Every event type `apply_event` acts on: what the operator selects in Stripe. The webhook panel
+#: reads this, and a test checks every `event_type ==` branch below is in it. The panel used to add
+#: up the first two tuples only and listed 9 of the 13 (reported 2026-09-30).
+HANDLED_EVENTS = SUBSCRIPTION_EVENTS + INVOICE_EVENTS + PAYMENT_EVENTS
+
 
 def _epoch(value) -> "datetime | None":
     """Stripe timestamps are unix seconds. Anything else is ignored rather than guessed at."""
@@ -792,12 +805,7 @@ async def handle_event(session, event: VerifiedEvent) -> dict:
     if event.event_type in INVOICE_EVENTS:
         return await _apply_invoice_event(session, event, obj, outcome)
 
-    if event.event_type not in (
-        "payment_intent.succeeded",
-        "payment_intent.payment_failed",
-        "charge.refunded",
-        "charge.dispute.created",
-    ):
+    if event.event_type not in PAYMENT_EVENTS:
         return outcome
 
     # Find the invoice this event concerns by the reference we stored when collecting. Reading

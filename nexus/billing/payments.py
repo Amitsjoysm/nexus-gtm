@@ -140,7 +140,20 @@ class PaymentProvider(abc.ABC):
         """Open the provider's hosted self-service portal. Returns at least ``{"id", "url"}``.
 
         Card changes, cancellations and invoice history live there; every one of those comes
-        back to us as a ``customer.subscription.*`` or ``invoice.*`` event.
+        back to us as a ``customer.subscription.*`` or ``invoice.*`` event. Plan switching is
+        deliberately NOT offered: we learn the plan only at Checkout, so a switch made in the portal
+        would charge the new price while the workspace kept the old plan.
+        """
+
+    @abc.abstractmethod
+    async def cancel_subscription(
+        self, *, subscription_id: str, at_period_end: bool = True
+    ) -> dict:
+        """Cancel at the provider: at period end (the customer paid through it), or now.
+
+        Returns at least ``{"id", "status", "cancel_at_period_end"}``. Raises ``PaymentError`` when
+        the provider refuses, so the caller can leave its own row untouched: a subscription marked
+        cancelled here while the provider keeps charging is the failure this exists to prevent.
         """
 
 
@@ -163,6 +176,7 @@ class NoopPaymentProvider(PaymentProvider):
         self._invoices: dict[str, dict[str, Any]] = {}
         self.checkout_sessions: list[dict[str, Any]] = []
         self.portal_sessions: list[dict[str, Any]] = []
+        self.cancellations: list[dict[str, Any]] = []
         # Stage remote state here to exercise reconciliation offline.
         self.subscriptions: dict[str, dict[str, Any]] = {}
         self._seen: dict[str, PaymentResult] = {}
@@ -272,6 +286,22 @@ class NoopPaymentProvider(PaymentProvider):
         self.portal_sessions.append(record)
         return record
 
+    async def cancel_subscription(
+        self, *, subscription_id: str, at_period_end: bool = True
+    ) -> dict:
+        self.cancellations.append({"id": subscription_id, "at_period_end": at_period_end})
+        return {"id": subscription_id, "status": "active" if at_period_end else "canceled",
+                "cancel_at_period_end": at_period_end}
+
+
+#: Stamped on the portal configuration NEXUS creates, so it is found again rather than duplicated.
+#: Bump the suffix if the configuration's features ever change: a new tag creates a new one.
+PORTAL_CONFIG_TAG = "no_plan_switch_v1"
+
+#: Configuration id per Stripe account, keyed by a hash of the secret key (never the key itself).
+#: A provider instance is rebuilt every 30s, so the cache lives at module level.
+_portal_configurations: dict[str, str] = {}
+
 
 class StripePaymentProvider(PaymentProvider):
     """Stripe over the REST API, using the vendored HTTP client (no new dependency).
@@ -370,6 +400,8 @@ class StripePaymentProvider(PaymentProvider):
             try:
                 if method == "POST":
                     resp = await client.post(url, data=form or {}, headers=headers)
+                elif method == "DELETE":
+                    resp = await client.delete(url, headers=headers)
                 else:
                     resp = await client.get(url, headers=headers)
             except httpx.HTTPError as exc:      # connect/read timeout, reset connection
@@ -634,7 +666,10 @@ class StripePaymentProvider(PaymentProvider):
         self, *, customer_id: str, return_url: str = ""
     ) -> dict:
         self._require()
-        form: dict[str, Any] = {"customer": customer_id}
+        form: dict[str, Any] = {
+            "customer": customer_id,
+            "configuration": await self._portal_configuration(),
+        }
         if return_url:
             form["return_url"] = return_url
         data = await self._post("/billing_portal/sessions", form)
@@ -644,6 +679,80 @@ class StripePaymentProvider(PaymentProvider):
             "provider": self.name,
             "customer_id": customer_id,
         }
+
+    async def _portal_configuration(self) -> str:
+        """The id of a portal configuration with plan switching OFF, created once per account.
+
+        The account's default portal configuration is whatever someone clicked in the Stripe
+        dashboard, and Stripe enables subscription updates on it readily. NEXUS learns the plan only
+        at Checkout (`checkout.session.completed` carries our plan id), so a price changed in the
+        portal was billed while the workspace kept the old plan's entitlements. Passing our own
+        configuration on every session makes "no plan switching" true whatever the dashboard says.
+
+        Cards, invoices, address and cancellation stay available; cancellation is at period end,
+        matching the admin console's default. If the configuration cannot be created the portal
+        does not open: failing closed is right when the alternative charges the wrong price.
+        """
+        import hashlib
+
+        cache_key = hashlib.sha256(self.secret_key.encode()).hexdigest()[:16]
+        cached = _portal_configurations.get(cache_key)
+        if cached:
+            return cached
+        listed = await self._get("/billing_portal/configurations?active=true&limit=100")
+        for conf in listed.get("data") or []:
+            ours = (conf.get("metadata") or {}).get("nexus") == PORTAL_CONFIG_TAG
+            switching = ((conf.get("features") or {}).get("subscription_update") or {}).get(
+                "enabled")
+            if ours and not switching:
+                _portal_configurations[cache_key] = str(conf["id"])
+                return _portal_configurations[cache_key]
+        created = await self._post(
+            "/billing_portal/configurations",
+            {
+                "features[subscription_update][enabled]": "false",
+                "features[subscription_cancel][enabled]": "true",
+                "features[subscription_cancel][mode]": "at_period_end",
+                "features[payment_method_update][enabled]": "true",
+                "features[invoice_history][enabled]": "true",
+                "features[customer_update][enabled]": "true",
+                "features[customer_update][allowed_updates][0]": "email",
+                "features[customer_update][allowed_updates][1]": "address",
+                "features[customer_update][allowed_updates][2]": "tax_id",
+                "metadata[nexus]": PORTAL_CONFIG_TAG,
+            },
+            idempotency_key=f"portal-config:{PORTAL_CONFIG_TAG}",
+        )
+        _portal_configurations[cache_key] = str(created.get("id", ""))
+        return _portal_configurations[cache_key]
+
+    async def cancel_subscription(
+        self, *, subscription_id: str, at_period_end: bool = True
+    ) -> dict:
+        """At period end: set `cancel_at_period_end`. Now: DELETE, which ends it and stops billing.
+
+        No idempotency key on either: both are idempotent in effect, and a key would make a second
+        cancel within 24 hours (after someone resumed it in the dashboard) replay the first answer
+        without doing anything. A DELETE whose response was lost and then retried meets an
+        already-cancelled subscription and errors, so a refusal is checked against the live object
+        before it is reported.
+        """
+        self._require()
+        path = f"/subscriptions/{subscription_id}"
+        try:
+            if at_period_end:
+                data = await self._request("POST", path, form={"cancel_at_period_end": "true"})
+            else:
+                data = await self._request("DELETE", path)
+        except PaymentError:
+            current = await self.get_subscription(subscription_id=subscription_id)
+            done = (current.get("status") == "canceled" or
+                    (at_period_end and current.get("cancel_at_period_end")))
+            if not done:
+                raise
+            data = current
+        return {"id": str(data.get("id") or subscription_id), "status": str(data.get("status", "")),
+                "cancel_at_period_end": bool(data.get("cancel_at_period_end"))}
 
     async def fetch_subscription(self, subscription_id: str) -> dict:
         """Read one subscription back from Stripe. Used by the reconciliation job.
@@ -657,6 +766,10 @@ class StripePaymentProvider(PaymentProvider):
 
 
 _provider: PaymentProvider | None = None
+# A deliberate `set_payment_provider(x)` (the test seam), kept apart from the memo above for the
+# reason `ingestion/crm.py` keeps two globals: as one variable, "is an override installed?" could not
+# be answered once anything had been resolved.
+_override: PaymentProvider | None = None
 
 
 def build_payment_provider_from_settings() -> PaymentProvider:
@@ -669,16 +782,21 @@ def build_payment_provider_from_settings() -> PaymentProvider:
 
 
 def get_payment_provider() -> PaymentProvider:
+    """The environment's provider, for synchronous callers. Prefer ``resolve_payment_provider``,
+    which also honours a credential activated in the Payments tab."""
     global _provider
+    if _override is not None:
+        return _override
     if _provider is None:
         _provider = build_payment_provider_from_settings()
     return _provider
 
 
 def set_payment_provider(provider: PaymentProvider | None) -> None:
-    """Test/runtime override. Passing None restores selection from settings."""
-    global _provider, _resolved_at
-    _provider = provider
+    """Test/runtime override. Passing None restores selection from settings and the panel."""
+    global _provider, _override, _resolved_at
+    _override = provider
+    _provider = None
     _resolved_at = 0.0
 
 
@@ -691,38 +809,48 @@ _resolved_at = 0.0
 
 
 async def resolve_payment_provider() -> PaymentProvider:
-    """The provider to bill with, preferring an operator-managed credential over the environment.
+    """The provider to bill with: an injected double, else Stripe when EITHER the environment says
+    so OR a verified credential is active in the Payments tab, else the offline default.
 
-    Async because reading the managed credential is a database call. `get_payment_provider()` stays
-    for the synchronous callers and for tests that inject a double — an explicit override always
-    wins here, so `set_payment_provider` still does what it says.
+    The second half is new (2026-09-30). Activating a credential already requires a live
+    verification against `/v1/account`, which is a stronger statement of intent than an env var, yet
+    the tab did nothing until `NEXUS_PAYMENT_PROVIDER=stripe` was also set in the deployment: an
+    operator could verify and activate a key and every checkout still ran on `noop`. The environment
+    alone still selects Stripe as before, so no deployment that set it changes.
+
+    Async because reading the managed credential is a database call; 30s TTL so the worker, a
+    separate process, sees a change without a restart.
     """
     global _provider, _resolved_at
     import time
 
+    if _override is not None:
+        return _override
     if _provider is not None and (time.monotonic() - _resolved_at) < _CREDENTIAL_TTL_S:
         return _provider
 
     from nexus.core.config import get_settings
 
     s = get_settings()
-    if s.payment_provider != "stripe":
-        # Nothing to resolve: the noop provider has no credential. Build it the old way so a
-        # deployment with no payment provider never touches the credentials table.
-        if _provider is None:
-            _provider = build_payment_provider_from_settings()
-        return _provider
-
+    secret = ""
     try:
-        from nexus.billing.credentials import resolve_stripe_secrets
+        from nexus.billing.credentials import active_credential, resolve_stripe_secrets
 
-        secret, _hook, _pub = await resolve_stripe_secrets()
+        panel_active = await active_credential("stripe") is not None
+        if s.payment_provider == "stripe" or panel_active:
+            secret, _hook, _pub = await resolve_stripe_secrets()
     except Exception:
         # Falling back rather than raising: losing the ability to bill because a lookup hiccuped
         # is worse than billing with the configuration we already had.
         logger.warning("could not resolve the managed payment credential", exc_info=True)
-        secret = s.stripe_secret_key
+        panel_active = False
+        secret = s.stripe_secret_key if s.payment_provider == "stripe" else ""
 
-    _provider = StripePaymentProvider(secret)
+    if s.payment_provider == "stripe" or panel_active:
+        _provider = StripePaymentProvider(secret)
+    elif not isinstance(_provider, NoopPaymentProvider):
+        # Reuse one offline provider, as before: what it recorded is how tests (and an operator
+        # reading the synthetic ids) see what WOULD have been charged.
+        _provider = NoopPaymentProvider()
     _resolved_at = time.monotonic()
     return _provider
