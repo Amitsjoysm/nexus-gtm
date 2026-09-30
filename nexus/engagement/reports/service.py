@@ -23,8 +23,10 @@ size, and response times read a window (30 days by default).
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from statistics import median
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 RESPONSE_WINDOW_DAYS = 30
 NEEDS_AN_ANSWER = ("interested", "question", "referral")

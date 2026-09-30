@@ -20,7 +20,9 @@ Four decisions close an item, and each one is a different statement about the pe
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, time, timezone
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 OPEN_CATEGORIES = ("interested", "question", "referral", "unclear")
 HANDLED_CATEGORIES = ("declined", "unsubscribe")

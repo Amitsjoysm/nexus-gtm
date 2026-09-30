@@ -10,7 +10,9 @@
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 
 def zone_name_for(enrollment, campaign, mailbox) -> str:

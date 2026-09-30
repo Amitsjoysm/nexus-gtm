@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import time
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import format_datetime, make_msgid
 
@@ -20,6 +20,8 @@ from nexus.core.config import get_settings
 from tests.conftest import tenant_session
 from tests.test_engagement_sending import SentFolder
 from tests.test_engagement_sequences import _enrollment, _launched, _run
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 NOW = datetime(2026, 9, 22, 9, 0, tzinfo=UTC)
 

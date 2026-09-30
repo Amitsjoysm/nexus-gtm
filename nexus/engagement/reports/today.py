@@ -17,7 +17,9 @@ view is the reply desk's toggle.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 #: The order kinds appear in, and what each one asks of the SDR.
 KINDS = ("reply", "decide", "colleagues", "call", "review", "restart", "returning")

@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 logger = logging.getLogger("nexus.engagement.sending")
 

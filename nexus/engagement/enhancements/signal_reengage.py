@@ -61,8 +61,8 @@ class Suggestion:
 
 
 def _aware(moment: datetime | None) -> datetime | None:
-    from datetime import UTC
-
+    from datetime import timezone
+    UTC = timezone.utc
     if moment is None or moment.tzinfo is not None:
         return moment
     return moment.replace(tzinfo=UTC)

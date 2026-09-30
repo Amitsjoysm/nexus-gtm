@@ -10,7 +10,9 @@ reset mid-afternoon for an SDR in California and count yesterday's evening sends
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 #: Above this many a day, the chance of being marked as spam rises for most domains.
 VOLUME_WARNING_THRESHOLD = 50

@@ -8,13 +8,15 @@ actually do with the bytes is proved against the real services in `tests_live/en
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email import message_from_bytes as _parse
 from email.policy import default as _modern
 
 import pytest
 
 from tests.conftest import make_tenant, tenant_session
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 NOW = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
 

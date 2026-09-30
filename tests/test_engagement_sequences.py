@@ -6,7 +6,7 @@ Drafts come from the real `MessagingAgent` on the offline stub model, and sends 
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email import message_from_bytes as _parse
 from email.policy import default as _modern
 
@@ -15,6 +15,8 @@ import pytest
 from nexus.core.config import get_settings
 from tests.conftest import auth, make_tenant, seed_relevance_profile, signup, tenant_session
 from tests.test_engagement_sending import SentFolder
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 NOW = datetime(2026, 9, 22, 9, 0, tzinfo=UTC)   # a Tuesday
 

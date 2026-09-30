@@ -6,7 +6,7 @@ provider double.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -14,6 +14,8 @@ from nexus.core.config import get_settings
 from tests.conftest import auth, principal_from_token, signup, tenant_session
 from tests.test_engagement_replies import Mailbox, _mail, _sync
 from tests.test_engagement_sequences import STEPS, _enrollment, _launched, _run
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 
 @pytest.fixture

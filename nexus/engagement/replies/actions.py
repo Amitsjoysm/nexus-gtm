@@ -16,7 +16,9 @@ human replies are drafted in phase 10 and sent by the SDR.
 """
 from __future__ import annotations
 
-from datetime import UTC, time
+from datetime import time, timezone
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 RESUME_AT = time(9, 0)
 HUMAN = ("interested", "question", "referral")

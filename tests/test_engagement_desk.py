@@ -6,7 +6,7 @@ from a real sent email and a real reply rather than a hand-built classification 
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -15,6 +15,8 @@ from nexus.core.config import get_settings
 from tests.conftest import auth, signup, tenant_session
 from tests.test_engagement_replies import NOW, Mailbox, _mail, _sync
 from tests.test_engagement_sequences import _enrollment, _launched, _run
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 
 @pytest.fixture

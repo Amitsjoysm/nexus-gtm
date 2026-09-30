@@ -22,7 +22,9 @@ the email used one of them (D17).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc  # datetime.UTC is 3.11+; this project supports 3.10
 
 #: Per-message character budget. A long reply is kept; a forwarded thread pasted inside it is not.
 MESSAGE_BUDGET = 1500

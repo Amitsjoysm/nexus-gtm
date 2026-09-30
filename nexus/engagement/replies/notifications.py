@@ -128,7 +128,7 @@ def renewal_due(mailbox, now: datetime) -> bool:
     if expires is None:
         return True
     if expires.tzinfo is None:
-        from datetime import UTC
-
+        from datetime import timezone
+        UTC = timezone.utc
         expires = expires.replace(tzinfo=UTC)
     return expires - now < RENEW_WITHIN

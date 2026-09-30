@@ -43,6 +43,11 @@
 #   a-test-pseudonymisation-secret-with-enough-variety-0123456789 tests/test_engagement_ledger_stores.py, and the phase 06 plan doc
 #                            quoting it
 #   an-integration-pseudonymisation-secret-0123456789abcdef tests_integration/test_ledger_stores_pg.py, and the same plan doc
+#
+# Added 2026-09-30 (generic-api-key, raised by gitleaks 8.24.3 in CI and not by 8.18.4 locally):
+#
+#   idempotency_key=f"populate:{run_id}"  nexus/prospecting/populate.py - the billing idempotency
+#                            key for one populate run, built from the run's id. Not a credential.
 
 [extend]
 useDefault = true
@@ -59,4 +64,5 @@ regexes = [
   'sk_live_abcdefghijklmnop',
   'a-test-pseudonymisation-secret-with-enough-variety-0123456789',
   'an-integration-pseudonymisation-secret-0123456789abcdef',
+  'idempotency_key=f"populate:\{run_id\}"',
 ]
