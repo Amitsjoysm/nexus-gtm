@@ -40,8 +40,6 @@ def _allow_private() -> bool:
 @asynccontextmanager
 async def connect(store: str):
     """One asyncpg connection to ``store``. Raises ``StoreNotConfigured`` when there is no DSN."""
-    import asyncpg
-
     from nexus.engagement import config
     from nexus.sources.safety import validate_dsn
 
@@ -51,6 +49,10 @@ async def connect(store: str):
     if not dsn:
         raise StoreNotConfigured(store)
     validate_dsn(dsn, allow_private=_allow_private())
+    # Imported only once there is a DSN to use. asyncpg is the `postgres` extra, so a deployment
+    # without it raised ImportError here BEFORE the "no DSN" check, and `status` reported an
+    # unconfigured store as configured (found by CI, which installs without that extra).
+    import asyncpg
     conn = await asyncpg.connect(
         dsn.replace("postgresql+asyncpg://", "postgresql://", 1),
         timeout=20, command_timeout=60, statement_cache_size=0,

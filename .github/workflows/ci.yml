@@ -13,6 +13,8 @@ concurrency:
 permissions:
   contents: read
 
+# Python 3.11 everywhere: the version the production image runs (deploy/Dockerfile). CI tested
+# 3.10 while production ran 3.11, so a 3.11-only import passed every local check and failed here.
 jobs:
   # ---------- Quality gate: lint ----------
   lint:
@@ -22,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.10", cache: pip }
+        with: { python-version: "3.11", cache: pip }
       - run: pip install ruff
       - name: ruff (F + E9 — real bugs, not style noise)
         run: ruff check nexus tests
@@ -48,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.10", cache: pip }
+        with: { python-version: "3.11", cache: pip }
       # `metrics` is required, not optional: /metrics is on by default since M15, and
       # test_incident_hardening asserts ordinary endpoints still work with instrumentation
       # ACTIVE. Without the instrumentator installed, `_maybe_enable_metrics` degrades to
@@ -86,7 +88,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.10", cache: pip }
+        with: { python-version: "3.11", cache: pip }
       - run: pip install -e ".[dev,postgres,redis]"
       - name: Integration tests (real Postgres + Redis)
         env:
@@ -128,7 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.10" }
+        with: { python-version: "3.11" }
       - run: pip install pip-audit && pip-audit -r <(pip install -e . >/dev/null 2>&1; pip freeze) || true
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
@@ -222,7 +224,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.10", cache: pip }
+        with: { python-version: "3.11", cache: pip }
       - run: pip install -e ".[dev,postgres]"
       - name: Live engagement tests (serial; skips name the missing secret)
         run: pytest tests_live/engagement -n0 -p no:cacheprovider --timeout=300 -q -rs
