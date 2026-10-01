@@ -256,12 +256,18 @@ async def _world():
 
 
 @pytest.fixture
-def capturing():
-    from nexus.agents.llm import set_llm_provider
+def capturing(monkeypatch):
+    """Install the capturing model as the process LLM, and put the previous one BACK afterwards.
+
+    `conftest` resets the agent runtime between tests but not the provider, so a bare
+    `set_llm_provider` here left this fake answering for every later test on the worker: the reply
+    desk's suite, next alphabetically, failed seventeen tests in a full run and passed alone.
+    """
+    from nexus.agents import llm as llm_module
     from nexus.agents.runtime import reset_agent_runtime
 
     llm = _Capturing()
-    set_llm_provider(llm)
+    monkeypatch.setattr(llm_module, "_provider", llm)
     reset_agent_runtime()
     yield llm
     reset_agent_runtime()
