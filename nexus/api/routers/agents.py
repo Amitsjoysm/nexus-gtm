@@ -102,6 +102,27 @@ async def latest_runs(
     return out
 
 
+async def _sender_name(ts: TenantSession, user_id: str | None) -> str:
+    """The name this rep's email goes out under: their connected mailbox's display name (what the
+    recipient sees in From), else their own name. Empty when neither is known. Never raises: a
+    missing name costs the sign-off, not the draft."""
+    if not user_id:
+        return ""
+    try:
+        from nexus.models.engagement import MailboxConnection
+        from nexus.models.identity import User
+
+        mailbox = await ts.first(MailboxConnection, MailboxConnection.owner_user_id == user_id,
+                                 MailboxConnection.status == "connected")
+        name = (getattr(mailbox, "display_name", "") or "").strip() if mailbox else ""
+        if not name:
+            user = await ts.session.get(User, user_id)
+            name = ((user.full_name if user else "") or "").strip()
+        return name
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 @router.post("/{agent_name}/run", response_model=AgentRunResponse)
 async def run_agent(
     agent_name: str,
@@ -113,10 +134,15 @@ async def run_agent(
         # Metered *after* this check, so an unknown agent is never billed.
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown agent '{agent_name}'")
     capability = _AGENT_CAPABILITY.get(agent_name, _DEFAULT_AGENT_CAPABILITY)
+    inputs = dict(body.inputs)
+    if agent_name == "messaging" and not inputs.get("sender_name"):
+        # The draft is signed by whoever asked for it. Unnamed, the model invented one ("Best,
+        # Alex" on a live composer draft, 2026-10-01).
+        inputs["sender_name"] = await _sender_name(ts, principal.user_id)
     async with metered(ts, capability, user_id=principal.user_id,
                        attrs={"agent": agent_name}):
         result = await get_agent_runtime().run(
-            agent_name, ts, account_id=body.account_id, **body.inputs
+            agent_name, ts, account_id=body.account_id, **inputs
         )
 
     # Record what the model actually consumed, ALONGSIDE the flat per-action charge above. The flat

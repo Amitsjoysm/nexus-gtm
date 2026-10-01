@@ -7,6 +7,7 @@ from nexus.agents.copy import (
     email_rules,
     format_pains,
     select_value_prop,
+    sender_block,
     signal_facts,
     today_line,
 )
@@ -178,6 +179,12 @@ class MessagingAgent(BaseAgent):
         context_pack = (ctx.inputs.get("context_pack") or "").strip()
         if context_pack:
             content += f"\n{context_pack}\n"
+        # Who is sending, for callers without a context pack (the contact composer passes the
+        # signed-in rep). Without it the model invents a name to sign with ("Best, Alex").
+        if "YOU (THE SENDER)" not in context_pack:
+            sender = sender_block(str(ctx.inputs.get("sender_name") or ""))
+            if sender:
+                content += f"\n{sender}"
         facts_to_use = [f for f in (ctx.inputs.get("personal_facts") or []) if f]
         content += (
             f"\nThe trigger to open on: {hook}\n"

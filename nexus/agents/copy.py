@@ -6,6 +6,8 @@ and nothing in the type system could notice.
 """
 from __future__ import annotations
 
+import re
+
 # How many problems to name in one sentence. Four reads as a list being recited at the prospect;
 # two is a sentence. The rest of the value prop still reaches the model through the prompt body.
 MAX_PAINS_IN_A_SENTENCE = 2
@@ -90,10 +92,30 @@ _LOOKALIKES = str.maketrans({
 })
 
 
+#: Spaces at the end of a line: a model writing markdown ends lines with two spaces to force a
+#: break (measured on a live draft, 2026-10-01). Invisible in the text part, noise everywhere else.
+_LINE_END_SPACE = re.compile(r"[ \t]+(?=\r?\n|$)")
+
+
 def tidy_text(text: str) -> str:
-    """The same words, without look-alike or invisible characters. Curly quotes and dashes stay:
-    they are ordinary punctuation every client renders."""
-    return (text or "").translate(_LOOKALIKES)
+    """The same words, without look-alike or invisible characters or spaces at line ends. Curly
+    quotes and dashes stay: they are ordinary punctuation every client renders."""
+    return _LINE_END_SPACE.sub("", (text or "").translate(_LOOKALIKES))
+
+
+def sender_block(name: str) -> str:
+    """Who the email is from, for the prompt. The structure rule asks for a sign-off with "your
+    first name" and a model never told it invents one: "Best, Alex" above the rep's own signature
+    (reported 2026-09-30, and again on the contact composer 2026-10-01). Empty when no name is known,
+    which leaves the send path to sign with the mailbox signature."""
+    name = " ".join((name or "").split())
+    if not name:
+        return ""
+    first = name.split()[0]
+    return ("YOU (THE SENDER)\n"
+            f"- Name: {name}\n"
+            f"- Sign off with 'Best,' and your first name, {first}. Write nothing under it: your "
+            "signature is added when the email is sent.\n")
 
 
 # ---------------------------------------------------------------------------------------------

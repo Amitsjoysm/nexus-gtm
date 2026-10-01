@@ -83,24 +83,22 @@ def conversation_block(messages) -> str:
     return "\n".join(lines) + "\n"
 
 
-async def _sender_block(ts, mailbox) -> str:
-    """Who the email is from. The structure rule asks for a sign-off with "your first name" and the
-    model was never told it, so it invented one ("Best, Alex" above the rep's own signature,
-    reported 2026-09-30). The mailbox's display name, else its owner's name; nothing when neither is
-    known, which leaves the send path to sign with the signature."""
+async def sender_name(ts, mailbox) -> str:
+    """The name an email from this mailbox is signed with: its display name, else its owner's."""
     name = (getattr(mailbox, "display_name", "") or "").strip()
     if not name and getattr(mailbox, "owner_user_id", None):
         from nexus.models.identity import User
 
         owner = await ts.session.get(User, mailbox.owner_user_id)
         name = ((owner.full_name if owner else "") or "").strip()
-    if not name:
-        return ""
-    first = name.split()[0]
-    return ("YOU (THE SENDER)\n"
-            f"- Name: {name}\n"
-            f"- Sign off with 'Best,' and your first name, {first}. Write nothing under it: your "
-            "signature is added when the email is sent.\n")
+    return name
+
+
+async def _sender_block(ts, mailbox) -> str:
+    """Who the email is from (`copy.sender_block`), so the model signs with the real first name."""
+    from nexus.agents.copy import sender_block
+
+    return sender_block(await sender_name(ts, mailbox))
 
 
 #: What each follow-up adds, by its place in the sequence (the B2B cold email playbook the product

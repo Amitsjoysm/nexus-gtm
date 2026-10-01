@@ -348,3 +348,35 @@ async def test_a_draft_that_asks_for_a_meeting_is_regenerated_with_the_reason(ca
     assert len(capturing.prompts) == 2
     assert "requests a meeting" in capturing.prompts[1]
     assert "Worth a look?" in written.body and written.problems == []
+
+
+# ---- the contact composer signs with the rep's own name -------------------------------------------
+
+async def test_the_composer_draft_is_signed_by_the_rep_who_asked(client, capturing):
+    """A live composer draft on 2026-10-01 signed "Best, Alex": the composer calls the agent
+    directly, so the sender block the engagement drafter adds never reached it."""
+    from tests.conftest import auth, principal_from_token, signup
+
+    token = await signup(client, slug="composer", email="sam@composer.com", company="Composer")
+    async with tenant_session(principal_from_token(token).tenant_id) as ts:
+        await seed_relevance_profile(ts)
+    account = await client.post("/api/accounts", headers=auth(token),
+                                json={"name": "Acme Robotics", "domain": "acme.io"})
+    contact = await client.post(f"/api/accounts/{account.json()['id']}/contacts",
+                                headers=auth(token),
+                                json={"full_name": "Jane Buyer", "email": "jane@acme.io"})
+    r = await client.post("/api/agents/messaging/run", headers=auth(token),
+                          json={"account_id": account.json()["id"],
+                                "inputs": {"contact_id": contact.json()["id"]}})
+    assert r.status_code == 200, r.text
+    # `signup` names the owner "Rep".
+    assert "YOU (THE SENDER)\n- Name: Rep" in capturing.prompts[-1]
+    assert "your first name, Rep." in capturing.prompts[-1]
+
+
+def test_markdown_line_breaks_are_removed():
+    """A live draft ended every line with two spaces (markdown's forced break)."""
+    from nexus.agents.copy import tidy_text
+
+    assert tidy_text("Hi David,  \nOur AI\u2011powered scoring.  \n\nBest,  \nSam  ") == \
+        "Hi David,\nOur AI-powered scoring.\n\nBest,\nSam"
