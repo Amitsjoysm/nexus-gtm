@@ -2047,6 +2047,13 @@ engagement kind; anything else (composer, plays, orchestrator) is a first email:
   in"). Callers passing no touch are checked as before. A failed check costs one regeneration, and
   on an auto follow-up it holds the email for review (D17), so a new check must not false-positive.
 - The offline stub writes the same shape, and passes its own checks.
+- **Both drafting paths name the sender** through `copy.sender_block`: the engagement drafter from
+  the mailbox, and `POST /agents/messaging/run` (the contact composer) from the signed-in rep's
+  connected mailbox, else their own name. The composer path was missed by the 2026-09-30 fix and a
+  live draft still signed "Best, Alex". Measured on the local deploy, 2026-10-01, same contact:
+  before, a title-case subject, one block with markdown line breaks, "a 15-minute call on Friday",
+  `U+2011`/`U+202F`; after, "hg capital buy", paragraphs, "Open to seeing how?", the rep's name, no
+  look-alike characters, `check_draft` clean.
 
 ## Drafted email: structure, signature, and the mailbox that sends it
 
