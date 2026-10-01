@@ -106,10 +106,16 @@ class StubLLMProvider(LLMProvider):
             from nexus.agents.copy import DEFAULT_PAINS
 
             pain = v.get("pain") or DEFAULT_PAINS
+            # The same shape the rules ask a real model for (`copy.email_rules`): a short subject,
+            # the first name, one paragraph per idea, and an interest question rather than a
+            # meeting. This is what a deployment with a dead key sends, so it is held to them too.
+            first = (str(contact).split() or ["there"])[0]
             return (
-                f"Subject: {vp} for {account}\n\n"
-                f"Hi {contact}, noticed {trigger}. Teams like {account} use {vp} to get ahead of "
-                f"{pain}. Worth a 15-min look?\n\nBest,\nYour AE"
+                f"Subject: idea for {account}\n\n"
+                f"Hi {first},\n\n"
+                f"Noticed {trigger}.\n\n"
+                f"Teams like {account} use {vp} to get ahead of {pain}.\n\n"
+                f"Worth a look?\n\nBest,\nYour AE"
             )
         if purpose == "call_script":
             import json as _json

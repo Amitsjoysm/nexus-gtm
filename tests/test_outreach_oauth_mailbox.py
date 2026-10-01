@@ -71,7 +71,8 @@ async def test_a_connected_gmail_mailbox_sends_from_the_composer(client, folder)
 
     sent = message_from_bytes(folder.delivered[0])
     assert sent["To"] == "jane@acme.io" and "sam@oauthsend.com" in sent["From"]
-    text = sent.get_content()
+    # Plain text and HTML since 2026-09-30; CRLF on the wire, normalised here as a client would.
+    text = sent.get_body(("plain",)).get_content().replace("\r\n", "\n")
     # The mailbox's own signature and the opt-out footer, as on every engine send.
     assert "Sam\nSDR, Seller Co" in text and "/api/u/" in text
     async with tenant_session(me.tenant_id) as ts:
@@ -116,7 +117,8 @@ async def test_it_saves_to_the_providers_drafts_and_charges_nothing(client, fold
     assert r.json()["ok"] is True and r.json()["from_email"] == "sam@oauthdraft.com"
     assert folder.delivered == [] and len(folder.drafts) == 1
     draft = message_from_bytes(folder.drafts[0])
-    assert draft["To"] == "jane@acme.io" and "Sam\nSDR, Seller Co" in draft.get_content()
+    plain = draft.get_body(("plain",)).get_content().replace("\r\n", "\n")
+    assert draft["To"] == "jane@acme.io" and "Sam\nSDR, Seller Co" in plain
     async with tenant_session(me.tenant_id) as ts:
         assert await ts.list(BillingUsageEvent,
                              BillingUsageEvent.capability_id == "outreach.email_send") == []

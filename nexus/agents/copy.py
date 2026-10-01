@@ -81,6 +81,39 @@ OUTPUT_CONTRACT = (
     "then the body. No preamble, no commentary, no markdown."
 )
 
+#: Characters model output carries that look like ordinary ones and are not: a non-breaking hyphen
+#: renders as a box in some fonts, and zero-width marks survive into copy-paste and spam scoring.
+_LOOKALIKES = str.maketrans({
+    "\u2010": "-", "\u2011": "-", "\u2012": "-",        # hyphen, non-breaking hyphen, figure dash
+    "\u00a0": " ", "\u202f": " ", "\u2007": " ", "\u2009": " ",   # non-breaking and thin spaces
+    "\u200b": None, "\u200c": None, "\u200d": None, "\u2060": None, "\ufeff": None,
+})
+
+
+def tidy_text(text: str) -> str:
+    """The same words, without look-alike or invisible characters. Curly quotes and dashes stay:
+    they are ordinary punctuation every client renders."""
+    return (text or "").translate(_LOOKALIKES)
+
+
+# ---------------------------------------------------------------------------------------------
+# The email's shape, from the B2B cold email playbook the product owner supplied (2026-10-01).
+#
+# Its rules that this product can act on: a short lowercase subject that reads like an internal
+# note; one trigger that explains why now; the problem it creates, stated as an observation; proof
+# only as a real peer result; ONE soft, interest-based ask (never a meeting in a cold email);
+# short paragraphs; plain text; every follow-up adds something new and the last one closes the
+# loop. The per-touch half lives in `engagement/drafting/context.py`, which knows which touch this
+# is, and `agents/email_quality.py` checks the parts a reader can point at.
+
+#: The subject line. A title-case pitch with urgency reads as marketing and is skimmed as
+#: marketing; two or three lowercase words read like a colleague's note.
+SUBJECT_RULE = (
+    "Subject line: 2 to 4 words, lowercase except names and acronyms, the way a colleague labels "
+    "an internal note (for example 'eu expansion' or 'new sdr pod'). No urgency, no clickbait, no "
+    "question or exclamation marks, and not the recipient's name."
+)
+
 #: The shape of the body itself.
 #:
 #: Reported 2026-09-16: drafts arrived with no salutation. Nothing had ever asked for one — the
@@ -89,26 +122,62 @@ OUTPUT_CONTRACT = (
 #: buyer reads those two lines before anything else, and their absence is the first thing that says
 #: a machine wrote this.
 #:
+#: Paragraphs since 2026-10-01: a 90-word block with no blank line is what a reader skims past, and
+#: the HTML part (`engagement/sending/mime.py`) turns each blank-line paragraph into a real one.
+#:
 #: The sign-off is the NAME ONLY: the rep's signature block (title, company, phone) is appended by
 #: `nexus/outreach/signature.py` at send time, and a model inventing one would put a made-up title
 #: and number under a real person's name.
 STRUCTURE_RULE = (
-    "Structure the body as: a greeting line addressing the recipient by first name ('Hi Sam,'), "
-    "then the observation, then one line on what we remove, then the ask, then a short sign-off "
-    "line ('Best,' and your first name). Do not write a title, company, phone number or any other "
-    "signature detail under the sign-off — that is added automatically."
+    "Lay the body out as short paragraphs of one or two sentences, separated by one blank line: "
+    "a greeting line addressing the recipient by first name ('Hi Sam,'); the reason you are "
+    "writing now; the problem that creates for someone in their role, stated as an observation, "
+    "and what we remove; one line of proof only if the context names a real customer result; the "
+    "ask, on its own line; then a sign-off line ('Best,') with your first name on the line below "
+    "it. Do not write a title, company, phone number or any other signature detail under the "
+    "sign-off — that is added automatically. Plain text only: no bullet points, bold, headings, "
+    "emoji or em dashes, and at most one link, only if the context gives it."
 )
 
-#: The closing ask. Shared by both agents so an email and a call script cannot drift into asking
-#: for different things.
+#: One signal, used rather than recited. Three signals in one email reads as a dossier, and quoting
+#: someone's post back to them reads as surveillance; the playbook's line is "reference the idea".
+SIGNAL_RULE = (
+    "Use ONE signal: the single fact that best explains why you are writing now, and connect it "
+    "to the problem we solve. Say what it means for them rather than reciting it, and never quote "
+    "their post or article back to them. Do not pretend to know them, and do not compliment them."
+)
+
+#: The ask in an email nobody has answered yet: one interest question, NOT a meeting.
+#:
+#: This replaced "name a short duration and a rough time" on 2026-10-01, on the playbook's
+#: evidence that an interest-based ask ("Worth a look?") is answered far more often than a meeting
+#: request in a cold email: a stranger can say yes to a question in one word, and a calendar ask
+#: wants half an hour before they know why. What survives from the old rule is its reason: do not
+#: make the reader judge whether something is "valuable".
+EMAIL_CTA_RULE = (
+    "End with ONE short, interest-based question they can answer in a word, such as 'Worth a "
+    "look?' or 'Open to seeing how?'. Do not ask for a meeting, call or demo, and do not name a "
+    "duration, a day or a time: that comes after they reply. Do not offer to send anything the "
+    "context does not mention, and do not ask whether something would be 'valuable', 'helpful' "
+    "or 'of interest'."
+)
+
+#: The ask in a reply to someone who wrote back. Interest is the moment to make booking easy, and
+#: two concrete times beat "when works for you?", which hands the scheduling back to the buyer.
+REPLY_CTA_RULE = (
+    "If they showed interest, end by offering two specific times in their timezone (weekday, date "
+    "and time, worked out from the date given above) and ask which suits. Otherwise end with one "
+    "clear next step they can accept or decline in a word."
+)
+
+#: The call script's closing ask. A call is already a conversation, so it still books the meeting.
 #:
 #: **A question is not a CTA.** Measured on live drafts: every one closed with "Would a brief
 #: conversation about reducing plant energy spend be valuable for you?" or "...be helpful?" — a
 #: question, technically, and one a busy buyer cannot answer. It asks them to evaluate whether a
-#: meeting has value rather than to accept a small, specific commitment, which is the difference
-#: between a template and how a real SDR closes. The call scripts were already doing it right
-#: ("Would you be open to a 15-minute call this week?"), so this makes the email match.
-CTA_RULE = (
+#: meeting has value rather than to accept a small, specific commitment. Emails moved to
+#: `EMAIL_CTA_RULE` on 2026-10-01; this stays for the call script.
+CALL_CTA_RULE = (
     "End with ONE specific, low-friction ask: name a short duration and a rough time, or propose "
     "one concrete next step they can accept or decline in a word. Do not ask whether something "
     "would be 'valuable', 'helpful', 'of interest' or 'worth exploring' — those ask the reader to "
@@ -123,25 +192,43 @@ TONE_RULE = (
     "hype, warm without familiarity. No exclamation marks, no emoji, no flattery."
 )
 
-EMAIL_RULES = (
-    f"Rules: Under {EMAIL_WORD_CAP} words. Short sentences. "
-    f"{STRUCTURE_RULE} "
-    "Open with a specific observation about THEM, then connect it to one problem we solve, then "
-    "make the ask. Never open with a pitch or with our company. "
-    f"{TONE_RULE} "
-    "Do not write 'hope this finds you well', 'I wanted to reach out', 'circling back', "
-    "'synergy', 'leverage', 'game-changer', or 'revolutionary'. "
-    "No more than one question. No bullet lists. Plain sentences only. "
-    f"{CTA_RULE} "
-    "Use only facts given above — if a detail is missing, leave it out rather than inventing it. "
-    "Never state a metric, customer name or case study that is not in the context."
-)
+#: Touches that answer someone who wrote to us. Every other touch is still unanswered outreach.
+WARM_TOUCHES = frozenset({"response"})
+
+#: Touches sent inside an existing thread, whose subject is the thread's ("Re: ...") whatever the
+#: model writes (`drafting/drafter.py`), so a subject rule there would only cost a retry.
+THREADED_TOUCHES = frozenset({"followup", "reengage", "response", "signal"})
+
+
+def email_rules(touch: str = "first") -> str:
+    """The rules for one email. ``touch`` is the engagement kind (`first`, `followup`, `signal`,
+    `reengage`, `response`); anything else is read as a first email, which is what every caller
+    outside the engagement engine (the composer, plays, the orchestrator) is writing."""
+    warm = touch in WARM_TOUCHES
+    return (
+        f"Rules: Under {EMAIL_WORD_CAP} words; a follow-up can be much shorter. Short sentences. "
+        f"{STRUCTURE_RULE} "
+        f"{'' if touch in THREADED_TOUCHES else SUBJECT_RULE + ' '}"
+        f"{'' if warm else SIGNAL_RULE + ' '}"
+        "Never open with a pitch or with our company. "
+        f"{TONE_RULE} "
+        "Do not write 'hope this finds you well', 'I wanted to reach out', 'circling back', "
+        "'just following up', 'just bumping', 'just checking in', 'synergy', 'leverage', "
+        "'game-changer', or 'revolutionary'. "
+        "No more than one question. "
+        f"{REPLY_CTA_RULE if warm else EMAIL_CTA_RULE} "
+        "Use only facts given above — if a detail is missing, leave it out rather than inventing "
+        "it. Never state a metric, customer name or case study that is not in the context."
+    )
+
+
+EMAIL_RULES = email_rules()
 
 CALL_RULES = (
     "Rules: written to be SPOKEN, not read. Short sentences a person can say without pausing. "
     "No jargon, no buzzwords, no bullet-point phrasing. "
     f"{TONE_RULE} "
-    f"The `cta` field: {CTA_RULE} "
+    f"The `cta` field: {CALL_CTA_RULE} "
     "Use only facts given above — if a detail is missing, leave it out rather than inventing it. "
     "Never state a metric, customer name or case study that is not in the context."
 )

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from nexus.agents.copy import (
-    EMAIL_RULES,
     OUTPUT_CONTRACT,
     account_facts,
+    email_rules,
     format_pains,
     select_value_prop,
     signal_facts,
@@ -17,10 +17,33 @@ from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 
 
 def _split_subject(text: str) -> tuple[str, str]:
+    # Every draft passes through here, so this is where look-alike characters are removed: the
+    # composer, the reply desk and the campaign review all show what is sent (2026-09-30).
+    from nexus.agents.copy import tidy_text
+
+    text = tidy_text(text or "")
     if text.lower().startswith("subject:"):
         head, _, rest = text.partition("\n")
         return head.split(":", 1)[1].strip(), rest.strip()
     return "", text.strip()
+
+
+#: What this email IS, by engagement touch, for the opening line of the prompt. "Write a cold email"
+#: for a reply to someone who asked a question told the model to pitch them from scratch.
+_TOUCH_NOUN = {
+    "first": "a cold email",
+    "followup": "a follow-up email",
+    "signal": "a follow-up email",
+    "reengage": "an email picking the conversation back up",
+    "response": "a reply",
+}
+
+
+def _touch(ctx) -> str:
+    """The engagement kind this draft is for. Every caller outside the engine (the composer, plays,
+    the orchestrator) writes a first email, so that is the default."""
+    touch = str(ctx.inputs.get("touch_kind") or "").strip().lower()
+    return touch if touch in _TOUCH_NOUN else "first"
 
 
 def _first_name(contact) -> str:
@@ -125,6 +148,7 @@ class MessagingAgent(BaseAgent):
         hook = brief.signal_title if (brief and brief.signal_title) else trigger
 
         angle = (ctx.inputs.get("angle") or "").strip()
+        touch = _touch(ctx)
         # Facts first, then the task, then the rules, then the output contract. The facts have to
         # precede the rules or "use only facts given above" refers to nothing.
         who = contact.full_name if contact else "the buyer"
@@ -142,7 +166,7 @@ class MessagingAgent(BaseAgent):
             # First, because everything after it is dated relative to now: the signal ages, and the
             # specific day the CTA is told to propose.
             f"{today_line()}\n\n"
-            f"Write a cold email from an experienced SDR to {who}"
+            f"Write {_TOUCH_NOUN[touch]} from an experienced SDR to {who}"
             f"{f', {role},' if role else ''} at {ctx.account.name}.\n\n"
             f"WHAT WE KNOW ABOUT THEM:\n{facts}\n"
         )
@@ -179,7 +203,9 @@ class MessagingAgent(BaseAgent):
             content += f"Revise per the reviewer's instructions: {guidance}\n"
         # Rules last so they are the final thing before generation, and the reviewer's steer above
         # is never buried under them.
-        content += f"\n{EMAIL_RULES}\n{OUTPUT_CONTRACT}"
+        # The rules for THIS touch (`copy.email_rules`): a reply offers times, an unanswered email
+        # asks one interest question, a threaded one keeps the thread's subject.
+        content += f"\n{email_rules(touch)}\n{OUTPUT_CONTRACT}"
         user = LLMMessage(role="user", content=content)
         message = await ctx.complete(
             [ctx.system_message(), user],
@@ -215,7 +241,7 @@ class MessagingAgent(BaseAgent):
         # three completions nobody asked to pay for.
         problems = check_draft(
             subject=subject, body=body, first_name=_first_name(contact),
-            facts=facts_to_use, company_name=ctx.account.name or "",
+            facts=facts_to_use, company_name=ctx.account.name or "", touch=touch,
         )
         if problems:
             retry = LLMMessage(
@@ -237,7 +263,7 @@ class MessagingAgent(BaseAgent):
             if retry_body.strip() and len(
                 check_draft(subject=retry_subject, body=retry_body,
                             first_name=_first_name(contact), facts=facts_to_use,
-                            company_name=ctx.account.name or "")
+                            company_name=ctx.account.name or "", touch=touch)
             ) < len(problems):
                 message, subject, body = second, retry_subject, retry_body
         # A BLANK COMPLETION IS NOT A DRAFT. Observed live 2026-09-08: the provider returned an

@@ -2021,6 +2021,33 @@ The system grounding (`RelevanceContext.to_prompt`) names the specific fabricati
 name, a metric, a percentage, a case study, an integration — because "never invent value props"
 alone is not enforceable, and this product *has* the real facts, so omission is always available.
 
+**The B2B cold email playbook is the shape, by touch** (supplied by the product owner, 2026-10-01;
+`tests/test_email_playbook.py`). `copy.email_rules(touch)` builds the rules for one email from the
+engagement kind; anything else (composer, plays, orchestrator) is a first email:
+
+- **Subject** 2-4 lowercase words like an internal note (`SUBJECT_RULE`), not on threaded touches,
+  whose subject is the thread's "Re:". **Body** in short blank-line paragraphs (greeting, why now,
+  the problem as an observation, proof only if the context names a real result, the ask on its own
+  line, "Best," then the first name), plain text, no em dashes, one link at most. **One signal**,
+  used rather than recited, no flattery or fake familiarity (`SIGNAL_RULE`).
+- **The ask is one interest question in any email nobody has answered** (`EMAIL_CTA_RULE`: "Worth
+  a look?"), never a meeting, duration or day. This reverses the 2026-09 rule that asked for "15
+  minutes on Thursday", on the playbook's evidence that a stranger answers a one-word question far
+  more often than a calendar ask. A reply to someone who wrote back (`response`) offers **two
+  specific times** in their timezone instead (`REPLY_CTA_RULE`). The call script keeps its meeting
+  ask (`CALL_CTA_RULE`): a call is already a conversation.
+- **Each follow-up adds something new** (`drafting/context.followup_instruction`): email 2 a new
+  angle or a real peer result, 3 a pointed question about what the status quo costs, 4 two or three
+  lines, and the last of a sequence of three or more (or anything past the fourth) closes the loop
+  politely. A template's own step angle is listed after it and wins.
+- **`check_draft(touch=...)` enforces the parts a reader can point at**: a meeting request in the
+  ask SENTENCE of an unanswered email (a duration, a weekday, call/meeting/demo; a sentence, so "cut
+  it to 20 minutes" in the proof is not one), a subject over 6 words on a non-threaded touch, over
+  40 words with no blank line, and the empty follow-up phrases ("just following up/bumping/checking
+  in"). Callers passing no touch are checked as before. A failed check costs one regeneration, and
+  on an auto follow-up it holds the email for review (D17), so a new check must not false-positive.
+- The offline stub writes the same shape, and passes its own checks.
+
 ## Drafted email: structure, signature, and the mailbox that sends it
 
 Four reports on 2026-09-16, one chain: the draft had no salutation, no signature, did not read like
@@ -2056,6 +2083,28 @@ alone. Plain text for now, decided with the product owner: `_build_message` writ
 adds HTML only when a caller passes one, so markup would reach the buyer as literal tags. Style,
 samples and both signatures live in `Tenant.email_settings` beside the mailboxes — workspace
 preference, not schema, so no migration and nothing new for `apply_rls.py` to enrol.
+
+**An engagement email is plain text AND HTML, sent with CRLF, signed once, by the real sender**
+(`engagement/sending/mime.py`, 2026-09-30). A real Outlook delivery read "Scaling pro=uct
+development ... resource co=straints ... a 15-minute cal= Thursday", signed "Best, Alex" above the
+rep's "Kind Regards, Amit Singh", with a raw unsubscribe URL (also broken by `=`) underneath:
+
+- **CRLF on the wire** (`to_bytes` = `policy.SMTP`). The body is quoted-printable, whose soft break
+  is `=` + CRLF; serialised with bare LF, Exchange read `=` + LF + the next character as a bad escape,
+  kept the `=` and dropped the letter, once per ~76 characters. Gmail tolerated it, Graph's MIME
+  import did not. The SMTP path's IMAP APPEND of drafts had the same bug (`smtplib` itself converts).
+- **multipart/alternative, text first.** The HTML is the same words as paragraphs, no template
+  (designed cold email is filtered as marketing), with the opt-out line in 11px grey and
+  "unsubscribe" as its only link; the text part keeps the full URL. This supersedes "plain text for
+  now" for engagement sends; the SMTP composer path still adds HTML only when a caller passes one.
+- **One sign-off, the real name.** The structure rule asked for "your first name" and nothing said
+  what it was, so the model invented one. `drafting/context._sender_block` now names the sender (the
+  mailbox's display name, else its owner), and `compose_message_text` lets a signature REPLACE the
+  model's closing (keeping its "Best," only when the signature has no closing of its own); with no
+  signature the closing is signed with the sender's first name.
+- **`agents/copy.tidy_text`**, applied where every draft is parsed (`messaging._split_subject`) and
+  again at send: non-breaking hyphens and spaces become plain ones, zero-width marks go. Curly quotes
+  and dashes stay.
 
 **`send_email` takes A MAILBOX, not a settings blob wrapping one.** `resolve_smtp` reads
 `provider`, `host`, `username` and `password` off the TOP LEVEL of whatever it is given. The send

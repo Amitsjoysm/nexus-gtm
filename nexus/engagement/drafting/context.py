@@ -83,6 +83,55 @@ def conversation_block(messages) -> str:
     return "\n".join(lines) + "\n"
 
 
+async def _sender_block(ts, mailbox) -> str:
+    """Who the email is from. The structure rule asks for a sign-off with "your first name" and the
+    model was never told it, so it invented one ("Best, Alex" above the rep's own signature,
+    reported 2026-09-30). The mailbox's display name, else its owner's name; nothing when neither is
+    known, which leaves the send path to sign with the signature."""
+    name = (getattr(mailbox, "display_name", "") or "").strip()
+    if not name and getattr(mailbox, "owner_user_id", None):
+        from nexus.models.identity import User
+
+        owner = await ts.session.get(User, mailbox.owner_user_id)
+        name = ((owner.full_name if owner else "") or "").strip()
+    if not name:
+        return ""
+    first = name.split()[0]
+    return ("YOU (THE SENDER)\n"
+            f"- Name: {name}\n"
+            f"- Sign off with 'Best,' and your first name, {first}. Write nothing under it: your "
+            "signature is added when the email is sent.\n")
+
+
+#: What each follow-up adds, by its place in the sequence (the B2B cold email playbook the product
+#: owner supplied, 2026-10-01). The rule underneath all of them: every touch must give the reader
+#: something the last one did not, because "just bumping this" is the email that gets marked as spam.
+#: Touch 1 is the first email; a template's own angle for a step still wins over these.
+FOLLOWUP_BY_TOUCH = {
+    2: ("Bring a NEW angle: what a similar company got from us, only if the context names a real "
+        "customer result; otherwise a different problem the same trigger creates."),
+    3: ("Ask one pointed question or share one short insight about what the current way costs "
+        "someone in their role. No pitch in this one."),
+    4: "Keep it to two or three short lines: one new fact or question, then the ask.",
+}
+
+#: The last email of a sequence. Saying so is what lets a busy buyer answer without a meeting.
+LAST_TOUCH = ("This is the LAST email in the sequence. In two or three short lines, say politely "
+              "that you will stop writing and leave the door open. No guilt, no pressure.")
+
+
+def followup_instruction(touch: int, total: int) -> str:
+    """What follow-up number ``touch`` (2 or more) should add, given ``total`` steps.
+
+    The close-the-loop note is for the last step of a sequence of three or more, or any touch past
+    the fourth: a two-step sequence ending on "I'll stop writing" after one unanswered email reads as
+    a sulk, not a courtesy.
+    """
+    if touch >= 5 or (touch >= 3 and touch == total):
+        return LAST_TOUCH
+    return FOLLOWUP_BY_TOUCH.get(touch, FOLLOWUP_BY_TOUCH[4])
+
+
 async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
                         kind: str = "first", now: datetime | None = None) -> ContextPack:
     """The pack for one draft. Reads only this tenant's rows, through the tenant session."""
@@ -97,6 +146,9 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
     contact_zone = zone_or_none(zone_name) or UTC
     sdr_zone = zone_or_none(mailbox.timezone) or UTC
     parts = [now_block(moment, contact_zone, zone_name, sdr_zone, mailbox.timezone or "UTC")]
+    sender = await _sender_block(ts, mailbox)
+    if sender:
+        parts.append(sender)
 
     current_thread_id = getattr(enrollment, "current_thread_id", None)
     conversation = []
@@ -166,15 +218,26 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
     if rendered_signals:
         parts.append("LIVE SIGNALS (strongest first)\n" + rendered_signals + "\n")
 
+    touch_line = ""
+    if kind == "followup" and step is not None:
+        from nexus.models.engagement import EngagementStep
+
+        touch = int(getattr(step, "step_index", 0) or 0) + 1
+        total = len(await _rows(ts, ts.select(
+            EngagementStep, EngagementStep.campaign_id == step.campaign_id)))
+        touch_line = f" This is email {touch} of {total}. " + followup_instruction(touch, total)
     instructions = {
         "first": "This is the FIRST email to this person." + (
             f" Say in one short line that {referrer.split()[0]} suggested you get in touch; do "
             "not quote or paraphrase anything else they said." if referrer else ""),
         "followup": ("This is a FOLLOW-UP in the same thread. Do not repeat the earlier email; add "
-                     "one new, specific reason to reply. Never pretend they answered."),
+                     "one new, specific reason to reply. Never pretend they answered, and never "
+                     "write that you are just following up or bumping this." + touch_line),
         "reengage": ("They asked us to get back in touch around now. Reference that they asked, in "
                      "one short line, and make it easy to pick the conversation back up."),
-        "response": "They replied. Answer what they actually said, then propose one next step.",
+        "response": ("They replied. Answer what they actually said first, briefly. If they showed "
+                     "interest or asked to talk, offer two specific times in their timezone from "
+                     "the date above and ask which suits; otherwise propose one next step."),
         "signal": ("Our earlier emails went unanswered, or they asked to talk later. Something new "
                    "has happened at their company (the angle below): open with it in one line as "
                    "the reason for writing now. Never pretend they replied, and if they asked for "
@@ -183,6 +246,6 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
     angle = (getattr(step, "angle", "") or "").strip()
     block = ["INSTRUCTIONS", f"- {instructions}"]
     if angle:
-        block.append(f"- The angle for this step: {angle}")
+        block.append(f"- The angle for this step (follow this over the suggestion above): {angle}")
     parts.append("\n".join(block) + "\n")
     return ContextPack(text="\n".join(parts).strip(), facts=facts, zone_name=zone_name)

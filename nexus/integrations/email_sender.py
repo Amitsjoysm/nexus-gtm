@@ -12,6 +12,7 @@ import logging
 import smtplib
 import ssl
 from dataclasses import dataclass
+from email import policy
 from email.message import EmailMessage
 
 logger = logging.getLogger("nexus.integrations.email_sender")
@@ -244,8 +245,12 @@ def _save_draft_blocking(cfg: dict, to: str, subject: str, body: str) -> None:
     imap = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context)
     try:
         imap.login(cfg["username"], cfg["password"])
+        # CRLF, as IMAP requires. With bare LF a quoted-printable body's soft breaks were misread
+        # and the saved draft showed "=" in place of letters (found on the Graph path 2026-09-30;
+        # smtplib's own send converts line endings, APPEND does not).
         imap.append(
-            cfg["drafts_folder"], r"(\Draft)", imaplib.Time2Internaldate(time.time()), msg.as_bytes()
+            cfg["drafts_folder"], r"(\Draft)", imaplib.Time2Internaldate(time.time()),
+            msg.as_bytes(policy=policy.SMTP),
         )
     finally:
         try:

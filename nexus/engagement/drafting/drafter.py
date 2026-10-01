@@ -58,7 +58,7 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
             result = await get_agent_runtime().run(
                 "messaging", ts, account_id=account.id, contact_id=contact.id,
                 angle=getattr(step, "angle", "") or "", context_pack=pack.text,
-                personal_facts=pack.facts,
+                personal_facts=pack.facts, touch_kind=kind,
             )
     except QuotaExceeded:
         return Draft(context_pack=pack.text, facts=pack.facts, error="out_of_credits")
@@ -78,6 +78,6 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
         # subject line, a follow-up in a thread keeps the thread's subject.
         subject = reply_subject(thread.base_subject or subject)
     problems = check_draft(subject=subject, body=body, first_name=_first_name(contact),
-                           facts=pack.facts, company_name=account.name or "")
+                           facts=pack.facts, company_name=account.name or "", touch=kind)
     return Draft(subject=subject, body=body, problems=problems, context_pack=pack.text,
                  facts=pack.facts)

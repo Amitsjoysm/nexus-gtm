@@ -125,7 +125,96 @@ def test_the_message_carries_threading_unsubscribe_and_reconciliation_headers():
                                           "<mailto:sam@seller.com>")
     assert parsed["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
     assert parsed["X-Nexus-Ref"] == "01JREF"
-    assert parsed.get_content_type() == "text/plain"
+    # Plain text first, HTML last: a client shows the LAST part it can render (RFC 2046).
+    assert parsed.get_content_type() == "multipart/alternative"
+    assert [p.get_content_type() for p in parsed.iter_parts()] == ["text/plain", "text/html"]
+
+
+# ---- how the message reads in Outlook and Gmail (reported 2026-09-30) ----------------------------
+# A real send read "Scaling pro=uct development ... resource co=straints ... a 15-minute cal=
+# Thursday", signed "Best, Alex" above the rep's own "Kind Regards, Amit Singh", with the full
+# unsubscribe URL (also broken by "=") pasted under it.
+
+LONG = ("Hi Jeff,\n\nI saw Carnegie Foundry\u2019s recent $10.3M SEC Form D filing. Scaling product "
+        "development and accelerating market entry can be hampered by resource constraints. We "
+        "partner with ISVs to supply engineering talent and launch support, removing those "
+        "bottlenecks. Are you available for a 15\u2011minute call Thursday 1 October?\n\nBest,\nAlex")
+SIGNATURE = "Kind Regards,\nAmit Singh\nDeveloper\nDevbay"
+URL = "https://app.example.com/api/u/v1.b03e58cd9f4f4f4f9f26bed452f886a.7cc65d556bc1451383"
+
+
+def _built(body=LONG, signature=SIGNATURE, from_name="Amit Singh"):
+    from nexus.engagement.sending import mime
+
+    return mime.build_message(
+        from_addr="amit@devbay.io", from_name=from_name, to_addr="jeff@cf.com",
+        subject="Engineering capacity", body=body, message_id="<m1@devbay>", ref="01JREF",
+        unsubscribe_url=URL, unsubscribe_mailto="amit@devbay.io", signature=signature)
+
+
+def test_every_line_ends_crlf_so_exchange_decodes_quoted_printable():
+    """With bare LF, Exchange read a soft break `=\\n` plus the next character as a broken escape:
+    it kept the `=` and dropped the character, once every ~76 characters."""
+    from nexus.engagement.sending import mime
+
+    raw = mime.to_bytes(_built())
+    assert b"\n" in raw and raw.count(b"\n") == raw.count(b"\r\n"), "a bare LF reached the wire"
+    assert b"=\r\n" in raw, "the long paragraph is still wrapped, now with a proper soft break"
+    plain = message_from_bytes(raw).get_body(("plain",)).get_content()
+    assert "product development" in plain and "resource constraints" in plain
+    assert "15-minute call" in plain, "a non-breaking hyphen is sent as a plain one"
+
+
+def test_the_signature_replaces_the_models_sign_off_instead_of_stacking():
+    plain = message_from_bytes(_built().as_bytes()).get_body(("plain",)).get_content()
+    assert "Alex" not in plain and "Best," not in plain
+    assert plain.count("Kind Regards,") == 1 and "Amit Singh\nDeveloper\nDevbay" in plain
+
+
+def test_a_signature_without_a_closing_keeps_the_closing_and_the_real_name():
+    plain = message_from_bytes(_built(signature="Amit Singh\nDeveloper").as_bytes()) \
+        .get_body(("plain",)).get_content()
+    assert "Best,\nAmit Singh\nDeveloper" in plain and "Alex" not in plain
+
+
+def test_with_no_signature_the_sign_off_names_the_sender():
+    plain = message_from_bytes(_built(signature="").as_bytes()).get_body(("plain",)).get_content()
+    assert "Best,\nAmit" in plain and "Alex" not in plain
+
+
+def test_the_html_part_reads_like_an_email_and_links_unsubscribe_in_small_print():
+    parsed = message_from_bytes(mime_bytes := _to_bytes(_built()))
+    html = parsed.get_body(("html",)).get_content()
+    assert html.count(URL) == 1 and f'href="{URL}"' in html, "the URL only as a link target"
+    assert ">unsubscribe</a>" in html
+    footer = html[html.index("Not relevant?") - 200:html.index("Not relevant?")]
+    assert "font-size:11px" in footer
+    assert "Hi Jeff,</p>" in html or "Hi Jeff,<br>" in html
+    assert "=\r\n" not in html and mime_bytes
+
+
+def _to_bytes(message):
+    from nexus.engagement.sending import mime
+
+    return mime.to_bytes(message)
+
+
+def test_draft_text_is_cleaned_of_look_alike_and_invisible_characters():
+    from nexus.engagement.sending.mime import tidy_text
+
+    assert tidy_text("a 15\u2011minute call\u00a0on\u202fMonday\u200b.") == "a 15-minute call on Monday."
+    assert tidy_text("Carnegie\u2019s round \u2014 big") == "Carnegie\u2019s round \u2014 big"
+
+
+def test_a_draft_saved_over_imap_uses_crlf_too():
+    from email import policy as _policy
+
+    from nexus.integrations import email_sender
+
+    src = (email_sender.__file__)
+    text = open(src, encoding="utf-8").read()
+    assert "msg.as_bytes(policy=policy.SMTP)" in text or "as_bytes(policy=SMTP)" in text
+    assert _policy.SMTP.linesep == "\r\n"
 
 
 def test_the_body_ends_with_the_signature_then_one_opt_out_line():
@@ -217,7 +306,9 @@ async def test_a_message_is_sent_once_threaded_and_asking_again_does_not_resend(
         delivered = message_from_bytes(folder.delivered[0])
         assert delivered["X-Nexus-Ref"] == row.ref_header
         assert delivered["Message-ID"] == row.rfc_message_id
-        assert "Sam\nSDR, Seller Co" in delivered.get_content()
+        # CRLF is the wire form; a mail client normalises it, and so does this read.
+        plain = delivered.get_body(("plain",)).get_content().replace("\r\n", "\n")
+        assert "Sam\nSDR, Seller Co" in plain
 
         again = await send(ts, mailbox=mailbox, contact=contact, subject="Quick question",
                            body="Hi Jane,\n\nWorth a chat?", idempotency_key="k-1")
@@ -354,3 +445,27 @@ async def test_a_sent_message_is_recorded_in_the_ledger_for_a_consenting_workspa
     assert payload["context_pack"] == "Account: Acme Robotics"
     assert payload["mailbox_provider"] == "google"
     assert sent[0].payload["refs"]["message_id"] == result.message_id
+
+
+async def test_the_draft_is_told_who_it_is_written_as():
+    """The model was told to sign off with "your first name" and never given one, so it invented
+    "Alex". The context now names the sender, from the mailbox, else its owner."""
+    from types import SimpleNamespace
+
+    from nexus.engagement.drafting.context import build_context
+    from nexus.models.account import Account
+
+    tid, mailbox_id, contact_id, _user = await _world("ctxname")
+    async with tenant_session(tid) as ts:
+        mailbox, contact = await _load(ts, mailbox_id, contact_id)
+        account = await ts.get(Account, contact.account_id)
+        enrollment = SimpleNamespace(contact_timezone="", current_thread_id=None)
+        pack = await build_context(ts, enrollment=enrollment, contact=contact, account=account,
+                                   mailbox=mailbox, kind="first")
+        assert "YOU (THE SENDER)\n- Name: Sam Rep" in pack.text
+        assert "first name, Sam" in pack.text
+
+        mailbox.display_name = ""
+        pack = await build_context(ts, enrollment=enrollment, contact=contact, account=account,
+                                   mailbox=mailbox, kind="first")
+        assert "- Name: Sam Rep" in pack.text, "falls back to the mailbox owner's name"
