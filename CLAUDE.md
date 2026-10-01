@@ -1522,6 +1522,32 @@ costs one "yes" (`_is_affirmative` already handles it); being wrong the other wa
 Note the orchestrator has exactly one destination — it is an ICP intake funnel that ends in
 `discover`. There is still no path for a scoped question about an account already in context.
 
+**`discover` adds NEW companies whatever the workspace already holds** (2026-10-01,
+`agents/discovery.py`, `tests/test_orchestrator_discovery_adds.py`). Reported as "it says 25
+companies and none appear in Accounts"; reproduced on the local deploy as `counts: {own: 25, new: 0}`.
+The agent filled its `discovery_max_candidates` (25) slots with the workspace's own accounts by fit
+and searched only for the remainder, so any workspace past 25 accounts never got a new one. Own
+matches are now listed as context and up to the same number of new companies come from the chain
+Populate and the daily sweep use (`find_icp_companies` → `deliver`), at their price and gates:
+
+- **Balance checked for the whole request before anything is searched**, and a refusal is a note in
+  the results, not a failed run (the own list still shows). Added companies and their
+  `discovery.account_added` charge (keyed `discover:<run_id>`) share a SAVEPOINT, so a charge
+  refused at the last moment takes the accounts with it. Decided with the product owner: charged
+  like Populate, 5 credits each.
+- **"High relevance" is the sweep's threshold**: web candidates must clear `icp_discovery_min_fit`;
+  LinkedIn and shared-store candidates are ICP matches by construction. The ICP's industries are
+  mapped to LinkedIn codes first, so a "Software Development" account scores as a "SaaS" match.
+- **It runs inside the chat request**, so `find_icp_companies(linkedin_budget_s=...)`
+  (`discovery_linkedin_budget_s`, 90s like Find similar) stops LinkedIn and lets web search fill in,
+  keeping what LinkedIn already delivered. Populate and the sweep are jobs and pass nothing.
+- `GET /orchestration/runs/{id}/results` returns `shortfall`, the sweep's own wording for why fewer
+  were added than asked, and the panel shows "N of M added" or "No new companies were added: ...".
+- On SQLite the chain's platform-session writes (LinkedIn pages into the shared store) wait on the
+  request's tenant transaction, which has already written the run; the chain notes LinkedIn
+  "failed" and web search fills in. Postgres does not lock (different tables). Tests seed held
+  accounts in a committed session first, as the sweep's tests do.
+
 ## Two counters, two tables
 
 `analytics.overview` reports **`agent_actions`** (`count(AgentRun)` — one row per individual agent

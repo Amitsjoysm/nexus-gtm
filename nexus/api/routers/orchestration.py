@@ -197,9 +197,23 @@ async def get_run_results(
         target=discovery.get("target"),
         total=total,
         counts=discovery.get("counts") or {},
+        shortfall=_shortfall(discovery),
         columns=columns,
         candidates=page,
     )
+
+
+def _shortfall(discovery: dict) -> str:
+    """Why a run added fewer new companies than it asked for, in the daily sweep's own words."""
+    from nexus.discovery.auto import shortfall_reason
+
+    counts = discovery.get("counts") or {}
+    requested = counts.get("requested")
+    if not requested or (counts.get("new") or 0) >= requested:
+        return ""
+    notes = dict(discovery.get("notes") or {})
+    billing = notes.pop("billing", "")
+    return billing or shortfall_reason(notes, discovery.get("discarded") or {})
 
 
 @router.post("/runs/{run_id}/cancel", response_model=RunOut)

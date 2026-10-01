@@ -160,5 +160,9 @@ class ResultsResponse(BaseModel):
     target: str | None = None
     total: int
     counts: dict = Field(default_factory=dict)
+    # Why fewer new companies were added than asked for ("" when the run delivered them all): a
+    # refused balance, a source that failed, candidates below the fit threshold. Without it a short
+    # run and a broken one read the same.
+    shortfall: str = ""
     columns: list[ResultColumn] = Field(default_factory=list)
     candidates: list[dict] = Field(default_factory=list)

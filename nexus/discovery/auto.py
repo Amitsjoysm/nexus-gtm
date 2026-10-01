@@ -286,6 +286,7 @@ _NOTE_TEXT = {
     ("linkedin", "failed"): "LinkedIn search failed",
     ("linkedin", "no_industry_codes"): "your ICP industries match no LinkedIn industry",
     ("linkedin", "nothing_new"): "LinkedIn had no new companies",
+    ("linkedin", "timed_out"): "LinkedIn took too long, so web search filled in",
     ("web", "failed"): "web search failed",
 }
 

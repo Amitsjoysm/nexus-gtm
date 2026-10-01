@@ -299,7 +299,8 @@ class SendMessageTool(Tool):
 
 class DiscoveryTool(_AgentTool):
     name = "discovery"
-    description = "Surface companies/contacts matching the conversation's ICP (read-only)."
+    description = ("Surface the workspace's own ICP matches and add new companies (or contacts) "
+                   "matching the conversation's ICP.")
     agent_name = "discovery"
     requires_approval = False
 
@@ -312,6 +313,10 @@ class DiscoveryTool(_AgentTool):
             target=gi.get("target", "companies"),
             icp=gi.get("icp") or {},
             max_candidates=gi.get("max_candidates"),
+            # Who the added companies belong to and what their charge is keyed on, so a retried
+            # step pays once.
+            owner_user_id=tc.run.created_by,
+            run_id=tc.run.id,
         )
         if result.status != "completed":
             raise ToolError(result.error or "discovery failed")

@@ -485,13 +485,20 @@ async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainRes
 async def find_icp_companies(
     ts, icp: dict, n: int, *, client=None, web_search: WebSearch | None = None,
     product_context: str = "", web_pool: int | None = None,
+    linkedin_budget_s: float | None = None,
 ) -> ChainResult:
     """Up to ``n`` companies matching the ICP that this workspace does not hold. Never raises for
     a source failing: that source is noted and the next one is asked.
 
     ``web_pool`` lets web search return MORE than ``n``: its candidates still face the fit
     threshold at delivery, so the caller needs a pool to choose from. LinkedIn and database
-    candidates do not, and never exceed ``n``."""
+    candidates do not, and never exceed ``n``.
+
+    ``linkedin_budget_s`` is for a caller a person is waiting on (the orchestrator runs inside the
+    chat request; Populate and the daily sweep are jobs and pass nothing). When it runs out, the
+    companies LinkedIn already delivered are kept (they are appended page by page), the claimed page
+    is released, and web search is asked for the rest: the same trade as Find similar's budget."""
+    from nexus.core.aio import run_with_timeout
     from nexus.integrations.apify import ApifyError, ApifyNotConfigured
 
     result = ChainResult()
@@ -510,10 +517,16 @@ async def find_icp_companies(
         if not q.industry_ids:
             result.notes["linkedin"] = "no_industry_codes"
         else:
+            before = len(result.candidates)
             try:
-                linkedin_delivered = await _from_linkedin(ts, q, need, result, taken, client)
+                read = _from_linkedin(ts, q, need, result, taken, client)
+                linkedin_delivered = await (run_with_timeout(read, linkedin_budget_s)
+                                            if linkedin_budget_s else read)
                 if not linkedin_delivered:
                     result.notes["linkedin"] = "nothing_new"
+            except TimeoutError:
+                linkedin_delivered = len(result.candidates) - before
+                result.notes["linkedin"] = "timed_out"
             except ApifyNotConfigured:
                 result.notes["linkedin"] = "not_configured"
             except ApifyError as exc:

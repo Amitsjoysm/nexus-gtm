@@ -1,11 +1,13 @@
 # nexus/agents/discovery.py
 """Discovery Agent — surface companies (or contacts) matching a conversation's ICP.
 
-Read-only by design: it ranks the tenant's own accounts by deterministic ICP fit, then fills any
-gap from the web (deduped by domain, persisted as ``source="discovery"`` so the results table can
-tell own data from net-new). The conversation's ICP — not the saved RelevanceProfile — drives the
-scoring, so discovery reflects exactly what the rep asked for. Fully offline: scoring needs no LLM
-and the browser returns no hits in tests, making counts and ordering reproducible.
+For companies it does two things: ranks the tenant's own accounts by deterministic ICP fit, as
+context, and adds up to the same number of NEW companies through the chain Populate and the daily
+sweep use (`prospecting/companies.find_icp_companies` → `prospecting/deliver.deliver`), persisted as
+``source="discovery"`` and charged ``discovery.account_added`` like them. The two used to share one
+cap, own first, so a workspace holding 25 accounts never got a new company (reported 2026-10-01).
+The conversation's ICP — not the saved RelevanceProfile — drives the scoring, so discovery reflects
+exactly what the rep asked for.
 """
 from __future__ import annotations
 
@@ -13,6 +15,29 @@ from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 from nexus.core.config import get_settings
 from nexus.models.account import Account, Contact
 from nexus.models.relevance import RelevanceProfile
+
+
+#: What a company the orchestrator adds is charged as: the same capability as Populate and the daily
+#: sweep, because it is the same result (decided with the product owner 2026-10-01).
+ADD_CAPABILITY = "discovery.account_added"
+
+
+def _linkedin_client():
+    """The LinkedIn actor client; ``None`` is the configured Apify pool. A seam for tests."""
+    return None
+
+
+def _web_search(ctx):
+    """The web company search the chain falls back to: the runtime's registry."""
+    registry = getattr(ctx, "registry", None)
+    return registry.company_search if registry is not None else None
+
+
+def _refusal(exc, need: int) -> str:
+    """The sentence a refused balance check becomes in the run's notes."""
+    detail = getattr(exc, "reason", "") or str(exc)
+    return (f"No new companies were added: adding {need} needs more credits than this workspace "
+            f"has ({detail}). Top up or lower the number, then run it again.")
 
 
 def _icp_to_scoring(icp: dict) -> dict:
@@ -67,6 +92,14 @@ class DiscoveryAgent(BaseAgent):
     async def _discover_companies(
         self, ctx: AgentContext, profile, scoring_icp: dict, icp: dict, max_candidates: int
     ) -> dict:
+        # The LinkedIn codes the ICP's industries map to, so a LinkedIn-sourced account labelled
+        # "Software Development" counts as an industry match for "SaaS" (as on the saved ICP).
+        if scoring_icp.get("industries"):
+            from nexus.prospecting.industries import map_industries
+
+            scoring_icp["linkedin_industry_ids"] = await map_industries(scoring_icp["industries"])
+            profile.icp = scoring_icp
+
         accounts = await ctx.ts.list(Account)
         survivors = [a for a in accounts if _passes_hard_filters(a, scoring_icp)]
         scored = []
@@ -76,49 +109,82 @@ class DiscoveryAgent(BaseAgent):
         scored.sort(key=lambda t: (-t[0].score, t[1].name))
         own = scored[:max_candidates]
         candidates = [self._candidate(a, fit, source="own", is_new=False) for (fit, a) in own]
-        seen_domains = {a.domain for (_, a) in own if a.domain}
 
-        new_count = 0
-        if len(candidates) < max_candidates and ctx.registry is not None:
-            need = max_candidates - len(candidates)
-            # The registry runs the company-search waterfall (InfoJoy -> web -> Apify) and
-            # returns net-new candidates deduped/merged by domain with per-field provenance.
-            found = await ctx.registry.company_search(icp, limit=need)
-            for cand in found:
-                # Normalised before comparing: the raw form made acme.com, www.acme.com and
-                # https://acme.com/ three separate Acme rows in one workspace.
-                from nexus.accounts.dedupe import find_existing_account, normalise_on_write
-
-                domain = normalise_on_write(cand.domain) or ""
-                if not domain or domain in seen_domains:
-                    continue
-                # A bulk path skips silently rather than erroring: discovery running into an account
-                # the rep already has is the normal case, not a problem to report.
-                if await find_existing_account(ctx.ts, domain=domain, name=cand.name) is not None:
-                    continue
-                acc = Account(
-                    tenant_id=ctx.ts.tenant_id,
-                    name=(cand.name or domain).strip(),
-                    domain=domain,
-                    industry=cand.industry or (icp.get("industries") or [None])[0],
-                    country=cand.country or (icp.get("geo") or [None])[0],
-                    employee_count=cand.employee_count,
-                    source="discovery",
-                )
-                ctx.ts.add(acc)
-                await ctx.ts.flush()
-                fit = ctx.relevance.score_icp_fit(profile, acc)
-                candidates.append(self._candidate(acc, fit, source="discovery", is_new=True))
-                seen_domains.add(domain)
-                new_count += 1
-                if len(candidates) >= max_candidates:
-                    break
+        # NEW companies are asked for whatever the workspace already holds. They used to be asked
+        # for only when fewer than `max_candidates` own accounts existed, so a workspace past 25
+        # accounts was shown 25 of its own and never got a new one (reported 2026-10-01).
+        new_accounts, notes, discarded = await self._add_new_companies(
+            ctx, profile, scoring_icp, max_candidates)
+        for acc in new_accounts:
+            fit = ctx.relevance.score_icp_fit(profile, acc)
+            candidates.append(self._candidate(acc, fit, source="discovery", is_new=True))
 
         return {
             "target": "companies",
-            "counts": {"own": len(own), "new": new_count},
+            "counts": {"own": len(own), "new": len(new_accounts), "requested": max_candidates},
+            "notes": notes,
+            "discarded": discarded,
             "candidates": candidates,
         }
+
+    async def _add_new_companies(self, ctx: AgentContext, profile, scoring_icp: dict,
+                                 need: int) -> tuple[list[Account], dict, dict]:
+        """Up to ``need`` companies the workspace does not hold, through the chain Populate and the
+        daily sweep use, at their price. Returns ``(accounts, notes, discarded)``. Never raises:
+        a source, the balance or the charge failing costs the new companies, never the own list.
+
+        * The balance is checked for the whole request BEFORE anything is searched, as Populate
+          does: a search nobody can pay for is spend with nothing to show for it.
+        * Web candidates must clear ``icp_discovery_min_fit`` ("high relevance"); LinkedIn and
+          database candidates are ICP matches by construction (`prospecting/deliver.py`).
+        * The accounts and their ``discovery.account_added`` charge share a SAVEPOINT, so a charge
+          refused at the last moment takes the accounts with it rather than adding them free.
+        """
+        from collections import Counter
+
+        from nexus.billing.errors import QuotaExceeded
+        from nexus.billing.meter import metered
+        from nexus.prospecting.companies import find_icp_companies
+        from nexus.prospecting.deliver import deliver
+
+        settings = get_settings()
+        owner = ctx.inputs.get("owner_user_id")
+        run_id = ctx.inputs.get("run_id")
+        if need <= 0:
+            return [], {}, {}
+        try:
+            from nexus.billing.entitlements import preflight
+
+            (await preflight(ctx.ts, ADD_CAPABILITY, quantity=need)).raise_if_blocked()
+        except QuotaExceeded as exc:
+            return [], {"billing": _refusal(exc, need)}, {}
+        except Exception:  # noqa: BLE001 - a billing read that fails must not stop discovery
+            pass
+
+        chain = await find_icp_companies(
+            ctx.ts, scoring_icp, need, client=_linkedin_client(), web_search=_web_search(ctx),
+            web_pool=need * 3, linkedin_budget_s=settings.discovery_linkedin_budget_s)
+        discarded = Counter(chain.discarded)
+        notes = dict(chain.notes)
+        try:
+            async with ctx.ts.session.begin_nested():
+                ids, _ = await deliver(ctx.ts, profile, chain.candidates, limit=need,
+                                       source="discovery", min_fit=settings.icp_discovery_min_fit,
+                                       discarded=discarded, owner_user_id=owner)
+                if ids:
+                    async with metered(ctx.ts, ADD_CAPABILITY, quantity=len(ids), user_id=owner,
+                                       source="api",
+                                       idempotency_key=f"discover:{run_id}" if run_id else None,
+                                       attrs={"run_id": run_id, "via": "orchestrator"}):
+                        pass
+        except QuotaExceeded as exc:
+            return [], {**notes, "billing": _refusal(exc, need)}, dict(discarded)
+        added: list[Account] = []
+        for account_id in ids:
+            account = await ctx.ts.get(Account, account_id)
+            if account is not None:
+                added.append(account)
+        return added, notes, dict(discarded)
 
     async def _discover_contacts(
         self, ctx: AgentContext, profile, scoring_icp: dict, icp: dict, max_candidates: int

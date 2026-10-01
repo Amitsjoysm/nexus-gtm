@@ -1001,6 +1001,8 @@ export interface DiscoveryResult {
   target: string | null;
   total: number;
   counts: Record<string, number>;
+  /** Why fewer new records were added than asked for; "" when the run delivered them all. */
+  shortfall?: string;
   columns: ResultColumn[];
   candidates: DiscoveryCandidate[];
 }

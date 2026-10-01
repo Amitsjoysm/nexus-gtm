@@ -247,6 +247,9 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
   const counts = data?.counts ?? {};
   const added = counts.new ?? 0;
   const already = counts.own ?? 0;
+  // How many new ones the run asked for; absent on runs from before it was recorded.
+  const requested = counts.requested ?? 0;
+  const shortfall = (data?.shortfall ?? "").trim();
   const people = importEntity === "contact";
   const addedWho = people
     ? added === 1 ? "person was" : "people were"
@@ -341,11 +344,26 @@ export function ResultsPanel({ runId }: ResultsPanelProps) {
         <div className={styles.addedNotice} role="status">
           <Icons.CheckIcon />
           <span>
-            {formatNumber(added)} new {addedWho} added to your {people ? "Contacts" : "Accounts"}.
+            {requested > added
+              ? `${formatNumber(added)} of ${formatNumber(requested)} new ${people ? "people" : "companies"} added to your ${people ? "Contacts" : "Accounts"}.`
+              : `${formatNumber(added)} new ${addedWho} added to your ${people ? "Contacts" : "Accounts"}.`}
+            {shortfall && ` ${sentence(shortfall)}`}
           </span>
           <Link to={people ? "/contacts" : "/accounts?source=found"} className={styles.addedLink}>
             {people ? "View in Contacts" : "View in Accounts"}
           </Link>
+        </div>
+      )}
+
+      {added === 0 && requested > 0 && data && (
+        // A run that added nothing says why. It used to say nothing, so 25 rows of accounts the
+        // workspace already held read as 25 companies found (reported 2026-10-01).
+        <div className={`${styles.addedNotice} ${styles.shortNotice}`} role="status">
+          <Icons.AlertTriangleIcon />
+          <span>
+            No new {people ? "people were" : "companies were"} added
+            {shortfall ? `: ${shortfall}` : "."}
+          </span>
         </div>
       )}
 
@@ -505,6 +523,14 @@ function Reasons({ reasons }: { reasons: string[] }) {
       {rest.length > 0 && <span className={styles.reasonMore}>+{rest.length}</span>}
     </span>
   );
+}
+
+/** The server's reason as a sentence after the count: a capital first letter and a full stop. */
+function sentence(text: string): string {
+  const t = text.trim();
+  if (!t) return "";
+  const capped = t[0].toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(capped) ? capped : `${capped}.`;
 }
 
 function CustomValue({ value }: { value: unknown }): ReactNode {

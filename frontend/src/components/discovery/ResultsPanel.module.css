@@ -72,6 +72,14 @@
   height: 16px;
   color: var(--success);
 }
+/* A run that added nothing: the same notice in the warning tone, so it reads as information about
+   the run rather than as an error in the page. */
+.shortNotice {
+  background: var(--warning-quiet);
+}
+.shortNotice > :global(svg) {
+  color: var(--warning);
+}
 .addedLink {
   margin-left: auto;
   font-weight: var(--weight-medium);
