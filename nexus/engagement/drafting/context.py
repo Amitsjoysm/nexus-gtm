@@ -74,12 +74,19 @@ def now_block(now: datetime, contact_zone, contact_zone_name: str, sdr_zone,
 def conversation_block(messages) -> str:
     if not messages:
         return "THIS CONVERSATION\n- Nothing has been sent or received yet: this is the first email.\n"
+    from nexus.engagement.replies.parse import strip_quoted
+
     lines = ["THIS CONVERSATION (oldest first)"]
     for message in messages:
         who = "WE WROTE" if message.direction == "out" else "THEY WROTE"
         when = _when(message.sent_at or message.received_at or message.created_at)
+        body = message.body_text or ""
+        if message.direction != "out":
+            # What they wrote, not our own emails quoted back underneath: those are already above,
+            # and a long quote would otherwise be what survives the clip instead of their words.
+            body = strip_quoted(body) or body
         lines.append(f"- {who} at {when} — Subject: {message.subject or '(none)'}\n"
-                     f"  {_clip(message.body_text)}")
+                     f"  {_clip(body)}")
     return "\n".join(lines) + "\n"
 
 
@@ -131,8 +138,14 @@ def followup_instruction(touch: int, total: int) -> str:
 
 
 async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
-                        kind: str = "first", now: datetime | None = None) -> ContextPack:
-    """The pack for one draft. Reads only this tenant's rows, through the tenant session."""
+                        kind: str = "first", now: datetime | None = None,
+                        thread=None) -> ContextPack:
+    """The pack for one draft. Reads only this tenant's rows, through the tenant session.
+
+    ``thread`` is the conversation being answered or continued, when the caller knows it. It wins
+    over the enrollment's current thread: a reply desk answer belongs to the thread the reply came
+    in, and drafting it from wherever the enrollment had moved since told the model nothing had
+    been sent yet, so it wrote a cold opener as the answer to a buyer's reply."""
     from nexus.agents.copy import account_facts, signal_facts
     from nexus.core.db import utcnow
     from nexus.engagement.timekeeping import zone_or_none
@@ -148,7 +161,8 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
     if sender:
         parts.append(sender)
 
-    current_thread_id = getattr(enrollment, "current_thread_id", None)
+    current_thread_id = getattr(thread, "id", None) or getattr(enrollment, "current_thread_id",
+                                                               None)
     conversation = []
     if current_thread_id:
         conversation = await _rows(ts, ts.select(

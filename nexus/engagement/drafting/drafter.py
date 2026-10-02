@@ -52,7 +52,7 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
     from nexus.engagement.subjects import reply_subject
 
     pack = await build_context(ts, enrollment=enrollment, contact=contact, account=account,
-                               mailbox=mailbox, step=step, kind=kind, now=now)
+                               mailbox=mailbox, step=step, kind=kind, now=now, thread=thread)
     try:
         async with metered(ts, capability, user_id=user_id, source="engagement"):
             result = await get_agent_runtime().run(
