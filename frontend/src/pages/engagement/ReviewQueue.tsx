@@ -66,7 +66,13 @@ export function ReviewQueue({ campaignId, onChanged }: ReviewQueueProps) {
         }
         if (pass.drafted === 0) {
           if (pass.failed > 0) {
-            toast.error(`${pass.failed} could not be written`, "Try Regenerate on each, or take them out.");
+            // The server says why each one failed. Without the reason "try again" was the only
+            // advice, which cannot tell a model outage from a contact with nothing to write from.
+            const reason = pass.errors.find((e) => e.error)?.error;
+            toast.error(
+              `${pass.failed} could not be written`,
+              reason ? `${reason}. Try Regenerate on each, or take them out.` : "Try Regenerate on each, or take them out.",
+            );
           }
           break;
         }

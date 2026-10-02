@@ -2487,6 +2487,32 @@ their routers, workers and pages are gone; their tables stay as read-only histor
   desk); Save to Drafts goes through `engagement.sending.drafts.save_draft`, unmetered, which the
   reply desk uses too. SMTP remains the fallback and behaves as before.
 
+**When campaigns stop, Platform health says which stage** (2026-10-02, `engagement/health.py`, the
+`campaigns` row). Reported from staging as "no drafts, first emails never send, follow-ups never
+send, replies not picked up". The whole engine was then run once end to end on the production image
+against a restored copy of the local Postgres, API phase as `nexus_app` under RLS and worker phase
+as the owner, the role split staging uses. Every stage worked: drafts, approval, launch, first
+sends, follow-ups in-thread, a reply read, classified and shown on the desk. So the code is not
+what stops; the deployment's state is, and nothing reported it. Everything after approval is worker
+work, so the row reads the evidence the worker leaves rather than asking it:
+- **a step due more than 30 minutes ago in a running campaign was not sent.** Everything that
+  legitimately waits moves the due time or the status, so only a job that is not running, or one
+  that raises on that enrollment every tick, leaves it in the past. A "later" date or an
+  out-of-office return that has passed counts too.
+- **a connected mailbox not read for 30 minutes is not having its replies picked up.**
+- the switch off while campaigns run, mailboxes needing reconnecting, a mailbox's own fault, and
+  failed sends in the last week. Platform sessionmaker, or it counts zero of everything.
+
+**A mailbox that cannot be read now says so.** `sync_mailbox` caught an expired grant and a limit
+and let every other provider refusal escape, and the sweep's tenant session rolled back with it,
+discarding what the failure had written: `fresh_access_token`'s `error` status for a misconfigured
+mailbox app (a wrong client secret), and nothing at all for a read refused outright (a Google
+project without the Gmail API enabled answers 403). The mailbox read "Connected" while no reply was
+ever picked up. Renewal of the push subscription happened to catch the first case, but only when
+the subscription was missing or expiring. Now the refusal is `last_error` ("Replies could not be
+read: ..."), shown on the Mailboxes page, and a successful read clears it. A draft that cannot be
+written also names its reason on the Review screen instead of only "try again".
+
 **Do-not-contact takes a whole domain, and an uploaded list** (2026-09-30,
 `engagement/suppression/service.py`). A domain block is stored in the same `email` column as
 `@acme.io`, so it shares the one-active-block index and needed no migration. Every READ

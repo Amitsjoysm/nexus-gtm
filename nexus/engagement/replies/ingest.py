@@ -30,7 +30,13 @@ RESYNC_WINDOW = timedelta(days=3)
 
 async def sync_mailbox(ts, mailbox, *, now: datetime | None = None) -> dict:
     from nexus.core.db import utcnow
-    from nexus.engagement.mailboxes.provider import AuthExpired, CursorExpired, ProviderLimit
+    from nexus.engagement.mailboxes.provider import (
+        AuthExpired,
+        CursorExpired,
+        ProviderError,
+        ProviderLimit,
+        TransientError,
+    )
     from nexus.engagement.mailboxes.registry import open_provider
 
     moment = now or utcnow()
@@ -54,6 +60,18 @@ async def sync_mailbox(ts, mailbox, *, now: datetime | None = None) -> dict:
         return {"error": "needs_reauth"}
     except ProviderLimit as exc:
         return {"error": f"provider limit until {exc.retry_at}"}
+    except TransientError:
+        raise  # unreachable says nothing about the mailbox; the next poll tries again
+    except ProviderError as exc:
+        # Anything else the provider refused: a misconfigured mailbox app (`fresh_access_token`
+        # has already marked the mailbox `error` and said why), or a read refused outright, which
+        # is what a Google project without the Gmail API enabled answers. Raising let the sweep
+        # roll the session back, which discarded both, so the mailbox read "Connected" while no
+        # reply was ever picked up. Returning keeps them, and the Mailboxes page shows last_error.
+        if mailbox.status == "connected":
+            mailbox.last_error = f"Replies could not be read: {exc.detail or exc}"[:500]
+        await ts.flush()
+        return {"error": f"refused ({exc.status or 'no status'})"}
 
     outcomes: dict[str, int] = {}
     for provider_message_id in batch.message_ids:
@@ -68,6 +86,8 @@ async def sync_mailbox(ts, mailbox, *, now: datetime | None = None) -> dict:
         outcomes[outcome] = outcomes.get(outcome, 0) + 1
     mailbox.sync_cursor = batch.next_cursor or mailbox.sync_cursor
     mailbox.last_synced_at = moment
+    # A connected mailbox that has just been read has no outstanding fault to report.
+    mailbox.last_error = None
     await ts.flush()
     return outcomes
 

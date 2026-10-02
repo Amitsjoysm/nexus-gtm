@@ -313,6 +313,14 @@ async def _probe_mailbox_apps() -> tuple[str, str]:
     return (DEGRADED if UNCONFIGURED in statuses else OK), "; ".join(parts)
 
 
+async def _probe_campaigns() -> tuple[str, str]:
+    """Whether campaigns are moving: the switch, steps the worker should already have sent, and
+    mailboxes it should already have read (`engagement.health`)."""
+    from nexus.engagement.health import engine_health
+
+    return await engine_health()
+
+
 async def _probe_ledger_outbox() -> tuple[str, str]:
     """How much is waiting to be shipped, and how old the oldest is.
 
@@ -368,6 +376,7 @@ _PROBES: tuple[tuple[str, Any], ...] = (
     ("web fetcher", _probe_web_fetcher),
     ("phone lookup", _probe_phone_lookup),
     ("mailbox apps", _probe_mailbox_apps),
+    ("campaigns", _probe_campaigns),
     ("ledger stores", _probe_ledger_stores),
     ("ledger outbox", _probe_ledger_outbox),
 )
