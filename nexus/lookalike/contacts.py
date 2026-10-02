@@ -152,6 +152,51 @@ def _profile_url(url: str) -> bool:
     return "linkedin.com/in/" in low
 
 
+#: A markdown link to a page: ``[Name](url)``.
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+_CURRENT = re.compile(r"\(\s*current\s*\)", re.IGNORECASE)
+
+
+def _current_employer(snippet: str) -> tuple[str, str]:
+    """``(company, company_linkedin_page)`` of the role marked ``(Current)``, or ``("", "")``.
+
+    The headline is self-description ("VP Sales | SaaS, Security & Cloud") and often names no
+    employer, or names a territory or team where one should be. The snippet's ``## Experience``
+    section does not guess: the current role is marked ``(Current)`` and links the company's own
+    LinkedIn page, in one of two shapes seen live (2026-10-02):
+
+    * ``### VP Enterprise Sales, UK&I - [TeamViewer](https://linkedin.com/company/...) (Current)``
+    * ``### [Simpro Software](https://linkedin.com/company/...)`` then ``#### VP UK Sales (Current)``
+
+    Only a linked company counts: the page is what later resolves to a website domain, and a plain
+    name after a dash is as likely to be a territory as an employer. A past role never counts.
+    """
+    from nexus.prospecting.linkedin import canonical_company_url
+
+    in_experience = False
+    group: tuple[str, str] | None = None
+    for raw in (snippet or "").splitlines():
+        line = raw.strip()
+        if line.startswith("## ") or line == "##":
+            in_experience = line[3:].strip().lower() == "experience"
+            group = None
+            continue
+        if not in_experience:
+            continue
+        if line.startswith("### "):
+            text = line[4:].strip()
+            link = _MD_LINK.search(text)
+            page = canonical_company_url(link.group(2)) if link else ""
+            if link and page and _CURRENT.search(text):
+                return link.group(1).strip()[:120], page
+            # A heading that IS the company groups the roles under it ("#### ... (Current)").
+            group = (link.group(1).strip()[:120], page) if link and page and text.startswith("[") \
+                else None
+        elif line.startswith("#### ") and group and _CURRENT.search(line):
+            return group
+    return "", ""
+
+
 def _parse_profile(title: str) -> tuple[str, str, str]:
     """``(name, title, company)`` from a LinkedIn SERP title. Empty name means unusable."""
     raw = (title or "").strip()
@@ -429,12 +474,16 @@ class ContactLookalike:
     #: Employer as a plain string. Net-new people have no `Account` row, so `account_name` (which
     #: is read from one) would be empty and the rep would see a person with no company.
     company: str = ""
+    #: The employer's own LinkedIn page, from the snippet's current role (`_current_employer`). The
+    #: add form resolves it to the company's website, which a name alone cannot be trusted to do.
+    company_linkedin_url: str = ""
 
     def as_dict(self) -> dict:
         return {
             "contact_id": self.contact_id,
             "is_new": self.is_new,
             "company": self.company,
+            "company_linkedin_url": self.company_linkedin_url,
             "full_name": self.full_name,
             "account_id": self.account_id,
             "account_name": self.account_name,
@@ -614,9 +663,13 @@ class ContactLookalikeService:
                 continue
             # The page title is usually just the name, so the ROLE comes from the snippet or not at
             # all — and a suggestion with no role is one a rep cannot judge without opening it.
-            snip_title, snip_company = _parse_headline(str(getattr(hit, "snippet", "") or ""))
+            snippet = str(getattr(hit, "snippet", "") or "")
+            snip_title, snip_company = _parse_headline(snippet)
             title = title or snip_title
-            company = company or snip_company
+            # The current role in the Experience section first: it names the employer and links its
+            # page, where the headline names a territory, a team, or nothing (2026-10-02).
+            employer, employer_page = _current_employer(snippet)
+            company = employer or company or snip_company
             if not title:
                 continue
             # A title the workspace has said it does not sell to. Dropped rather than ranked low:
@@ -636,8 +689,8 @@ class ContactLookalikeService:
             seen.add(key)
             out.append(ContactLookalike(
                 contact_id="", full_name=name, account_id="", title=title or None,
-                linkedin_url=url, company=company, is_new=True, score=score,
-                reasons=reasons,
+                linkedin_url=url, company=company, company_linkedin_url=employer_page,
+                is_new=True, score=score, reasons=reasons,
             ))
 
         if out:

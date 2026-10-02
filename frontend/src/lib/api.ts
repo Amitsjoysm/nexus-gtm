@@ -429,9 +429,11 @@ export class ApiClient {
     return this.request<Account[]>("/accounts", { query: q ? { q } : undefined, signal });
   }
   /** A company's website domain from its name, for the Similar-people add form. */
-  companyDomain(name: string, signal?: AbortSignal) {
+  /** The company's website domain: from its LinkedIn page when one is known, else by its name. */
+  companyDomain(name: string, signal?: AbortSignal, linkedinUrl?: string) {
+    const page = linkedinUrl ? `&linkedin_url=${encodeURIComponent(linkedinUrl)}` : "";
     return this.request<CompanyDomainResult>(
-      `/accounts/company-domain?name=${encodeURIComponent(name)}`,
+      `/accounts/company-domain?name=${encodeURIComponent(name)}${page}`,
       { signal },
     );
   }

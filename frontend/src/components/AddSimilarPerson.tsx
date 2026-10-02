@@ -128,7 +128,8 @@ export function AddSimilarPerson({ person, onAdded, onCancel, className }: AddSi
     let active = true;
     setResolving(true);
     api
-      .companyDomain(company, ctrl.signal)
+      // Their company's own LinkedIn page names its website; the name alone is the fallback.
+      .companyDomain(company, ctrl.signal, person.company_linkedin_url || undefined)
       .then((found) => {
         if (!active) return;
         setResolved(found);
@@ -145,7 +146,7 @@ export function AddSimilarPerson({ person, onAdded, onCancel, className }: AddSi
       active = false;
       ctrl.abort();
     };
-  }, [api, company, creating]);
+  }, [api, company, creating, person.company_linkedin_url]);
 
   const options = useMemo<SelectOption[]>(() => {
     const label = (a: Account) => (a.domain ? `${a.name} (${a.domain})` : a.name);
@@ -269,7 +270,9 @@ export function AddSimilarPerson({ person, onAdded, onCancel, className }: AddSi
                 resolving
                   ? "Looking up their company's website…"
                   : resolved?.domain
-                    ? `Found from ${resolved.title || resolved.url}. Check it is the right company.`
+                    ? resolved.source === "linkedin"
+                      ? `From ${resolved.title || company}'s LinkedIn page. Check it is the right company.`
+                      : `Found from ${resolved.title || resolved.url}. Check it is the right company.`
                     : "Optional. Needed to find their email and to collect this company's signals."
               }
             >

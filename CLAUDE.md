@@ -1388,6 +1388,19 @@ the account under a domain a person already refused. A name match cannot say whi
 — measured live, "Globex" resolves to a login page at `globex.international`. Directory aggregators
 are excluded by the same `_NON_COMPANY_HOSTS` discovery uses.
 
+**A similar person's employer comes from their current role, and its domain from the company's own
+LinkedIn page** (2026-10-02, `tests/test_similar_person_employer.py`). Reported as "company and
+domain still have to be typed"; measured for one seed, 4 of 10 results had no company and 2 more a
+territory or team ("UK&I", "Security & Cloud"). Every LinkedIn snippet Exa returns has an
+`## Experience` section whose role marked `(Current)` links the company page; the parser read only
+the headline. `lookalike/contacts._current_employer` reads that entry (inline `### Title - [Co](url)
+(Current)` or grouped `### [Co](url)` + `#### Title (Current)`), linked companies only, never a past
+role, ahead of the title and headline parses. The result carries `company_linkedin_url`, and
+`GET /accounts/company-domain?linkedin_url=` resolves it through
+`company_domain.resolve_from_linkedin_page`: the shared store, then one company-details run stored
+for every workspace, a no-website page remembered 30 days, then the old name search. Still a
+prefill: the form says "From X's LinkedIn page. Check it is the right company."
+
 `scripts/clean_invalid_emails.py` clears what was saved before all of this — dry run by default.
 
 ## LinkedIn prospecting (`nexus/prospecting/`)

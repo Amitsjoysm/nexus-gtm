@@ -505,6 +505,9 @@ class ContactLookalikeOut(BaseModel):
     # Employer as plain text. A net-new person has no Account row, so `account_name` — read from
     # one — would be blank and the rep would see a name with no company beside it.
     company: str = ""
+    # The employer's own LinkedIn page, read from the current role. Declared, or pydantic drops it
+    # and the add form falls back to searching the company by name.
+    company_linkedin_url: str = ""
 
 
 class ContactLookalikeResponse(BaseModel):
@@ -542,6 +545,9 @@ class CompanyDomainOut(BaseModel):
     domain: str | None = None
     url: str = ""
     title: str = ""
+    # "linkedin" when the company's own LinkedIn page named its website, "search" when a name
+    # search found it, "" when nothing did. The form says which, because the rep confirms it.
+    source: str = ""
 
 
 class SimilarPersonAddedOut(BaseModel):

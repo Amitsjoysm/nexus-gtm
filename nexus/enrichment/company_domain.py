@@ -96,3 +96,47 @@ async def resolve_company_domain(name: str, *, search=None) -> CompanyDomain | N
         if _acceptable(company, host, title):
             return CompanyDomain(domain=host, url=url, title=title)
     return None
+
+
+async def resolve_from_linkedin_page(url: str, *, client=None) -> CompanyDomain | None:
+    """The website domain the company's own LinkedIn page names, or ``None``. Never raises.
+
+    The better evidence when a similar person's current role links the page (2026-10-02): the page
+    states the company's website, where a name search has to guess which "Globex" was meant. Read the
+    way Find similar reads pages (`prospecting/similar.py`): the shared store first, at no cost; then
+    ONE company-details run, stored for every workspace; a page with no website is remembered for
+    30 days so it is not bought again. Still only a prefill the rep confirms.
+    """
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.company import Company
+    from nexus.prospecting import linkedin as li
+
+    page = li.canonical_company_url(url)
+    if not page:
+        return None
+    try:
+        async with get_platform_sessionmaker()() as s:
+            row = (await s.execute(
+                select(Company.domain, Company.name).where(Company.linkedin_url == page)
+            )).first()
+        if row is not None and row[0]:
+            return CompanyDomain(domain=row[0], url=page, title=row[1] or "")
+
+        from nexus.prospecting.companies import store_companies
+        from nexus.prospecting.similar import _known_without_website, _remember_without_website
+
+        if await _known_without_website([page]):
+            return None
+        details = (await li.company_details([page], client=client)).get(page)
+        if details is None:
+            return None
+        await store_companies([details])
+        if not details.domain:
+            await _remember_without_website(page)
+            return None
+        return CompanyDomain(domain=details.domain, url=page, title=details.name or "")
+    except Exception as exc:  # a lookup that fails costs the prefill, never the form
+        logger.info("company page lookup failed for %s: %r", page, exc)
+        return None

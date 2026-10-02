@@ -255,6 +255,7 @@ async def list_accounts(
 @router.get("/company-domain", response_model=CompanyDomainOut)
 async def company_domain(
     name: str,
+    linkedin_url: str | None = None,
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> CompanyDomainOut:
     """The website domain of a company named in plain text, for the Similar-people add form.
@@ -266,12 +267,20 @@ async def company_domain(
     and the rep is the one confirming it. Empty when nothing matched — a blank field a person can
     fill is better than a wrong domain they have to notice.
     """
-    from nexus.enrichment.company_domain import resolve_company_domain
+    from nexus.enrichment import company_domain as resolver
 
-    found = await resolve_company_domain(name)
+    # The company's own LinkedIn page first, when the person's current role linked one: it names
+    # the website, where a name search has to guess (2026-10-02). The name search is the fallback.
+    if linkedin_url:
+        found = await resolver.resolve_from_linkedin_page(linkedin_url)
+        if found is not None:
+            return CompanyDomainOut(domain=found.domain, url=found.url, title=found.title,
+                                    source="linkedin")
+    found = await resolver.resolve_company_domain(name)
     if found is None:
         return CompanyDomainOut()
-    return CompanyDomainOut(domain=found.domain, url=found.url, title=found.title)
+    return CompanyDomainOut(domain=found.domain, url=found.url, title=found.title,
+                            source="search")
 
 
 @router.get("/{account_id}", response_model=AccountOut)

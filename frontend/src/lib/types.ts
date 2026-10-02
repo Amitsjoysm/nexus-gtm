@@ -108,6 +108,8 @@ export interface ContactLookalike {
   is_new: boolean;
   /** Employer as plain text. A net-new person has no Account row, so `account_name` is blank. */
   company: string;
+  /** The employer's own LinkedIn page, from the person's current role; resolves to its domain. */
+  company_linkedin_url?: string;
 }
 
 /** A company's website domain resolved from its name, with the result that matched it. */
@@ -115,6 +117,8 @@ export interface CompanyDomainResult {
   domain: string | null;
   url: string;
   title: string;
+  /** "linkedin" when the company's own LinkedIn page named it, "search" when a name search did. */
+  source?: string;
 }
 
 /** Keep a sourced person: file them under an existing account, or find-or-create their company. */
