@@ -35,6 +35,7 @@ rebuild, and [10-ISSUE-LOG.md](10-ISSUE-LOG.md) or
 | [13-DATABASE-ACCESS.md](13-DATABASE-ACCESS.md) | Reaching the database — why `psql` from your laptop cannot work, and what to use instead |
 | [14-AZURE-DEPLOY-GUIDE.md](14-AZURE-DEPLOY-GUIDE.md) | **Start here for a NEW deployment** — empty subscription to `gtm.infojoy.com`, staging + production + CI/CD, every command with its verification |
 | [15-STAGING-PARITY.md](15-STAGING-PARITY.md) | Staging behaves differently from local — **every setting that silently degrades the product if missed**, across `.env`, runtime settings, provider keys and feature switches |
+| [16-GO-LIVE-PRODUCTION.md](16-GO-LIVE-PRODUCTION.md) | Taking gtm.infojoy.com live: **how to start collecting data**, every URL to register outside the app, and each setting compared with local (current as of 2026-10-02) |
 
 > **01 vs 14.** `01-LAUNCH.md` documents the original single-environment production build.
 > `14-AZURE-DEPLOY-GUIDE.md` supersedes it for anything new: it adds the separate staging estate,

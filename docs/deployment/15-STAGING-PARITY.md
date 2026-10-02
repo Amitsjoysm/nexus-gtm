@@ -1,5 +1,8 @@
 # 15 — Making staging (or prod) behave exactly like local
 
+> **Superseded for production by `16-GO-LIVE-PRODUCTION.md`** (2026-10-02), which also covers how
+> to start collecting data and every URL to register. Where the two disagree, 16 is current.
+
 Captured from the reference local deploy on 2026-09-10. Staging produced lookalikes named
 "Marketjoy Competitor", contacts from another company's page, and orchestrator discovery that
 returned nothing. Every one of those traced to configuration, not code: **nearly every
