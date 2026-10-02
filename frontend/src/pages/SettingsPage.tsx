@@ -270,7 +270,10 @@ function EmailStyleCard() {
                     placeholder="Direct, plain, peer to peer"
                   />
                 </Field>
-                <Field label="Target length (words)" hint="Between 40 and 200. Blank uses the default 90.">
+                <Field
+                  label="Target length (words)"
+                  hint="Between 40 and 200. Drafts are kept to it. Blank uses the default 90."
+                >
                   <Input
                     type="number"
                     min={40}
@@ -282,6 +285,19 @@ function EmailStyleCard() {
                   />
                 </Field>
               </div>
+              <Field
+                label="First email asks for"
+                hint="A one-word interest question gets more replies from people who do not know you yet. Replies to interested buyers always offer two times."
+              >
+                <Select
+                  value={value.first_ask ?? "interest"}
+                  onChange={(e) => set("first_ask", e.target.value as EmailStyle["first_ask"])}
+                  options={[
+                    { value: "interest", label: "An interest question, e.g. “Worth a look?” (recommended)" },
+                    { value: "meeting", label: "A short meeting, e.g. “15 minutes on Thursday?”" },
+                  ]}
+                />
+              </Field>
               <Field
                 label="Example emails"
                 hint="Up to 3. The agent copies their structure and voice only — never their customer names, metrics or claims."

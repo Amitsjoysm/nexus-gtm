@@ -184,6 +184,15 @@ EMAIL_CTA_RULE = (
     "or 'of interest'."
 )
 
+#: The ask for a workspace that chose "a short meeting" for its first emails (Settings → Email style,
+#: `style.first_ask = "meeting"`, 2026-10-01). Opt-in: the playbook's interest question stays the
+#: default, and this keeps the old rule's guard against asking whether a meeting would be "valuable".
+MEETING_CTA_RULE = (
+    "End with ONE specific, low-friction ask for a short meeting: name a short duration and a "
+    "rough day, which they can accept or decline in a word. Do not ask whether a conversation "
+    "would be 'valuable', 'helpful' or 'of interest'."
+)
+
 #: The ask in a reply to someone who wrote back. Interest is the moment to make booking easy, and
 #: two concrete times beat "when works for you?", which hands the scheduling back to the buyer.
 REPLY_CTA_RULE = (
@@ -222,13 +231,24 @@ WARM_TOUCHES = frozenset({"response"})
 THREADED_TOUCHES = frozenset({"followup", "reengage", "response", "signal"})
 
 
-def email_rules(touch: str = "first") -> str:
+def email_rules(touch: str = "first", *, first_ask: str = "interest",
+                word_cap: int | None = None) -> str:
     """The rules for one email. ``touch`` is the engagement kind (`first`, `followup`, `signal`,
     `reengage`, `response`); anything else is read as a first email, which is what every caller
-    outside the engagement engine (the composer, plays, the orchestrator) is writing."""
+    outside the engagement engine (the composer, plays, the orchestrator) is writing.
+
+    ``first_ask`` and ``word_cap`` are the workspace's own choices (`email_style.draft_options`).
+    Their defaults are the playbook's, so a workspace that set neither is unchanged."""
     warm = touch in WARM_TOUCHES
+    cap = word_cap or EMAIL_WORD_CAP
+    if warm:
+        ask = REPLY_CTA_RULE
+    elif first_ask == "meeting":
+        ask = MEETING_CTA_RULE
+    else:
+        ask = EMAIL_CTA_RULE
     return (
-        f"Rules: Under {EMAIL_WORD_CAP} words; a follow-up can be much shorter. Short sentences. "
+        f"Rules: Under {cap} words; a follow-up can be much shorter. Short sentences. "
         f"{STRUCTURE_RULE} "
         f"{'' if touch in THREADED_TOUCHES else SUBJECT_RULE + ' '}"
         f"{'' if warm else SIGNAL_RULE + ' '}"
@@ -238,7 +258,7 @@ def email_rules(touch: str = "first") -> str:
         "'just following up', 'just bumping', 'just checking in', 'synergy', 'leverage', "
         "'game-changer', or 'revolutionary'. "
         "No more than one question. "
-        f"{REPLY_CTA_RULE if warm else EMAIL_CTA_RULE} "
+        f"{ask} "
         "Use only facts given above — if a detail is missing, leave it out rather than inventing "
         "it. Never state a metric, customer name or case study that is not in the context."
     )

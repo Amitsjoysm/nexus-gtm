@@ -618,7 +618,14 @@ async def get_email_style(
         tone=str(style.get("tone") or ""),
         length_words=style.get("length_words"),
         samples=[str(s) for s in (style.get("samples") or []) if str(s).strip()],
+        first_ask=_first_ask(style),
     )
+
+
+def _first_ask(style: dict) -> str:
+    from nexus.agents.email_style import draft_options
+
+    return draft_options({"style": style})["first_ask"]
 
 
 @router.put("/email/style", response_model=EmailStyleOut)
@@ -636,11 +643,14 @@ async def set_email_style(
 
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     settings = dict(tenant.email_settings or {})
+    previous = settings.get("style") if isinstance(settings.get("style"), dict) else {}
     settings["default_signature"] = body.default_signature.strip()
     settings["style"] = {
         "tone": body.tone.strip(),
         "length_words": body.length_words,
         "samples": samples,
+        # Omitted keeps what is saved, so a client from before the field cannot reset it.
+        "first_ask": body.first_ask or _first_ask(previous),
     }
     tenant.email_settings = settings
     await ts.flush()
@@ -649,6 +659,7 @@ async def set_email_style(
         tone=settings["style"]["tone"],
         length_words=settings["style"]["length_words"],
         samples=samples,
+        first_ask=settings["style"]["first_ask"],
     )
 
 

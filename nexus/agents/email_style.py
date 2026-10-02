@@ -42,6 +42,29 @@ def samples(settings: dict | None) -> list[str]:
         return []
 
 
+#: What a first email may ask for. "interest" is the playbook's one-word question and the default;
+#: "meeting" is a workspace's explicit choice to ask for a short meeting instead (2026-10-01).
+FIRST_ASKS = ("interest", "meeting")
+
+
+def draft_options(settings: dict | None) -> dict:
+    """The two style choices both the prompt and the draft check read, so they cannot disagree.
+
+    ``word_cap`` is the workspace's target length when it set one, else None (the rules' 90).
+    ``first_ask`` is "meeting" only when the workspace chose it. Never raises: a malformed blob
+    leaves the defaults, which are exactly the behaviour before these options existed.
+    """
+    try:
+        style = _style(settings)
+        length = style.get("length_words")
+        cap = int(length) if length not in (None, "") else None
+        ask = str(style.get("first_ask") or "interest")
+        return {"word_cap": cap if cap and cap > 0 else None,
+                "first_ask": ask if ask in FIRST_ASKS else "interest"}
+    except Exception:  # noqa: BLE001
+        return {"word_cap": None, "first_ask": "interest"}
+
+
 def style_prompt(settings: dict | None) -> str:
     """The style block for the messaging prompt, or "" when the workspace has configured nothing.
 

@@ -2073,6 +2073,15 @@ engagement kind; anything else (composer, plays, orchestrator) is a first email:
   in"). Callers passing no touch are checked as before. A failed check costs one regeneration, and
   on an auto follow-up it holds the email for review (D17), so a new check must not false-positive.
 - The offline stub writes the same shape, and passes its own checks.
+- **Two workspace choices override the playbook, and both the prompt and the check read them**
+  (`email_style.draft_options`, 2026-10-01). Settings → Email style's target length is the word cap
+  (`email_rules(word_cap=)`, `check_draft(word_cap=)`); it used to be "aim for about N" beside a
+  fixed "under 90" rule and a 105-word check, so a 150-word setting was trimmed back. And
+  **"First email asks for"** (`style.first_ask`: `interest` default, `meeting` opt-in) swaps
+  `EMAIL_CTA_RULE` for `MEETING_CTA_RULE` and stops the meeting-ask check; replies still offer two
+  times. The engagement drafter's final check reads the same options, or it would hold a draft the
+  agent was told to write. `PUT /workspace/email/style` keeps a saved `first_ask` when the body
+  omits it, so an older client cannot reset it.
 - **Both drafting paths name the sender** through `copy.sender_block`: the engagement drafter from
   the mailbox, and `POST /agents/messaging/run` (the contact composer) from the signed-in rep's
   connected mailbox, else their own name. The composer path was missed by the 2026-09-30 fix and a

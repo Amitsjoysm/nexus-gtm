@@ -1174,6 +1174,8 @@ export interface EmailStyle {
   tone: string;
   length_words: number | null;
   samples: string[];
+  /** What a first email asks for: the playbook's interest question, or a short meeting. */
+  first_ask?: "interest" | "meeting";
 }
 
 /** Send-ready mailbox shown at the approval gate (no secrets, visible to approvers). */

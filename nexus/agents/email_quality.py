@@ -90,7 +90,8 @@ def _ask_line(lines: list[str]) -> str:
 
 
 def check_draft(*, subject, body, first_name, facts=None, company_name: str = "",
-                touch: str = "") -> list[str]:
+                touch: str = "", word_cap: int | None = None,
+                first_ask: str = "interest") -> list[str]:
     """Problems with this draft, in the order a reader would notice them. Empty means it is fine.
 
     Never raises: it is called on whatever the model returned, including None.
@@ -102,6 +103,10 @@ def check_draft(*, subject, body, first_name, facts=None, company_name: str = ""
     that depend on where the email sits: the subject's length (not for a threaded touch, whose
     subject is the thread's) and no meeting request until the buyer has replied. Callers that pass
     none are checked as before.
+
+    ``word_cap`` and ``first_ask`` are the workspace's own choices (`email_style.draft_options`): a
+    workspace that set a target length is checked against it, and one that chose to ask for a
+    meeting in its first emails is not told off for doing so. Defaults are the playbook's.
     """
     problems: list[str] = []
     text = str(body or "").strip()
@@ -151,15 +156,17 @@ def check_draft(*, subject, body, first_name, facts=None, company_name: str = ""
             "lines: the greeting, the reason, the problem, the ask, then the sign-off."
         )
 
-    if touch and touch not in WARM_TOUCHES and _MEETING_ASK.search(_ask_line(lines)):
+    if (touch and touch not in WARM_TOUCHES and first_ask != "meeting"
+            and _MEETING_ASK.search(_ask_line(lines))):
         problems.append(
             "The ask requests a meeting. In an email they have not answered, ask one short "
             "interest question instead (for example 'Worth a look?'); times come after they reply."
         )
 
-    if _words(text) > EMAIL_WORD_CAP + _WORD_SLACK:
+    cap = word_cap or EMAIL_WORD_CAP
+    if _words(text) > cap + _WORD_SLACK:
         problems.append(
-            f"The email is longer than {EMAIL_WORD_CAP} words; cut it to the observation, one "
+            f"The email is longer than {cap} words; cut it to the observation, one "
             "value line and the ask."
         )
 

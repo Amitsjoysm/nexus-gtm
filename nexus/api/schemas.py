@@ -860,6 +860,9 @@ class EmailStyleIn(BaseModel):
     #: Emails this workspace considers good. The agent copies their STRUCTURE and voice only —
     #: never their facts. See `nexus/agents/email_style.py`.
     samples: list[str] = Field(default_factory=list)
+    #: What a first email asks for: the playbook's one-word interest question (default), or a short
+    #: meeting. Optional so a client that predates the field keeps what is saved.
+    first_ask: Literal["interest", "meeting"] | None = None
 
 
 class EmailStyleOut(BaseModel):
@@ -867,6 +870,7 @@ class EmailStyleOut(BaseModel):
     tone: str = ""
     length_words: int | None = None
     samples: list[str] = Field(default_factory=list)
+    first_ask: str = "interest"
 
 
 class MailboxOut(BaseModel):

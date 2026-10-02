@@ -386,3 +386,78 @@ def test_markdown_line_breaks_are_removed():
 
     assert tidy_text("Hi David,  \nOur AI\u2011powered scoring.  \n\nBest,  \nSam  ") == \
         "Hi David,\nOur AI-powered scoring.\n\nBest,\nSam"
+
+
+# ---- the workspace's own length and first-email ask (2026-10-01) -----------------------------------
+
+def test_the_defaults_are_the_playbook_when_a_workspace_set_nothing():
+    from nexus.agents.copy import EMAIL_RULES, email_rules
+    from nexus.agents.email_style import draft_options
+
+    options = draft_options({})
+    assert options == {"word_cap": None, "first_ask": "interest"}
+    assert email_rules("first", **options) == EMAIL_RULES
+    # A malformed blob degrades to the same defaults rather than raising.
+    assert draft_options({"style": {"length_words": "lots", "first_ask": 7}}) == options
+
+
+def test_a_workspace_that_chose_a_meeting_asks_for_one():
+    from nexus.agents.copy import EMAIL_CTA_RULE, MEETING_CTA_RULE, REPLY_CTA_RULE, email_rules
+
+    rules = email_rules("first", first_ask="meeting")
+    assert MEETING_CTA_RULE in rules and EMAIL_CTA_RULE not in rules
+    # A reply to an interested buyer still offers two times, whatever the first-email choice.
+    assert REPLY_CTA_RULE in email_rules("response", first_ask="meeting")
+
+
+def test_the_check_follows_the_workspace_choices():
+    from nexus.agents.email_quality import check_draft
+
+    meeting = GOOD.replace("Worth a look?", "Open to 15 minutes on Thursday?")
+    assert check_draft(subject="x", body=meeting, first_name="Curtis", touch="first",
+                       first_ask="meeting") == []
+    long_body = GOOD.replace("Worth a look?", ("word " * 70) + "Worth a look?")
+    assert check_draft(subject="x", body=long_body, first_name="Curtis", touch="first") \
+        == [], "the default cap of 90 (+15) allows it"
+    problems = check_draft(subject="x", body=long_body, first_name="Curtis", touch="first",
+                           word_cap=50)
+    assert any("longer than 50 words" in p for p in problems)
+
+
+def test_the_rules_state_the_workspace_length():
+    from nexus.agents.copy import email_rules
+
+    assert "Under 150 words" in email_rules("first", word_cap=150)
+
+
+async def test_the_email_style_api_keeps_the_first_ask(client):
+    from tests.conftest import auth, signup
+
+    token = await signup(client, slug="askstyle", email="o@askstyle.com", company="Ask")
+    h = auth(token)
+    base = {"default_signature": "", "tone": "", "length_words": None, "samples": []}
+    r = await client.put("/api/workspace/email/style", headers=h,
+                         json={**base, "first_ask": "meeting"})
+    assert r.status_code == 200, r.text
+    assert r.json()["first_ask"] == "meeting"
+    # A client from before the field posts no first_ask: what is saved stays.
+    r = await client.put("/api/workspace/email/style", headers=h, json={**base, "tone": "plain"})
+    assert r.json()["first_ask"] == "meeting"
+    assert (await client.get("/api/workspace/email/style", headers=h)).json()["first_ask"] \
+        == "meeting"
+    assert (await client.put("/api/workspace/email/style", headers=h,
+                             json={**base, "first_ask": "calendar"})).status_code == 422
+
+
+async def test_a_meeting_workspace_drafts_are_asked_for_a_meeting(capturing):
+    from nexus.agents.copy import EMAIL_CTA_RULE, MEETING_CTA_RULE
+    from nexus.models.identity import Tenant
+
+    tid, *ids = await _world()
+    async with tenant_session(tid) as ts:
+        tenant = await ts.session.get(Tenant, tid)
+        tenant.email_settings = {"style": {"first_ask": "meeting", "length_words": 120}}
+    await _draft(tid, ids, kind="first", step_number=1)
+    prompt = capturing.prompts[-1]
+    assert MEETING_CTA_RULE in prompt and EMAIL_CTA_RULE not in prompt
+    assert "Under 120 words" in prompt

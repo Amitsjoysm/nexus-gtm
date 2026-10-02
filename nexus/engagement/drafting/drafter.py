@@ -77,7 +77,15 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
         # Exactly one "Re:", on the thread's own subject (D16): whatever the model wrote on the
         # subject line, a follow-up in a thread keeps the thread's subject.
         subject = reply_subject(thread.base_subject or subject)
+    # The workspace's own length and first-email ask, the same options the agent drafted against
+    # (`email_style.draft_options`), or this check would hold a draft the agent was told to write.
+    from nexus.agents.email_style import draft_options
+    from nexus.models.identity import Tenant
+
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    options = draft_options(getattr(tenant, "email_settings", None) or {})
     problems = check_draft(subject=subject, body=body, first_name=_first_name(contact),
-                           facts=pack.facts, company_name=account.name or "", touch=kind)
+                           facts=pack.facts, company_name=account.name or "", touch=kind,
+                           **options)
     return Draft(subject=subject, body=body, problems=problems, context_pack=pack.text,
                  facts=pack.facts)

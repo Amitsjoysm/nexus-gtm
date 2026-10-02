@@ -12,7 +12,7 @@ from nexus.agents.copy import (
     today_line,
 )
 from nexus.agents.email_quality import check_draft
-from nexus.agents.email_style import style_prompt
+from nexus.agents.email_style import draft_options, style_prompt
 from nexus.agents.llm import LLMMessage
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 
@@ -200,7 +200,11 @@ class MessagingAgent(BaseAgent):
         # The workspace's own voice: tone, length and its sample emails, offered as STRUCTURE only.
         # Placed after the facts and before the rules, so the rules — including "use only facts
         # given above" — are still the last word on what may be claimed.
-        style = style_prompt(await _email_settings(ctx))
+        email_settings = await _email_settings(ctx)
+        # The workspace's target length and first-email ask, read once so the rules below and the
+        # check after generation hold the draft to the same thing.
+        options = draft_options(email_settings)
+        style = style_prompt(email_settings)
         if style:
             content += f"\n{style}"
         guidance = (ctx.inputs.get("guidance") or "").strip()
@@ -212,7 +216,7 @@ class MessagingAgent(BaseAgent):
         # is never buried under them.
         # The rules for THIS touch (`copy.email_rules`): a reply offers times, an unanswered email
         # asks one interest question, a threaded one keeps the thread's subject.
-        content += f"\n{email_rules(touch)}\n{OUTPUT_CONTRACT}"
+        content += f"\n{email_rules(touch, **options)}\n{OUTPUT_CONTRACT}"
         user = LLMMessage(role="user", content=content)
         message = await ctx.complete(
             [ctx.system_message(), user],
@@ -248,7 +252,7 @@ class MessagingAgent(BaseAgent):
         # three completions nobody asked to pay for.
         problems = check_draft(
             subject=subject, body=body, first_name=_first_name(contact),
-            facts=facts_to_use, company_name=ctx.account.name or "", touch=touch,
+            facts=facts_to_use, company_name=ctx.account.name or "", touch=touch, **options,
         )
         if problems:
             retry = LLMMessage(
@@ -270,7 +274,7 @@ class MessagingAgent(BaseAgent):
             if retry_body.strip() and len(
                 check_draft(subject=retry_subject, body=retry_body,
                             first_name=_first_name(contact), facts=facts_to_use,
-                            company_name=ctx.account.name or "", touch=touch)
+                            company_name=ctx.account.name or "", touch=touch, **options)
             ) < len(problems):
                 message, subject, body = second, retry_subject, retry_body
         # A BLANK COMPLETION IS NOT A DRAFT. Observed live 2026-09-08: the provider returned an
