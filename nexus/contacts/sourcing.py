@@ -143,7 +143,8 @@ async def source_account_contacts(
         logger.info("LinkedIn contacts for %s: notes=%s discarded=%s", account.id,
                     linkedin.notes, dict(linkedin.discarded))
     if linkedin.people:
-        return await _persist_linkedin_people(ts, account, linkedin.people)
+        return await _persist_linkedin_people(ts, account, linkedin.people,
+                                              pooled=linkedin.pooled)
 
     from nexus.integrations.registry import get_registry
 
@@ -216,18 +217,22 @@ async def source_account_contacts(
     return created
 
 
-async def _persist_linkedin_people(ts: TenantSession, account: Account, people) -> list[Contact]:
+async def _persist_linkedin_people(ts: TenantSession, account: Account, people,
+                                   pooled=frozenset()) -> list[Contact]:
     """LinkedIn people as contacts, each then given a work email by the verified finder (the
-    waterfall enricher, which also charges for it). Already deduped by the caller."""
+    waterfall enricher, which also charges for it). Already deduped by the caller. ``pooled`` are
+    the profiles the shared pool supplied rather than a LinkedIn read now."""
     from nexus.enrichment.waterfall import get_enricher
+    from nexus.people.store import normalise_linkedin
 
     enricher = get_enricher()
     created: list[Contact] = []
     for person in people:
+        from_pool = normalise_linkedin(person.linkedin_url) in pooled
         contact = Contact(
             tenant_id=ts.tenant_id, account_id=account.id, full_name=person.full_name,
             title=person.title or None, linkedin_url=person.linkedin_url,
-            enrichment_source="sourcing:linkedin",
+            enrichment_source="sourcing:pool" if from_pool else "sourcing:linkedin",
         )
         ts.add(contact)
         await ts.flush()

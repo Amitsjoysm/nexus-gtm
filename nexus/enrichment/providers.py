@@ -149,6 +149,34 @@ class EnrichmentProvider(abc.ABC):
     async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult: ...
 
 
+class SharedPeopleProvider(EnrichmentProvider):
+    """An address the platform found and proved for this same LinkedIn profile, from the shared
+    pool (`nexus/people/pool.py`), at this company's own domain.
+
+    Offered as a candidate WITHOUT a verdict, so the waterfall's final pass verifies it live before
+    the save policy can keep it: proven within the last 90 days is a strong lead, not proof (people
+    leave). Free, and never enough on its own to skip the paid finders, since `_satisfied` wants a
+    VALID verdict: billing is exactly what it was. Keyed on the contact's LinkedIn profile only; a
+    contact without one gets nothing here. Never raises.
+    """
+
+    name = "shared_people"
+    costs_money = False
+
+    async def enrich(self, account: Account, contact: Contact) -> EnrichmentResult:
+        if not (contact.linkedin_url or "").strip():
+            return EnrichmentResult()
+        try:
+            from nexus.people.pool import _domains_for, pooled_email_for
+
+            email = await pooled_email_for(contact.linkedin_url, domains=_domains_for(account))
+        except Exception:
+            return EnrichmentResult()
+        if not email or email == (contact.email or "").strip().lower():
+            return EnrichmentResult()
+        return EnrichmentResult(found=True, email=email, email_confidence=0.8, source=self.name)
+
+
 class SourceDatabaseProvider(EnrichmentProvider):
     """Read a contact's email/phone from a registered source database, ahead of the paid finders.
 

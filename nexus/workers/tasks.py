@@ -1006,6 +1006,19 @@ async def handle_backfill_companies(payload: dict) -> dict:
     return report
 
 
+async def handle_pool_found_people(payload: dict) -> dict:
+    """Put people the platform found, and addresses it proved, into the shared pool
+    (`nexus/people/pool.py`). Queued by the request that found them, so the platform-global write
+    never shares a transaction with the tenant's."""
+    from nexus.people.pool import pool_found_people
+
+    tenant_id = payload.get("tenant_id")
+    if not tenant_id:
+        return {"error": "tenant_id is required"}
+    return await pool_found_people(tenant_id, people=payload.get("people") or [],
+                                   verified=payload.get("verified") or [])
+
+
 async def handle_refresh_mailbox_tokens(payload: dict) -> dict:
     """Refresh each connected SDR mailbox at least once a day (spec §9 mailbox status).
 
@@ -1347,6 +1360,7 @@ HANDLERS: dict[str, Handler] = {
     "populate_accounts": handle_populate_accounts,
     "crawl_companies": handle_crawl_companies,
     "backfill_companies": handle_backfill_companies,
+    "pool_found_people": handle_pool_found_people,
     "sync_network_account": handle_sync_network_account,
     "rollup_usage": handle_rollup_usage,
     "prune_web_cache": handle_prune_web_cache,

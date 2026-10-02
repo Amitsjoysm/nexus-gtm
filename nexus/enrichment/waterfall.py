@@ -23,6 +23,7 @@ from nexus.enrichment.providers import (
     EnrichmentResult,
     PatternEmailProvider,
     SearchEnrichmentProvider,
+    SharedPeopleProvider,
     SourceDatabaseProvider,
     VerifyingPatternEmailProvider,
 )
@@ -180,6 +181,8 @@ class WaterfallEnricher:
         account = account or await ts.get(Account, contact.account_id)
         if account is None:
             return EnrichmentResult()
+        # What the contact held before: an address found below that differs from it is ours.
+        supplied = (contact.email or "").strip().lower()
 
         # Where does this organisation actually receive email? Resolved once per account and cached
         # for 30 days (`nexus/enrichment/mail_domain.py`), because every guess below is built on it.
@@ -269,6 +272,15 @@ class WaterfallEnricher:
         if merged.found:
             contact.enrichment_source = merged.source
         await ts.flush()
+        if (merged.email and merged.email_status == STATUS_VALID and merged.email_check == "mailbox"
+                and (contact.email or "").strip().lower() == merged.email.strip().lower() != supplied
+                and (contact.linkedin_url or "").strip()):
+            # Found by us and proven by a mailbox verifier: shared so the next workspace that knows
+            # this profile is offered it (`nexus/people/pool.py`). Queued, never written here: this
+            # runs inside the tenant's write transaction and the pool is platform-global.
+            from nexus.people.pool import enqueue_pool
+
+            await enqueue_pool(ts.tenant_id, verified=[contact.id])
         from nexus.engagement.ledger.emit import emit
 
         await emit(ts, "enrichment.contact", actor_user_id=user_id,
@@ -296,6 +308,9 @@ def get_enricher() -> WaterfallEnricher:
                 # actor run. With no source registered it returns immediately and the order below
                 # is unchanged — which is why this is safe to put first unconditionally.
                 SourceDatabaseProvider(),
+                # An address the platform already proved for this LinkedIn profile, at this
+                # company. Free, re-verified live before it can be saved (`nexus/people/pool.py`).
+                SharedPeopleProvider(),
                 SearchEnrichmentProvider(get_browser_provider()),
                 VerifyingPatternEmailProvider(),
                 PatternEmailProvider(),
