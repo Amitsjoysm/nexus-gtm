@@ -621,6 +621,16 @@ plans in draft or active, the one case the server allows. All behind `pricing.wr
 Subscriptions the plan change sat behind "Manage"; it reads "Change plan" for `subscriptions.write`.
 `tests/test_plan_authoring_ui.py`.
 
+**A changed price is the price checkout charges** (2026-10-02, found while adding Edit). Checkout
+cached a plan's Stripe price in `meta.price_id` on first purchase and reused it whenever one existed,
+so a price changed in Admin kept charging the OLD amount at Stripe with nothing reporting it. The
+cache now also stores the terms it was made for (`price_amount_cents`, `price_currency`,
+`price_interval`) and is reused only while they match; otherwise `ensure_plan_price` mints a new
+Stripe price (its idempotency key carries the amount, and Stripe prices are immutable). A cache
+written before this has no terms and is re-ensured once. Customers already paying through Stripe keep
+their subscription's price: changing it is a plan change, not a plan edit, and the Edit dialog says
+so.
+
 `sort_order` defaults to a function of price, so a new tier lands in the right place without the
 operator knowing what the number means. An **annual** plan is a separate row with `interval="year"`,
 and its auto-position is derived from the yearly price — set `sort_order` explicitly to sit it beside

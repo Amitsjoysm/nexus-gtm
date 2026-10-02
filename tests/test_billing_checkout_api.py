@@ -281,3 +281,54 @@ async def test_portal_is_refused_for_an_admin_managed_workspace(client, noop_pro
     r = await client.post("/api/billing/portal", json={}, headers=auth(token))
     assert r.status_code == 409, r.text
     assert noop_provider.portal_sessions == []
+
+
+# ---- a price changed in Admin is the price checkout charges (2026-10-02) ---------------------------
+
+async def _set_price(plan_id: str, cents: int) -> None:
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingPlan
+
+    async with get_platform_sessionmaker()() as s:
+        plan = await s.get(BillingPlan, plan_id)
+        plan.base_price_cents = cents
+        await s.commit()
+
+
+def _record_ensures(provider) -> list[int]:
+    seen: list[int] = []
+    real = provider.ensure_plan_price
+
+    async def ensure(**kw):
+        seen.append(kw["amount_cents"])
+        return await real(**kw)
+
+    provider.ensure_plan_price = ensure
+    return seen
+
+
+async def test_a_repriced_plan_is_charged_at_its_new_price(client, noop_provider):
+    """Checkout cached the plan's Stripe price on first purchase and reused it forever, so a price
+    changed on the Plans tab kept charging the OLD amount at Stripe, silently. Stripe prices are
+    immutable; a new amount needs a new price object, which `ensure_plan_price` already mints."""
+    token, _ = await _seeded_tenant(client, slug="reprice")
+    ensures = _record_ensures(noop_provider)
+    body = {"plan_id": "accelerate", "success_url": "https://app/ok", "cancel_url": "https://app/no"}
+
+    assert (await client.post("/api/billing/checkout", json=body, headers=auth(token))).status_code \
+        == 200
+    await _set_price("accelerate", 24900)
+    assert (await client.post("/api/billing/checkout", json=body, headers=auth(token))).status_code \
+        == 200
+    assert ensures[-1] == 24900, ensures
+    assert noop_provider.prices["accelerate"]["amount_cents"] == 24900
+
+
+async def test_an_unchanged_price_reuses_the_cached_one(client, noop_provider):
+    token, _ = await _seeded_tenant(client, slug="samepr")
+    ensures = _record_ensures(noop_provider)
+    body = {"plan_id": "accelerate", "success_url": "https://app/ok", "cancel_url": "https://app/no"}
+    for _ in range(3):
+        assert (await client.post("/api/billing/checkout", json=body, headers=auth(token))) \
+            .status_code == 200
+    assert len(ensures) == 1, "a price nobody changed must not be re-created at the provider"

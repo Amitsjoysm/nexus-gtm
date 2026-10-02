@@ -546,8 +546,16 @@ async def create_checkout(
         # The price object has to exist at the PSP before a Checkout line item can reference it.
         # ensure_plan_price is keyed on plan id + amount, so this is a lookup after the first
         # call rather than a new price each time.
-        price_id = str((plan.meta or {}).get("price_id") or "")
-        if not price_id:
+        #
+        # The cached price is reused only while the plan's price terms are the ones it was made
+        # for. It used to be reused whenever one existed, so a price changed on the Plans tab kept
+        # charging the OLD amount at Stripe, silently (found 2026-10-02 when that tab gained an Edit
+        # button). Stripe prices are immutable: a new amount needs a new price object.
+        meta = dict(plan.meta or {})
+        terms = {"price_amount_cents": int(plan.base_price_cents),
+                 "price_currency": plan.currency, "price_interval": plan.interval}
+        price_id = str(meta.get("price_id") or "")
+        if not price_id or any(meta.get(k) != v for k, v in terms.items()):
             refs = await provider.ensure_plan_price(
                 plan_id=plan.id, name=plan.name, amount_cents=plan.base_price_cents,
                 currency=plan.currency, interval=plan.interval,
@@ -555,7 +563,7 @@ async def create_checkout(
             price_id = str(refs.get("price_id") or "")
             # billing_plans is platform-global (no tenant_id, no RLS policy), so caching the
             # reference here is a plain write, not a cross-tenant one.
-            plan.meta = {**(plan.meta or {}), **refs}
+            plan.meta = {**meta, **refs, **terms}
             await ts.session.flush()
 
         customer_id = (sub.psp_customer_id or "") if sub is not None else ""

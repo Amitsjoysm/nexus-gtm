@@ -161,7 +161,12 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
           return;
         }
         await api.updatePlan(plan.id, body);
-        toast.success(`${name.trim()} updated`, "Applies to every subscription on it except grandfathered ones.");
+        toast.success(
+          `${name.trim()} updated`,
+          body.base_price_cents !== undefined
+            ? "Credits and limits apply now. The new price applies to new purchases; customers already paying through Stripe keep their current price."
+            : "Applies to every subscription on it except grandfathered ones.",
+        );
       }
       onDone();
       onClose();
@@ -183,7 +188,7 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
       description={
         creating
           ? "Starts as a draft with what another plan includes. Nothing reaches the price list until you publish it."
-          : "Price, credits and limits. Applies to every subscription on this plan except grandfathered ones."
+          : "Credits and limits apply to every subscription on this plan except grandfathered ones. A new price applies to new purchases: customers already paying through Stripe keep the price they signed up at."
       }
     >
       <div className={styles.form}>
