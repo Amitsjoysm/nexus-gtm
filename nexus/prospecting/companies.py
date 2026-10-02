@@ -7,7 +7,9 @@ search (decided with the product owner 2026-09-24).
    not already hold" is an SQL anti-join against the workspace's accounts, so it scales with the
    workspace. The discovery it replaces sent at most 256 held domains to the search as exclusions,
    so a workspace holding 3,500 accounts was shown the same top results every day and nearly all
-   were duplicates.
+   were duplicates. Then companies any workspace added by any other route (upload, CRM, hand-add,
+   web find), matched on codes derived from their own text, and only those that clear this
+   workspace's fit threshold (2026-10-02).
 2. **LinkedIn** (``linkedin_company_search``) for the shortfall. Pages are read from a cursor
    shared by every workspace (``prospect_cursors``): each page read is stored in the shared table,
    so the next workspace with the same ICP gets those companies from step 1 rather than paying to
@@ -37,7 +39,7 @@ from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Awaitable, Callable
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import delete, exists, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from nexus.core.db import get_platform_sessionmaker, utcnow
@@ -56,6 +58,8 @@ MAX_SPLIT_DEPTH = 3
 _CEILING = li.PAGE_SIZE * li.MAX_PAGES
 
 WebSearch = Callable[..., Awaitable[list]]
+#: Would this candidate clear the workspace's fit threshold? (`deliver.fit_screen`)
+Screen = Callable[["Candidate"], bool]
 
 
 @dataclass(frozen=True)
@@ -101,7 +105,7 @@ class Candidate:
 
     domain: str
     name: str
-    source: str                      # database | linkedin | web
+    source: str                      # database | shared | linkedin | web
     company_id: str | None = None
     industry: str | None = None
     country: str | None = None
@@ -195,6 +199,9 @@ async def store_companies(companies) -> dict[str, str]:
                         if row is None:
                             break
                         await s.flush()
+                        # Countries derived from the row's own text (`resolution.derive_codes`)
+                        # give way to the offices LinkedIn lists, the first time it lists any.
+                        first_read = row.linkedin_fetched_at is None and bool(c.countries)
                         if not row.linkedin_url or row.linkedin_url == c.linkedin_url:
                             row.linkedin_url = c.linkedin_url or row.linkedin_url
                             row.linkedin_id = c.linkedin_id or row.linkedin_id
@@ -209,6 +216,13 @@ async def store_companies(companies) -> dict[str, str]:
                         have = set((await s.scalars(
                             select(CompanyCountry.country_code)
                             .where(CompanyCountry.company_id == row.id))).all())
+                        if first_read and row.linkedin_url == c.linkedin_url:
+                            stale = have - set(c.countries)
+                            if stale:
+                                await s.execute(delete(CompanyCountry).where(
+                                    CompanyCountry.company_id == row.id,
+                                    CompanyCountry.country_code.in_(sorted(stale))))
+                                have -= stale
                         if row.linkedin_url == c.linkedin_url:
                             for code in c.countries:
                                 if code not in have:
@@ -229,15 +243,13 @@ async def store_companies(companies) -> dict[str, str]:
 
 # ---- step 1: the database ----------------------------------------------------------------------
 
-async def _from_database(ts, q: ProspectQuery, limit: int, taken: set[str]) -> list[Candidate]:
+def _matching(ts, q: ProspectQuery, taken: set[str]):
+    """Shared companies matching the query's codes that this workspace does not hold."""
     from nexus.models.account import Account
     from nexus.models.company import Company, CompanyCountry
 
-    if not q.industry_ids or limit <= 0:
-        return []
     stmt = (
         select(Company)
-        .where(Company.linkedin_fetched_at.isnot(None))
         .where(Company.linkedin_industry_id.in_(sorted(descendants(q.industry_ids))))
         .where(~exists(select(Account.id).where(
             Account.tenant_id == ts.tenant_id, Account.domain == Company.domain)))
@@ -254,14 +266,56 @@ async def _from_database(ts, q: ProspectQuery, limit: int, taken: set[str]) -> l
                               Company.employee_range_min <= q.employee_max))
     if taken:
         stmt = stmt.where(Company.domain.notin_(sorted(taken)))
-    stmt = stmt.order_by(Company.linkedin_fetched_at.desc(), Company.id).limit(limit)
-    rows = (await ts.session.scalars(stmt)).all()
-    return [
-        Candidate(domain=r.domain, name=r.name or r.domain, source="database", company_id=r.id,
-                  industry=r.industry, country=country_label(r.hq_country_code) or r.country,
-                  employee_count=r.employee_count, linkedin_url=r.linkedin_url or "")
-        for r in rows
-    ]
+    return stmt
+
+
+def _candidate(row, source: str) -> Candidate:
+    return Candidate(domain=row.domain, name=row.name or row.domain, source=source,
+                     company_id=row.id, industry=row.industry,
+                     country=country_label(row.hq_country_code) or row.country,
+                     employee_count=row.employee_count, linkedin_url=row.linkedin_url or "")
+
+
+async def _from_database(ts, q: ProspectQuery, limit: int, taken: set[str]) -> list[Candidate]:
+    """Companies a LinkedIn search stored: ICP matches by construction."""
+    from nexus.models.company import Company
+
+    if not q.industry_ids or limit <= 0:
+        return []
+    stmt = (_matching(ts, q, taken).where(Company.linkedin_fetched_at.isnot(None))
+            .order_by(Company.linkedin_fetched_at.desc(), Company.id).limit(limit))
+    return [_candidate(r, "database") for r in (await ts.session.scalars(stmt)).all()]
+
+
+#: How many derived rows one request may screen. Each is a deterministic score, no request.
+SHARED_POOL_FACTOR = 5
+SHARED_POOL_MAX = 200
+
+
+async def _from_shared(ts, q: ProspectQuery, limit: int, taken: set[str],
+                       screen: Screen | None) -> list[Candidate]:
+    """Companies another workspace added (an upload, a CRM pull, a hand-add, a web find), matched on
+    codes derived from their own text (`companies.resolution.derive_codes`).
+
+    Weaker evidence than a LinkedIn filter, so only offered with a ``screen``, the workspace's own
+    fit threshold, and only the ones it passes count toward the request. Without one the step is
+    skipped: offering an unscreened text match would put it on the same footing as a LinkedIn row.
+    """
+    from nexus.models.company import Company
+
+    if not q.industry_ids or limit <= 0 or screen is None:
+        return []
+    stmt = (_matching(ts, q, taken).where(Company.linkedin_fetched_at.is_(None))
+            .order_by(Company.updated_at.desc(), Company.id)
+            .limit(min(SHARED_POOL_MAX, limit * SHARED_POOL_FACTOR)))
+    out: list[Candidate] = []
+    for row in (await ts.session.scalars(stmt)).all():
+        cand = _candidate(row, "shared")
+        if screen(cand):
+            out.append(cand)
+            if len(out) >= limit:
+                break
+    return out
 
 
 async def _held(ts, domains) -> set[str]:
@@ -485,7 +539,7 @@ async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainRes
 async def find_icp_companies(
     ts, icp: dict, n: int, *, client=None, web_search: WebSearch | None = None,
     product_context: str = "", web_pool: int | None = None,
-    linkedin_budget_s: float | None = None,
+    linkedin_budget_s: float | None = None, screen: Screen | None = None,
 ) -> ChainResult:
     """Up to ``n`` companies matching the ICP that this workspace does not hold. Never raises for
     a source failing: that source is noted and the next one is asked.
@@ -497,7 +551,11 @@ async def find_icp_companies(
     ``linkedin_budget_s`` is for a caller a person is waiting on (the orchestrator runs inside the
     chat request; Populate and the daily sweep are jobs and pass nothing). When it runs out, the
     companies LinkedIn already delivered are kept (they are appended page by page), the claimed page
-    is released, and web search is asked for the rest: the same trade as Find similar's budget."""
+    is released, and web search is asked for the rest: the same trade as Find similar's budget.
+
+    ``screen`` is the workspace's fit threshold. With it, shared companies other workspaces added
+    by any other route (codes derived from their own text) are offered after the LinkedIn-stored
+    ones and before anything is bought, but only those that pass it."""
     from nexus.core.aio import run_with_timeout
     from nexus.integrations.apify import ApifyError, ApifyNotConfigured
 
@@ -508,6 +566,9 @@ async def find_icp_companies(
     taken: set[str] = set()
 
     for cand in await _from_database(ts, q, n, taken):
+        taken.add(cand.domain)
+        result.candidates.append(cand)
+    for cand in await _from_shared(ts, q, n - len(result.candidates), taken, screen):
         taken.add(cand.domain)
         result.candidates.append(cand)
 

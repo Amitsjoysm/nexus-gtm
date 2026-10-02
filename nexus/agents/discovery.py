@@ -145,7 +145,7 @@ class DiscoveryAgent(BaseAgent):
         from nexus.billing.errors import QuotaExceeded
         from nexus.billing.meter import metered
         from nexus.prospecting.companies import find_icp_companies
-        from nexus.prospecting.deliver import deliver
+        from nexus.prospecting.deliver import deliver, fit_screen
 
         settings = get_settings()
         owner = ctx.inputs.get("owner_user_id")
@@ -163,7 +163,8 @@ class DiscoveryAgent(BaseAgent):
 
         chain = await find_icp_companies(
             ctx.ts, scoring_icp, need, client=_linkedin_client(), web_search=_web_search(ctx),
-            web_pool=need * 3, linkedin_budget_s=settings.discovery_linkedin_budget_s)
+            web_pool=need * 3, linkedin_budget_s=settings.discovery_linkedin_budget_s,
+            screen=fit_screen(profile, settings.icp_discovery_min_fit))
         discarded = Counter(chain.discarded)
         notes = dict(chain.notes)
         try:

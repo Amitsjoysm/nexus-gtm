@@ -120,7 +120,7 @@ async def _deliver_run(ts, run_id: str, *, client, web_search, min_fit: int) -> 
     from nexus.billing.meter import metered
     from nexus.models.prospecting import ProspectRun
     from nexus.prospecting.companies import find_icp_companies
-    from nexus.prospecting.deliver import deliver
+    from nexus.prospecting.deliver import deliver, fit_screen
     from nexus.relevance.engine import get_profile
 
     run = await ts.get(ProspectRun, run_id)
@@ -131,6 +131,7 @@ async def _deliver_run(ts, run_id: str, *, client, web_search, min_fit: int) -> 
     chain = await find_icp_companies(
         ts, profile.icp, run.requested, client=client, web_search=web_search,
         web_pool=run.requested * 3, product_context=profile.product_context or "",
+        screen=fit_screen(profile, min_fit),
     )
     discarded = Counter(chain.discarded)
     account_ids, _ = await deliver(

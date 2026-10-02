@@ -997,10 +997,13 @@ async def handle_crawl_companies(payload: dict) -> dict:
 
 async def handle_backfill_companies(payload: dict) -> dict:
     """Link unlinked accounts to shared company records. Idempotent, so the heartbeat can enqueue
-    it freely; it only ever fills a NULL."""
-    from nexus.companies.backfill import backfill_companies
+    it freely; it only ever fills a NULL. Then hand the shared rows what their linked accounts have
+    learned since (enrichment, a CRM pull, an edit), which also only fills a NULL."""
+    from nexus.companies.backfill import backfill_companies, fill_from_linked_accounts
 
-    return await backfill_companies(limit=payload.get("limit", 1000))
+    report = await backfill_companies(limit=payload.get("limit", 1000))
+    report["filled_from_accounts"] = (await fill_from_linked_accounts()).get("filled", 0)
+    return report
 
 
 async def handle_refresh_mailbox_tokens(payload: dict) -> dict:

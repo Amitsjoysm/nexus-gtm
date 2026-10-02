@@ -6,6 +6,9 @@
 * **Web candidates are not**: a web search returns whatever ranks for the words. They are enriched
   (unbilled, as the daily sweep always did), re-checked against the ICP's size and country with the
   enriched values, and must clear ``min_fit``.
+* **Shared candidates are not either** (2026-10-02): their codes were read off the row's own words.
+  The chain only offered the ones ``fit_screen`` passed, and they face the same gates and threshold
+  here, without the enrichment, since the shared row already carries what it knows.
 * **The workspace check runs again at insert** (``find_existing_account``), the backstop for account
   domains stored before domains were normalised, which the chain's SQL anti-join compares exactly.
 
@@ -20,6 +23,38 @@ from collections import Counter
 from nexus.prospecting.companies import Candidate
 
 logger = logging.getLogger("nexus.prospecting.deliver")
+
+#: Candidates whose ICP match is a claim to check rather than a filter LinkedIn applied.
+SCREENED_SOURCES = frozenset({"web", "shared"})
+
+
+def _account_for(ts_tenant_id, cand: Candidate, *, source: str, owner_user_id=None):
+    from nexus.models.account import Account
+
+    return Account(
+        tenant_id=ts_tenant_id, name=(cand.name or cand.domain).strip(), domain=cand.domain,
+        # Only what a source reported. Never the ICP's own values: a stamped industry is
+        # permanent (enrichment fills blanks only) and the fit score would then credit the ICP
+        # for matching itself.
+        industry=cand.industry, country=cand.country, employee_count=cand.employee_count,
+        source=source, owner_user_id=owner_user_id, company_id=cand.company_id,
+    )
+
+
+def fit_screen(profile, min_fit: int):
+    """``find_icp_companies``'s ``screen``: would this candidate clear ``min_fit`` here?
+
+    The same deterministic score `deliver` applies, on the same fields, so a candidate the chain
+    lets through is not then discarded for a reason the chain could have seen."""
+    from nexus.relevance import get_relevance_engine
+
+    relevance = get_relevance_engine()
+
+    def passes(cand: Candidate) -> bool:
+        account = _account_for(None, cand, source="screen")
+        return relevance.score_icp_fit(profile, account).score >= min_fit
+
+    return passes
 
 
 async def deliver(
@@ -38,16 +73,10 @@ async def deliver(
     relevance = get_relevance_engine()
     settings = get_settings()
 
-    built: list[tuple[Candidate, Account]] = []
-    for cand in candidates:
-        built.append((cand, Account(
-            tenant_id=ts.tenant_id, name=(cand.name or cand.domain).strip(), domain=cand.domain,
-            # Only what a source reported. Never the ICP's own values: a stamped industry is
-            # permanent (enrichment fills blanks only) and the fit score would then credit the ICP
-            # for matching itself.
-            industry=cand.industry, country=cand.country, employee_count=cand.employee_count,
-            source=source, owner_user_id=owner_user_id, company_id=cand.company_id,
-        )))
+    built: list[tuple[Candidate, Account]] = [
+        (cand, _account_for(ts.tenant_id, cand, source=source, owner_user_id=owner_user_id))
+        for cand in candidates
+    ]
 
     web = [account for cand, account in built if cand.source == "web"]
     enrich = settings.icp_discovery_enrich_candidates
@@ -64,14 +93,14 @@ async def deliver(
     for cand, account in built:
         if len(account_ids) >= limit:
             break
-        if cand.source == "web" and not (
+        if cand.source in SCREENED_SOURCES and not (
             _within_size_band(account.employee_count, icp) and _within_geo(account.country, icp)
         ):
             discarded["outside_icp"] += 1
             continue
         fit = relevance.score_icp_fit(profile, account)
         screened += 1
-        if cand.source == "web" and fit.score < min_fit:
+        if cand.source in SCREENED_SOURCES and fit.score < min_fit:
             discarded["low_fit"] += 1
             continue
         if await find_existing_account(ts, domain=account.domain) is not None:

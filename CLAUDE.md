@@ -1437,6 +1437,18 @@ unproven page does to a contact list.
    overlapping size band. "Not held" is an SQL anti-join against the workspace's accounts. The old
    discovery sent at most 256 held domains to Exa as exclusions, so a 3,500-account workspace got
    the same top results every day; pinned with 299 held and the new one still found.
+   **Then companies any workspace added any other way** (2026-10-02, decided with the product
+   owner): an upload, CRM pull, hand-add or web find lands in `companies` within a tick through the
+   backfill, but with no LinkedIn codes, so step 1 could never offer it: 256 of 393 shared rows
+   locally. `resolution.derive_codes` now reads the industry code, HQ country and size band off
+   the row's own text on every non-LinkedIn write (fill blanks only, `match_term`, never the LLM),
+   leaving `linkedin_fetched_at` NULL as the provenance mark. Those rows (source `shared`) are
+   offered after the LinkedIn-stored ones and only when `deliver.fit_screen`, the workspace's
+   own fit threshold, passes; `deliver` holds them to it again. No screen, no shared step. A
+   LinkedIn read replaces the derived values and drops derived countries it does not list.
+   `backfill.fill_from_linked_accounts` hands a linked row what its account learned AFTER the link
+   (enrichment, a CRM pull, an edit): the link read the account once and never again.
+   `scripts/derive_company_codes.py` (dry run by default) covers rows stored before.
 2. LinkedIn for the shortfall, from `prospect_cursors`, which is **shared by every workspace**:
    every company on a page read is stored, so the next workspace with the same ICP gets it from
    step 1 and never pays to read the page again. A page is claimed by compare-and-set and released

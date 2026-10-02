@@ -77,3 +77,54 @@ async def backfill_companies(*, limit: int = 1000, dry_run: bool = False) -> dic
         logger.warning("company backfill failed", exc_info=True)
         report["error"] = "backfill failed; see logs"
     return report
+
+
+async def fill_from_linked_accounts(*, limit: int = 500) -> dict:
+    """Give shared rows what their linked accounts learned after the link. Never raises.
+
+    `backfill_companies` reads an account's firmographics once, when it links it, and a linked
+    account is never read again. An upload with a name and a website links at once with nothing
+    else; the industry, country and headcount that enrichment, a CRM pull or a person adds later
+    stayed on the account, so the shared row kept its blanks and its derived codes were never
+    computed: the company could never be offered to another workspace's ICP search.
+
+    Fills blanks only, through `resolve_company`, like the link itself. Converges: a row stops
+    matching the moment its blank is filled, so a quiet tick costs one indexed query."""
+    from sqlalchemy import and_, or_, select
+
+    from nexus.companies.resolution import resolve_company
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.account import Account
+    from nexus.models.company import Company
+
+    report = {"filled": 0}
+    try:
+        async with get_platform_sessionmaker()() as session:
+            rows = (await session.execute(
+                select(Account, Company.domain)
+                .join(Company, Company.id == Account.company_id)
+                .where(or_(
+                    and_(Company.industry.is_(None), Account.industry.isnot(None),
+                         Account.industry != ""),
+                    and_(Company.country.is_(None), Account.country.isnot(None),
+                         Account.country != ""),
+                    and_(Company.employee_count.is_(None), Account.employee_count.isnot(None)),
+                ))
+                .limit(limit))).all()
+            seen: set[str] = set()
+            for account, domain in rows:
+                # Several workspaces may hold the company; the first account read fills the blank
+                # and the rest find nothing left to fill, exactly as at link time.
+                await resolve_company(session, domain=domain, industry=account.industry or None,
+                                      country=account.country or None,
+                                      employee_count=account.employee_count,
+                                      source="account_backfill")
+                await session.flush()
+                if domain not in seen:
+                    seen.add(domain)
+                    report["filled"] += 1
+            await session.commit()
+    except Exception:
+        logger.warning("filling shared companies from linked accounts failed", exc_info=True)
+        report["error"] = "fill failed; see logs"
+    return report

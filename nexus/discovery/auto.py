@@ -253,11 +253,12 @@ async def auto_discover_for_tenant(
     from collections import Counter
 
     from nexus.prospecting.companies import find_icp_companies
-    from nexus.prospecting.deliver import deliver
+    from nexus.prospecting.deliver import deliver, fit_screen
 
     chain = await find_icp_companies(
         ts, profile.icp, target_count, web_search=search, web_pool=pool_limit,
         product_context=getattr(profile, "product_context", "") or "",
+        screen=fit_screen(profile, min_fit),
     )
     discarded = Counter(chain.discarded)
     account_ids, screened = await deliver(
