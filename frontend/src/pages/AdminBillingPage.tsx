@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Button } from "@/components/ui";
+import { Button, Icons } from "@/components/ui";
 import { CustomPlanDialog } from "./admin/CustomPlanDialog";
 import { TenantActionsDialog } from "./admin/TenantActionsDialog";
 import { UserActionsDialog } from "./admin/UserActionsDialog";
 import { RateCardDialog } from "./admin/RateCardDialog";
 import { PlanEntitlementsDialog } from "./admin/PlanEntitlementsDialog";
+import { PlanDialog } from "./admin/PlanDialog";
 import { PlatformAdmins } from "./admin/PlatformAdmins";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge, Card, CardHeader, EmptyState, Skeleton, Tabs, useToast } from "@/components/ui";
@@ -207,10 +208,36 @@ function RateCards() {
 
 function Plans() {
   const api = useApiClient();
+  const toast = useToast();
   const can = usePlatformCan();
   const plans = useApi<AdminPlan[]>((signal) => api.adminBillingPlans(signal), []);
   const [editing, setEditing] = useState<AdminPlan | null>(null);
+  // The plan dialog: `undefined` closed, `null` creating, a plan editing it.
+  const [planForm, setPlanForm] = useState<AdminPlan | null | undefined>(undefined);
+  const [statusBusy, setStatusBusy] = useState<string | null>(null);
   const canEdit = can(PRICING_WRITE);
+
+  // Publish puts a draft on the price list; hold takes it off and leaves its subscribers alone.
+  // Only standard plans in draft or active can move: the server refuses anything else.
+  async function toggleStatus(plan: AdminPlan) {
+    const next = plan.status === "active" ? "draft" : "active";
+    setStatusBusy(plan.id);
+    try {
+      await api.setPlanStatus(plan.id, next);
+      toast.success(
+        next === "active" ? `${plan.name} published` : `${plan.name} held`,
+        next === "active"
+          ? "It is on the price list now."
+          : "It is off the price list. Workspaces already on it keep it unchanged.",
+      );
+      plans.refetch();
+    } catch (err) {
+      toast.error("Couldn't change the plan's status",
+        err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setStatusBusy(null);
+    }
+  }
 
   const columns: Column<AdminPlan>[] = [
     {
@@ -265,14 +292,31 @@ function Plans() {
           {
             key: "actions",
             header: "",
-            width: "130px",
-            render: (r: AdminPlan) => (
-              <div className={styles.rowActions}>
-                <Button variant="secondary" onClick={() => setEditing(r)}>
-                  What's included
-                </Button>
-              </div>
-            ),
+            width: "320px",
+            render: (r: AdminPlan) => {
+              const movable =
+                r.plan_class === "standard" && (r.status === "draft" || r.status === "active");
+              return (
+                <div className={styles.rowActions}>
+                  <Button size="sm" variant="secondary" onClick={() => setPlanForm(r)}>
+                    Edit
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => setEditing(r)}>
+                    What's included
+                  </Button>
+                  {movable && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={statusBusy === r.id}
+                      onClick={() => void toggleStatus(r)}
+                    >
+                      {r.status === "active" ? "Hold" : "Publish"}
+                    </Button>
+                  )}
+                </div>
+              );
+            },
           } as Column<AdminPlan>,
         ]
       : []),
@@ -288,12 +332,19 @@ function Plans() {
     >
       {(rows) => (
         <>
+          {canEdit && (
+            <div className={styles.tableToolbar}>
+              <Button iconLeft={<Icons.PlusIcon />} onClick={() => setPlanForm(null)}>
+                New plan
+              </Button>
+            </div>
+          )}
           <DataTable
             columns={columns}
             rows={rows}
             getRowKey={(r) => r.id}
             caption="Plans"
-            minWidth={canEdit ? 900 : 760}
+            minWidth={canEdit ? 1080 : 760}
           />
           <PlanEntitlementsDialog
             open={editing !== null}
@@ -302,6 +353,13 @@ function Plans() {
               plans.refetch();
             }}
             plan={editing}
+          />
+          <PlanDialog
+            open={planForm !== undefined}
+            onClose={() => setPlanForm(undefined)}
+            plan={planForm ?? null}
+            plans={rows}
+            onDone={() => plans.refetch()}
           />
         </>
       )}
@@ -368,8 +426,11 @@ function Subscriptions() {
       width: canCustomPlan ? "220px" : "120px",
       render: (r) => (
         <div className={styles.rowActions}>
+          {/* Named for what it does. As "Manage" the plan change was easy to miss, and was
+              reported as "cannot add a subscription" (2026-10-01). A support admin, who can only
+              grant credits there, still sees "Manage". */}
           <Button variant="secondary" onClick={() => setActions(r)}>
-            Manage
+            {canCustomPlan ? "Change plan" : "Manage"}
           </Button>
           {canCustomPlan && (
             <Button variant="ghost" onClick={() => setCustom(r)}>

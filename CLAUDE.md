@@ -612,6 +612,15 @@ it. `POST /admin/billing/plans` closes that; `PUT .../status` publishes or holds
 - **No Stripe object is created.** `create_checkout` calls `ensure_plan_price` on first purchase, so
   a draft nobody bought does not litter the Stripe account with products.
 
+**The Plans tab is where this is used** (`admin/PlanDialog.tsx`, 2026-10-01). For five weeks the
+server half had no screen: the tab offered only "What's included", the API client carried an
+`updatePlan` nobody called, and an operator reported "I can view plans but cannot edit or add one"
+as a regression. "New plan" creates a draft cloned from a chosen plan; "Edit" PATCHes only the fields
+that changed and never `status`; "Publish"/"Hold" use `PUT .../status` and appear only on standard
+plans in draft or active, the one case the server allows. All behind `pricing.write`. In
+Subscriptions the plan change sat behind "Manage"; it reads "Change plan" for `subscriptions.write`.
+`tests/test_plan_authoring_ui.py`.
+
 `sort_order` defaults to a function of price, so a new tier lands in the right place without the
 operator knowing what the number means. An **annual** plan is a separate row with `interval="year"`,
 and its auto-position is derived from the yearly price — set `sort_order` explicitly to sit it beside

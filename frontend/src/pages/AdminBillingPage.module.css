@@ -53,6 +53,13 @@
   font-size: var(--text-base);
 }
 
+/* Actions that act on the whole table (New plan), above it and to the right, like a page action. */
+.tableToolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-3);
+}
+
 .rowActions {
   display: flex;
   gap: var(--space-2);

@@ -1742,6 +1742,22 @@ export class ApiClient {
       { method: "PUT", body },
     );
   }
+  /** Create a sellable plan. It starts as a draft, with entitlements cloned from `base_plan_id`. */
+  createPlan(body: {
+    plan_id: string; name: string; base_plan_id: string; base_price_cents: number;
+    included_credits: number; description?: string; seat_price_cents?: number | null;
+    interval?: string; max_seats?: number | null; trial_days?: number;
+  }) {
+    return this.request<{ plan_id: string; status: string; warning?: string | null }>(
+      "/admin/billing/plans", { method: "POST", body },
+    );
+  }
+  /** Publish a standard plan to the price list ("active"), or hold it ("draft"). */
+  setPlanStatus(planId: string, status: "active" | "draft") {
+    return this.request<{ plan_id: string; status: string; sellable: boolean }>(
+      `/admin/billing/plans/${planId}/status`, { method: "PUT", body: { status } },
+    );
+  }
   upsertRateCard(capabilityId: string, body: Record<string, unknown>) {
     return this.request<AdminRateCard>(`/admin/billing/rates/${capabilityId}`, {
       method: "PUT",
