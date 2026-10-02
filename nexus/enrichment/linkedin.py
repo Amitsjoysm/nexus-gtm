@@ -37,6 +37,68 @@ def canonical_profile_url(url: str) -> str | None:
     return m.group(0).rstrip("/")
 
 
+# ---- strict shapes, for a value somebody typed, uploaded or a model returned (2026-10-02) ----------
+#
+# `canonical_profile_url` FINDS a profile inside a string, which is right for search results and
+# wrong for a field: "https://evil.io/?next=https://linkedin.com/in/x" contains one. A field holds a
+# person's profile only if the WHOLE value is one; anything else is refused, never coerced.
+
+_HOST = r"(?:https?://)?(?:[a-z0-9-]{1,10}\.)?linkedin\.com"
+_STRICT_PROFILE_RE = re.compile(
+    rf"^{_HOST}/in/([^/?#\s]{{2,200}})(?:/[^?#\s]*)?/?(?:[?#]\S*)?$", re.IGNORECASE)
+_STRICT_COMPANY_RE = re.compile(
+    rf"^{_HOST}/(company|showcase|school)/([^/?#\s]{{1,200}})(?:/[^?#\s]*)?/?(?:[?#]\S*)?$",
+    re.IGNORECASE)
+
+
+def person_profile_url(value: str | None) -> str | None:
+    """``value`` when the whole of it is a LinkedIn member profile URL, else None.
+
+    The value comes back as given (trimmed): dedupe and the shared stores compare through
+    `people.store.normalise_linkedin`, so there is no need to rewrite what a person typed."""
+    raw = (value or "").strip()
+    return raw if raw and _STRICT_PROFILE_RE.match(raw) else None
+
+
+def company_page_url(value: str | None) -> str | None:
+    """The canonical ``https://www.linkedin.com/<company|showcase|school>/<slug>`` for a value that is
+    one, else None. A person's profile is not a company page."""
+    m = _STRICT_COMPANY_RE.match((value or "").strip())
+    if not m:
+        return None
+    return f"https://www.linkedin.com/{m.group(1).lower()}/{m.group(2)}"
+
+
+_TITLE_SPLIT = re.compile(r"\s+[-–—|]\s+")
+
+
+def is_own_profile(hit, full_name: str) -> bool:
+    """Whether this LinkedIn result is the named person's OWN profile.
+
+    A LinkedIn profile result is titled with its owner's name ("Jane Doe - VP Sales - Acme |
+    LinkedIn"), and most slugs carry it ("jane-doe-4a1"). The snippet does not count: a colleague's
+    profile that mentions Jane in its "about" text names her and her company, and attaching it to
+    her is the wrong-person failure `contacts/affiliation.py` exists to prevent."""
+    tokens = _name_tokens(full_name)
+    url = canonical_profile_url(_hit_field(hit, "url"))
+    if not tokens or not url:
+        return False
+    slug = url.rsplit("/in/", 1)[-1].lower()
+    lead = _TITLE_SPLIT.split(_hit_field(hit, "title").strip(), maxsplit=1)[0].lower()
+    surname, given = tokens[-1], tokens[0]
+
+    def names(text: str) -> bool:
+        return surname in text and (given in text or len(tokens) == 1)
+
+    return names(slug) or names(lead)
+
+
+def _hit_field(hit, name: str) -> str:
+    if isinstance(hit, dict):
+        return str(hit.get(name) or "")
+    return str(getattr(hit, name, "") or "")
+
+
 class LinkedInFinder:
     """Search the web for a person's LinkedIn profile and return the best-matching profile URL."""
 
@@ -71,21 +133,15 @@ class LinkedInFinder:
     def _best_match(hits, tokens: list[str], account: Account | None = None) -> str | None:
         from nexus.contacts.affiliation import proves_affiliation
 
-        surname = tokens[-1]
-        given = tokens[0]
+        name = " ".join(tokens)
         for hit in hits:
-            url = getattr(hit, "url", "") or (hit.get("url", "") if isinstance(hit, dict) else "")
-            canon = canonical_profile_url(url)
+            canon = canonical_profile_url(_hit_field(hit, "url"))
             if not canon:
                 continue
-            title = getattr(hit, "title", "") or (hit.get("title", "") if isinstance(hit, dict) else "")
-            snippet = getattr(hit, "snippet", "") or (
-                hit.get("snippet", "") if isinstance(hit, dict) else ""
-            )
-            hay = f"{canon} {title} {snippet}".lower()
-            # Require the surname (in slug/title/snippet); for multi-token names also the given
-            # name, so "…/in/john-collison" isn't matched for "Jane Collison".
-            if not (surname in hay and (given in hay or len(tokens) == 1)):
+            # The profile must be THEIRS: named in its title or slug, not merely in its snippet
+            # (a colleague's profile mentions them), and for multi-token names the given name too,
+            # so "…/in/john-collison" isn't matched for "Jane Collison".
+            if not is_own_profile(hit, name):
                 continue
             # A NAME does not tell one Furqan Mustafa from another — the staging report was
             # exactly a namesake's profile. The profile must name THIS company too.

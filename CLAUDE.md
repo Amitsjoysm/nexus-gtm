@@ -1140,6 +1140,48 @@ Engineering means forty rows and **forty paid phone lookups for one phone number
   to whichever customer happened to ask second and make revenue depend on crawl ordering. Usage rows
   carry `attrs.cached` so the margin is visible in the stream.
 
+**The pool holds what WE found, and Find contacts asks it first** (2026-10-02, `people/pool.py`).
+The store held phone lookups and nothing else (empty locally) while workspaces paid LinkedIn for the
+same buyers twice. Decided with the product owner, "only what we found":
+- every row a LinkedIn employees run PROVED (the account's own page, the company named, an ICP
+  title), including ones this workspace did not take: profile, name, title, company domain, source
+  `linkedin_employees`. A later read moves a person who changed jobs: that is our newer evidence,
+  not a tenant's edit, so fill-blanks-only does not apply to it.
+- an address our finder found (not the one the contact arrived with) and a MAILBOX verifier proved,
+  on the company's own or mail domain, for a contact with a LinkedIn profile. Only the address and
+  the profile are shared: the name and title may be the customer's upload, and a row made this way
+  keeps the default source, so Find contacts never offers it.
+- customer uploads, CRM imports and typed contacts stay in their workspace.
+
+Writes go through the `pool_found_people` job, never the request: the pool is platform-global and
+the request holds a tenant write transaction (the SQLite suite's "database is locked"). Reuse:
+`prospecting/contacts.linkedin_contacts` offers pooled people at the domain who pass the same title
+gates, seen on LinkedIn within 180 days (delivering one does not refresh them), and buys a run only
+for the rest; they are saved as `sourcing:pool`. `SharedPeopleProvider`, free and second in the
+waterfall, offers a pooled address (90 days) for the contact's own profile WITHOUT a verdict, so the
+final pass verifies it live; `_satisfied` still wants a valid verdict plus a phone, so billing is
+exactly what it was.
+
+## LinkedIn URLs: a person's own profile, a company's own page (2026-10-02)
+
+Asked: "ensure incorrect LinkedIn URLs are not mapped to accounts or contacts." Every writer now
+goes through `enrichment/linkedin.py`: `person_profile_url` (the WHOLE value is a `/in/` URL;
+`canonical_profile_url` merely finds one inside a string, right for search results and wrong for a
+field) and `company_page_url` (`/company/`, `/showcase/`, `/school/`).
+- **Typed or uploaded**: the contact form and the similar-person add 422 with the shape required
+  (validated in the endpoint, not on `ContactIn`, which `ContactOut` inherits: a stored bad value
+  would otherwise fail every contact list); a contact CSV cell is left blank and reported, the row
+  still imports; an account CSV `linkedin_url` must be a company page.
+- **Found by search**: `is_own_profile` requires the name in the result's TITLE lead or the URL
+  slug. The snippet no longer counts: a colleague's profile mentions the person and the company,
+  and passed both the finder and contact search's proof.
+- **An account's page** from the web enrichment is kept only when the search returned it and that
+  result states the account's own domain (`account.proven_company_page`): measured,
+  `linkedin.com/company/vanta` is VANTA - Chauffeurs. Missing beats wrong for a link a rep trusts.
+- `scripts/clean_linkedin_urls.py` (dry run by default) moves bad stored values to
+  `custom_fields["rejected_linkedin_url"]` and sets account pages a LinkedIn read proved from the
+  shared company. Local dry run: nothing bad stored, 121 account pages to fill.
+
 ## Account refresh: tiered, and claimed off a stored due-time
 
 Every account used to be refreshed on the same 6h cycle. Measured, that is what made the pipeline
@@ -2524,6 +2566,16 @@ ever picked up. Renewal of the push subscription happened to catch the first cas
 the subscription was missing or expiring. Now the refusal is `last_error` ("Replies could not be
 read: ..."), shown on the Mailboxes page, and a successful read clears it. A draft that cannot be
 written also names its reason on the Review screen instead of only "try again".
+
+**A suggested reply reads the conversation the reply came in** (2026-10-02, asked "do automated
+replies have complete context?"). `build_context` took the conversation from the ENROLLMENT's
+current thread; once that had moved on (a reply to an older email, a later thread), the pack said
+"Nothing has been sent or received yet: this is the first email" and the model answered a buyer's
+reply with a cold opener. A `thread` passed by the caller now wins, and `drafter.draft` passes the
+one it has. Inbound messages are shown through `parse.strip_quoted`: they are stored whole, quoting
+our emails back underneath, which are already in the block, and a long quote was what survived the
+1,500-character clip instead of the buyer's words. The answer's shape (two specific times, greeting,
+paragraphs, sign-off) is the playbook's, pinned in `test_email_playbook.py`.
 
 **Do-not-contact takes a whole domain, and an uploaded list** (2026-09-30,
 `engagement/suppression/service.py`). A domain block is stored in the same `email` column as

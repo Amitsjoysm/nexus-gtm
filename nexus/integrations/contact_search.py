@@ -165,7 +165,7 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
                     full_name=name,
                     title=(p.get("title") or "").strip() or None,
                     seniority=(p.get("seniority") or "").strip() or None,
-                    linkedin_url=self._proven_profile(p.get("linkedin_url"), proof),
+                    linkedin_url=self._proven_profile(p.get("linkedin_url"), proof, name),
                     source=self.name,
                     confidence=self.confidence,
                 )
@@ -175,17 +175,21 @@ class SearchBackedContactSearchProvider(ContactSearchProvider):
         return out
 
     @staticmethod
-    def _proven_profile(claimed: str | None, proof: list[dict]) -> str | None:
+    def _proven_profile(claimed: str | None, proof: list[dict], full_name: str = "") -> str | None:
         """The person's LinkedIn profile, only from a result that proved their employment.
 
         A URL the model returned is kept only if the search actually returned it among the proving
         results — never invented, never a namesake's from a result that named them but not this
         company. Absent a claim, a proving LinkedIn profile fills it, since it is grounded already.
+
+        And only their OWN profile among those (2026-10-02): a colleague's profile that mentions
+        them names them and the company too, which is all `proof` checked.
         """
         from nexus.contacts.affiliation import canonical_url
-        from nexus.enrichment.linkedin import canonical_profile_url
+        from nexus.enrichment.linkedin import canonical_profile_url, is_own_profile
 
-        proven = [canonical_profile_url(h.get("url")) for h in proof]
+        proven = [canonical_profile_url(h.get("url")) for h in proof
+                  if is_own_profile(h, full_name)]
         proven = [u for u in proven if u]
         if claimed:
             want = canonical_url(canonical_profile_url(claimed) or claimed)

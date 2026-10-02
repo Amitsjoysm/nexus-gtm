@@ -454,7 +454,7 @@ async def create_contact(
         seniority=body.seniority,
         email=body.email,
         phone=body.phone,
-        linkedin_url=body.linkedin_url,
+        linkedin_url=_profile_or_422(body.linkedin_url),
     )
     ts.add(contact)
     await ts.flush()
@@ -620,6 +620,25 @@ def _profile_key(url: str | None) -> str:
     return low.split(marker, 1)[1].split("/", 1)[0]
 
 
+def _profile_or_422(value: str | None) -> str | None:
+    """A typed LinkedIn URL for a PERSON, or a 422 naming the shape it must have; blank is None.
+
+    Any string used to be stored, so a company page, a post or a search URL became somebody's
+    "profile" and the phone finder and personalisation then read another page (2026-10-02)."""
+    from nexus.enrichment.linkedin import person_profile_url
+
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    url = person_profile_url(raw)
+    if url is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "That is not a LinkedIn profile URL. A person's profile looks like "
+            "linkedin.com/in/their-name; a company page, a post or a search link cannot be used.")
+    return url
+
+
 async def _contact_by_profile(ts: TenantSession, profile: str) -> Contact | None:
     """This workspace's contact with that LinkedIn profile, deleted ones included."""
     from sqlalchemy import or_
@@ -672,6 +691,7 @@ async def add_similar_person(
     from nexus.accounts.dedupe import find_existing_account, normalise_on_write
 
     full_name = " ".join(body.full_name.split())
+    _profile_or_422(body.linkedin_url)  # before anything is created for it
     profile = _profile_key(body.linkedin_url)
 
     async def already_here(contact: Contact, account: Account | None = None) -> SimilarPersonAddedOut:
@@ -733,7 +753,7 @@ async def add_similar_person(
     contact = Contact(
         tenant_id=ts.tenant_id, account_id=account.id, full_name=full_name,
         title=(body.title or "").strip() or None,
-        linkedin_url=(body.linkedin_url or "").strip() or None,
+        linkedin_url=_profile_or_422(body.linkedin_url),
         enrichment_source="similar_people",
     )
     ts.add(contact)

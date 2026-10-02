@@ -294,6 +294,18 @@ async def import_accounts_csv(
             existing = await ts.first(Account, Account.name == name)
 
         extras = _custom_values(row, custom, _extras(row, mapped_columns))
+        if extras.get("linkedin_url"):
+            # `linkedin_url` in custom fields IS the account's company page on every screen; only a
+            # company page may sit there (a person's profile or a post is not one).
+            from nexus.enrichment.linkedin import company_page_url
+
+            page = company_page_url(extras["linkedin_url"])
+            if page is None:
+                errors.append(f"row {index}: the LinkedIn URL is not a company page "
+                              "(linkedin.com/company/...), so it was left blank")
+                extras.pop("linkedin_url")
+            else:
+                extras["linkedin_url"] = page
         try:
             # ONE ROW, ONE SAVEPOINT. The write used to be flushed straight onto the request's
             # transaction, so a single row the database refused - a value longer than the column,
@@ -322,6 +334,27 @@ async def import_accounts_csv(
         "created": created, "updated": updated, "skipped": skipped,
         "total_rows": len(rows), "errors": errors[:50],
     }
+
+
+def _contact_text_values(fields: dict, index: int, errors: list[str]) -> dict[str, str]:
+    """The contact text fields this row sets; blank cells set nothing.
+
+    A LinkedIn cell that is not a person's own profile URL is left blank and reported, and the row
+    still imports. Any string used to be stored, so a company page or a post became the person's
+    "profile", and the phone finder and personalisation read somebody else's page (2026-10-02)."""
+    from nexus.enrichment.linkedin import person_profile_url
+
+    out: dict[str, str] = {}
+    for field in CONTACT_TEXT_FIELDS:
+        value = (fields.get(field) or "").strip()
+        if not value:
+            continue
+        if field == "linkedin_url" and person_profile_url(value) is None:
+            errors.append(f"row {index}: the LinkedIn URL is not a person's profile "
+                          "(linkedin.com/in/...), so it was left blank")
+            continue
+        out[field] = value
+    return out
 
 
 async def import_contacts_csv(
@@ -355,6 +388,7 @@ async def import_contacts_csv(
         domain = normalise_domain(fields.get("account_domain", "")) or normalise_domain(
             email.split("@")[-1]
         )
+        text_values = _contact_text_values(fields, index, errors)
         try:
             # One row, one savepoint — see the account loop above.
             async with ts.session.begin_nested():
@@ -379,10 +413,8 @@ async def import_contacts_csv(
                         full_name=full_name or email.split("@")[0],
                         email=email,
                     )
-                    for field in CONTACT_TEXT_FIELDS:
-                        value = (fields.get(field) or "").strip()
-                        if value:
-                            setattr(contact, field, value)
+                    for field, value in text_values.items():
+                        setattr(contact, field, value)
                     extras = _custom_values(row, custom, _extras(row, mapped_columns))
                     if extras:
                         contact.custom_fields = extras
@@ -393,10 +425,8 @@ async def import_contacts_csv(
                     # Blank cells never overwrite, for the same reason they do not on accounts.
                     if full_name:
                         existing.full_name = full_name
-                    for field in CONTACT_TEXT_FIELDS:
-                        value = (fields.get(field) or "").strip()
-                        if value:
-                            setattr(existing, field, value)
+                    for field, value in text_values.items():
+                        setattr(existing, field, value)
                     extras = _custom_values(row, custom, _extras(row, mapped_columns))
                     if extras:
                         existing.custom_fields = {**(existing.custom_fields or {}), **extras}

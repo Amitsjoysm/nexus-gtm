@@ -181,6 +181,35 @@ async def _refund_stub_served(ts, user_id: str | None) -> None:
     )
 
 
+def proven_company_page(url: str | None, hits, account) -> str | None:
+    """The company LinkedIn page the model named, only when the search really returned it AND that
+    result states the account's own website. Else None (2026-10-02).
+
+    The model reads six snippets and is asked for "the company's LinkedIn page if present". A page
+    it names may be invented, or be a namesake's: measured, `linkedin.com/company/vanta` is
+    VANTA - Chauffeurs, not Vanta the security company. A company page that lists its website
+    proves which company it is; a name match does not, which is the lesson of every
+    wrong-attribution bug this codebase has shipped. Missing is better than wrong here: the account
+    page shows a link a rep trusts."""
+    import re
+
+    from nexus.companies.resolution import normalise_domain
+    from nexus.enrichment.linkedin import company_page_url
+
+    want = company_page_url(url)
+    domain = normalise_domain(getattr(account, "domain", None))
+    if not want or not domain:
+        return None
+    states_site = re.compile(rf"(?<![a-z0-9-]){re.escape(domain)}(?![a-z0-9-])")
+    for hit in hits or []:
+        if (company_page_url(getattr(hit, "url", "") or "") or "").lower() != want.lower():
+            continue
+        text = f"{getattr(hit, 'title', '') or ''} {getattr(hit, 'snippet', '') or ''}".lower()
+        if states_site.search(text):
+            return want
+    return None
+
+
 class SearchBackedAccountEnricher:
     """Find and apply firmographics for an account from web search + LLM extraction."""
 
@@ -253,7 +282,10 @@ class SearchBackedAccountEnricher:
             self.last_served_by_stub = True
             return {}
         self.last_served_by_stub = False
-        return _parse_obj(resp.text)
+        data = _parse_obj(resp.text)
+        if isinstance(data, dict) and data.get("linkedin_url"):
+            data["linkedin_url"] = proven_company_page(data["linkedin_url"], hits, account) or ""
+        return data
 
     def apply(self, account: Account, data: dict) -> list[str]:
         """Fill BLANK fields only — never overwrite existing CRM/user data. Returns filled keys."""
@@ -299,8 +331,12 @@ class SearchBackedAccountEnricher:
             cf["description"] = description[:500]
             cf_changed = True
             filled.append("description")
-        linkedin = (data.get("linkedin_url") or "").strip()
-        if linkedin and "linkedin.com" in linkedin.lower() and not cf.get("linkedin_url"):
+        # A company page and nothing else: "linkedin.com" anywhere in the value used to be enough,
+        # so a person's profile or a post could become the page a rep checks the company against.
+        from nexus.enrichment.linkedin import company_page_url
+
+        linkedin = company_page_url(data.get("linkedin_url"))
+        if linkedin and not cf.get("linkedin_url"):
             cf["linkedin_url"] = linkedin[:300]
             cf_changed = True
             filled.append("linkedin_url")
