@@ -54,17 +54,44 @@ PROVIDERS_MANAGE = "providers.manage"    # add/test/pin platform provider API ke
 # all are different acts, and the second is the one that shows up as an outage.
 FEATURES_MANAGE = "features.manage"
 
+# Create and change objects AT THE PAYMENT PROVIDER: a plan's Stripe product and price, a
+# subscription started from the console, a plan change that moves what Stripe charges. Superadmin
+# only (product owner, 2026-10-09): each one moves a real customer's money, and the console cannot
+# undo it the way it can undo a rate card. Finance keeps rate cards and entitlements
+# (`pricing.write`) and NEXUS-only plan changes (`subscriptions.write`).
+STRIPE_MANAGE = "stripe.manage"
+
 ALL_PERMISSIONS = (
     BILLING_READ, PRICING_WRITE, SUBSCRIPTIONS_WRITE, CREDITS_GRANT,
     CREDITS_GRANT_CAPPED, INVOICES_COLLECT, JOBS_MANAGE, ADMINS_MANAGE, USERS_MANAGE,
     USERS_IMPERSONATE, SOURCES_MANAGE, SYSTEM_READ, PROVIDERS_MANAGE, FEATURES_MANAGE,
+    STRIPE_MANAGE,
 )
 
 # Every permission that existed BEFORE `features.manage` was added. Migration 0055 uses it to
 # recognise a stored superadmin row that held everything at the time it was written, and grants the
 # new permission to exactly those. See the migration for why that cannot simply be inferred from
-# the role name.
-PERMISSIONS_BEFORE_FEATURES_MANAGE = tuple(p for p in ALL_PERMISSIONS if p != FEATURES_MANAGE)
+# the role name. FROZEN: it excludes every permission added since, or a database upgrading across
+# 0055 and a later backfill would match neither.
+PERMISSIONS_BEFORE_FEATURES_MANAGE = tuple(
+    p for p in ALL_PERMISSIONS if p not in (FEATURES_MANAGE, STRIPE_MANAGE)
+)
+# The same, for migration 0067.
+PERMISSIONS_BEFORE_STRIPE_MANAGE = tuple(p for p in ALL_PERMISSIONS if p != STRIPE_MANAGE)
+
+
+def widened_with(held: list, new_permission: str, before: tuple) -> list | None:
+    """The stored permission list once ``new_permission`` exists, or None to leave the row alone.
+
+    A row holding every permission in ``before`` meant "everything" when it was written, so a
+    permission added later belongs to it. A row missing even one was deliberately narrowed and
+    stays exactly as it is. An empty list resolves through the role preset and needs nothing.
+    """
+    if not held or new_permission in held:
+        return None
+    if not set(before).issubset(set(held)):
+        return None
+    return sorted(set(held) | {new_permission})
 
 # Role presets. `superadmin` is everything; the other two are deliberately narrower.
 #

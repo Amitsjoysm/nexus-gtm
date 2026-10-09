@@ -26,6 +26,11 @@ export const SOURCES_MANAGE = "sources.manage";
  * visible to every user.
  */
 export const FEATURES_MANAGE = "features.manage";
+/**
+ * Create and change objects at Stripe: plans, prices, subscriptions started from the console and
+ * Stripe plan changes. Superadmin only, mirroring the server.
+ */
+export const STRIPE_MANAGE = "stripe.manage";
 export const SYSTEM_READ = "system.read";
 
 /** Human labels for the permission chips shown against each admin. */
@@ -43,6 +48,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   [USERS_IMPERSONATE]: "Impersonate users",
   [SOURCES_MANAGE]: "Manage data sources",
   [FEATURES_MANAGE]: "Switch features on and off",
+  [STRIPE_MANAGE]: "Manage Stripe plans & subscriptions",
   [SYSTEM_READ]: "Read system health",
 };
 
