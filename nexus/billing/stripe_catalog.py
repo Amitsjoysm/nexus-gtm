@@ -42,7 +42,17 @@ def sellable_at_provider(plan) -> bool:
 
 
 async def current_account(provider) -> str:
-    return str(await provider.account_id() or "")
+    # Read through getattr: a provider shaped like the seam without subclassing it (several test
+    # doubles are) predates accounts, and its ids are treated exactly as they were before.
+    reader = getattr(provider, "account_id", None)
+    if reader is None:
+        return str(getattr(provider, "name", "") or "")
+    return str(await reader() or "")
+
+
+async def _exists(provider, kind: str, object_id: str) -> bool:
+    check = getattr(provider, "object_exists", None)
+    return True if check is None else bool(await check(kind, object_id))
 
 
 def _retire(meta: dict, account: str) -> dict:
@@ -67,7 +77,7 @@ async def plan_price_id(plan, provider, *, account: str = "") -> str:
     recorded = str(meta.get("price_account") or "")
     if price_id and not recorded:
         # Cached before ids recorded their account: ask once.
-        recorded = account if await provider.object_exists("prices", price_id) else _UNKNOWN
+        recorded = account if await _exists(provider, "prices", price_id) else _UNKNOWN
     if price_id and recorded != account:
         meta = _retire(meta, recorded)
         price_id = ""
@@ -199,7 +209,7 @@ async def customer_id_for(sub, provider, *, tenant_id: str, email: str, name: st
     existing = str(sub.psp_customer_id or "") if sub is not None else ""
     recorded = str(meta.get("psp_customer_account") or "")
     if existing and not recorded:
-        recorded = account if await provider.object_exists("customers", existing) else _UNKNOWN
+        recorded = account if await _exists(provider, "customers", existing) else _UNKNOWN
     if existing and recorded == account:
         if meta.get("psp_customer_account") != account:
             meta["psp_customer_account"] = account

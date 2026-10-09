@@ -544,38 +544,27 @@ async def create_checkout(
     provider = await resolve_payment_provider()
     try:
         # The price object has to exist at the PSP before a Checkout line item can reference it.
-        # ensure_plan_price is keyed on plan id + amount, so this is a lookup after the first
-        # call rather than a new price each time.
         #
         # The cached price is reused only while the plan's price terms are the ones it was made
-        # for. It used to be reused whenever one existed, so a price changed on the Plans tab kept
-        # charging the OLD amount at Stripe, silently (found 2026-10-02 when that tab gained an Edit
-        # button). Stripe prices are immutable: a new amount needs a new price object.
-        meta = dict(plan.meta or {})
-        terms = {"price_amount_cents": int(plan.base_price_cents),
-                 "price_currency": plan.currency, "price_interval": plan.interval}
-        price_id = str(meta.get("price_id") or "")
-        if not price_id or any(meta.get(k) != v for k, v in terms.items()):
-            refs = await provider.ensure_plan_price(
-                plan_id=plan.id, name=plan.name, amount_cents=plan.base_price_cents,
-                currency=plan.currency, interval=plan.interval,
-            )
-            price_id = str(refs.get("price_id") or "")
-            # billing_plans is platform-global (no tenant_id, no RLS policy), so caching the
-            # reference here is a plain write, not a cross-tenant one.
-            plan.meta = {**meta, **refs, **terms}
-            await ts.session.flush()
+        # for (a price changed on the Plans tab kept charging the OLD amount at Stripe, found
+        # 2026-10-02) AND only inside the Stripe account it was made in. Both the price and the
+        # customer were cached without their account, so after the key moved to another account
+        # (test to live, or a new test account) checkout sent ids Stripe could not find: "No such
+        # price" (reported 2026-10-09). `stripe_catalog` owns that rule for every caller.
+        from nexus.billing.stripe_catalog import current_account, customer_id_for, plan_price_id
 
-        customer_id = (sub.psp_customer_id or "") if sub is not None else ""
-        if not customer_id:
-            email = await _billing_email(principal.user_id)
-            if email:
-                customer_id = await provider.ensure_customer(
-                    tenant_id=ts.tenant_id, email=email
-                )
-                if sub is not None:
-                    sub.psp_customer_id = customer_id
-                    await ts.flush()
+        account = await current_account(provider)
+        price_id = await plan_price_id(plan, provider, account=account)
+        # billing_plans is platform-global (no tenant_id, no RLS policy), so caching the
+        # reference here is a plain write, not a cross-tenant one.
+        await ts.session.flush()
+
+        email = await _billing_email(principal.user_id)
+        customer_id = await customer_id_for(
+            sub, provider, tenant_id=ts.tenant_id, email=email, account=account,
+        )
+        if sub is not None:
+            await ts.flush()
 
         session_out = await provider.create_checkout_session(
             tenant_id=ts.tenant_id, plan_id=plan.id, price_id=price_id,

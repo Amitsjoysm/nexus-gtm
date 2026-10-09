@@ -62,18 +62,19 @@ async def collect_invoice(
     provider = await resolve_payment_provider()
     sub = await ts.first(BillingSubscription)
 
-    customer_id = sub.psp_customer_id if sub is not None else None
+    # The customer must exist in the CURRENT Stripe account; one cached from another account is
+    # replaced rather than charged (see `stripe_catalog`, reported 2026-10-09).
+    from nexus.billing.stripe_catalog import customer_id_for
+
+    customer_id = await customer_id_for(
+        sub, provider, tenant_id=ts.tenant_id, email=email or "", name=name or "",
+    )
     if not customer_id:
-        if not email:
-            raise CollectionError(
-                "no billing contact for this workspace; cannot create a payment customer"
-            )
-        customer_id = await provider.ensure_customer(
-            tenant_id=ts.tenant_id, email=email, name=name
+        raise CollectionError(
+            "no billing contact for this workspace; cannot create a payment customer"
         )
-        if sub is not None:
-            sub.psp_customer_id = customer_id
-            await ts.flush()
+    if sub is not None:
+        await ts.flush()
 
     # Raise a real invoice at the provider, carrying the lines we rated, rather than a bare charge.
     #
