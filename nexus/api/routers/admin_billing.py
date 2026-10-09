@@ -194,6 +194,8 @@ class SubscriptionOut(BaseModel):
     status: str
     grandfathered: bool
     current_period_end: str | None
+    # Billed through Stripe: a plan change happens AT Stripe, superadmin only (2026-10-09).
+    stripe_billed: bool = False
 
 
 @router.get("/rates", response_model=list[RateCardOut])
@@ -269,6 +271,7 @@ async def list_subscriptions(
             SubscriptionOut(
                 tenant_id=sub.tenant_id, tenant_name=name, plan_id=sub.plan_id,
                 status=sub.status, grandfathered=sub.grandfathered,
+                stripe_billed=bool((sub.psp_subscription_id or "").strip()),
                 current_period_end=(
                     sub.current_period_end.isoformat() if sub.current_period_end else None
                 ),

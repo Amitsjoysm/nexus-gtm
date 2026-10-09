@@ -137,3 +137,41 @@ async def start_subscription(ts, *, plan_id: str, method: str, days_until_due: i
             "invoice_url": str(created.get("hosted_invoice_url") or ""),
             "invoice_note": str(created.get("invoice_note") or ""),
             "days_until_due": days_until_due}
+
+
+async def change_stripe_plan(ts, sub, plan_id: str, *, actor: str = "system"):
+    """Move a Stripe-billed workspace to ``plan_id`` AT STRIPE, now, prorated and invoiced.
+
+    Our row changes only after Stripe agrees. Credits follow the subscription: a card subscription
+    gets them now (keyed per plan per period, so the webhook's later grant is a no-op); an invoiced
+    one gets them when the proration invoice is paid.
+    """
+    from nexus.billing.stripe_catalog import plan_price_id
+    from nexus.billing.subscriptions import apply_plan_change_credits, take_plan_terms
+
+    plan = await ts.session.get(BillingPlan, plan_id)
+    if plan is None:
+        raise StripeSubscriptionError(f"Unknown plan '{plan_id}'", 404)
+    if plan.plan_class != "standard" or int(plan.base_price_cents or 0) <= 0:
+        raise StripeSubscriptionError(
+            f"'{plan.name}' cannot be billed through this Stripe subscription. Cancel the Stripe "
+            "subscription first, then change the plan.")
+    psp = (sub.psp_subscription_id or "").strip()
+    provider = await resolve_payment_provider()
+    if provider.name != "stripe" and psp.startswith("sub_"):
+        raise StripeSubscriptionError(
+            f"This subscription is billed through Stripe ({psp}). {NO_CREDENTIAL}")
+    price_id = await plan_price_id(plan, provider)
+    result = await provider.change_subscription_price(
+        subscription_id=psp, price_id=price_id, plan_id=plan.id)
+    previous = sub.plan_id
+    take_plan_terms(sub, plan)
+    invoiced = str(result.get("collection_method")
+                   or (sub.meta or {}).get("collection") or "") == "send_invoice"
+    sub.meta = {**(sub.meta or {}), "previous_plan_id": previous, "changed_by": actor,
+                "changed_at": utcnow().isoformat(), "changed_via": "stripe",
+                **({"credits_pending_plan": plan.id} if invoiced else {})}
+    await ts.flush()
+    if not invoiced:
+        await apply_plan_change_credits(ts, plan)
+    return sub

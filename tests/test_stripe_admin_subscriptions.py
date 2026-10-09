@@ -101,3 +101,75 @@ async def test_only_a_superadmin_can_start_one(client, monkeypatch, stripe):
     boss, tid = await _boss_and_customer(client, monkeypatch, "sas7")
     finance = await _make_role(client, boss, "cfo@sas7.com", "finance", "sas7f")
     assert (await _start(client, finance, tid, method="invoice")).status_code == 403
+
+
+# ---- a plan change for a Stripe-billed workspace happens at Stripe ----------------------------
+
+def _change(client, token, tid, plan_id="accelerate"):
+    return client.post(f"/api/admin/billing/tenants/{tid}/subscription",
+                       headers=auth(token), json={"plan_id": plan_id})
+
+
+async def test_a_card_billed_plan_change_happens_at_stripe_with_credits_now(
+        client, monkeypatch, stripe):
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingSubscription
+
+    boss, tid = await _boss_and_customer(client, monkeypatch, "sas8")
+    sub = await _sub(tid)
+    async with get_platform_sessionmaker()() as s:
+        row = await s.get(BillingSubscription, sub.id)
+        row.psp_subscription_id, row.psp_customer_id = "sub_card8", "cus_card8"
+        await s.commit()
+    r = await _change(client, boss, tid)
+    assert r.status_code == 200, r.text
+    assert stripe.price_changes[-1]["id"] == "sub_card8"
+    assert stripe.price_changes[-1]["plan_id"] == "accelerate"
+    after = await _sub(tid)
+    assert after.plan_id == "accelerate" and "credits_pending_plan" not in after.meta
+
+
+async def test_an_invoice_billed_plan_change_waits_for_payment(client, monkeypatch, stripe):
+    boss, tid = await _boss_and_customer(client, monkeypatch, "sas9")
+    assert (await _start(client, boss, tid, method="invoice")).status_code == 200
+    r = await _change(client, boss, tid)
+    assert r.status_code == 200, r.text
+    after = await _sub(tid)
+    assert after.plan_id == "accelerate"
+    assert after.meta["credits_pending_plan"] == "accelerate"
+
+
+async def test_finance_cannot_change_a_stripe_billed_plan_but_can_change_others(
+        client, monkeypatch, stripe):
+    boss, tid = await _boss_and_customer(client, monkeypatch, "sas10")
+    finance = await _make_role(client, boss, "cfo@sas10.com", "finance", "sas10f")
+    assert (await _change(client, finance, tid, "launch")).status_code == 200   # NEXUS-only
+    assert (await _start(client, boss, tid, plan_id="accelerate",
+                         method="invoice")).status_code == 200
+    denied = await _change(client, finance, tid, "launch")
+    assert denied.status_code == 403 and "superadmin" in denied.text
+
+
+async def test_when_stripe_refuses_the_plan_stays(client, monkeypatch, stripe):
+    from nexus.billing.payments import PaymentError
+
+    boss, tid = await _boss_and_customer(client, monkeypatch, "sas11")
+    assert (await _start(client, boss, tid, method="invoice")).status_code == 200
+
+    async def refuse(**kw):
+        raise PaymentError("stripe /subscriptions -> 400: no such item")
+
+    monkeypatch.setattr(stripe, "change_subscription_price", refuse)
+    r = await _change(client, boss, tid)
+    assert r.status_code == 502
+    assert (await _sub(tid)).plan_id == "launch"
+
+
+async def test_the_subscription_list_says_which_workspaces_stripe_bills(
+        client, monkeypatch, stripe):
+    boss, tid = await _boss_and_customer(client, monkeypatch, "sas12")
+    rows = (await client.get("/api/admin/billing/subscriptions", headers=auth(boss))).json()
+    assert next(r for r in rows if r["tenant_id"] == tid)["stripe_billed"] is False
+    assert (await _start(client, boss, tid, method="invoice")).status_code == 200
+    rows = (await client.get("/api/admin/billing/subscriptions", headers=auth(boss))).json()
+    assert next(r for r in rows if r["tenant_id"] == tid)["stripe_billed"] is True

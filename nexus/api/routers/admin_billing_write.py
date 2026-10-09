@@ -285,6 +285,13 @@ async def set_tenant_subscription(
     body: SubscriptionIn,
     principal: Principal = Depends(require_platform_permission(SUBSCRIPTIONS_WRITE)),
 ) -> dict:
+    from nexus.api.deps import platform_permissions
+    from nexus.billing.payments import PaymentError
+    from nexus.billing.stripe_subscriptions import (
+        StripeSubscriptionError,
+        change_stripe_plan,
+        stripe_subscription_of,
+    )
     from nexus.billing.subscriptions import change_plan, ensure_subscription
 
     async with get_sessionmaker()() as session:
@@ -294,14 +301,37 @@ async def set_tenant_subscription(
         # inherit. Bind it explicitly or Postgres RLS rejects the write.
         await apply_rls(session, tenant_id)
         ts = TenantSession(session, tenant_id)
-        created = await ensure_subscription(ts, plan_id=body.plan_id)
-        sub = created if created is not None else await change_plan(
-            ts, body.plan_id, actor=principal.user_id
-        )
+        billed = await stripe_subscription_of(ts)
+        if billed is not None:
+            # Billed through Stripe: the change must happen at Stripe, or Stripe keeps charging
+            # the old price while the workspace sits on the new plan (2026-10-09).
+            if STRIPE_MANAGE not in await platform_permissions(principal):
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN,
+                    "This workspace is billed through Stripe, so changing its plan changes what "
+                    "Stripe charges. Only a superadmin can do that.",
+                )
+            try:
+                sub = await change_stripe_plan(ts, billed, body.plan_id,
+                                               actor=principal.user_id)
+            except StripeSubscriptionError as exc:
+                raise HTTPException(exc.status_code, str(exc)) from exc
+            except PaymentError as exc:
+                raise HTTPException(
+                    status.HTTP_502_BAD_GATEWAY,
+                    f"Stripe refused, nothing was changed here: {exc}",
+                ) from exc
+            via = "stripe"
+        else:
+            created = await ensure_subscription(ts, plan_id=body.plan_id)
+            sub = created if created is not None else await change_plan(
+                ts, body.plan_id, actor=principal.user_id
+            )
+            via = "nexus"
         await record_admin_action(
             session, actor=principal.user_id, action="subscription.change",
             target=body.plan_id, subject_tenant_id=tenant_id,
-            after={"plan_id": sub.plan_id, "status": sub.status},
+            after={"plan_id": sub.plan_id, "status": sub.status, "via": via},
         )
         await session.commit()
         return {"tenant_id": tenant_id, "plan_id": sub.plan_id, "status": sub.status}
