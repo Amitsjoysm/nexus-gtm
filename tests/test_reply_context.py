@@ -17,13 +17,13 @@ pinned in `test_email_playbook.py`.
 from __future__ import annotations
 
 from tests.conftest import tenant_session
-from tests.test_engagement_desk import (  # noqa: F401
-    _fetch,
-    _owner_of,
-    _replied,
-    engine_on,
-    mailbox_double,
-)
+from tests import test_engagement_desk as _desk
+from tests.test_engagement_desk import _fetch, _owner_of, _replied  # noqa: F401
+
+# Shared fixtures, bound by assignment: pytest collects them either way, and a test parameter named
+# like an IMPORTED fixture is a redefinition to ruff (F811), which fails the CI lint job.
+engine_on = _desk.engine_on
+mailbox_double = _desk.mailbox_double
 
 REPLY = ("Sounds interesting, can you send pricing first?\n\n"
          "On Mon, 21 Sep 2026 at 10:00, Sam Rep <sam@seq.com> wrote:\n"

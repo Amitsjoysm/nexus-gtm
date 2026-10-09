@@ -19,7 +19,11 @@ from nexus.core.db import get_platform_sessionmaker, utcnow
 from nexus.models import Account, Contact
 from nexus.models.person import Person
 from tests.conftest import make_tenant, tenant_session
-from tests.test_prospect_contacts import Actors, _account, _person, _source, web  # noqa: F401
+from tests import test_prospect_contacts as _contacts
+from tests.test_prospect_contacts import Actors, _account, _person, _source  # noqa: F401
+
+# A shared fixture, bound by assignment (an imported one shadowed by a parameter is ruff F811).
+web = _contacts.web
 
 VANTA_URL = "linkedin.com/in/acwright1"
 
