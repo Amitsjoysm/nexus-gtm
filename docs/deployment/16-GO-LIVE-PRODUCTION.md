@@ -190,3 +190,32 @@ number), and **Integrations** (CRM). Platform admins are added on **Superadmin �
 2. Configuration: every changed setting reads **in effect**, not only **saved**.
 3. Add one account you know well and open its Signals tab after a few minutes.
 4. Sign up a test workspace end to end (OTP email arrives, plan is Free, Relevance populate works).
+
+### Once, after the release with shared reuse and LinkedIn checks (2026-10-02)
+
+Both scripts are dry runs unless given `--apply`, print the database they will touch first, and are
+safe to repeat. Run the dry run, read the counts, then apply.
+
+```
+docker cp scripts/derive_company_codes.py <app-container>:/tmp/derive.py
+docker exec <app-container> python /tmp/derive.py            # then again with --apply
+docker cp scripts/clean_linkedin_urls.py <app-container>:/tmp/clean_li.py
+docker exec <app-container> python /tmp/clean_li.py          # then again with --apply
+```
+
+- `derive_company_codes` lets companies one workspace added be offered to others with the same ICP
+  (behind each workspace's fit threshold). Locally: 256 of 258 rows gained an industry code.
+- `clean_linkedin_urls` moves any LinkedIn URL that is not what its field claims to
+  `rejected_linkedin_url`, and fills account company pages a LinkedIn read proved. Locally: nothing
+  bad stored, 121 account pages filled.
+
+**Campaigns:** Platform health now has a **campaigns** row. If campaigns look stuck, it names the
+stage: the switch off, emails overdue (the worker is not sending them), mailboxes not read
+(replies not picked up), mailboxes needing reconnecting, or a mailbox's own error such as Google
+refusing the read because the Gmail API is not enabled in the Google Cloud project behind the
+Mailbox app.
+
+**CRM (HubSpot):** the token to paste is a private app's access token, which starts with `pat-`.
+HubSpot now lists private apps under **Development → Legacy apps** (older portals: Settings →
+Integrations → Private Apps). A **Personal Access Key** is for the HubSpot CLI and is refused by the
+CRM API even when brand new. Leave **API base URL** blank.
