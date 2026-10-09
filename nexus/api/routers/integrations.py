@@ -338,6 +338,26 @@ async def get_crm_connection(
     return _connection_out(await get_connection(ts), env_provider=_env_provider())
 
 
+def _pasted_token(value: str | None) -> str:
+    """A token as pasted, without what pasting adds: a ``Bearer `` prefix (copied from a request
+    header) and whitespace or line breaks inside it (copied across a wrapped line). No CRM token
+    contains whitespace, so removing it can only repair one."""
+    import re
+
+    token = re.sub(r"^\s*bearer\s+", "", value or "", flags=re.IGNORECASE)
+    return re.sub(r"\s+", "", token)
+
+
+def _is_hubspot_app_host(api_base: str) -> bool:
+    import urllib.parse
+
+    if not api_base:
+        return False
+    host = urllib.parse.urlparse(api_base if "://" in api_base else f"https://{api_base}").hostname
+    host = (host or "").lower()
+    return host.endswith("hubspot.com") and host.split(".")[0].startswith("app")
+
+
 @router.put("/crm/connection", response_model=CRMConnectionOut)
 async def set_crm_connection(
     body: CRMConnectionIn,
@@ -356,13 +376,21 @@ async def set_crm_connection(
         )
 
     existing = await get_connection(ts)
-    token = (body.access_token or "").strip()
+    token = _pasted_token(body.access_token)
     if not token and not has_credentials(existing):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "An access token is required to connect a CRM."
         )
 
     api_base = (body.api_base or "").strip()
+    if provider == "hubspot" and _is_hubspot_app_host(api_base):
+        # The address bar of HubSpot's web app is not its API: every request went to the web app
+        # and came back 401, which the screen read as an invalid token.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "That is HubSpot's app address, not its API. Leave API base URL blank to use "
+            "https://api.hubapi.com.",
+        )
     if provider == "salesforce":
         # Salesforce REST is addressed at the org's own host, which OAuth returns as instance_url.
         # On the manual path the admin supplies it; without it the credential has nowhere to go,
@@ -400,11 +428,37 @@ async def test_crm_connection(
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.manage_workspace)),
 ) -> CRMConnectionTestOut:
-    """Verify the resolved connector's credentials and record the outcome on the row."""
-    connector = await resolve_crm_connector(ts)
-    result = await connector.test_connection()
+    """Verify the resolved connector's credentials and record the outcome on the row.
+
+    Never tests somebody else's CRM: when this workspace has a stored credential that cannot be
+    built, resolution falls back to the deployment's connector (right for the heartbeat), and Test
+    then reported on THAT token, so a fresh, correct paste read "Invalid or expired" whenever the
+    deployment's own token was stale. Sync already refused this (`_reject_unusable_connection`)."""
+    from nexus.ingestion.crm import CRMTestResult
+    from nexus.ingestion.crm_credentials import build_tenant_connector
+    from nexus.integrations import connections as _connections
 
     row = await get_connection(ts)
+    unusable = (
+        row is not None and bool(row.secret)
+        and build_tenant_connector(row.provider, _connections.secret_bundle(row),
+                                   row.api_base or "") is None
+    )
+    if unusable:
+        result = CRMTestResult(
+            ok=False, label=(row.provider or "CRM").capitalize(),
+            detail=(
+                "Salesforce needs the instance URL of your org (e.g. https://acme.my.salesforce.com)."
+                if row.provider == "salesforce" and _connections.secret_bundle(row)
+                else "The stored credential could not be read. Paste the token again and save."
+            ),
+        )
+        source = row.provider
+    else:
+        connector = await resolve_crm_connector(ts)
+        result = await connector.test_connection()
+        source = connector.source
+
     if row is not None:
         if result.ok:
             row.status = "connected"
@@ -421,7 +475,7 @@ async def test_crm_connection(
         actor_user_id=principal.user_id,
         target_type="crm_connection",
         target_id=row.id if row is not None else "",
-        meta={"provider": connector.source, "ok": result.ok, "detail": result.detail},
+        meta={"provider": source, "ok": result.ok, "detail": result.detail},
     )
     return CRMConnectionTestOut(ok=result.ok, label=result.label, detail=result.detail)
 

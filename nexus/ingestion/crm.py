@@ -568,8 +568,22 @@ def _split_name(full_name: str | None) -> tuple[str, str]:
     return parts[0], " ".join(parts[1:])
 
 
+#: What HubSpot's 401 means for a pasted token that is not a private app's (2026-10-02). Reported
+#: from gtm.infojoy.com as "a token created just now is invalid or expired": the key that is easy to
+#: find in HubSpot today is the Personal Access Key, which is for the HubSpot CLI, and a private
+#: app's access token is the one that starts with ``pat-``. "Expired" sent the operator to make
+#: another of the wrong kind.
+_HUBSPOT_NOT_A_PRIVATE_APP_TOKEN = (
+    "HubSpot refused this token. It does not look like a private app access token, which starts "
+    "with pat- (for example pat-na1-...). A Personal Access Key is for the HubSpot CLI and cannot "
+    "read the CRM. In HubSpot open Development > Legacy apps (older portals: Settings > "
+    "Integrations > Private Apps), create a private app with the crm.objects.companies and "
+    "crm.objects.contacts read and write scopes, and paste the access token from its Auth tab."
+)
+
 _HUBSPOT_TEST_ERRORS = {
-    401: "Invalid or expired access token.",
+    401: "Invalid or expired access token. Copy it again from the private app's Auth tab: it may "
+         "have been rotated, or only part of it was copied.",
     403: "Token is missing required scopes (crm.objects.companies.read/write).",
     429: "HubSpot rate limit reached — try again shortly.",
 }
@@ -879,6 +893,12 @@ class HubSpotConnector(CRMConnector):
                 if st_fallback == 200:
                     return CRMTestResult(ok=True, label="HubSpot", detail="Connected.")
                 st = st_fallback
+            if (st == 401 and self._token_provider is None
+                    and not self._token.lower().startswith("pat-")):
+                # A pasted token of the wrong KIND, not an expired one (OAuth connections refresh
+                # and are not pasted, so they never reach this sentence).
+                return CRMTestResult(ok=False, label="HubSpot",
+                                     detail=_HUBSPOT_NOT_A_PRIVATE_APP_TOKEN)
             return CRMTestResult(
                 ok=False,
                 label="HubSpot",

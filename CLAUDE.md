@@ -213,6 +213,19 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
   reported success while the customer's CRM received nothing. `_reject_unusable_connection` in
   `routers/integrations.py` 400s the request instead, naming the missing instance URL or the
   unreadable secret. That was the whole of "two-way syncs are failing", together with the next line.
+- **Test never tests another CRM either, and a 401 says which kind of wrong** (2026-10-02,
+  `tests/test_crm_token_paste.py`). Reported from gtm.infojoy.com: "a personal access token created
+  just now shows invalid or expired". Four causes, all closed:
+  - Test resolved with the fallback, so a stored credential that could not be built was tested AS
+    THE DEPLOYMENT'S OWN CONNECTOR, whose stale env token answered "Invalid or expired". Test now
+    reports the unreadable credential (or Salesforce's missing instance URL) instead.
+  - HubSpot's **Personal Access Key** (for the CLI; easy to find now that private apps sit under
+    Development > Legacy apps) 401s against the CRM API. A pasted token not starting `pat-` that
+    401s gets a sentence naming that and where the private app's token is; a `pat-` 401 says copy
+    it again. The form's hint says the same.
+  - A pasted `Bearer ` prefix and whitespace inside the token are removed on save.
+  - An "API base" of `app*.hubspot.com` (the web app's address bar) is refused with
+    `api.hubapi.com`; regional API hosts (`api-eu1.hubapi.com`) are still accepted.
 - **Both directions are reachable from the screen.** `imports/crm_pull.py` has read accounts and
   contacts from both CRMs since it was written and no screen called either — the Integrations page's
   only Sync button imported hand-typed rows. `CrmPullPanel` wires `POST /imports/accounts/crm` and

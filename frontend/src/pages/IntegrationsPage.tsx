@@ -212,7 +212,7 @@ function CrmConnectionCard() {
               hint={
                 conn.has_credentials
                   ? "A token is saved. Leave this blank to keep it."
-                  : "In HubSpot: Settings → Integrations → Private Apps."
+                  : "In HubSpot: Development → Legacy apps → Private app (older portals: Settings → Integrations → Private Apps). Paste its access token, which starts with pat-. A Personal Access Key will not work."
               }
             >
               <Input
