@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Field, Input, Skeleton, useToast } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
+import { usePlatformCan } from "@/app/RequirePlatformAdmin";
 import { ApiError } from "@/lib/api";
+import { STRIPE_MANAGE } from "@/lib/permissions";
 import type { PaymentCredential } from "@/lib/types";
 import styles from "./PaymentsTab.module.css";
 
@@ -30,6 +32,8 @@ const STATUS_LABEL: Record<string, string> = {
 export function PaymentsTab() {
   const api = useApiClient();
   const toast = useToast();
+  // Registering the webhook creates an object at Stripe: superadmin only (2026-10-09).
+  const canManageStripe = usePlatformCan()(STRIPE_MANAGE);
   const [rows, setRows] = useState<PaymentCredential[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -142,6 +146,33 @@ export function PaymentsTab() {
     }
   }
 
+  // Creates the endpoint in this credential's Stripe account (pinned API version, the events the
+  // app handles) and saves its signing secret here. Replaces the manual step in the dashboard.
+  async function registerWebhook(rowItem: PaymentCredential) {
+    setBusy(rowItem.id);
+    try {
+      const res = await api.registerStripeWebhook(rowItem.id);
+      await load();
+      if (res.others.length) {
+        toast.error(
+          "Webhook registered, but check Stripe",
+          `Another endpoint already points at ${res.url} (${res.others.join(", ")}). Delete it ` +
+            "in Stripe, or it will fail every delivery.",
+        );
+      } else {
+        toast.success(
+          "Webhook registered in Stripe",
+          `${res.events.length} events to ${res.url}. Signing secret saved.` +
+            (res.replaced.length ? " The previous endpoint was replaced." : ""),
+        );
+      }
+    } catch (err) {
+      fail("Couldn't register the webhook", err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function remove(rowItem: PaymentCredential) {
     if (!window.confirm(`Delete the ${rowItem.provider} account ending ${rowItem.key_hint}?`)) {
       return;
@@ -195,7 +226,12 @@ export function PaymentsTab() {
               placeholder="sk_live_…"
             />
           </Field>
-          <Field label="Webhook signing secret" hint="From the endpoint in your Stripe dashboard.">
+          <Field
+            label="Webhook signing secret"
+            hint={canManageStripe
+              ? "Leave blank and press Create webhook in Stripe once the key is verified."
+              : "From the endpoint in your Stripe dashboard."}
+          >
             <Input
               type="password"
               value={form.webhook_secret}
@@ -297,6 +333,21 @@ export function PaymentsTab() {
                     }
                   >
                     Make live
+                  </Button>
+                )}
+                {canManageStripe && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void registerWebhook(r)}
+                    disabled={busy !== null || r.status !== "verified"}
+                    title={
+                      r.status === "verified"
+                        ? "Create the webhook in this Stripe account and save its signing secret"
+                        : "Verify this account first"
+                    }
+                  >
+                    Create webhook in Stripe
                   </Button>
                 )}
                 <Button

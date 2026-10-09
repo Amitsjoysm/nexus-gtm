@@ -174,3 +174,13 @@ async def test_only_a_superadmin_can_create_it(client, monkeypatch, role):
     r = await client.post(f"/api/admin/payment-credentials/{cid}/webhook-endpoint",
                           headers=auth(other))
     assert r.status_code == 403
+
+
+async def test_the_webhook_panel_offers_the_one_click_path_first(client, monkeypatch):
+    """The panel's hand-made steps are only needed without the button, so the button comes first."""
+    boss = await _bootstrap_admin(client, monkeypatch, "sws6")
+    r = await client.get("/api/admin/runtime/webhook", headers=auth(boss))
+    assert r.status_code == 200, r.text
+    first = r.json()["instructions"][0]
+    assert "Create webhook in Stripe" in first and "App public address" in first
+    assert "—" not in first

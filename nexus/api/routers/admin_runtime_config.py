@@ -159,6 +159,10 @@ async def webhook_info(
         # Ordered as the operator will actually do it, and each step says where the thing it names
         # lives. "Paste the URL below" was wrong the moment the URL box rendered above the list.
         "instructions": [
+            # The one-click path (2026-10-09) first, so nobody does by hand what a button does.
+            "One click instead of the next four steps: set App public address (above), verify the "
+            "account on the Payments tab, then press Create webhook in Stripe. It adds this "
+            "endpoint with these events and saves its signing secret.",
             "In the Stripe dashboard: Developers -> Webhooks -> Add endpoint.",
             "Paste the endpoint URL shown above.",
             "Select the events listed here — Stripe sends everything otherwise, and every "

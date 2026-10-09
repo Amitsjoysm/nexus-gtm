@@ -1858,6 +1858,16 @@ export class ApiClient {
       `/admin/payment-credentials/${id}/deactivate`, { method: "POST" },
     );
   }
+  /**
+   * Register this deployment's Stripe webhook in the credential's account. The signing secret is
+   * stored on the credential and never returned. Superadmin only.
+   */
+  registerStripeWebhook(id: string) {
+    return this.request<{
+      endpoint_id: string; url: string; events: string[]; api_version: string;
+      replaced: string[]; others: string[];
+    }>(`/admin/payment-credentials/${id}/webhook-endpoint`, { method: "POST" });
+  }
   deletePaymentCredential(id: string) {
     return this.request<void>(`/admin/payment-credentials/${id}`, { method: "DELETE" });
   }

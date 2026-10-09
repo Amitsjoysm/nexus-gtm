@@ -49,3 +49,17 @@ def test_new_copy_uses_no_em_dashes():
     start = dialog.index("Start a Stripe subscription")
     block = dialog[start:start + 4000]
     assert "—" not in block
+
+
+def test_the_payments_tab_registers_the_webhook_for_superadmins_only():
+    tab = _read("pages/admin/PaymentsTab.tsx")
+    assert "const canManageStripe = usePlatformCan()(STRIPE_MANAGE);" in tab
+    assert "{canManageStripe && (" in tab
+    assert "Create webhook in Stripe" in tab
+    assert "api.registerStripeWebhook(" in tab
+    assert "/webhook-endpoint" in _read("lib/api.ts")
+
+
+def test_the_secret_field_tells_a_superadmin_it_can_be_left_blank():
+    tab = _read("pages/admin/PaymentsTab.tsx")
+    assert "Leave blank and press Create webhook in Stripe" in tab
