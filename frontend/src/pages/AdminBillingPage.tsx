@@ -23,6 +23,7 @@ import {
   PROVIDERS_MANAGE,
   FEATURES_MANAGE,
   SOURCES_MANAGE,
+  STRIPE_MANAGE,
 } from "@/lib/permissions";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
@@ -215,7 +216,38 @@ function Plans() {
   // The plan dialog: `undefined` closed, `null` creating, a plan editing it.
   const [planForm, setPlanForm] = useState<AdminPlan | null | undefined>(undefined);
   const [statusBusy, setStatusBusy] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  // "What's included" edits entitlements (pricing.write). Creating, editing, publishing and
+  // holding a plan changes what Stripe sells, which is the superadmin's alone (2026-10-09).
   const canEdit = can(PRICING_WRITE);
+  const canManageStripe = can(STRIPE_MANAGE);
+
+  // Make every plan on sale exist in the Stripe account the active key belongs to. Safe to repeat.
+  async function syncToStripe() {
+    setSyncing(true);
+    try {
+      const res = await api.syncPlansToStripe();
+      const count = (outcome: string) => res.plans.filter((p) => p.outcome === outcome).length;
+      const failed = res.plans.filter((p) => p.outcome === "failed");
+      if (failed.length) {
+        toast.error(
+          `Stripe refused ${failed.length} plan${failed.length === 1 ? "" : "s"}`,
+          failed.map((p) => `${p.plan_id}: ${p.detail ?? "no reason given"}`).join(" · "),
+        );
+      } else {
+        toast.success(
+          `Plans are in Stripe (${res.account})`,
+          `${count("created")} created, ${count("reused")} already there.`,
+        );
+      }
+      plans.refetch();
+    } catch (err) {
+      toast.error("Couldn't sync to Stripe",
+        err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   // Publish puts a draft on the price list; hold takes it off and leaves its subscribers alone.
   // Only standard plans in draft or active can move: the server refuses anything else.
@@ -265,6 +297,25 @@ function Plans() {
       ),
     },
     {
+      key: "stripe",
+      header: "Stripe",
+      width: "140px",
+      hideOnMobile: true,
+      // Only standard plans with a price exist at Stripe; the rest charge nobody.
+      render: (r) =>
+        r.plan_class === "standard" && r.base_price_cents > 0 ? (
+          r.stripe_price_id ? (
+            <Badge tone="success" title={`${r.stripe_price_id} in ${r.stripe_account}`}>
+              In Stripe
+            </Badge>
+          ) : (
+            <Badge tone="neutral">Not in Stripe</Badge>
+          )
+        ) : (
+          <span className={styles.subtle}>No price</span>
+        ),
+    },
+    {
       key: "base_price_cents",
       header: "Base / mo",
       align: "right",
@@ -287,7 +338,7 @@ function Plans() {
       hideOnMobile: true,
       render: (r) => <span className={styles.mono}>{r.entitlement_count}</span>,
     },
-    ...(canEdit
+    ...(canEdit || canManageStripe
       ? [
           {
             key: "actions",
@@ -295,15 +346,20 @@ function Plans() {
             width: "320px",
             render: (r: AdminPlan) => {
               const movable =
+                canManageStripe &&
                 r.plan_class === "standard" && (r.status === "draft" || r.status === "active");
               return (
                 <div className={styles.rowActions}>
-                  <Button size="sm" variant="secondary" onClick={() => setPlanForm(r)}>
-                    Edit
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={() => setEditing(r)}>
-                    What's included
-                  </Button>
+                  {canManageStripe && (
+                    <Button size="sm" variant="secondary" onClick={() => setPlanForm(r)}>
+                      Edit
+                    </Button>
+                  )}
+                  {canEdit && (
+                    <Button size="sm" variant="secondary" onClick={() => setEditing(r)}>
+                      What's included
+                    </Button>
+                  )}
                   {movable && (
                     <Button
                       size="sm"
@@ -332,10 +388,13 @@ function Plans() {
     >
       {(rows) => (
         <>
-          {canEdit && (
+          {canManageStripe && (
             <div className={styles.tableToolbar}>
               <Button iconLeft={<Icons.PlusIcon />} onClick={() => setPlanForm(null)}>
                 New plan
+              </Button>
+              <Button variant="secondary" loading={syncing} onClick={() => void syncToStripe()}>
+                Sync to Stripe
               </Button>
             </div>
           )}
@@ -344,7 +403,7 @@ function Plans() {
             rows={rows}
             getRowKey={(r) => r.id}
             caption="Plans"
-            minWidth={canEdit ? 1080 : 760}
+            minWidth={canEdit || canManageStripe ? 1220 : 900}
           />
           <PlanEntitlementsDialog
             open={editing !== null}

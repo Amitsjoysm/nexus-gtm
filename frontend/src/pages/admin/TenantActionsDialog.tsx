@@ -2,9 +2,19 @@ import { useEffect, useState } from "react";
 import { Button, Field, Input, Modal, Select, useToast } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { usePlatformCan, usePlatformIdentity } from "@/app/RequirePlatformAdmin";
-import { CREDITS_GRANT, CREDITS_GRANT_CAPPED, SUBSCRIPTIONS_WRITE } from "@/lib/permissions";
+import {
+  CREDITS_GRANT,
+  CREDITS_GRANT_CAPPED,
+  STRIPE_MANAGE,
+  SUBSCRIPTIONS_WRITE,
+} from "@/lib/permissions";
 import { ApiError } from "@/lib/api";
-import type { AdminPlan, AdminSubscription, ProrationPreview } from "@/lib/types";
+import type {
+  AdminPlan,
+  AdminSubscription,
+  ProrationPreview,
+  StripeSubscriptionStart,
+} from "@/lib/types";
 import styles from "./AdminForms.module.css";
 
 function money(cents: number): string {
@@ -77,18 +87,33 @@ export function TenantActionsDialog({ open, onClose, tenant, plans, onDone }: Pr
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [pauseReason, setPauseReason] = useState("");
-  const [busy, setBusy] = useState<"plan" | "credits" | "pause" | null>(null);
+  const [busy, setBusy] = useState<"plan" | "credits" | "pause" | "stripe" | null>(null);
   const [preview, setPreview] = useState<ProrationPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [startPlan, setStartPlan] = useState("");
+  const [method, setMethod] = useState<"invoice" | "checkout_link">("invoice");
+  const [days, setDays] = useState("14");
+  const [billingEmail, setBillingEmail] = useState("");
+  const [started, setStarted] = useState<StripeSubscriptionStart | null>(null);
 
   const canChangePlan = can(SUBSCRIPTIONS_WRITE);
   const canGrant = can(CREDITS_GRANT) || can(CREDITS_GRANT_CAPPED);
+  // Creating or changing anything at Stripe is the superadmin's alone (2026-10-09).
+  const canManageStripe = can(STRIPE_MANAGE);
+  const stripeBilled = Boolean(tenant?.stripe_billed);
   const paused = tenant?.status === "suspended";
+  const billable = plans.filter(
+    (p) => p.plan_class === "standard" && p.status === "active" && p.base_price_cents > 0,
+  );
+
+  // A result belongs to the workspace it was made for; never show it against another one.
+  useEffect(() => setStarted(null), [tenant, open]);
 
   // Fetch the money as soon as a plan is picked. Aborted on change so a slow response for an
-  // abandoned selection cannot land after a newer one and show the wrong number.
+  // abandoned selection cannot land after a newer one and show the wrong number. A workspace
+  // billed through Stripe is prorated by Stripe, so our own preview would show the wrong money.
   useEffect(() => {
-    if (!tenant || !planId || !canChangePlan) {
+    if (!tenant || !planId || !canChangePlan || stripeBilled) {
       setPreview(null);
       return;
     }
@@ -102,7 +127,7 @@ export function TenantActionsDialog({ open, onClose, tenant, plans, onDone }: Pr
         if (!controller.signal.aborted) setPreviewing(false);
       });
     return () => controller.abort();
-  }, [api, tenant, planId, canChangePlan]);
+  }, [api, tenant, planId, canChangePlan, stripeBilled]);
   // A ceiling only applies to someone who holds *only* the capped permission. The number comes
   // from the server so the console never contradicts the limit actually enforced.
   const cap = can(CREDITS_GRANT) ? null : identity?.credit_grant_cap ?? null;
@@ -162,6 +187,43 @@ export function TenantActionsDialog({ open, onClose, tenant, plans, onDone }: Pr
     }
   }
 
+  async function startStripe() {
+    if (!tenant || !startPlan) return;
+    setBusy("stripe");
+    try {
+      const res = await api.startStripeSubscription(tenant.tenant_id, {
+        plan_id: startPlan,
+        method,
+        days_until_due: Number(days) || 14,
+        ...(billingEmail.trim() ? { billing_email: billingEmail.trim() } : {}),
+      });
+      setStarted(res);
+      if (res.method === "invoice") {
+        toast.success(
+          `${tenant.tenant_name} is on ${startPlan}`,
+          res.invoice_note || "Stripe emailed the first invoice. Credits arrive when it is paid.",
+        );
+        onDone();
+      }
+    } catch (err) {
+      toast.error(
+        "Couldn't start the Stripe subscription",
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function copyLink(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Copied", "The Checkout link is on your clipboard.");
+    } catch {
+      toast.error("Couldn't copy", "Select the link and copy it by hand.");
+    }
+  }
+
   async function grantCredits() {
     if (!tenant || !amount) return;
     setBusy("credits");
@@ -205,7 +267,11 @@ export function TenantActionsDialog({ open, onClose, tenant, plans, onDone }: Pr
           <>
             <Field
               label="Move to plan"
-              hint="Takes effect immediately and is prorated to the day."
+              hint={
+                stripeBilled
+                  ? "Billed through Stripe: the price changes at Stripe now, and Stripe invoices the prorated difference immediately."
+                  : "Takes effect immediately and is prorated to the day."
+              }
             >
               <Select
                 value={planId}
@@ -217,14 +283,111 @@ export function TenantActionsDialog({ open, onClose, tenant, plans, onDone }: Pr
                 }))}
               />
             </Field>
+            {stripeBilled && !canManageStripe && (
+              <p className={styles.hint}>
+                Only a superadmin can change the plan of a workspace billed through Stripe.
+              </p>
+            )}
             {previewing && <p className={styles.hint}>Working out the proration…</p>}
             {!previewing && preview && <ProrationSummary preview={preview} />}
             <div className={styles.actions}>
-              <Button onClick={changePlan} loading={busy === "plan"} disabled={!planId}>
+              <Button
+                onClick={changePlan}
+                loading={busy === "plan"}
+                disabled={!planId || (stripeBilled && !canManageStripe)}
+              >
                 Change plan
               </Button>
             </div>
           </>
+        )}
+
+        {canManageStripe && !stripeBilled && (
+          <fieldset className={styles.fieldset}>
+            <legend className={styles.legend}>Start a Stripe subscription</legend>
+            <p className={styles.hint}>
+              Bills this workspace through Stripe from now on. Plan changes then happen at Stripe.
+            </p>
+            <Field label="Plan">
+              <Select
+                value={startPlan}
+                onChange={(e) => setStartPlan(e.target.value)}
+                placeholder="Select a plan…"
+                options={billable.map((p) => ({
+                  value: p.id,
+                  label: `${p.name}, $${(p.base_price_cents / 100).toFixed(2)}/${p.interval}`,
+                }))}
+              />
+            </Field>
+            <Field label="How the customer pays">
+              <Select
+                value={method}
+                onChange={(e) => {
+                  setMethod(e.target.value as "invoice" | "checkout_link");
+                  setStarted(null);
+                }}
+                options={[
+                  { value: "invoice", label: "Email an invoice (starts now, credits when paid)" },
+                  {
+                    value: "checkout_link",
+                    label: "Checkout link (starts when the customer pays by card)",
+                  },
+                ]}
+              />
+            </Field>
+            {method === "invoice" && (
+              <div className={styles.row}>
+                <Field label="Days to pay" hint="14 unless agreed otherwise.">
+                  <Input
+                    type="number"
+                    min="1"
+                    max="90"
+                    value={days}
+                    onChange={(e) => setDays(e.target.value)}
+                  />
+                </Field>
+                <Field label="Billing email" hint="Leave blank to bill the workspace owner.">
+                  <Input
+                    type="email"
+                    value={billingEmail}
+                    onChange={(e) => setBillingEmail(e.target.value)}
+                    placeholder="finance@customer.com"
+                  />
+                </Field>
+              </div>
+            )}
+            {started?.method === "checkout_link" && (
+              <div className={styles.linkResult}>
+                <p className={styles.hint}>
+                  Send this link to the customer. It stops working{" "}
+                  {new Date(started.expires_at * 1000).toLocaleString()}.
+                </p>
+                <div className={styles.linkRow}>
+                  <code className={styles.linkValue}>{started.url}</code>
+                  <Button size="sm" variant="secondary" onClick={() => void copyLink(started.url)}>
+                    Copy link
+                  </Button>
+                </div>
+              </div>
+            )}
+            {started?.method === "invoice" && started.invoice_url && (
+              <p className={styles.hint}>
+                <a href={started.invoice_url} target="_blank" rel="noreferrer">
+                  Open the invoice Stripe sent
+                </a>
+              </p>
+            )}
+            <div className={styles.actions}>
+              <Button
+                variant="secondary"
+                onClick={startStripe}
+                loading={busy === "stripe"}
+                disabled={!startPlan}
+              >
+                {method === "invoice" ? "Email an invoice" : "Create Checkout link"}
+              </Button>
+            </div>
+          </fieldset>
         )}
 
         {canChangePlan && (

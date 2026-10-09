@@ -61,6 +61,8 @@ import type {
   CustomerRow,
   CustomerUsage,
   PaymentCredential,
+  StripeSubscriptionStart,
+  StripeSyncRow,
   PlatformOverview,
   SubscriptionPatch,
   ProviderModels,
@@ -1760,6 +1762,12 @@ export class ApiClient {
       `/admin/billing/plans/${planId}/status`, { method: "PUT", body: { status } },
     );
   }
+  /** Make every plan on sale exist in the active Stripe account. Superadmin only. */
+  syncPlansToStripe() {
+    return this.request<{ account: string; plans: StripeSyncRow[] }>(
+      "/admin/billing/plans/stripe-sync", { method: "POST" },
+    );
+  }
   upsertRateCard(capabilityId: string, body: Record<string, unknown>) {
     return this.request<AdminRateCard>(`/admin/billing/rates/${capabilityId}`, {
       method: "PUT",
@@ -1897,6 +1905,15 @@ export class ApiClient {
     return this.request<{ plan_id: string; status: string }>(
       `/admin/billing/tenants/${tenantId}/subscription`,
       { method: "POST", body: { plan_id: planId } },
+    );
+  }
+  /** Start a workspace on a Stripe subscription: emailed invoice or Checkout link. Superadmin only. */
+  startStripeSubscription(tenantId: string, body: {
+    plan_id: string; method: "invoice" | "checkout_link";
+    days_until_due?: number; billing_email?: string;
+  }) {
+    return this.request<StripeSubscriptionStart>(
+      `/admin/billing/tenants/${tenantId}/stripe-subscription`, { method: "POST", body },
     );
   }
   grantTenantCredits(tenantId: string, body: {

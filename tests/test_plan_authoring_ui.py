@@ -26,13 +26,16 @@ def test_the_plans_tab_offers_new_plan_edit_and_publish():
     assert "api.setPlanStatus" in page and '"Publish"' in page and '"Hold"' in page
 
 
-def test_every_plan_control_is_behind_pricing_write():
-    """The server refuses these without `pricing.write`; offering them would be a door that 403s."""
+def test_every_plan_control_is_behind_the_permission_the_server_checks():
+    """The server refuses New plan / Edit / Publish / Hold without `stripe.manage` (superadmin only
+    since 2026-10-09: a plan on sale lives in Stripe), and "What's included" without
+    `pricing.write`. Offering either to someone without it would be a door that 403s."""
     page = _read(PAGE)
     plans = page[page.index("function Plans()"):page.index("function Subscriptions()")]
     assert "const canEdit = can(PRICING_WRITE);" in plans
-    assert "{canEdit && (" in plans  # the New plan toolbar
-    assert "...(canEdit" in plans    # the row actions column
+    assert "const canManageStripe = can(STRIPE_MANAGE);" in plans
+    assert "{canManageStripe && (" in plans        # the New plan toolbar
+    assert "...(canEdit || canManageStripe" in plans  # the row actions column
 
 
 def test_publish_and_hold_only_where_the_server_allows_it():

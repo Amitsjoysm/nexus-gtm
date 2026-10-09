@@ -56,7 +56,9 @@
 /* Actions that act on the whole table (New plan), above it and to the right, like a page action. */
 .tableToolbar {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
 

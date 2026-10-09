@@ -108,6 +108,40 @@ export function PaymentsTab() {
     }
   }
 
+  // Activating a superadmin's key also creates the plans on sale in that Stripe account; the
+  // response says what happened (`stripe_sync`, absent for anyone without `stripe.manage`).
+  async function activate(rowItem: PaymentCredential) {
+    setBusy(rowItem.id);
+    try {
+      const res = await api.activatePaymentCredential(rowItem.id);
+      await load();
+      const sync = res.stripe_sync ?? null;
+      if (!sync) {
+        toast.success("Billing account activated");
+        return;
+      }
+      const failed = sync.filter((p) => p.outcome === "failed");
+      const created = sync.filter((p) => p.outcome === "created").length;
+      const reused = sync.filter((p) => p.outcome === "reused").length;
+      if (failed.length) {
+        toast.error(
+          "Activated, but Stripe refused some plans",
+          failed.map((p) => `${p.plan_id || "plans"}: ${p.detail ?? "no reason given"}`)
+            .join(" · "),
+        );
+      } else {
+        toast.success(
+          "Billing account activated",
+          `Plans synced to Stripe: ${created} created, ${reused} already there.`,
+        );
+      }
+    } catch (err) {
+      fail("Couldn't activate", err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function remove(rowItem: PaymentCredential) {
     if (!window.confirm(`Delete the ${rowItem.provider} account ending ${rowItem.key_hint}?`)) {
       return;
@@ -252,9 +286,7 @@ export function PaymentsTab() {
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={() =>
-                      act(r.id, "Couldn't activate", () => api.activatePaymentCredential(r.id))
-                    }
+                    onClick={() => void activate(r)}
                     // Unverified is not merely discouraged, it is refused by the server. Disabling
                     // the button says so before the click instead of after it.
                     disabled={busy !== null || r.status !== "verified"}

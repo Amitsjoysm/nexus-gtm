@@ -1648,7 +1648,30 @@ export interface PaymentCredential {
   status: string;
   last_error: string;
   active: boolean;
+  /** Set only when a superadmin activates it: what syncing the plans into this account did. */
+  stripe_sync?: StripeSyncRow[] | null;
 }
+
+/** One plan's outcome when the plans on sale are made to exist in the Stripe account in force. */
+export interface StripeSyncRow {
+  plan_id: string;
+  outcome: "created" | "reused" | "failed";
+  price_id?: string;
+  detail?: string;
+}
+
+/** What starting a workspace on a Stripe subscription produced. */
+export type StripeSubscriptionStart =
+  | {
+      method: "invoice";
+      plan_id: string;
+      status: string;
+      psp_subscription_id: string;
+      invoice_url: string;
+      invoice_note: string;
+      days_until_due: number;
+    }
+  | { method: "checkout_link"; plan_id: string; url: string; expires_at: number };
 
 /**
  * Platform-wide counts, read across every tenant.
@@ -1746,6 +1769,8 @@ export interface AdminSubscription {
   status: string;
   grandfathered: boolean;
   current_period_end: string | null;
+  /** Billed through Stripe: a plan change happens at Stripe, and only a superadmin can make it. */
+  stripe_billed: boolean;
 }
 
 export interface AdminPlan {
@@ -1763,6 +1788,9 @@ export interface AdminPlan {
   trial_days: number;
   sort_order: number;
   entitlement_count: number;
+  /** The plan's Stripe price and the account it lives in; empty when it has none yet. */
+  stripe_price_id: string;
+  stripe_account: string;
 }
 
 export interface ModuleEntitlement {
