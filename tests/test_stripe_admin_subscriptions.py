@@ -173,3 +173,64 @@ async def test_the_subscription_list_says_which_workspaces_stripe_bills(
     assert (await _start(client, boss, tid, method="invoice")).status_code == 200
     rows = (await client.get("/api/admin/billing/subscriptions", headers=auth(boss))).json()
     assert next(r for r in rows if r["tenant_id"] == tid)["stripe_billed"] is True
+
+
+# ---- a subscription left in a previous Stripe account ---------------------------------------------
+
+def _not_in_this_account(sid: str):
+    from nexus.billing.payments import PaymentError
+
+    exc = PaymentError(f"stripe /subscriptions/{sid} -> 404: "
+                       f'{{"error": {{"message": "No such subscription: \'{sid}\'"}}}}')
+    exc.status = 404
+    return exc
+
+
+async def test_a_plan_change_for_a_subscription_in_another_account_says_how_to_get_out(
+        client, monkeypatch, stripe):
+    """After an account switch Stripe answers 404 for the old account's subscription. Relaying
+    "No such subscription" leaves the operator guessing; the answer names the way out."""
+    boss, tid = await _boss_and_customer(client, monkeypatch, "sas13")
+    assert (await _start(client, boss, tid, method="invoice")).status_code == 200
+    sid = (await _sub(tid)).psp_subscription_id
+
+    async def gone(**kw):
+        raise _not_in_this_account(sid)
+
+    monkeypatch.setattr(stripe, "change_subscription_price", gone)
+    r = await _change(client, boss, tid)
+    assert r.status_code == 409, r.text
+    assert "previous Stripe account" in r.text and "Edit terms" in r.text
+    assert (await _sub(tid)).plan_id == "launch"
+
+
+async def test_cancelling_a_subscription_in_another_account_says_how_to_get_out(
+        client, monkeypatch, stripe):
+    boss, tid = await _boss_and_customer(client, monkeypatch, "sas14")
+    assert (await _start(client, boss, tid, method="invoice")).status_code == 200
+    sid = (await _sub(tid)).psp_subscription_id
+
+    async def gone(**kw):
+        raise _not_in_this_account(sid)
+
+    monkeypatch.setattr(stripe, "cancel_subscription", gone)
+    r = await client.post(f"/api/admin/billing/tenants/{tid}/subscription/cancel",
+                          headers=auth(boss), json={"at_period_end": True})
+    assert r.status_code == 409, r.text
+    assert "previous Stripe account" in r.text
+    after = await _sub(tid)
+    assert after.status == "active" and not after.cancel_at_period_end
+
+
+async def test_once_marked_canceled_a_new_stripe_subscription_can_start(
+        client, monkeypatch, stripe):
+    """The way out the message names actually works: Edit terms never calls Stripe."""
+    boss, tid = await _boss_and_customer(client, monkeypatch, "sas15")
+    assert (await _start(client, boss, tid, method="invoice")).status_code == 200
+    stripe.account = "acct_new"
+    r = await client.patch(f"/api/admin/billing/tenants/{tid}/subscription",
+                           headers=auth(boss), json={"status": "canceled", "reason": "old acct"})
+    assert r.status_code == 200, r.text
+    r = await _start(client, boss, tid, method="invoice")
+    assert r.status_code == 200, r.text
+    assert (await _sub(tid)).psp_customer_id.startswith("cus_acct_new")

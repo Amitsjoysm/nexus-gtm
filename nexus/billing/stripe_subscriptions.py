@@ -30,6 +30,22 @@ class StripeSubscriptionError(Exception):
         self.status_code = status_code
 
 
+def in_previous_account(exc: Exception, subscription_id: str) -> str:
+    """The sentence for a subscription Stripe cannot find, or "" for any other refusal.
+
+    After an account switch the old account's subscriptions answer 404 to the new key, and
+    relaying "No such subscription" leaves the operator guessing. Cancelling only our row is not
+    offered as a fix: the old account may still be charging the customer, which only its own
+    dashboard can stop. Edit terms never calls Stripe, so it is the way out once that is done.
+    """
+    if getattr(exc, "status", 0) != 404 or "subscription" not in str(exc).lower():
+        return ""
+    return (f"Stripe has no subscription {subscription_id} in the account billing now, so it "
+            "belongs to a previous Stripe account. Cancel it in that account's Stripe dashboard, "
+            "then set its status to canceled with Edit terms on the Customers tab and start a "
+            "new Stripe subscription. Nothing was changed here.")
+
+
 def _app_url(path: str) -> str:
     from nexus.core.config import get_settings
 

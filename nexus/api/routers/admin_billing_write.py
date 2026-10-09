@@ -290,6 +290,7 @@ async def set_tenant_subscription(
     from nexus.billing.stripe_subscriptions import (
         StripeSubscriptionError,
         change_stripe_plan,
+        in_previous_account,
         stripe_subscription_of,
     )
     from nexus.billing.subscriptions import change_plan, ensure_subscription
@@ -317,6 +318,9 @@ async def set_tenant_subscription(
             except StripeSubscriptionError as exc:
                 raise HTTPException(exc.status_code, str(exc)) from exc
             except PaymentError as exc:
+                gone = in_previous_account(exc, billed.psp_subscription_id or "")
+                if gone:
+                    raise HTTPException(status.HTTP_409_CONFLICT, gone) from exc
                 raise HTTPException(
                     status.HTTP_502_BAD_GATEWAY,
                     f"Stripe refused, nothing was changed here: {exc}",
@@ -1077,6 +1081,7 @@ async def cancel_tenant_subscription(
     """
     from nexus.billing.payments import PaymentError, PaymentNotConfigured
     from nexus.billing.subscriptions import ProviderCancelRefused, cancel_subscription
+    from nexus.billing.stripe_subscriptions import in_previous_account
     from nexus.models.billing import BillingSubscription
 
     at_period_end = body.at_period_end if body else True
@@ -1094,6 +1099,10 @@ async def cancel_tenant_subscription(
         except PaymentNotConfigured as exc:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
         except PaymentError as exc:
+            gone = in_previous_account(
+                exc, (existing.psp_subscription_id or "") if existing else "")
+            if gone:
+                raise HTTPException(status.HTTP_409_CONFLICT, gone) from exc
             raise HTTPException(
                 status.HTTP_502_BAD_GATEWAY,
                 f"Stripe did not cancel it: {exc}. Nothing was changed here.") from exc
