@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,11 +28,23 @@ logger = logging.getLogger("nexus.billing.payments")
 
 
 class PaymentError(RuntimeError):
-    """Base class for payment-provider failures."""
+    """Base class for payment-provider failures.
+
+    ``status`` is the provider's HTTP status when there was one (0 for a transport failure), so a
+    caller can tell "this object is not in this account" (404) from "the key is wrong" (401).
+    """
+
+    status: int = 0
 
 
 class PaymentNotConfigured(PaymentError):
     """The selected provider has no credentials. Never raised by the noop provider."""
+
+
+#: Subscription metadata that says the plan's credits arrive when an invoice is PAID, not when the
+#: subscription starts. Set on subscriptions a superadmin starts by emailed invoice (2026-10-09).
+CREDITS_META_KEY = "nexus_credits"
+CREDITS_ON_PAYMENT = "on_payment"
 
 
 @dataclass
@@ -82,12 +95,13 @@ class PaymentProvider(abc.ABC):
     @abc.abstractmethod
     async def ensure_plan_price(
         self, *, plan_id: str, name: str, amount_cents: int, currency: str = "USD",
-        interval: str = "month",
+        interval: str = "month", product_id: str = "",
     ) -> dict:
         """Publish a plan as a product + recurring price at the provider.
 
         Needed so a bespoke, per-customer price negotiated in Admin exists as a real object at
         the PSP, rather than only inside our own tables. Returns ``{"product_id", "price_id"}``.
+        ``product_id`` reuses a product this account already holds, so only a new price is made.
         """
 
     @abc.abstractmethod
@@ -156,6 +170,49 @@ class PaymentProvider(abc.ABC):
         cancelled here while the provider keeps charging is the failure this exists to prevent.
         """
 
+    # ---- Stripe-managed plans and subscriptions (2026-10-09) ---------------------------------
+    # Deliberately NOT abstract: the defaults below keep every existing provider and test double
+    # working, and the two that read state answer the way those callers were treated before.
+
+    async def account_id(self) -> str:
+        """Which account at the provider the active credentials belong to.
+
+        Every id this deployment caches is only meaningful inside one account; reusing it after
+        the key changed is the "No such price" failure (reported 2026-10-09).
+        """
+        return self.name
+
+    async def object_exists(self, kind: str, object_id: str) -> bool:
+        """Whether a cached id still names an object in the CURRENT account.
+
+        Asked once for caches written before ids recorded their account. The default answers yes,
+        which is exactly how those caches were treated before.
+        """
+        return True
+
+    async def set_price_active(self, *, price_id: str, active: bool) -> None:
+        raise PaymentError(f"{self.name} cannot archive or reactivate a price")
+
+    async def rename_product(self, *, product_id: str, name: str) -> None:
+        raise PaymentError(f"{self.name} cannot rename a product")
+
+    async def create_invoiced_subscription(
+        self, *, customer_id: str, price_id: str, tenant_id: str, plan_id: str,
+        days_until_due: int, idempotency_key: str,
+    ) -> dict:
+        """Start a subscription paid by emailed invoice and send its first invoice now.
+
+        Returns at least ``{"id", "status", "customer", "collection_method",
+        "current_period_start", "current_period_end", "hosted_invoice_url", "invoice_note"}``.
+        """
+        raise PaymentError(f"{self.name} cannot create a subscription")
+
+    async def change_subscription_price(
+        self, *, subscription_id: str, price_id: str, plan_id: str,
+    ) -> dict:
+        """Move a one-item subscription to ``price_id`` now, invoicing the prorated difference."""
+        raise PaymentError(f"{self.name} cannot change a subscription's price")
+
 
 class NoopPaymentProvider(PaymentProvider):
     """Offline default. Records intent, moves no money, never fails.
@@ -180,6 +237,11 @@ class NoopPaymentProvider(PaymentProvider):
         # Stage remote state here to exercise reconciliation offline.
         self.subscriptions: dict[str, dict[str, Any]] = {}
         self._seen: dict[str, PaymentResult] = {}
+        self.account = "noop"
+        self.price_active: dict[str, bool] = {}
+        self.renames: list[dict[str, Any]] = []
+        self.price_changes: list[dict[str, Any]] = []
+        self._subs_by_key: dict[str, dict[str, Any]] = {}
 
     async def ensure_customer(self, *, tenant_id: str, email: str, name: str = "") -> str:
         cid = self.customers.setdefault(tenant_id, f"noop_cus_{tenant_id[:12]}")
@@ -211,9 +273,10 @@ class NoopPaymentProvider(PaymentProvider):
 
     async def ensure_plan_price(
         self, *, plan_id: str, name: str, amount_cents: int, currency: str = "USD",
-        interval: str = "month",
+        interval: str = "month", product_id: str = "",
     ) -> dict:
-        out = {"product_id": f"noop_prod_{plan_id}", "price_id": f"noop_price_{plan_id}"}
+        out = {"product_id": product_id or f"noop_prod_{plan_id}",
+               "price_id": f"noop_price_{plan_id}"}
         self.prices[plan_id] = {**out, "amount_cents": amount_cents, "name": name}
         return out
 
@@ -265,6 +328,8 @@ class NoopPaymentProvider(PaymentProvider):
             # tests can be built from exactly the shape the real provider returns.
             "metadata": {"tenant_id": tenant_id, "plan_id": plan_id},
             "url": f"https://checkout.local.test/{session_id}",
+            # Stripe expires a Checkout session after 24 hours; the offline one says the same.
+            "expires_at": int(time.time()) + 24 * 3600,
             "provider": self.name,
         }
         self.checkout_sessions.append(record)
@@ -293,6 +358,50 @@ class NoopPaymentProvider(PaymentProvider):
         return {"id": subscription_id, "status": "active" if at_period_end else "canceled",
                 "cancel_at_period_end": at_period_end}
 
+    async def account_id(self) -> str:
+        return self.account
+
+    async def object_exists(self, kind: str, object_id: str) -> bool:
+        return True
+
+    async def set_price_active(self, *, price_id: str, active: bool) -> None:
+        self.price_active[price_id] = active
+
+    async def rename_product(self, *, product_id: str, name: str) -> None:
+        self.renames.append({"product_id": product_id, "name": name})
+
+    async def create_invoiced_subscription(
+        self, *, customer_id: str, price_id: str, tenant_id: str, plan_id: str,
+        days_until_due: int, idempotency_key: str,
+    ) -> dict:
+        if idempotency_key in self._subs_by_key:
+            return self._subs_by_key[idempotency_key]
+        now = int(time.time())
+        sid = f"noop_sub_{len(self._subs_by_key) + 1}"
+        out = {
+            "id": sid, "status": "active", "customer": customer_id, "price_id": price_id,
+            "collection_method": "send_invoice", "days_until_due": days_until_due,
+            "metadata": {"tenant_id": tenant_id, "plan_id": plan_id,
+                         CREDITS_META_KEY: CREDITS_ON_PAYMENT},
+            "current_period_start": now, "current_period_end": now + 30 * 86400,
+            "hosted_invoice_url": "", "invoice_note": "",
+        }
+        self._subs_by_key[idempotency_key] = out
+        self.subscriptions[sid] = out
+        return out
+
+    async def change_subscription_price(
+        self, *, subscription_id: str, price_id: str, plan_id: str,
+    ) -> dict:
+        current = self.subscriptions.get(subscription_id) or {"id": subscription_id,
+                                                              "status": "active"}
+        out = {**current, "price_id": price_id,
+               "metadata": {**(current.get("metadata") or {}), "plan_id": plan_id}}
+        self.subscriptions[subscription_id] = out
+        self.price_changes.append({"id": subscription_id, "price_id": price_id,
+                                   "plan_id": plan_id})
+        return out
+
 
 #: Stamped on the portal configuration NEXUS creates, so it is found again rather than duplicated.
 #: Bump the suffix if the configuration's features ever change: a new tag creates a new one.
@@ -301,6 +410,10 @@ PORTAL_CONFIG_TAG = "no_plan_switch_v1"
 #: Configuration id per Stripe account, keyed by a hash of the secret key (never the key itself).
 #: A provider instance is rebuilt every 30s, so the cache lives at module level.
 _portal_configurations: dict[str, str] = {}
+
+#: Account id per key digest. One `GET /v1/account` per key per process: the answer cannot change
+#: for a given key, and every cached plan, price and customer id is checked against it.
+_account_ids: dict[str, str] = {}
 
 
 class StripePaymentProvider(PaymentProvider):
@@ -412,6 +525,7 @@ class StripePaymentProvider(PaymentProvider):
                 last = PaymentError(
                     f"stripe {path} -> {resp.status_code}: {resp.text[:300]}"
                 )
+                last.status = resp.status_code
                 if resp.status_code not in self.RETRY_STATUSES:
                     raise last
             if attempt < self.max_retries - 1 and self.retry_base_delay_s:
@@ -496,17 +610,19 @@ class StripePaymentProvider(PaymentProvider):
 
     async def ensure_plan_price(
         self, *, plan_id: str, name: str, amount_cents: int, currency: str = "USD",
-        interval: str = "month",
+        interval: str = "month", product_id: str = "",
     ) -> dict:
         self._require()
-        # Keyed on the plan id, so re-publishing the same custom plan reuses the product
-        # instead of littering the account with duplicates.
-        product = await self._post(
-            "/products",
-            {"name": name, "metadata[plan_id]": plan_id},
-            idempotency_key=f"product:{plan_id}",
-        )
-        product_id = str(product.get("id", ""))
+        if not product_id:
+            # Keyed on the plan id, so a retry inside Stripe's 24-hour idempotency window reuses
+            # the product. Beyond that window the CALLER passes the product it already holds
+            # (`stripe_catalog.plan_price_id`), which is what stops duplicates for good.
+            product = await self._post(
+                "/products",
+                {"name": name, "metadata[plan_id]": plan_id},
+                idempotency_key=f"product:{plan_id}",
+            )
+            product_id = str(product.get("id", ""))
         price = await self._post(
             "/prices",
             {
@@ -514,11 +630,103 @@ class StripePaymentProvider(PaymentProvider):
                 "currency": currency.lower(), "recurring[interval]": interval,
                 "metadata[plan_id]": plan_id,
             },
-            # Amount is in the key: changing the price must mint a NEW Stripe price object,
+            # Product and amount are in the key: a new amount mints a NEW Stripe price object,
             # because Stripe prices are immutable once created.
-            idempotency_key=f"price:{plan_id}:{amount_cents}:{currency}:{interval}",
+            idempotency_key=f"price:{product_id}:{amount_cents}:{currency}:{interval}",
         )
         return {"product_id": product_id, "price_id": str(price.get("id", ""))}
+
+    async def account_id(self) -> str:
+        import hashlib
+
+        self._require()
+        digest = hashlib.sha256(self.secret_key.encode()).hexdigest()
+        if digest not in _account_ids:
+            account = str((await self._get("/account")).get("id") or "")
+            if not account:
+                raise PaymentError("stripe /account returned no account id")
+            _account_ids[digest] = account
+        return _account_ids[digest]
+
+    async def object_exists(self, kind: str, object_id: str) -> bool:
+        self._require()
+        if kind not in ("prices", "products", "customers"):
+            raise ValueError(f"unknown object kind {kind!r}")
+        try:
+            obj = await self._get(f"/{kind}/{object_id}")
+        except PaymentError as exc:
+            if exc.status == 404:
+                return False
+            raise
+        return not obj.get("deleted")
+
+    async def set_price_active(self, *, price_id: str, active: bool) -> None:
+        self._require()
+        await self._post(f"/prices/{price_id}", {"active": "true" if active else "false"})
+
+    async def rename_product(self, *, product_id: str, name: str) -> None:
+        self._require()
+        await self._post(f"/products/{product_id}", {"name": name})
+
+    async def create_invoiced_subscription(
+        self, *, customer_id: str, price_id: str, tenant_id: str, plan_id: str,
+        days_until_due: int, idempotency_key: str,
+    ) -> dict:
+        self._require()
+        sub = await self._post(
+            "/subscriptions",
+            {
+                "customer": customer_id, "items[0][price]": price_id,
+                "collection_method": "send_invoice", "days_until_due": str(int(days_until_due)),
+                "metadata[tenant_id]": tenant_id, "metadata[plan_id]": plan_id,
+                f"metadata[{CREDITS_META_KEY}]": CREDITS_ON_PAYMENT,
+            },
+            idempotency_key=idempotency_key,
+        )
+        invoice_id = str(sub.get("latest_invoice") or "")
+        hosted, note = "", ""
+        if invoice_id:
+            # Finalize and send NOW, so Stripe emails it while the superadmin is still on the
+            # call. Left alone, Stripe finalizes it about an hour later. A failure here never
+            # loses the subscription, which already exists: the invoice still goes out on
+            # Stripe's own schedule, and the note says so.
+            try:
+                inv = await self._post(f"/invoices/{invoice_id}/finalize", {})
+                if inv.get("status") == "open":
+                    inv = await self._post(f"/invoices/{invoice_id}/send", {})
+                hosted = str(inv.get("hosted_invoice_url") or "")
+            except PaymentError as exc:
+                note = f"Stripe will send the first invoice on its own schedule: {exc}"[:300]
+        return {
+            "id": str(sub.get("id", "")), "status": str(sub.get("status", "")),
+            "customer": str(sub.get("customer") or customer_id),
+            "collection_method": str(sub.get("collection_method") or "send_invoice"),
+            "current_period_start": sub.get("current_period_start"),
+            "current_period_end": sub.get("current_period_end"),
+            "invoice_id": invoice_id, "hosted_invoice_url": hosted, "invoice_note": note,
+        }
+
+    async def change_subscription_price(
+        self, *, subscription_id: str, price_id: str, plan_id: str,
+    ) -> dict:
+        self._require()
+        current = await self._get(f"/subscriptions/{subscription_id}")
+        items = (current.get("items") or {}).get("data") or []
+        if len(items) != 1:
+            # Every subscription NEXUS creates has exactly one item. Anything else was built by
+            # hand in the Stripe dashboard, and guessing which item is "the plan" would reprice the
+            # wrong line.
+            raise PaymentError(
+                f"stripe subscription {subscription_id} has {len(items)} items; "
+                "change it in the Stripe dashboard"
+            )
+        return await self._post(
+            f"/subscriptions/{subscription_id}",
+            {
+                "items[0][id]": str(items[0]["id"]), "items[0][price]": price_id,
+                "proration_behavior": "always_invoice", "metadata[plan_id]": plan_id,
+            },
+        )
 
     async def refund(
         self, *, reference: str, amount_cents: int, idempotency_key: str
@@ -583,6 +791,9 @@ class StripePaymentProvider(PaymentProvider):
             "url": str(data.get("url", "")),
             "provider": self.name,
             "customer_id": str(data.get("customer") or customer_id or ""),
+            # When the hosted page stops working (Stripe: 24 hours). The console shows it beside a
+            # link a superadmin sends to a customer.
+            "expires_at": int(data.get("expires_at") or 0),
             "tenant_id": tenant_id,
             "plan_id": plan_id,
         }
@@ -822,7 +1033,6 @@ async def resolve_payment_provider() -> PaymentProvider:
     separate process, sees a change without a restart.
     """
     global _provider, _resolved_at
-    import time
 
     if _override is not None:
         return _override
