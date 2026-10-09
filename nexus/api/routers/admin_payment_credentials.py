@@ -36,6 +36,8 @@ class CredentialOut(BaseModel):
     status: str
     last_error: str
     active: bool
+    # Set only on activation by a superadmin: what syncing the plans to this account did.
+    stripe_sync: list[dict] | None = None
 
 
 class CredentialIn(BaseModel):
@@ -142,7 +144,36 @@ async def activate_payment_credential(
     await _audit(principal, "payment_credential.activate", credential_id,
                  {"account_id": row.account_id, "account_name": row.account_name,
                   "livemode": row.livemode})
-    return _out(row)
+    from nexus.api.deps import platform_permissions
+    from nexus.billing.permissions import STRIPE_MANAGE
+
+    out = _out(row)
+    # A new key may belong to a new Stripe account, where none of the plans exist yet. A
+    # superadmin's activation creates them straight away; anyone else's leaves Stripe alone
+    # (creating objects at Stripe is superadmin-only, 2026-10-09), and checkout still creates a
+    # plan's price in the new account on its first purchase.
+    if STRIPE_MANAGE in await platform_permissions(principal):
+        out = out.model_copy(update={"stripe_sync": await _sync_plans_after_activation()})
+    return out
+
+
+async def _sync_plans_after_activation() -> list[dict] | None:
+    """Create the plans on sale in the account just activated. Never fails the activation:
+    a refusal comes back as a `failed` row for the operator to read."""
+    from nexus.billing import stripe_catalog
+    from nexus.billing.payments import PaymentError, resolve_payment_provider
+    from nexus.core.db import get_sessionmaker
+
+    provider = await resolve_payment_provider()
+    if provider.name != "stripe":
+        return None
+    try:
+        async with get_sessionmaker()() as session:
+            report = await stripe_catalog.sync_plans(session, provider)
+            await session.commit()
+        return report
+    except PaymentError as exc:
+        return [{"plan_id": "", "outcome": "failed", "detail": str(exc)[:300]}]
 
 
 @router.post("/{credential_id}/deactivate", response_model=CredentialOut)

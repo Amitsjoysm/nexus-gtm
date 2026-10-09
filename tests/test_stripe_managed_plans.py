@@ -129,3 +129,59 @@ async def test_sync_without_stripe_says_so(client, monkeypatch):
     token = await _superadmin(client, monkeypatch, slug="smp8", email="boss@smp8.com")
     r = await client.post("/api/admin/billing/plans/stripe-sync", headers=auth(token))
     assert r.status_code == 409 and "Payments tab" in r.text
+
+
+# ---- activating a key for a new account syncs the plans (superadmin) ---------------------------
+
+async def _verified_credential() -> str:
+    from nexus.billing.credentials import add_credential
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.payment_credential import PaymentCredential
+
+    row = await add_credential(label="live", secret_key="sk_test_sync1",
+                               webhook_secret="whsec_x")
+    async with get_platform_sessionmaker()() as s:
+        (await s.get(PaymentCredential, row.id)).status = "verified"
+        await s.commit()
+    return row.id
+
+
+async def test_a_superadmin_activation_syncs_the_plans(client, monkeypatch):
+    from nexus.billing import stripe_catalog
+    from nexus.billing.payments import set_payment_provider
+
+    set_payment_provider(None)
+    token = await _superadmin(client, monkeypatch, slug="smp9", email="boss@smp9.com")
+
+    async def fake_sync(session, provider, *, account=""):
+        return [{"plan_id": "launch", "outcome": "created", "price_id": "price_x"}]
+
+    monkeypatch.setattr(stripe_catalog, "sync_plans", fake_sync)
+    cid = await _verified_credential()
+    r = await client.post(f"/api/admin/payment-credentials/{cid}/activate",
+                          headers=auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["stripe_sync"][0]["outcome"] == "created"
+    set_payment_provider(None)
+
+
+async def test_a_finance_activation_does_not_touch_stripe(client, monkeypatch):
+    from nexus.billing import stripe_catalog
+    from nexus.billing.payments import set_payment_provider
+
+    set_payment_provider(None)
+    boss = await _bootstrap_admin(client, monkeypatch, "smp10")
+    finance = await _make_role(client, boss, "cfo@smp10.com", "finance", "smp10f")
+    called: list = []
+
+    async def fake_sync(session, provider, *, account=""):
+        called.append(1)
+        return []
+
+    monkeypatch.setattr(stripe_catalog, "sync_plans", fake_sync)
+    cid = await _verified_credential()
+    r = await client.post(f"/api/admin/payment-credentials/{cid}/activate",
+                          headers=auth(finance))
+    assert r.status_code == 200, r.text
+    assert r.json().get("stripe_sync") is None and called == []
+    set_payment_provider(None)
