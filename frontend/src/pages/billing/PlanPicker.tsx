@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Badge, Button, Card, CardHeader, Icons, Skeleton, useToast } from "@/components/ui";
@@ -42,6 +42,24 @@ export function PlanPicker({ usage }: { usage: BillingUsage | null }) {
   const api = useApiClient();
   const toast = useToast();
   const plans = useApi<SellablePlan[]>((signal) => api.billingPlans(signal), []);
+  const { refetch } = plans;
+  // Prices, plans and what the list shows change in Admin without a deploy, and this page is often
+  // left open. Re-read the list whenever the page comes back into view (at most every 5 seconds),
+  // so nobody buys from yesterday's list (reported 2026-10-09: "changes are not reflecting").
+  const lastRead = useRef(Date.now());
+  useEffect(() => {
+    function refresh() {
+      if (document.visibilityState !== "visible" || Date.now() - lastRead.current < 5000) return;
+      lastRead.current = Date.now();
+      refetch();
+    }
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [refetch]);
   const [busy, setBusy] = useState<string | null>(null);
   // Null until someone uses the switch. Until then the view follows `defaultInterval`, which needs
   // the price list, so it is derived on every render rather than copied into state by an effect.
@@ -127,8 +145,9 @@ export function PlanPicker({ usage }: { usage: BillingUsage | null }) {
         }
       />
 
-      {plans.loading && <Skeleton width="100%" height={200} />}
-      {plans.error && (
+      {/* Only before the first answer: a refresh keeps the cards on screen while it reads. */}
+      {plans.loading && !plans.data && <Skeleton width="100%" height={200} />}
+      {plans.error && !plans.data && (
         <p className={styles.contract}>
           Couldn't load the price list. Your current plan and usage above are unaffected.
         </p>
@@ -150,7 +169,8 @@ export function PlanPicker({ usage }: { usage: BillingUsage | null }) {
           <p className="sr-only" role="status">
             {announcement}
           </p>
-          <ul className={styles.grid}>
+          {/* Columns follow the number of cards, at most four: 4 sit 4-up or 2 by 2, never 3 + 1. */}
+          <ul className={styles.grid} data-count={Math.min(families.length, 5)}>
             {families.map((family) => (
               <PlanCard
                 key={family.key}

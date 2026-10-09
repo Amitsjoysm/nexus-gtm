@@ -122,11 +122,8 @@ PLAN_SEED: list[dict] = [
         "entitlements": [],
     },
     {
-        # 1,000 credits, raised from 100 on 2026-08-26: the free tier now has to let someone try
-        # every feature, and 100 credits is roughly forty enrichments — not enough to reach the
-        # part of the product worth paying for. Costs $1.92 per fully-consuming user at blended
-        # COGS, $4.00 worst case. That is the acquisition budget, and the number to watch if
-        # signups outpace conversions.
+        # Raised from 100 to 1,000 on 2026-08-26 so someone could try every feature, then resized
+        # to 200 on 2026-08-27 (below).
         "id": "free", "name": "Free", "plan_class": "free", "status": "active",
         # 200 credits is a TRIAL of the whole product, not a usable free tier, and that is the
         # intent. At the worst-case $0.004/credit COGS a free workspace costs at most $0.80 to
@@ -135,7 +132,9 @@ PLAN_SEED: list[dict] = [
         # work on the buyer's own data, not enough to run a territory on.
         "base_price_cents": 0, "seat_price_cents": 0, "included_credits": 200,
         "max_seats": 1, "seats": 1, "sort_order": 10,
-        "description": "Try every feature with 1,000 credits.",
+        # No number in the copy: the card states the credits from `included_credits`, and the
+        # sentence said 1,000 for six weeks while the plan granted 200 (found 2026-10-09).
+        "description": "Try every feature on your own accounts.",
         "entitlements": _FREE_ENT,
     },
     {

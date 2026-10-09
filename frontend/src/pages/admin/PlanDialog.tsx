@@ -3,6 +3,7 @@ import { Button, Field, Input, Modal, Select, Textarea, useToast } from "@/compo
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import type { AdminPlan } from "@/lib/types";
+import { formatPrice } from "@/pages/billing/planFamilies";
 import styles from "./AdminForms.module.css";
 
 interface Props {
@@ -57,6 +58,10 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
   const api = useApiClient();
   const toast = useToast();
   const creating = plan === null;
+  // The same tier at the other interval, which customers may be looking at instead.
+  const twin = plan?.counterpart_id
+    ? plans.find((p) => p.id === plan.counterpart_id) ?? null
+    : null;
 
   const [name, setName] = useState("");
   const [planId, setPlanId] = useState("");
@@ -257,6 +262,17 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
               onChange={(e) => setCredits(e.target.value)} placeholder="4000" />
           </Field>
         </div>
+        {twin && (
+          // Reported 2026-10-09 as "a plan changed in Admin does not reach the billing page": a
+          // monthly price was edited while customers see the tier's ANNUAL plan first. The two are
+          // separate plans and neither follows the other.
+          <p className={styles.hint}>
+            {twin.name} is this tier billed {twin.interval === "year" ? "yearly" : "monthly"}, a
+            separate plan at {formatPrice(twin.base_price_cents, twin.currency)}
+            {twin.interval === "year" ? " a year" : " a month"}. Customers see the annual price
+            first, so edit both when the tier&rsquo;s price changes.
+          </p>
+        )}
 
         <div className={styles.row}>
           <Field label="Price per extra seat" hint="Blank for none." error={errors.seatPrice}>

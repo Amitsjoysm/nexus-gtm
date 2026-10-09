@@ -64,6 +64,15 @@ export function defaultInterval(families: PlanFamily[]): BillingInterval {
     if (family.monthly.current) return "month";
     if (family.annual.current) return "year";
   }
+  // With no tier sold both ways there is no switch, so the view is what the list sells. A list a
+  // superadmin has narrowed to monthly plans, shown "annually", would label every card "Only sold
+  // with monthly billing" beside a switch that is not there (2026-10-09).
+  if (!families.some((f) => f.monthly !== null && f.annual !== null)) {
+    const priced = families
+      .flatMap((f) => [f.monthly, f.annual])
+      .filter((p): p is SellablePlan => p !== null && p.base_price_cents > 0);
+    if (priced.length > 0 && priced.every((p) => p.interval !== "year")) return "month";
+  }
   return "year";
 }
 

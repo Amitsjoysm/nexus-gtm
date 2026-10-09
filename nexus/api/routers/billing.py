@@ -439,6 +439,11 @@ async def list_sellable_plans(
             .order_by(BillingPlan.sort_order)
         )
     ).all()
+    # A superadmin chooses which of these the list shows, at most four cards (2026-10-09). A hidden
+    # plan is still on sale; it is only left off this list.
+    from nexus.billing.price_list import is_shown
+
+    rows = [p for p in rows if is_shown(p)]
 
     modules = (
         await ts.session.scalars(

@@ -162,6 +162,9 @@ async def update_plan(
             raise HTTPException(
                 status.HTTP_502_BAD_GATEWAY, f"Stripe refused, nothing was changed: {exc}"
             ) from exc
+        from nexus.billing.price_list import fit_after_publish, is_shown
+
+        note = await fit_after_publish(session, plan) if was_status != "active" else ""
         await session.flush()
         await record_admin_action(
             session, actor=principal.user_id, action="plan.update", target=plan_id,
@@ -173,7 +176,7 @@ async def update_plan(
             "base_price_cents": plan.base_price_cents,
             "seat_price_cents": plan.seat_price_cents,
             "included_credits": plan.included_credits,
-            "stripe": stripe,
+            "stripe": stripe, "shown": is_shown(plan), "note": note,
         }
 
 
@@ -1223,6 +1226,10 @@ async def create_sellable_plan_endpoint(
                     status.HTTP_502_BAD_GATEWAY,
                     f"Stripe refused, the plan was not created: {exc}",
                 ) from exc
+            from nexus.billing.price_list import fit_after_publish, is_shown
+
+            result["note"] = await fit_after_publish(session, plan)
+            result["shown"] = is_shown(plan)
             await session.flush()
         await record_admin_action(
             session, actor=principal.user_id, action="plan.create",
@@ -1265,14 +1272,59 @@ async def set_sellable_plan_status(
                 status.HTTP_502_BAD_GATEWAY,
                 f"Stripe refused, the plan was not published: {exc}",
             ) from exc
+        from nexus.billing.price_list import fit_after_publish, is_shown
+
+        # Publishing is never refused for the four-card limit: a plan can be on sale and off the
+        # price list, and the note says which (2026-10-09).
+        note = await fit_after_publish(session, plan) if was != "active" else ""
         await session.flush()
         await record_admin_action(
             session, actor=principal.user_id, action="plan.status",
             target=plan_id, before={"status": was}, after={"status": plan.status},
+            note=note,
         )
         await session.commit()
         return {"plan_id": plan_id, "status": plan.status,
-                "sellable": plan.status == "active", "stripe": stripe}
+                "sellable": plan.status == "active", "stripe": stripe,
+                "shown": is_shown(plan), "note": note}
+
+
+class PriceListIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    shown: bool
+
+
+@router.put("/plans/{plan_id}/price-list")
+async def set_plan_on_price_list(
+    plan_id: str,
+    body: PriceListIn,
+    principal: Principal = Depends(require_platform_permission(STRIPE_MANAGE)),
+) -> dict:
+    """Show or hide a plan on the customer price list, at most four cards. Superadmin only.
+
+    Presentation only: a hidden plan stays on sale and its subscribers keep it (Hold stops selling).
+    No Stripe call: what Stripe sells is unchanged by what the list shows."""
+    from nexus.billing.price_list import PriceListError, is_shown, on_price_list, set_shown
+
+    async with get_sessionmaker()() as session:
+        plan = await session.get(BillingPlan, plan_id)
+        if plan is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown plan '{plan_id}'")
+        was = is_shown(plan)
+        try:
+            await set_shown(session, plan, body.shown)
+        except PriceListError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        await session.flush()
+        if was != is_shown(plan):
+            await record_admin_action(
+                session, actor=principal.user_id, action="plan.price_list", target=plan_id,
+                before={"shown": was}, after={"shown": is_shown(plan)},
+            )
+        await session.commit()
+        return {"plan_id": plan_id, "shown": is_shown(plan),
+                "on_price_list": on_price_list(plan)}
 
 
 @router.post("/plans/stripe-sync")

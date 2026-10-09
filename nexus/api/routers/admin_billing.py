@@ -54,6 +54,13 @@ class PlanOut(BaseModel):
     # Plans tab compares the account with the active credential's (2026-10-09).
     stripe_price_id: str = ""
     stripe_account: str = ""
+    # The customer price list (2026-10-09): whether a superadmin left the plan shown, whether it is
+    # on the list now (shown, on sale, a listable class), the card it occupies there, and the plan
+    # sold at the other interval for the same tier, so an edit can say it is priced separately.
+    shown: bool = True
+    on_price_list: bool = False
+    price_list_family: str = ""
+    counterpart_id: str = ""
 
 
 @router.get("/plans/{plan_id}/entitlements")
@@ -148,6 +155,8 @@ async def list_plans(
         stmt = stmt.where(BillingPlan.status == status_filter)
     async with get_sessionmaker()() as session:
         plans = (await session.scalars(stmt)).all()
+        # Cards and pairs are facts about the whole ladder, whatever the filter shows.
+        everything = (await session.scalars(select(BillingPlan))).all() if status_filter else plans
         counts = dict(
             (
                 await session.execute(
@@ -158,6 +167,11 @@ async def list_plans(
                 )
             ).all()
         )
+    from nexus.billing.plans import interval_pairs
+    from nexus.billing.price_list import families, is_shown, listable, on_price_list
+
+    cards = families(everything)
+    pairs = interval_pairs([p for p in everything if p.status == "active" and listable(p)])
     return [
         PlanOut(
             id=p.id, name=p.name, description=p.description, plan_class=p.plan_class,
@@ -168,6 +182,9 @@ async def list_plans(
             entitlement_count=int(counts.get(p.id, 0)),
             stripe_price_id=str((p.meta or {}).get("price_id") or ""),
             stripe_account=str((p.meta or {}).get("price_account") or ""),
+            shown=is_shown(p), on_price_list=on_price_list(p),
+            price_list_family=cards.get(p.id, ""),
+            counterpart_id=(pairs[p.id].counterpart_id or "") if p.id in pairs else "",
         )
         for p in plans
     ]

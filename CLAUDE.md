@@ -645,6 +645,30 @@ included" stays on `pricing.write`. In Subscriptions the plan change sat behind 
 "Change plan" for `subscriptions.write`.
 `tests/test_plan_authoring_ui.py`.
 
+**What the customer price list shows is the superadmin's choice, at most four cards**
+(`nexus/billing/price_list.py`, 2026-10-09, `tests/test_price_list.py`). Asked as "show or hide which
+plans are visible, not more than 4", together with "a plan changed in Admin does not reach the billing
+page". The second had two causes and neither was the server: the picker opens on **Annual**, so a
+monthly price edit was invisible behind the tier's annual plan (a separate row at its own price; the
+edit dialog now names it), and the page read the list once (it now re-reads when the page comes back
+into view, at most every 5 seconds, and keeps the cards on screen while it does).
+
+- A card is a tier as PlanPicker draws it: a monthly plan and its `-annual` twin are one card, so the
+  seeded ladder is three. Pairing runs over the LISTED rows, so hiding a monthly leaves its annual a
+  card of its own and cannot sneak a fifth past the limit.
+- **Hiding is presentation, not a hold.** A hidden plan stays on sale (subscribers, console Checkout
+  links, checkout by id); Hold is still how a plan stops being sold. The flag is
+  `meta.price_list_hidden`; no flag means shown, so nothing moved when it shipped and `sync_plans`
+  cannot undo a choice.
+- Showing a fifth card is a 409; **publishing is never refused for it**: a plan that would make a
+  fifth card goes on sale hidden and the response's `note` says so.
+- `PUT /admin/billing/plans/{id}/price-list` (`stripe.manage`, audited `plan.price_list`). The Plans
+  tab shows "N of 4 cards" and a Shown/Hidden box per listable plan; `PRICE_LIST_LIMIT` in
+  `AdminBillingPage.tsx` is pinned to `MAX_CARDS` by test. The picker's grid takes one column per
+  card (4-up, 2x2 below 1200px, one column on a phone), and with no tier sold both ways it opens on
+  the interval the list actually sells instead of labelling every card "Only sold with monthly
+  billing".
+
 **A changed price is the price checkout charges** (2026-10-02, found while adding Edit). Checkout
 cached a plan's Stripe price in `meta.price_id` on first purchase and reused it whenever one existed,
 so a price changed in Admin kept charging the OLD amount at Stripe with nothing reporting it. The

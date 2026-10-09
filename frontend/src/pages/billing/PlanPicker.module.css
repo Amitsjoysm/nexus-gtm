@@ -2,13 +2,55 @@
    tier is a self-contained, comparable unit and the user is choosing BETWEEN them. One card per
    tier, whichever intervals it is sold on; auto-fit reflows the ladder to one column without a
    breakpoint. */
+/* One column per card, up to the four a superadmin can show (nexus/billing/price_list.py). A
+   count the server never sends (5+) falls back to three across. Fewer cards keep a card's reading
+   width instead of stretching one price across the whole page. */
 .grid {
+  --plan-columns: 3;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
+  grid-template-columns: repeat(var(--plan-columns), minmax(0, 1fr));
   gap: var(--space-4);
   margin: var(--space-4) 0 0;
   padding: 0;
   list-style: none;
+}
+
+.grid[data-count="1"] {
+  --plan-columns: 1;
+  max-width: 24rem;
+}
+
+.grid[data-count="2"] {
+  --plan-columns: 2;
+  max-width: 48rem;
+}
+
+.grid[data-count="4"] {
+  --plan-columns: 4;
+}
+
+/* Four cards need about 920px of content beside the sidebar; below that, two by two. */
+@media (max-width: 1200px) {
+  .grid[data-count="4"] {
+    --plan-columns: 2;
+  }
+}
+
+@media (max-width: 960px) {
+  .grid[data-count="3"],
+  .grid[data-count="5"] {
+    --plan-columns: 1;
+    max-width: 30rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .grid,
+  .grid[data-count="2"],
+  .grid[data-count="4"] {
+    --plan-columns: 1;
+    max-width: none;
+  }
 }
 
 /* The Annual | Monthly switch and the saving it unlocks, above the cards it controls. The hint

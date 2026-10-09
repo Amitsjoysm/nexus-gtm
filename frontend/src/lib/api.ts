@@ -1794,8 +1794,14 @@ export class ApiClient {
   }
   /** Publish a standard plan to the price list ("active"), or hold it ("draft"). */
   setPlanStatus(planId: string, status: "active" | "draft") {
-    return this.request<{ plan_id: string; status: string; sellable: boolean }>(
-      `/admin/billing/plans/${planId}/status`, { method: "PUT", body: { status } },
+    return this.request<{
+      plan_id: string; status: string; sellable: boolean; shown: boolean; note: string;
+    }>(`/admin/billing/plans/${planId}/status`, { method: "PUT", body: { status } });
+  }
+  /** Show or hide a plan on the customer price list (at most four cards). Superadmin only. */
+  setPlanOnPriceList(planId: string, shown: boolean) {
+    return this.request<{ plan_id: string; shown: boolean; on_price_list: boolean }>(
+      `/admin/billing/plans/${planId}/price-list`, { method: "PUT", body: { shown } },
     );
   }
   /** Make every plan on sale exist in the active Stripe account. Superadmin only. */

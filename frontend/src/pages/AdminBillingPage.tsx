@@ -8,7 +8,9 @@ import { PlanEntitlementsDialog } from "./admin/PlanEntitlementsDialog";
 import { PlanDialog } from "./admin/PlanDialog";
 import { PlatformAdmins } from "./admin/PlatformAdmins";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Badge, Card, CardHeader, EmptyState, Skeleton, Tabs, useToast } from "@/components/ui";
+import {
+  Badge, Card, CardHeader, Checkbox, EmptyState, Skeleton, Tabs, useToast,
+} from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { useApi } from "@/hooks/useApi";
@@ -48,6 +50,12 @@ import { LedgerTab } from "./admin/LedgerTab";
 import styles from "./AdminBillingPage.module.css";
 
 const MARGIN_FLOOR = 0.5;
+
+/**
+ * Cards the customer price list may show (`nexus/billing/price_list.MAX_CARDS`; a test holds the
+ * two equal). A plan sold monthly and annually is one card, as the customer's picker draws it.
+ */
+const PRICE_LIST_LIMIT = 4;
 
 function money(cents: number, currency = "USD"): string {
   return new Intl.NumberFormat(undefined, {
@@ -216,6 +224,7 @@ function Plans() {
   // The plan dialog: `undefined` closed, `null` creating, a plan editing it.
   const [planForm, setPlanForm] = useState<AdminPlan | null | undefined>(undefined);
   const [statusBusy, setStatusBusy] = useState<string | null>(null);
+  const [listBusy, setListBusy] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   // "What's included" edits entitlements (pricing.write). Creating, editing, publishing and
   // holding a plan changes what Stripe sells, which is the superadmin's alone (2026-10-09).
@@ -255,12 +264,12 @@ function Plans() {
     const next = plan.status === "active" ? "draft" : "active";
     setStatusBusy(plan.id);
     try {
-      await api.setPlanStatus(plan.id, next);
+      const res = await api.setPlanStatus(plan.id, next);
       toast.success(
         next === "active" ? `${plan.name} published` : `${plan.name} held`,
         next === "active"
-          ? "It is on the price list now."
-          : "It is off the price list. Workspaces already on it keep it unchanged.",
+          ? res.note || (res.shown ? "It is on the price list now." : "It is on sale, hidden from the price list.")
+          : "It is off sale. Workspaces already on it keep it unchanged.",
       );
       plans.refetch();
     } catch (err) {
@@ -270,6 +279,33 @@ function Plans() {
       setStatusBusy(null);
     }
   }
+
+  // Show or hide on the customer price list. Presentation only: a hidden plan stays on sale.
+  async function toggleShown(plan: AdminPlan) {
+    setListBusy(plan.id);
+    try {
+      const res = await api.setPlanOnPriceList(plan.id, !plan.shown);
+      toast.success(
+        res.shown ? `${plan.name} is shown` : `${plan.name} is hidden`,
+        res.shown
+          ? plan.status === "active"
+            ? "Customers see it on the price list now."
+            : "It goes on the price list when you publish it."
+          : "It is off the price list and still on sale to anyone already on it.",
+      );
+      plans.refetch();
+    } catch (err) {
+      toast.error("Couldn't change the price list",
+        err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setListBusy(null);
+    }
+  }
+
+  const rows = plans.data ?? [];
+  const cardsShown = new Set(
+    rows.filter((p) => p.on_price_list).map((p) => p.price_list_family),
+  ).size;
 
   const columns: Column<AdminPlan>[] = [
     {
@@ -297,6 +333,47 @@ function Plans() {
       ),
     },
     {
+      key: "price_list",
+      header: "Price list",
+      width: "180px",
+      // Only standard and free plans can be listed; agreed deals, trials and staff plans never are.
+      // A tier sold monthly and annually shares one card, so showing its other half never counts
+      // against the limit.
+      render: (r) => {
+        if (r.plan_class !== "standard" && r.plan_class !== "free") {
+          return <span className={styles.subtle}>Never listed</span>;
+        }
+        if (r.status !== "active" && r.status !== "draft") {
+          return <span className={styles.subtle}>Not on sale</span>;
+        }
+        if (!canManageStripe) {
+          return r.on_price_list
+            ? <Badge tone="success">Shown</Badge>
+            : <span className={styles.subtle}>{r.shown ? "Not yet on sale" : "Hidden"}</span>;
+        }
+        const joinsACard = rows.some((o) => o.id === r.counterpart_id && o.on_price_list);
+        const full = r.status === "active" && !r.shown && !joinsACard
+          && cardsShown >= PRICE_LIST_LIMIT;
+        const label = r.shown
+          ? r.status === "active" ? "Shown" : "Show when published"
+          : "Hidden";
+        return (
+          <label
+            className={styles.listToggle}
+            title={full ? `${PRICE_LIST_LIMIT} plans are already shown. Hide one first.` : undefined}
+          >
+            <Checkbox
+              label={`Show ${r.name} on the customer price list`}
+              checked={r.shown}
+              disabled={listBusy !== null || full}
+              onChange={() => void toggleShown(r)}
+            />
+            <span className={r.shown ? undefined : styles.subtle}>{label}</span>
+          </label>
+        );
+      },
+    },
+    {
       key: "stripe",
       header: "Stripe",
       width: "140px",
@@ -321,10 +398,17 @@ function Plans() {
     },
     {
       key: "base_price_cents",
-      header: "Base / mo",
+      header: "Price",
       align: "right",
-      width: "120px",
-      render: (r) => <span className={styles.mono}>{money(r.base_price_cents, r.currency)}</span>,
+      width: "140px",
+      // An annual plan's price is a year's. The header said "/ mo" over $950 for Launch (annual),
+      // the confusion behind "my change is not on the billing page" (2026-10-09).
+      render: (r) => (
+        <span className={styles.mono}>
+          {money(r.base_price_cents, r.currency)}
+          <span className={styles.subtle}>{r.interval === "year" ? " /yr" : " /mo"}</span>
+        </span>
+      ),
     },
     {
       key: "included_credits",
@@ -394,6 +478,10 @@ function Plans() {
         <>
           {canManageStripe && (
             <div className={styles.tableToolbar}>
+              <p className={styles.toolbarNote} aria-live="polite">
+                <strong>{cardsShown} of {PRICE_LIST_LIMIT}</strong> cards on the customer price
+                list. A plan sold monthly and annually is one card.
+              </p>
               <Button iconLeft={<Icons.PlusIcon />} onClick={() => setPlanForm(null)}>
                 New plan
               </Button>
@@ -407,7 +495,7 @@ function Plans() {
             rows={rows}
             getRowKey={(r) => r.id}
             caption="Plans"
-            minWidth={canEdit || canManageStripe ? 1220 : 900}
+            minWidth={canEdit || canManageStripe ? 1400 : 1080}
           />
           <PlanEntitlementsDialog
             open={editing !== null}

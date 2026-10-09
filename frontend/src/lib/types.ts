@@ -1828,6 +1828,14 @@ export interface AdminPlan {
   /** The plan's Stripe price and the account it lives in; empty when it has none yet. */
   stripe_price_id: string;
   stripe_account: string;
+  /** Left shown by a superadmin (no choice made means shown). */
+  shown: boolean;
+  /** On the customer price list now: shown, on sale, and a class the list can carry. */
+  on_price_list: boolean;
+  /** The card it occupies on the price list ('' when it is not on it). */
+  price_list_family: string;
+  /** The same tier sold at the other interval ('' when there is none). */
+  counterpart_id: string;
 }
 
 export interface ModuleEntitlement {
