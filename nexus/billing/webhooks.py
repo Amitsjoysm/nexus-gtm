@@ -316,6 +316,34 @@ async def _resolve_subscription(session, obj: dict, event: VerifiedEvent):
     return None, tenant_id
 
 
+def _credits_on_payment(metadata: dict) -> bool:
+    from nexus.billing.payments import CREDITS_META_KEY, CREDITS_ON_PAYMENT
+
+    return str((metadata or {}).get(CREDITS_META_KEY) or "") == CREDITS_ON_PAYMENT
+
+
+async def _grant_pending_credits(session, sub, outcome: dict) -> None:
+    """On `invoice.paid`, deliver credits an invoiced subscription has been waiting for.
+
+    Only for the plan the workspace is still on: a customer who moved plans before paying is owed
+    the plan they are on, and that move set its own marker. Never raises (see
+    `_grant_plan_credits`)."""
+    from nexus.core.tenancy import apply_rls
+    from nexus.models.billing import BillingPlan
+
+    pending = str((sub.meta or {}).get("credits_pending_plan") or "")
+    if not pending:
+        return
+    if pending == sub.plan_id:
+        plan = await session.get(BillingPlan, pending)
+        if plan is not None:
+            await _grant_plan_credits(session, sub, plan)
+            outcome["credits_granted_for"] = pending
+    await apply_rls(session, sub.tenant_id)
+    sub.meta = {k: v for k, v in (sub.meta or {}).items() if k != "credits_pending_plan"}
+    await session.flush()
+
+
 async def _grant_plan_credits(session, sub, plan) -> None:
     """Deliver a newly-bought plan's included credits. Never raises.
 
@@ -506,11 +534,16 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
             bought = await session.get(BillingPlan, plan_id)
             if bought is not None:
                 take_plan_terms(sub, bought)
-                # Same reasoning as the Checkout branch above. Stripe can deliver the plan on
-                # either event depending on how the subscription was created, so both grant —
-                # and the grant is keyed per plan per period, so whichever arrives second is a
-                # no-op rather than a second helping.
-                await _grant_plan_credits(session, sub, bought)
+                if _credits_on_payment(meta_in):
+                    # Paid by emailed invoice (started from the console, 2026-10-09): the credits
+                    # wait for `invoice.paid`, so a customer who never pays never spends them.
+                    meta["credits_pending_plan"] = bought.id
+                else:
+                    # Same reasoning as the Checkout branch above. Stripe can deliver the plan on
+                    # either event depending on how the subscription was created, so both grant —
+                    # and the grant is keyed per plan per period, so whichever arrives second is a
+                    # no-op rather than a second helping.
+                    await _grant_plan_credits(session, sub, bought)
         outcome["provider_status"] = raw_status
 
     meta["psp_synced_from_event"] = event.event_id
@@ -605,6 +638,8 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
     sub, _tenant_id = await _resolve_subscription(session, obj, event)
     if sub is not None:
         outcome["tenant_id"] = sub.tenant_id
+    if event.event_type == "invoice.paid" and sub is not None:
+        await _grant_pending_credits(session, sub, outcome)
 
     if event.event_type == "invoice.upcoming":
         # A PREVIEW of the next renewal. It has no persisted invoice at the provider and none
