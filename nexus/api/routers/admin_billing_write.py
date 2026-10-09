@@ -18,9 +18,10 @@ Two invariants are enforced at this layer, not merely documented:
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from nexus.api.deps import Principal, get_principal, require_platform_permission
 from nexus.billing.audit import record_admin_action, snapshot
@@ -304,6 +305,51 @@ async def set_tenant_subscription(
         )
         await session.commit()
         return {"tenant_id": tenant_id, "plan_id": sub.plan_id, "status": sub.status}
+
+
+class StripeSubscriptionIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    plan_id: str = Field(min_length=1)
+    method: Literal["invoice", "checkout_link"]
+    # 14 by default (decided 2026-10-09), editable per subscription.
+    days_until_due: int = Field(default=14, ge=1, le=90)
+    billing_email: EmailStr | None = None
+
+
+@router.post("/tenants/{tenant_id}/stripe-subscription")
+async def start_stripe_subscription(
+    tenant_id: str,
+    body: StripeSubscriptionIn,
+    principal: Principal = Depends(require_platform_permission(STRIPE_MANAGE)),
+) -> dict:
+    """Start a workspace on a Stripe subscription: by emailed invoice (starts now, credits when
+    paid) or by a Checkout link for the customer (starts when paid). Superadmin only."""
+    from nexus.billing.payments import PaymentError
+    from nexus.billing.stripe_subscriptions import StripeSubscriptionError, start_subscription
+
+    async with get_sessionmaker()() as session:
+        # Cross-tenant admin write: bind the tenant explicitly or Postgres RLS rejects it.
+        await apply_rls(session, tenant_id)
+        ts = TenantSession(session, tenant_id)
+        try:
+            result = await start_subscription(
+                ts, plan_id=body.plan_id, method=body.method,
+                days_until_due=body.days_until_due,
+                billing_email=str(body.billing_email or ""), actor=principal.user_id,
+            )
+        except StripeSubscriptionError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        except PaymentError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, f"Stripe refused, nothing was changed here: {exc}"
+            ) from exc
+        await record_admin_action(
+            session, actor=principal.user_id, action="subscription.stripe_start",
+            target=body.plan_id, subject_tenant_id=tenant_id, after=result,
+        )
+        await session.commit()
+    return result
 
 
 @router.get("/flags")
