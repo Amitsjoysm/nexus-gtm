@@ -1305,6 +1305,31 @@ async def sync_plans_to_stripe(
     return {"account": account, "plans": report}
 
 
+@router.post("/subscriptions/stripe-carry-over")
+async def carry_subscriptions_to_stripe(
+    principal: Principal = Depends(require_platform_permission(STRIPE_MANAGE)),
+) -> dict:
+    """Move every live subscription billed in a previous Stripe account into the one in force.
+
+    Runs by itself when a superadmin makes a new key live; this is the retry, for a workspace that
+    could not be moved then. Safe to repeat: a subscription already here is left alone, and one
+    half moved is finished rather than started again."""
+    from nexus.billing.payments import PaymentError, resolve_payment_provider
+    from nexus.billing.stripe_carryover import carry_over_all
+
+    provider = await resolve_payment_provider()
+    if provider.name != "stripe":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "No Stripe credential is in force. Add and activate one on the Payments tab first.",
+        )
+    try:
+        report = await carry_over_all(provider, actor=principal.user_id)
+    except PaymentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Stripe refused: {exc}") from exc
+    return {"subscriptions": report}
+
+
 # ---- cost rates ----------------------------------------------------------------------------------
 # Prices could be changed from Admin without a deploy; costs could not. That asymmetry is not a
 # missing CRUD screen, it is a hole in the guardrail: `validate_rate` compares a price against a

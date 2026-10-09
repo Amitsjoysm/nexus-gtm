@@ -63,3 +63,12 @@ def test_the_payments_tab_registers_the_webhook_for_superadmins_only():
 def test_the_secret_field_tells_a_superadmin_it_can_be_left_blank():
     tab = _read("pages/admin/PaymentsTab.tsx")
     assert "Leave blank and press Create webhook in Stripe" in tab
+
+
+def test_the_payments_tab_reports_and_retries_the_subscription_move():
+    tab = _read("pages/admin/PaymentsTab.tsx")
+    assert "res.stripe_carry" in tab and "describeCarry(" in tab
+    assert "{canManageStripe && r.active && (" in tab
+    assert "Move subscriptions here" in tab and "api.carryStripeSubscriptions()" in tab
+    assert "/admin/billing/subscriptions/stripe-carry-over" in _read("lib/api.ts")
+    assert "stripe_carry?: StripeCarryRow[] | null;" in _read("lib/types.ts")

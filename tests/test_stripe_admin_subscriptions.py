@@ -121,6 +121,7 @@ async def test_a_card_billed_plan_change_happens_at_stripe_with_credits_now(
         row = await s.get(BillingSubscription, sub.id)
         row.psp_subscription_id, row.psp_customer_id = "sub_card8", "cus_card8"
         await s.commit()
+    stripe.owner["sub_card8"] = "acct_old"          # it lives in the account in force
     r = await _change(client, boss, tid)
     assert r.status_code == 200, r.text
     assert stripe.price_changes[-1]["id"] == "sub_card8"

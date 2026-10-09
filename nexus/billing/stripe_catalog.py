@@ -208,8 +208,14 @@ async def customer_id_for(sub, provider, *, tenant_id: str, email: str, name: st
     meta = dict(sub.meta or {}) if sub is not None else {}
     existing = str(sub.psp_customer_id or "") if sub is not None else ""
     recorded = str(meta.get("psp_customer_account") or "")
-    if existing and not recorded:
-        recorded = account if await _exists(provider, "customers", existing) else _UNKNOWN
+    if existing and recorded != account:
+        # Not recorded yet (a cache from before accounts were), or recorded in another account.
+        # Stripe's own migration between accounts keeps customer ids, so a customer it copied
+        # here, cards included, is adopted rather than duplicated.
+        if await _exists(provider, "customers", existing):
+            recorded = account
+        elif not recorded:
+            recorded = _UNKNOWN
     if existing and recorded == account:
         if meta.get("psp_customer_account") != account:
             meta["psp_customer_account"] = account

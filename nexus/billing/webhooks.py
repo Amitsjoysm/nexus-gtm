@@ -316,6 +316,31 @@ async def _resolve_subscription(session, obj: dict, event: VerifiedEvent):
     return None, tenant_id
 
 
+def _is_retired(sub, obj: dict, event: VerifiedEvent) -> bool:
+    """An event about a subscription this row carried to another Stripe account (2026-10-09).
+
+    Only the old account can send one, and acting on it would touch the subscription that replaced
+    it: the old one's cancellation at the end of the carried period would end the new one."""
+    if sub is None:
+        return False
+    is_subscription_object = event.event_type.startswith("customer.subscription.")
+    psp = _str(obj.get("id")) if is_subscription_object else _str(obj.get("subscription"))
+    if not psp or psp == (sub.psp_subscription_id or ""):
+        return False
+    previous = (sub.meta or {}).get("previous_psp_subscriptions") or []
+    return any(str((p or {}).get("id") or "") == psp for p in previous)
+
+
+def _same_moment(a, b) -> bool:
+    if a is None or b is None:
+        return False
+    from datetime import timezone
+
+    a = a if a.tzinfo else a.replace(tzinfo=timezone.utc)
+    b = b if b.tzinfo else b.replace(tzinfo=timezone.utc)
+    return abs((a - b).total_seconds()) < 120
+
+
 def _credits_on_payment(metadata: dict) -> bool:
     from nexus.billing.payments import CREDITS_META_KEY, CREDITS_ON_PAYMENT
 
@@ -432,6 +457,9 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
 
     meta_in = _metadata(obj)
     sub, tenant_id = await _resolve_subscription(session, obj, event)
+    if _is_retired(sub, obj, event):
+        outcome["note"] = "subscription moved to another Stripe account"
+        return outcome
     # A row created below is born on the bought plan, so both "did the plan change?" guards would
     # read it as unchanged and skip the grant: the customer pays and holds no credits. Moving onto
     # a plan from no row at all IS a change, so both guards count it as one.
@@ -522,7 +550,14 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
         sub.cancel_at_period_end = bool(obj.get("cancel_at_period_end"))
         start = _epoch(obj.get("current_period_start"))
         end = _epoch(obj.get("current_period_end"))
-        if start is not None:
+        # The first period of a subscription carried from a previous Stripe account starts, at
+        # Stripe, at the switch. It was paid for and credited from our own period start, and the
+        # period roll keys its invoice on that start's month, so it stays (2026-10-09).
+        from nexus.billing.payments import CARRIED_FROM_KEY
+
+        carried_first = bool(meta_in.get(CARRIED_FROM_KEY)) and _same_moment(
+            end, sub.current_period_end)
+        if start is not None and not carried_first:
             sub.current_period_start = start
         if end is not None:
             sub.current_period_end = end
@@ -636,6 +671,9 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
     payment_intent = _str(obj.get("payment_intent"))
 
     sub, _tenant_id = await _resolve_subscription(session, obj, event)
+    if _is_retired(sub, obj, event):
+        outcome["note"] = "subscription moved to another Stripe account"
+        return outcome
     if sub is not None:
         outcome["tenant_id"] = sub.tenant_id
     if event.event_type == "invoice.paid" and sub is not None:

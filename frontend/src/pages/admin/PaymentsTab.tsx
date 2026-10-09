@@ -4,7 +4,7 @@ import { useApiClient } from "@/app/AuthContext";
 import { usePlatformCan } from "@/app/RequirePlatformAdmin";
 import { ApiError } from "@/lib/api";
 import { STRIPE_MANAGE } from "@/lib/permissions";
-import type { PaymentCredential } from "@/lib/types";
+import type { PaymentCredential, StripeCarryRow } from "@/lib/types";
 import styles from "./PaymentsTab.module.css";
 
 /**
@@ -28,6 +28,16 @@ const STATUS_LABEL: Record<string, string> = {
   registered: "Not verified",
   failed: "Failed",
 };
+
+/** "3 moved here" plus why any could not be, for the toast after a switch. */
+function describeCarry(rows: StripeCarryRow[]): { line: string; problems: string[] } {
+  const moved = rows.filter((c) => c.outcome === "carried").length;
+  const stuck = rows.filter((c) => c.outcome === "failed");
+  const line = rows.length
+    ? `Subscriptions moved here: ${moved}${stuck.length ? `, ${stuck.length} not moved` : ""}.`
+    : "No subscriptions needed moving.";
+  return { line, problems: stuck.map((c) => c.detail ?? "no reason given") };
+}
 
 export function PaymentsTab() {
   const api = useApiClient();
@@ -112,8 +122,9 @@ export function PaymentsTab() {
     }
   }
 
-  // Activating a superadmin's key also creates the plans on sale in that Stripe account; the
-  // response says what happened (`stripe_sync`, absent for anyone without `stripe.manage`).
+  // Activating a superadmin's key also creates the plans on sale in that Stripe account and moves
+  // the previous account's live subscriptions into it; the response says what happened
+  // (`stripe_sync`, `stripe_carry`, both absent for anyone without `stripe.manage`).
   async function activate(rowItem: PaymentCredential) {
     setBusy(rowItem.id);
     try {
@@ -127,16 +138,17 @@ export function PaymentsTab() {
       const failed = sync.filter((p) => p.outcome === "failed");
       const created = sync.filter((p) => p.outcome === "created").length;
       const reused = sync.filter((p) => p.outcome === "reused").length;
-      if (failed.length) {
-        toast.error(
-          "Activated, but Stripe refused some plans",
-          failed.map((p) => `${p.plan_id || "plans"}: ${p.detail ?? "no reason given"}`)
-            .join(" · "),
-        );
+      const carry = describeCarry(res.stripe_carry ?? []);
+      const problems = [
+        ...failed.map((p) => `${p.plan_id || "plans"}: ${p.detail ?? "no reason given"}`),
+        ...carry.problems,
+      ];
+      if (problems.length) {
+        toast.error("Activated, but not everything moved", problems.join(" · "));
       } else {
         toast.success(
           "Billing account activated",
-          `Plans synced to Stripe: ${created} created, ${reused} already there.`,
+          `Plans synced to Stripe: ${created} created, ${reused} already there. ${carry.line}`,
         );
       }
     } catch (err) {
@@ -168,6 +180,25 @@ export function PaymentsTab() {
       }
     } catch (err) {
       fail("Couldn't register the webhook", err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // The retry for the move that activation does by itself: a workspace whose old subscription
+  // could not be ended then (its old key was missing, or Stripe refused) is tried again.
+  async function carryOver(rowItem: PaymentCredential) {
+    setBusy(rowItem.id);
+    try {
+      const res = await api.carryStripeSubscriptions();
+      const carry = describeCarry(res.subscriptions);
+      if (carry.problems.length) {
+        toast.error(carry.line, carry.problems.join(" · "));
+      } else {
+        toast.success("Subscriptions checked", carry.line);
+      }
+    } catch (err) {
+      fail("Couldn't move the subscriptions", err);
     } finally {
       setBusy(null);
     }
@@ -348,6 +379,17 @@ export function PaymentsTab() {
                     }
                   >
                     Create webhook in Stripe
+                  </Button>
+                )}
+                {canManageStripe && r.active && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void carryOver(r)}
+                    disabled={busy !== null}
+                    title="Move subscriptions still billed in a previous Stripe account into this one"
+                  >
+                    Move subscriptions here
                   </Button>
                 )}
                 <Button

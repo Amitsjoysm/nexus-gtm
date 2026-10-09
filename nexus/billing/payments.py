@@ -46,6 +46,12 @@ class PaymentNotConfigured(PaymentError):
 CREDITS_META_KEY = "nexus_credits"
 CREDITS_ON_PAYMENT = "on_payment"
 
+#: Metadata on a subscription made in a new Stripe account to carry one over from the previous
+#: account (2026-10-09), and on the old one, naming where it went. The second is what lets a
+#: carry-over interrupted half way finish instead of starting again.
+CARRIED_FROM_KEY = "nexus_carried_from"
+CARRIED_TO_KEY = "nexus_carried_to"
+
 
 @dataclass
 class PaymentResult:
@@ -221,6 +227,29 @@ class PaymentProvider(abc.ABC):
         somebody else made for that URL (left alone, reported).
         """
         raise PaymentError(f"{self.name} cannot register a webhook endpoint")
+
+    async def default_payment_method(self, customer_id: str) -> str:
+        """The card this customer pays with in THIS account, or ''. A card reaches a new Stripe
+        account only through Stripe's own data migration; without one there is nothing to charge."""
+        return ""
+
+    async def create_carried_subscription(
+        self, *, customer_id: str, price_id: str, tenant_id: str, plan_id: str,
+        starts_at: int, trial: bool, payment_method: str, days_until_due: int,
+        carried_from: str, idempotency_key: str,
+    ) -> dict:
+        """Recreate a subscription from the previous account, first billed at ``starts_at``.
+
+        ``starts_at`` is the end of the period the customer already paid in the old account, so
+        nothing is charged twice. With ``payment_method`` the card is charged as before; without
+        one each renewal is an emailed invoice. Returns at least ``{"id", "status", "customer",
+        "collection_method", "current_period_start", "current_period_end"}``.
+        """
+        raise PaymentError(f"{self.name} cannot carry a subscription over")
+
+    async def end_carried_subscription(self, *, subscription_id: str, carried_to: str) -> dict:
+        """In the OLD account: stop renewing at period end and record where it went."""
+        raise PaymentError(f"{self.name} cannot end a carried subscription")
 
 
 class NoopPaymentProvider(PaymentProvider):
@@ -409,6 +438,36 @@ class NoopPaymentProvider(PaymentProvider):
         self.subscriptions[subscription_id] = out
         self.price_changes.append({"id": subscription_id, "price_id": price_id,
                                    "plan_id": plan_id})
+        return out
+
+    async def create_carried_subscription(
+        self, *, customer_id: str, price_id: str, tenant_id: str, plan_id: str,
+        starts_at: int, trial: bool, payment_method: str, days_until_due: int,
+        carried_from: str, idempotency_key: str,
+    ) -> dict:
+        if idempotency_key in self._subs_by_key:
+            return self._subs_by_key[idempotency_key]
+        now = int(time.time())
+        sid = f"noop_sub_{len(self._subs_by_key) + 1}"
+        out = {
+            "id": sid, "status": "trialing" if trial else "active", "customer": customer_id,
+            "price_id": price_id,
+            "collection_method": "charge_automatically" if payment_method else "send_invoice",
+            "metadata": {"tenant_id": tenant_id, "plan_id": plan_id,
+                         CARRIED_FROM_KEY: carried_from},
+            "current_period_start": now, "current_period_end": max(starts_at, now),
+        }
+        self._subs_by_key[idempotency_key] = out
+        self.subscriptions[sid] = out
+        return out
+
+    async def end_carried_subscription(self, *, subscription_id: str, carried_to: str) -> dict:
+        current = self.subscriptions.get(subscription_id) or {"id": subscription_id,
+                                                              "status": "active"}
+        out = {**current, "cancel_at_period_end": True,
+               "metadata": {**(current.get("metadata") or {}), CARRIED_TO_KEY: carried_to}}
+        self.subscriptions[subscription_id] = out
+        self.cancellations.append({"id": subscription_id, "at_period_end": True})
         return out
 
 
@@ -663,7 +722,7 @@ class StripePaymentProvider(PaymentProvider):
 
     async def object_exists(self, kind: str, object_id: str) -> bool:
         self._require()
-        if kind not in ("prices", "products", "customers"):
+        if kind not in ("prices", "products", "customers", "subscriptions"):
             raise ValueError(f"unknown object kind {kind!r}")
         try:
             obj = await self._get(f"/{kind}/{object_id}")
@@ -739,6 +798,52 @@ class StripePaymentProvider(PaymentProvider):
                 "items[0][id]": str(items[0]["id"]), "items[0][price]": price_id,
                 "proration_behavior": "always_invoice", "metadata[plan_id]": plan_id,
             },
+        )
+
+    async def default_payment_method(self, customer_id: str) -> str:
+        self._require()
+        return await self._default_payment_method(customer_id)
+
+    async def create_carried_subscription(
+        self, *, customer_id: str, price_id: str, tenant_id: str, plan_id: str,
+        starts_at: int, trial: bool, payment_method: str, days_until_due: int,
+        carried_from: str, idempotency_key: str,
+    ) -> dict:
+        self._require()
+        form: dict[str, Any] = {
+            "customer": customer_id, "items[0][price]": price_id,
+            "metadata[tenant_id]": tenant_id, "metadata[plan_id]": plan_id,
+            f"metadata[{CARRIED_FROM_KEY}]": carried_from,
+        }
+        if payment_method:
+            form.update({"collection_method": "charge_automatically",
+                         "default_payment_method": payment_method})
+        else:
+            form.update({"collection_method": "send_invoice",
+                         "days_until_due": str(int(days_until_due)),
+                         f"metadata[{CREDITS_META_KEY}]": CREDITS_ON_PAYMENT})
+        # The first bill falls where the old account's paid period ends. Stripe refuses an anchor
+        # in the past, and a period already over is simply due now, as a renewal would be.
+        if starts_at > int(time.time()) + 60:
+            if trial:
+                form["trial_end"] = str(int(starts_at))
+            else:
+                form.update({"billing_cycle_anchor": str(int(starts_at)),
+                             "proration_behavior": "none"})
+        sub = await self._post("/subscriptions", form, idempotency_key=idempotency_key)
+        return {
+            "id": str(sub.get("id", "")), "status": str(sub.get("status", "")),
+            "customer": str(sub.get("customer") or customer_id),
+            "collection_method": str(sub.get("collection_method") or form["collection_method"]),
+            "current_period_start": sub.get("current_period_start"),
+            "current_period_end": sub.get("current_period_end"),
+        }
+
+    async def end_carried_subscription(self, *, subscription_id: str, carried_to: str) -> dict:
+        self._require()
+        return await self._post(
+            f"/subscriptions/{subscription_id}",
+            {"cancel_at_period_end": "true", f"metadata[{CARRIED_TO_KEY}]": carried_to},
         )
 
     async def create_webhook_endpoint(self, *, url: str, events) -> dict:

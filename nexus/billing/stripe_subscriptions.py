@@ -146,7 +146,8 @@ async def start_subscription(ts, *, plan_id: str, method: str, days_until_due: i
         sub.current_period_end = end
     sub.meta = {**(sub.meta or {}), "collection": "send_invoice",
                 "credits_pending_plan": plan.id, "started_by": actor,
-                "started_at": utcnow().isoformat(), "psp_customer_account": account}
+                "started_at": utcnow().isoformat(), "psp_customer_account": account,
+                "psp_account": account}
     await ts.flush()
     return {"method": "invoice", "plan_id": plan.id, "status": sub.status,
             "psp_subscription_id": sub.psp_subscription_id,
@@ -177,6 +178,14 @@ async def change_stripe_plan(ts, sub, plan_id: str, *, actor: str = "system"):
     if provider.name != "stripe" and psp.startswith("sub_"):
         raise StripeSubscriptionError(
             f"This subscription is billed through Stripe ({psp}). {NO_CREDENTIAL}")
+    if provider.name == "stripe":
+        # A subscription the account switch did not carry is carried now, then repriced.
+        from nexus.billing.stripe_carryover import ensure_in_current_account
+
+        moved = await ensure_in_current_account(ts.session, sub, provider, actor=actor)
+        if moved["outcome"] in ("failed", "skipped"):
+            raise StripeSubscriptionError(str(moved.get("detail") or "It cannot be moved."))
+        psp = (sub.psp_subscription_id or "").strip()
     price_id = await plan_price_id(plan, provider)
     result = await provider.change_subscription_price(
         subscription_id=psp, price_id=price_id, plan_id=plan.id)

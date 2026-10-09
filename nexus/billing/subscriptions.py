@@ -458,7 +458,22 @@ async def cancel_subscription(ts: TenantSession, *, at_period_end: bool = True):
                 "is in force here, so cancelling it would stop nothing at Stripe. Activate the "
                 "credential on the Payments tab, or cancel it in the Stripe dashboard."
             )
-        await provider.cancel_subscription(subscription_id=psp_id, at_period_end=at_period_end)
+        from nexus.billing.payments import PaymentError
+
+        try:
+            await provider.cancel_subscription(subscription_id=psp_id,
+                                               at_period_end=at_period_end)
+        except PaymentError as exc:
+            # Not in this account: billed in a previous Stripe account the switch did not carry it
+            # from (2026-10-09). End it THERE, with the old key, or not at all.
+            if getattr(exc, "status", 0) != 404:
+                raise
+            from nexus.billing.stripe_carryover import cancel_in_previous_account
+
+            if not await cancel_in_previous_account(
+                    psp_id, at_period_end=at_period_end,
+                    current_key=getattr(provider, "secret_key", "")):
+                raise
     if at_period_end:
         sub.cancel_at_period_end = True
     else:

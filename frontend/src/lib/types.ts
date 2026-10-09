@@ -1650,6 +1650,22 @@ export interface PaymentCredential {
   active: boolean;
   /** Set only when a superadmin activates it: what syncing the plans into this account did. */
   stripe_sync?: StripeSyncRow[] | null;
+  /** Set on activation by a superadmin: subscriptions moved from the previous Stripe account. */
+  stripe_carry?: StripeCarryRow[] | null;
+}
+
+/**
+ * One workspace's subscription when the Stripe account changes: recreated in the new account
+ * (`carried`), left because it already ends (`skipped`), or not moved, with the reason.
+ */
+export interface StripeCarryRow {
+  tenant_id?: string;
+  plan_id?: string;
+  from?: string;
+  to?: string;
+  outcome: "carried" | "skipped" | "failed";
+  collection?: string;
+  detail?: string;
 }
 
 /** One plan's outcome when the plans on sale are made to exist in the Stripe account in force. */

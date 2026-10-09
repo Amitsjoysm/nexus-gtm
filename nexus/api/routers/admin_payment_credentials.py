@@ -36,8 +36,10 @@ class CredentialOut(BaseModel):
     status: str
     last_error: str
     active: bool
-    # Set only on activation by a superadmin: what syncing the plans to this account did.
+    # Set only on activation by a superadmin: what syncing the plans to this account did, and
+    # which subscriptions were carried over from the previous account.
     stripe_sync: list[dict] | None = None
+    stripe_carry: list[dict] | None = None
 
 
 class CredentialIn(BaseModel):
@@ -153,7 +155,10 @@ async def activate_payment_credential(
     # (creating objects at Stripe is superadmin-only, 2026-10-09), and checkout still creates a
     # plan's price in the new account on its first purchase.
     if STRIPE_MANAGE in await platform_permissions(principal):
+        # Plans first: a carried subscription needs its plan's price in the new account.
         out = out.model_copy(update={"stripe_sync": await _sync_plans_after_activation()})
+        out = out.model_copy(update={
+            "stripe_carry": await _carry_after_activation(principal.user_id)})
     return out
 
 
@@ -174,6 +179,21 @@ async def _sync_plans_after_activation() -> list[dict] | None:
         return report
     except PaymentError as exc:
         return [{"plan_id": "", "outcome": "failed", "detail": str(exc)[:300]}]
+
+
+async def _carry_after_activation(actor: str) -> list[dict] | None:
+    """Carry the previous account's live subscriptions into this one (2026-10-09: switching the
+    account changes only where the money goes). Never fails the activation."""
+    from nexus.billing.payments import PaymentError, resolve_payment_provider
+    from nexus.billing.stripe_carryover import carry_over_all
+
+    provider = await resolve_payment_provider()
+    if provider.name != "stripe":
+        return None
+    try:
+        return await carry_over_all(provider, actor=actor)
+    except PaymentError as exc:
+        return [{"outcome": "failed", "detail": str(exc)[:300]}]
 
 
 @router.post("/{credential_id}/webhook-endpoint", response_model=dict)

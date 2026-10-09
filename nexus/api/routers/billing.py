@@ -611,6 +611,20 @@ async def create_portal(
         )
 
     provider = await resolve_payment_provider()
+    from nexus.billing.stripe_catalog import customer_id_for
+    from nexus.billing.stripe_subscriptions import owner_email
+
+    try:
+        # After a Stripe account switch the cached customer belongs to the old account. The portal
+        # opens on this workspace's customer in the account billing NOW, found or carried over by
+        # the rule checkout uses (2026-10-09).
+        customer_id = await customer_id_for(
+            sub, provider, tenant_id=ts.tenant_id, email=await owner_email(ts)) or customer_id
+    except PaymentNotConfigured as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except PaymentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"payment provider: {exc}") from exc
+    await ts.flush()
     try:
         session_out = await provider.create_billing_portal_session(
             customer_id=customer_id,

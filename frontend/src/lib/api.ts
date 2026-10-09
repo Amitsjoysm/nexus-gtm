@@ -61,6 +61,7 @@ import type {
   CustomerRow,
   CustomerUsage,
   PaymentCredential,
+  StripeCarryRow,
   StripeSubscriptionStart,
   StripeSyncRow,
   PlatformOverview,
@@ -1867,6 +1868,12 @@ export class ApiClient {
       endpoint_id: string; url: string; events: string[]; api_version: string;
       replaced: string[]; others: string[];
     }>(`/admin/payment-credentials/${id}/webhook-endpoint`, { method: "POST" });
+  }
+  /** Move every live subscription still billed in a previous Stripe account into this one. */
+  carryStripeSubscriptions() {
+    return this.request<{ subscriptions: StripeCarryRow[] }>(
+      "/admin/billing/subscriptions/stripe-carry-over", { method: "POST" },
+    );
   }
   deletePaymentCredential(id: string) {
     return this.request<void>(`/admin/payment-credentials/${id}`, { method: "DELETE" });
