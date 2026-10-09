@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from nexus.api.deps import Principal, get_principal, require_platform_permission
 from nexus.billing.audit import record_admin_action, snapshot
 from nexus.billing.rates import CREDIT_USD
-from nexus.billing.permissions import ALL_PERMISSIONS, permissions_for_role, ADMINS_MANAGE, BILLING_READ, INVOICES_COLLECT, PRICING_WRITE, SUBSCRIPTIONS_WRITE
+from nexus.billing.permissions import ALL_PERMISSIONS, permissions_for_role, ADMINS_MANAGE, BILLING_READ, INVOICES_COLLECT, PRICING_WRITE, STRIPE_MANAGE, SUBSCRIPTIONS_WRITE
 from nexus.core.db import get_sessionmaker
 from nexus.core.tenancy import TenantSession, apply_rls
 from nexus.models.billing import (
@@ -135,15 +135,32 @@ class CreditGrantIn(BaseModel):
 async def update_plan(
     plan_id: str,
     body: PlanPatch,
-    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+    principal: Principal = Depends(require_platform_permission(STRIPE_MANAGE)),
 ) -> dict:
+    """Edit a plan. Superadmin only (2026-10-09): a plan on sale lives in Stripe, so a new name
+    renames its product and a new price on an active plan creates a new Stripe price (Stripe
+    prices are immutable; existing subscribers stay on theirs until a plan change moves them)."""
+    from nexus.billing.payments import PaymentError, resolve_payment_provider
+    from nexus.billing.stripe_catalog import apply_plan_to_provider
+
     async with get_sessionmaker()() as session:
         plan = await session.get(BillingPlan, plan_id)
         if plan is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown plan '{plan_id}'")
         before = snapshot(plan, _PLAN_FIELDS)
+        was_name, was_status = plan.name, plan.status
         for field, value in body.model_dump(exclude_unset=True).items():
             setattr(plan, field, value)
+        await session.flush()
+        try:
+            stripe = await apply_plan_to_provider(
+                plan, await resolve_payment_provider(),
+                renamed=plan.name != was_name, was_status=was_status,
+            )
+        except PaymentError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, f"Stripe refused, nothing was changed: {exc}"
+            ) from exc
         await session.flush()
         await record_admin_action(
             session, actor=principal.user_id, action="plan.update", target=plan_id,
@@ -155,6 +172,7 @@ async def update_plan(
             "base_price_cents": plan.base_price_cents,
             "seat_price_cents": plan.seat_price_cents,
             "included_credits": plan.included_credits,
+            "stripe": stripe,
         }
 
 
@@ -1067,12 +1085,13 @@ class PlanStatusIn(BaseModel):
 @router.post("/plans", status_code=status.HTTP_201_CREATED)
 async def create_sellable_plan_endpoint(
     body: SellablePlanIn,
-    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+    principal: Principal = Depends(require_platform_permission(STRIPE_MANAGE)),
 ) -> dict:
     """Create a plan the public price list can sell.
 
-    Gated on `pricing.write`, the same permission that edits a rate card: this sets a price
-    customers pay. Entitlements are cloned from `base_plan_id` rather than started empty, because
+    Superadmin only (`stripe.manage`, 2026-10-09): a plan on sale lives in Stripe, so creating one
+    active creates its Stripe product and price first, and a refusal creates nothing here.
+    Entitlements are cloned from `base_plan_id` rather than started empty, because
     `resolve_entitlement` falls back to permissive catalog defaults for anything a plan does not
     list — an empty new plan would grant nearly everything, which is the opposite of what a cheaper
     tier is for.
@@ -1106,6 +1125,20 @@ async def create_sellable_plan_endpoint(
             )
         except PlanAuthoringError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        if result.get("status") == "active":
+            from nexus.billing.payments import PaymentError, resolve_payment_provider
+            from nexus.billing.stripe_catalog import apply_plan_to_provider
+
+            plan = await session.get(BillingPlan, result["plan_id"])
+            try:
+                result["stripe"] = await apply_plan_to_provider(
+                    plan, await resolve_payment_provider())
+            except PaymentError as exc:
+                raise HTTPException(
+                    status.HTTP_502_BAD_GATEWAY,
+                    f"Stripe refused, the plan was not created: {exc}",
+                ) from exc
+            await session.flush()
         await record_admin_action(
             session, actor=principal.user_id, action="plan.create",
             target=result["plan_id"], after=result,
@@ -1118,16 +1151,19 @@ async def create_sellable_plan_endpoint(
 async def set_sellable_plan_status(
     plan_id: str,
     body: PlanStatusIn,
-    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+    principal: Principal = Depends(require_platform_permission(STRIPE_MANAGE)),
 ) -> dict:
-    """Publish a plan to the price list, or hold it.
+    """Publish a plan to the price list, or hold it. Superadmin only (2026-10-09).
 
     `draft` is the hold: the plan leaves the price list and existing subscribers are untouched,
     because entitlements resolve from the plan row rather than from what is currently on sale. That
     is the difference between holding and retiring, and it is the one an operator wants when a price
-    is wrong while customers are mid-purchase.
+    is wrong while customers are mid-purchase. Publishing makes the plan's Stripe price exist first
+    (a refusal leaves it unpublished); holding archives that price for new purchases.
     """
+    from nexus.billing.payments import PaymentError, resolve_payment_provider
     from nexus.billing.plan_authoring import PlanAuthoringError, set_plan_status
+    from nexus.billing.stripe_catalog import apply_plan_to_provider
 
     async with get_sessionmaker()() as session:
         before = await session.get(BillingPlan, plan_id)
@@ -1136,13 +1172,52 @@ async def set_sellable_plan_status(
             plan = await set_plan_status(session, plan_id, body.status)
         except PlanAuthoringError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        try:
+            stripe = await apply_plan_to_provider(
+                plan, await resolve_payment_provider(), was_status=was)
+        except PaymentError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Stripe refused, the plan was not published: {exc}",
+            ) from exc
+        await session.flush()
         await record_admin_action(
             session, actor=principal.user_id, action="plan.status",
             target=plan_id, before={"status": was}, after={"status": plan.status},
         )
         await session.commit()
         return {"plan_id": plan_id, "status": plan.status,
-                "sellable": plan.status == "active"}
+                "sellable": plan.status == "active", "stripe": stripe}
+
+
+@router.post("/plans/stripe-sync")
+async def sync_plans_to_stripe(
+    principal: Principal = Depends(require_platform_permission(STRIPE_MANAGE)),
+) -> dict:
+    """Make every plan on sale exist in the Stripe account the active key belongs to, and say
+    what was created, reused or refused. Safe to repeat: inside one account everything is
+    reused."""
+    from nexus.billing.payments import PaymentError, resolve_payment_provider
+    from nexus.billing.stripe_catalog import current_account, sync_plans
+
+    provider = await resolve_payment_provider()
+    if provider.name != "stripe":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "No Stripe credential is in force. Add and activate one on the Payments tab first.",
+        )
+    async with get_sessionmaker()() as session:
+        try:
+            account = await current_account(provider)
+        except PaymentError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Stripe refused: {exc}") from exc
+        report = await sync_plans(session, provider, account=account)
+        await record_admin_action(
+            session, actor=principal.user_id, action="plan.stripe_sync", target=account,
+            after={"plans": report},
+        )
+        await session.commit()
+    return {"account": account, "plans": report}
 
 
 # ---- cost rates ----------------------------------------------------------------------------------

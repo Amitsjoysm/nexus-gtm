@@ -269,19 +269,32 @@ async def test_creating_a_plan_is_audited(client, monkeypatch):
     assert "plan.status" in actions
 
 
-async def test_no_stripe_object_is_created_for_a_plan_nobody_has_bought(client, monkeypatch):
-    """Matches the seeded plans: `create_checkout` calls `ensure_plan_price` on first purchase and
-    caches the id. Publishing a price for a draft would litter the Stripe account with products for
-    tiers that were never sold."""
+async def test_a_draft_creates_nothing_at_stripe(client, monkeypatch):
+    """A draft is not for sale, so it must not litter the Stripe account with products."""
     from nexus.billing.payments import NoopPaymentProvider, set_payment_provider
 
     provider = NoopPaymentProvider()
     set_payment_provider(provider)
     try:
         token = await _superadmin(client, monkeypatch, slug="pa20", email="boss@pa20.com")
-        await client.post("/api/admin/billing/plans", headers=auth(token),
-                          json=_plan(status="active"))
+        await client.post("/api/admin/billing/plans", headers=auth(token), json=_plan())
         assert provider.prices == {}
+    finally:
+        set_payment_provider(None)
+
+
+async def test_a_plan_created_on_sale_exists_at_stripe(client, monkeypatch):
+    """Decided 2026-10-09: plans live in Stripe, so a plan on sale is always buyable."""
+    from nexus.billing.payments import NoopPaymentProvider, set_payment_provider
+
+    provider = NoopPaymentProvider()
+    set_payment_provider(provider)
+    try:
+        token = await _superadmin(client, monkeypatch, slug="pa20b", email="boss@pa20b.com")
+        r = await client.post("/api/admin/billing/plans", headers=auth(token),
+                              json=_plan(status="active"))
+        assert r.status_code == 201, r.text
+        assert "scale" in provider.prices
     finally:
         set_payment_provider(None)
 

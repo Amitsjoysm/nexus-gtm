@@ -255,10 +255,10 @@ async def create_sellable_plan(
         session, base_price_cents=base_price_cents, included_credits=included_credits,
     )
 
-    # **No Stripe object is created here.** `create_checkout` calls `ensure_plan_price` on first
-    # purchase and caches the id into `plan.meta`, which is the documented behaviour for seeded
-    # plans. Publishing a price for a draft nobody has bought would litter the Stripe account with
-    # products for tiers that were never sold.
+    # **No Stripe object is created here.** A draft is not for sale, and pricing one would litter
+    # the Stripe account with products for tiers that were never sold. A plan created or published
+    # ON SALE is made to exist at Stripe by the endpoint (`stripe_catalog.apply_plan_to_provider`,
+    # decided 2026-10-09), so a plan on the price list is always buyable.
     return {
         "plan_id": plan_id,
         "status": plan.status,

@@ -50,6 +50,10 @@ class PlanOut(BaseModel):
     trial_days: int
     sort_order: int
     entitlement_count: int
+    # Which Stripe price and account the plan's cached id belongs to ('' when it has none). The
+    # Plans tab compares the account with the active credential's (2026-10-09).
+    stripe_price_id: str = ""
+    stripe_account: str = ""
 
 
 @router.get("/plans/{plan_id}/entitlements")
@@ -162,6 +166,8 @@ async def list_plans(
             included_credits=p.included_credits, max_seats=p.max_seats,
             trial_days=p.trial_days, sort_order=p.sort_order,
             entitlement_count=int(counts.get(p.id, 0)),
+            stripe_price_id=str((p.meta or {}).get("price_id") or ""),
+            stripe_account=str((p.meta or {}).get("price_account") or ""),
         )
         for p in plans
     ]

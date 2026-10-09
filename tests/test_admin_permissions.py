@@ -106,15 +106,21 @@ async def test_support_can_still_read_the_console(client, monkeypatch):
     assert (await client.get("/api/admin/billing/rates", headers=auth(support))).status_code == 200
 
 
-async def test_finance_can_reprice_but_not_manage_admins(client, monkeypatch):
+async def test_finance_can_set_rates_but_not_plans_or_admins(client, monkeypatch):
     boss = await _bootstrap_admin(client, monkeypatch, "rb3")
     finance = await _make_role(client, boss, "cfo@nexus.com", "finance", "rb3s")
 
-    ok = await client.patch(
+    # Plans are superadmin-only since 2026-10-09 (they live in Stripe). Rate cards stay Finance's.
+    plan_edit = await client.patch(
         "/api/admin/billing/plans/starter", headers=auth(finance),
         json={"base_price_cents": 4200},
     )
-    assert ok.status_code == 200, ok.text
+    assert plan_edit.status_code == 403
+    rate = await client.put(
+        "/api/admin/billing/rates/ai.research", headers=auth(finance),
+        json={"credits_per_unit": 50},
+    )
+    assert rate.status_code != 403, rate.text
 
     denied = await client.post(
         "/api/admin/billing/admins", headers=auth(finance),
