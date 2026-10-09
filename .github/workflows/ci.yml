@@ -60,7 +60,7 @@ jobs:
       - name: pytest (parallel, bounded) + coverage gate
         # Coverage floor starts conservative; ratchet it up as the suite grows.
         run: >
-          pytest -n auto -p no:cacheprovider --timeout=120 -q
+          pytest -n auto -p no:cacheprovider --timeout=120 -o timeout_method=signal -q --durations=25
           --cov=nexus --cov-report=term-missing --cov-report=xml --cov-fail-under=60
       - uses: actions/upload-artifact@v4
         if: always()
@@ -94,7 +94,7 @@ jobs:
         env:
           NEXUS_TEST_POSTGRES_URL: postgresql+asyncpg://nexus:nexus@localhost:5432/nexus
           NEXUS_TEST_REDIS_URL: redis://localhost:6379/0
-        run: pytest tests_integration -p no:cacheprovider --timeout=120 -q
+        run: pytest tests_integration -p no:cacheprovider --timeout=120 -o timeout_method=signal -q
 
   # ---------- Quality gate: frontend build ----------
   frontend:

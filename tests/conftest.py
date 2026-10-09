@@ -24,6 +24,13 @@ _TMPDIR = tempfile.mkdtemp(prefix="nexus_test_")
 # one worker wipe another's tables mid-test. ``PYTEST_XDIST_WORKER`` is unset on a serial run →
 # a single "test_main.db"; under xdist each worker gets "test_gw0.db", "test_gw1.db", ….
 _WORKER_ID = os.environ.get("PYTEST_XDIST_WORKER", "main")
+# Start from NO inherited deployment settings. A CI variable group or a developer's shell can export
+# NEXUS_* values (a queue backend of redis, a staging database or Redis URL, a verifier or fetch
+# service), and every one the pins below do not name reached get_settings(), so a unit test could
+# block on a real service. Azure's CI loads a variable group into every step and froze part way
+# through the suite (2026-10-09). NEXUS_TEST_* belong to tests_integration and stay.
+for _name in [k for k in os.environ if k.startswith("NEXUS_") and not k.startswith("NEXUS_TEST_")]:
+    del os.environ[_name]
 os.environ["NEXUS_DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMPDIR}/test_{_WORKER_ID}.db"
 os.environ["NEXUS_ENV"] = "test"
 os.environ["NEXUS_LLM_PROVIDER"] = "stub"

@@ -243,13 +243,18 @@ stages:
               #
               # `set +e` is scoped to the two pytest calls alone; `exit "$RC"` restores the real
               # result, so a failing suite still fails this step. Measured 2026-09-10.
+              # A test that blocks past --timeout used to freeze the whole run: pyproject's
+              # timeout_method is "thread" (Windows has no SIGALRM), which kills the WORKER, and
+              # pytest-xdist then waits forever with no summary (2026-10-09: "stuck at 52%").
+              # On Linux SIGALRM fails just that test with its traceback and the run finishes.
+              # --durations names the slowest, so a creeping test is visible before it times out.
               set +e
               if [ "${BUILD_REASON}" = "PullRequest" ]; then
-                pytest -n auto -p no:cacheprovider --timeout=120 -q \
-                  --junitxml=junit-unit.xml
+                pytest -n auto -p no:cacheprovider --timeout=120 -o timeout_method=signal -q \
+                  --durations=25 --junitxml=junit-unit.xml
               else
-                pytest -n auto -p no:cacheprovider --timeout=120 -q \
-                  --junitxml=junit-unit.xml \
+                pytest -n auto -p no:cacheprovider --timeout=120 -o timeout_method=signal -q \
+                  --durations=25 --junitxml=junit-unit.xml \
                   --cov=nexus --cov-report=xml --cov-report=term-missing --cov-fail-under=60
               fi
               RC=$?
@@ -264,7 +269,7 @@ stages:
           # the same variables the GitHub workflow used, so tests_integration/conftest.py needs no change.
           - bash: |
               set -euo pipefail
-              pytest tests_integration -p no:cacheprovider --timeout=120 -q \
+              pytest tests_integration -p no:cacheprovider --timeout=120 -o timeout_method=signal -q \
                 --junitxml=junit-integration.xml
             env:
               NEXUS_TEST_POSTGRES_URL: postgresql+asyncpg://nexus:nexus@localhost:5432/nexus
