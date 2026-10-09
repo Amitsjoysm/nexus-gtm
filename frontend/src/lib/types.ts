@@ -1223,6 +1223,27 @@ export interface CRMConnectionTest {
   detail: string;
 }
 
+/** A tenant's own sequence-platform connection. The API key is never returned. */
+export interface SEPConnection {
+  provider: string;
+  /** "default" means pushes are recorded by the stub, not delivered. */
+  source: "tenant" | "default";
+  has_credentials: boolean;
+  status: "none" | "unverified" | "connected" | "error";
+  verified_at: string | null;
+  last_error: string | null;
+  updated_at: string | null;
+}
+
+export interface SEPConnectionInput {
+  provider: string;
+  api_key?: string | null;
+}
+
+export interface OAuthStart {
+  authorize_url: string;
+}
+
 // ---- live dashboard activity feed ----
 export type ActivityKind = "signal" | "alert" | "account_scored" | "agent_run";
 export type ActivityTone = "neutral" | "info" | "success" | "warning" | "critical";

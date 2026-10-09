@@ -148,6 +148,9 @@ import type {
   CRMConnection,
   CRMConnectionInput,
   CRMConnectionTest,
+  OAuthStart,
+  SEPConnection,
+  SEPConnectionInput,
   CRMPushResponse,
   CRMSyncRequest,
   CRMSyncResponse,
@@ -902,6 +905,38 @@ export class ApiClient {
       method: "DELETE",
       signal,
     });
+  }
+
+  // ---- per-tenant SEP connection (admin only) ----
+  sepConnection(signal?: AbortSignal) {
+    return this.request<SEPConnection>("/integrations/sep/connection", { signal });
+  }
+  setSepConnection(body: SEPConnectionInput, signal?: AbortSignal) {
+    return this.request<SEPConnection>("/integrations/sep/connection", {
+      method: "PUT",
+      body,
+      signal,
+    });
+  }
+  testSepConnection(signal?: AbortSignal) {
+    return this.request<CRMConnectionTest>("/integrations/sep/connection/test", {
+      method: "POST",
+      signal,
+    });
+  }
+  clearSepConnection(signal?: AbortSignal) {
+    return this.request<void>("/integrations/sep/connection", {
+      method: "DELETE",
+      signal,
+    });
+  }
+
+  /** Where to send the browser to authorize this deployment's app. 400s when unconfigured. */
+  oauthStart(kind: "crm" | "sep", provider: string, signal?: AbortSignal) {
+    return this.request<OAuthStart>(
+      `/integrations/${kind}/oauth/${provider}/start`,
+      { signal },
+    );
   }
 
   // ---- inbox ----

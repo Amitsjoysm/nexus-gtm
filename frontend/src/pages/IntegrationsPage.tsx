@@ -24,6 +24,7 @@ import type {
   CRMAccountInput,
   CRMConnection,
   CRMSyncResponse,
+  SEPConnection,
   SEPPushResponse,
   TelephonyConnection,
 } from "@/lib/types";
@@ -61,7 +62,7 @@ export function IntegrationsPage() {
       />
       <div className={styles.grid}>
         <CrmConnectionCard />
-        <SepCard />
+        <SepConnectionCard />
         <TelephonyCard />
         {/* Alert channels sit here rather than in Settings because this is the page about
             connecting other people's systems, and connecting one is a workspace decision. Choosing
@@ -390,6 +391,258 @@ function CrmPullPanel({ connected, provider }: { connected: boolean; provider: s
   );
 }
 
+/** Sequence platforms. Outreach is OAuth-only — there is no API key to paste. */
+const SEP_PROVIDERS: { value: string; label: string }[] = [
+  { value: "salesloft", label: "Salesloft" },
+  { value: "outreach", label: "Outreach" },
+];
+
+function sepChip(c: SEPConnection): { tone: "success" | "warning" | "danger" | "neutral"; text: string } {
+  if (c.source === "default") return { tone: "neutral", text: "Not connected" };
+  if (c.status === "connected") return { tone: "success", text: "Connected" };
+  if (c.status === "error") return { tone: "danger", text: "Connection error" };
+  return { tone: "warning", text: "Not verified" };
+}
+
+function SepConnectionCard() {
+  const api = useApiClient();
+  const toast = useToast();
+  const state = useApi<SEPConnection>((signal) => api.sepConnection(signal), []);
+  const [provider, setProvider] = useState("salesloft");
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  const conn = state.data;
+  const oauthOnly = provider === "outreach";
+
+  async function onSave(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.setSepConnection({ provider, api_key: apiKey.trim() || null });
+      setApiKey("");
+      state.refetch();
+      toast.success("Sequence platform saved", "Run a connection test to verify it.");
+    } catch (err) {
+      toast.error("Couldn't save", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onTest() {
+    setTesting(true);
+    try {
+      const res = await api.testSepConnection();
+      state.refetch();
+      if (res.ok) toast.success("Connection verified", res.label || res.detail);
+      else toast.error("Connection failed", res.detail);
+    } catch (err) {
+      toast.error("Test failed", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function onClear() {
+    try {
+      await api.clearSepConnection();
+      setConfirmClear(false);
+      setApiKey("");
+      state.refetch();
+      toast.success("Disconnected", "Pushes are recorded, not delivered, until you reconnect.");
+    } catch (err) {
+      toast.error("Couldn't disconnect", err instanceof ApiError ? err.detail : "Please try again.");
+    }
+  }
+
+  const chip = conn ? sepChip(conn) : null;
+
+  return (
+    <Card padding="lg" className={styles.card}>
+      <div className={styles.cardHead}>
+        <span className={styles.cardIcon} aria-hidden="true">
+          <Icons.SendIcon />
+        </span>
+        <div className={styles.cardHeadText}>
+          <h2 className={styles.cardTitle}>Sequence platform</h2>
+          <p className={styles.cardDesc}>
+            Connect Salesloft or Outreach so plays and the orchestrator enroll real prospects.
+          </p>
+        </div>
+        {chip && (
+          <Badge tone={chip.tone} dot>
+            {chip.text}
+          </Badge>
+        )}
+      </div>
+
+      {state.loading && (
+        <div className={styles.form} aria-busy="true">
+          <Skeleton height={60} />
+          <Skeleton height={60} />
+        </div>
+      )}
+
+      {state.error && (
+        <ErrorState
+          title="Couldn't load the sequence platform"
+          message={state.error.detail}
+          onRetry={state.refetch}
+          compact
+        />
+      )}
+
+      {conn && !state.loading && (
+        <>
+          {conn.source === "default" && (
+            <p className={styles.okNote} role="status">
+              Not connected: sequence pushes are recorded for review, not delivered.
+            </p>
+          )}
+
+          <form className={styles.form} onSubmit={onSave} noValidate>
+            <Field label="Platform">
+              <Select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                options={SEP_PROVIDERS}
+              />
+            </Field>
+
+            {oauthOnly ? (
+              <p className={styles.okNote}>
+                Outreach connects with OAuth, so there is no API key to paste.
+              </p>
+            ) : (
+              <Field
+                label="API key"
+                required={!conn.has_credentials}
+                hint={
+                  conn.has_credentials
+                    ? "A key is saved. Leave this blank to keep it."
+                    : "In Salesloft: Settings → Integrations → API."
+                }
+              >
+                <Input
+                  type="password"
+                  autoComplete="off"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={conn.has_credentials ? "••••••••  (saved)" : "Paste your API key"}
+                />
+              </Field>
+            )}
+
+            {conn.last_error && (
+              <p className={styles.errorNote} role="status">
+                {conn.last_error}
+              </p>
+            )}
+            {conn.status === "connected" && conn.verified_at && (
+              <p className={styles.okNote} role="status">
+                Last verified {new Date(conn.verified_at).toLocaleString()}.
+              </p>
+            )}
+
+            <div className={styles.actions}>
+              <div className={styles.actionGroup}>
+                {oauthOnly ? (
+                  <OAuthConnectButton kind="sep" provider="outreach" label="Connect Outreach" />
+                ) : (
+                  <Button type="submit" loading={saving}>
+                    Save credentials
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  iconLeft={<Icons.ShieldCheckIcon />}
+                  loading={testing}
+                  onClick={onTest}
+                >
+                  Test connection
+                </Button>
+              </div>
+              {conn.source === "tenant" && (
+                <Button type="button" variant="ghost" onClick={() => setConfirmClear(true)}>
+                  Disconnect
+                </Button>
+              )}
+            </div>
+          </form>
+
+          <details className={styles.advanced}>
+            <summary className={styles.summary}>Push a contact manually</summary>
+            <ManualSepPushForm />
+          </details>
+        </>
+      )}
+
+      <Modal
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        title="Disconnect sequence platform?"
+        description="Stored credentials are deleted. Pushes go back to being recorded for review instead of delivered."
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmClear(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={onClear}>
+              Disconnect
+            </Button>
+          </>
+        }
+      >
+        <p>You will need the credentials again to reconnect.</p>
+      </Modal>
+    </Card>
+  );
+}
+
+/**
+ * Starts an OAuth flow. The authorize URL is fetched rather than linked directly, because the
+ * endpoint is bearer-authenticated and 400s when this deployment has no app registered — so a
+ * plain link would send the admin to a vendor error page instead of telling them what is wrong.
+ */
+function OAuthConnectButton({
+  kind,
+  provider,
+  label,
+}: {
+  kind: "crm" | "sep";
+  provider: string;
+  label: string;
+}) {
+  const api = useApiClient();
+  const toast = useToast();
+  const [starting, setStarting] = useState(false);
+
+  async function onConnect() {
+    setStarting(true);
+    try {
+      const { authorize_url } = await api.oauthStart(kind, provider);
+      window.location.href = authorize_url;
+    } catch (err) {
+      toast.error(
+        `Can't connect ${provider}`,
+        err instanceof ApiError ? err.detail : "Please try again.",
+      );
+      setStarting(false);
+    }
+  }
+
+  return (
+    <Button type="button" loading={starting} onClick={onConnect} iconLeft={<Icons.PlugIcon />}>
+      {label}
+    </Button>
+  );
+}
+
 function ManualImportForm() {
   const api = useApiClient();
   const toast = useToast();
@@ -544,7 +797,7 @@ function ManualImportForm() {
   );
 }
 
-function SepCard() {
+function ManualSepPushForm() {
   const api = useApiClient();
   const toast = useToast();
   const [sequence, setSequence] = useState("");
@@ -578,20 +831,7 @@ function SepCard() {
   }
 
   return (
-    <Card padding="lg" className={styles.card}>
-      <div className={styles.cardHead}>
-        <span className={styles.cardIcon} aria-hidden="true">
-          <Icons.SendIcon />
-        </span>
-        <div>
-          <h2 className={styles.cardTitle}>Sequence push</h2>
-          <p className={styles.cardDesc}>
-            Enroll a contact into an Outreach or Salesloft sequence by email.
-          </p>
-        </div>
-      </div>
-
-      <form className={styles.form} onSubmit={onPush} noValidate>
+    <form className={styles.form} onSubmit={onPush} noValidate>
         <Field label="Sequence" required>
           <Input
             value={sequence}
@@ -632,7 +872,6 @@ function SepCard() {
           </div>
         )}
       </form>
-    </Card>
   );
 }
 
