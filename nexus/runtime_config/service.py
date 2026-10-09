@@ -221,6 +221,9 @@ _VALIDATORS = {
     "fetch_service_url": _validate_fetch_url,
     "billing_dunning_schedule_days": _validate_dunning_schedule,
     "engagement_public_base_url": _validate_public_base_url,
+    # Same rules: an origin, https outside a local stack, no private host. Stripe redirects
+    # customers to it and posts webhooks to it.
+    "app_base_url": _validate_public_base_url,
     "engagement_google_client_id": _validate_google_client_id,
     "engagement_google_pubsub_topic": _validate_pubsub_topic,
     "engagement_google_push_service_account": _validate_service_account,

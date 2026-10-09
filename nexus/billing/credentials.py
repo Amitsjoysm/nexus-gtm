@@ -167,6 +167,26 @@ async def activate_credential(credential_id: str) -> PaymentCredential:
     return row
 
 
+async def set_webhook_secret(credential_id: str, webhook_secret: str) -> PaymentCredential:
+    """Store the signing secret of a webhook endpoint registered for this credential's account.
+
+    The one field that may change after a credential is added: it belongs to the endpoint, not to
+    the key, and registering the endpoint from the panel (2026-10-09) is what produces it. Sealed
+    like the key, and returned by nothing.
+    """
+    webhook_secret = (webhook_secret or "").strip()
+    if not webhook_secret.startswith("whsec_"):
+        raise CredentialError("that is not a Stripe webhook signing secret")
+    async with get_platform_sessionmaker()() as s:
+        row = await s.get(PaymentCredential, credential_id)
+        if row is None:
+            raise CredentialError("no such credential")
+        row.webhook_secret_encrypted = seal_text(webhook_secret)
+        await s.commit()
+        await s.refresh(row)
+        return row
+
+
 async def deactivate_credential(credential_id: str) -> PaymentCredential | None:
     """Stop billing with this credential. Never refused — during an incident "stop taking money
     with this account" must not be blocked by a state machine."""

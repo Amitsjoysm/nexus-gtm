@@ -213,6 +213,15 @@ class PaymentProvider(abc.ABC):
         """Move a one-item subscription to ``price_id`` now, invoicing the prorated difference."""
         raise PaymentError(f"{self.name} cannot change a subscription's price")
 
+    async def create_webhook_endpoint(self, *, url: str, events) -> dict:
+        """Register this deployment's webhook in the account and return its signing secret.
+
+        Returns ``{"id", "url", "secret", "replaced", "others"}``: ``replaced`` are endpoints NEXUS
+        made earlier for the same URL (removed, their secrets are lost), ``others`` are endpoints
+        somebody else made for that URL (left alone, reported).
+        """
+        raise PaymentError(f"{self.name} cannot register a webhook endpoint")
+
 
 class NoopPaymentProvider(PaymentProvider):
     """Offline default. Records intent, moves no money, never fails.
@@ -406,6 +415,10 @@ class NoopPaymentProvider(PaymentProvider):
 #: Stamped on the portal configuration NEXUS creates, so it is found again rather than duplicated.
 #: Bump the suffix if the configuration's features ever change: a new tag creates a new one.
 PORTAL_CONFIG_TAG = "no_plan_switch_v1"
+
+#: Stamped on the webhook endpoint NEXUS registers, so a later registration for the same URL can
+#: find and replace its own endpoint and never touch one somebody made by hand.
+WEBHOOK_TAG = "billing_webhook_v1"
 
 #: Configuration id per Stripe account, keyed by a hash of the secret key (never the key itself).
 #: A provider instance is rebuilt every 30s, so the cache lives at module level.
@@ -727,6 +740,37 @@ class StripePaymentProvider(PaymentProvider):
                 "proration_behavior": "always_invoice", "metadata[plan_id]": plan_id,
             },
         )
+
+    async def create_webhook_endpoint(self, *, url: str, events) -> dict:
+        self._require()
+        listed = (await self._get("/webhook_endpoints?limit=100")).get("data") or []
+        same_url = [e for e in listed if str(e.get("url") or "") == url]
+        ours = [str(e["id"]) for e in same_url
+                if (e.get("metadata") or {}).get("nexus") == WEBHOOK_TAG]
+        others = [str(e["id"]) for e in same_url
+                  if (e.get("metadata") or {}).get("nexus") != WEBHOOK_TAG]
+        form: dict[str, Any] = {
+            "url": url,
+            # Pinned to the version this client sends: the handler reads subscription period
+            # dates and an invoice's subscription and payment fields in this shape, and later
+            # versions moved them. A new account defaults to a later version.
+            "api_version": self.API_VERSION,
+            "description": "NEXUS billing",
+            "metadata[nexus]": WEBHOOK_TAG,
+        }
+        for i, event in enumerate(events):
+            form[f"enabled_events[{i}]"] = event
+        created = await self._post("/webhook_endpoints", form)
+        # Ours, for the same URL, made earlier: its secret is unknown here, so it can only ever
+        # answer 400 and fill the Stripe dashboard with failed deliveries. Removed only AFTER the
+        # new one exists, so a failure leaves the old setup exactly as it was.
+        for endpoint_id in ours:
+            try:
+                await self._request("DELETE", f"/webhook_endpoints/{endpoint_id}")
+            except PaymentError as exc:
+                logger.warning("could not remove old webhook endpoint %s: %s", endpoint_id, exc)
+        return {"id": str(created.get("id") or ""), "url": str(created.get("url") or url),
+                "secret": str(created.get("secret") or ""), "replaced": ours, "others": others}
 
     async def refund(
         self, *, reference: str, amount_cents: int, idempotency_key: str

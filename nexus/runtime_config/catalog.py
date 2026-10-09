@@ -679,6 +679,27 @@ _SPECS: tuple[SettingSpec, ...] = (
                 "customer. Read the would_block counter before flipping this.",
         risk="high", options=("off", "shadow", "on"),
     ),
+    # A Stripe account switch needs these two and nothing else outside the Payments tab, so they
+    # are here rather than in the deployment environment (asked 2026-10-09).
+    SettingSpec(
+        key="app_base_url", label="App public address", group=BILLING, kind="str",
+        effect="The https origin customers use. Stripe Checkout and the billing portal return "
+               "here, the Stripe webhook URL is built from it, and password-reset emails link "
+               "to it.",
+        warning="A wrong address sends customers to another origin after paying, where they "
+                "look logged out, and a webhook created from it can never be reached. Use the "
+                "exact address people open, with no path.",
+        risk="high", placeholder="https://gtm.example.com",
+    ),
+    SettingSpec(
+        key="stripe_automatic_tax", label="Stripe Tax at Checkout", group=BILLING, kind="bool",
+        effect="Asks Stripe to calculate sales tax or VAT at Checkout, and makes Checkout collect "
+               "a billing address.",
+        warning="Stripe refuses every Checkout with this on unless Stripe Tax is set up in that "
+                "Stripe account (origin address and registrations). Set it up there first, and "
+                "again after switching accounts.",
+        risk="high",
+    ),
     SettingSpec(
         key="billing_dunning_enabled", label="Dunning retries", group=BILLING, kind="bool",
         effect="Retries failed collections on a schedule and escalates to past-due.",

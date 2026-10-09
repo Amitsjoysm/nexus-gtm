@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from nexus.api.deps import Principal, require_platform_permission
 from nexus.billing.audit import record_admin_action
-from nexus.billing.permissions import PRICING_WRITE
+from nexus.billing.permissions import PRICING_WRITE, STRIPE_MANAGE
 from nexus.core.db import get_platform_sessionmaker
 
 router = APIRouter(prefix="/admin/payment-credentials", tags=["admin-payments"])
@@ -174,6 +174,60 @@ async def _sync_plans_after_activation() -> list[dict] | None:
         return report
     except PaymentError as exc:
         return [{"plan_id": "", "outcome": "failed", "detail": str(exc)[:300]}]
+
+
+@router.post("/{credential_id}/webhook-endpoint", response_model=dict)
+async def register_webhook_endpoint(
+    credential_id: str,
+    principal: Principal = Depends(require_platform_permission(STRIPE_MANAGE)),
+) -> dict:
+    """Register this deployment's Stripe webhook in the credential's account and keep its secret.
+
+    Replaces the hand-made step in the Stripe dashboard that every account switch needed: the URL
+    comes from the app's public address, the API version is pinned to the one the handler reads,
+    the events are exactly the ones it handles, and the signing secret goes straight onto this
+    credential, sealed, without anyone copying it. Uses the credential's OWN key, so a new
+    account can be set up completely before it is activated. Superadmin only (2026-10-09).
+    """
+    from nexus.billing.credentials import CredentialError, secret_for, set_webhook_secret
+    from nexus.billing.payments import PaymentError, StripePaymentProvider
+    from nexus.billing.webhooks import HANDLED_EVENTS
+    from nexus.core.config import get_settings
+    from nexus.models.payment_credential import PaymentCredential
+    from nexus.runtime_config.service import _validate_public_base_url
+
+    base = (get_settings().app_base_url or "").strip().rstrip("/")
+    try:
+        _validate_public_base_url(base)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Set the app's public address (Configuration, Billing) first: Stripe posts the "
+            f"webhook there. {exc}",
+        ) from exc
+    async with get_platform_sessionmaker()() as session:
+        row = await session.get(PaymentCredential, credential_id)
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such credential")
+        try:
+            key = await secret_for(row)
+        except CredentialError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    url = f"{base}/api/billing/webhooks/stripe"
+    try:
+        created = await StripePaymentProvider(key).create_webhook_endpoint(
+            url=url, events=HANDLED_EVENTS)
+        await set_webhook_secret(credential_id, created["secret"])
+    except PaymentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Stripe refused: {exc}") from exc
+    except CredentialError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"Stripe returned no usable signing secret: {exc}") from exc
+    result = {"endpoint_id": created["id"], "url": url, "events": sorted(HANDLED_EVENTS),
+              "api_version": StripePaymentProvider.API_VERSION,
+              "replaced": created["replaced"], "others": created["others"]}
+    await _audit(principal, "payment_credential.webhook_endpoint", credential_id, result)
+    return result
 
 
 @router.post("/{credential_id}/deactivate", response_model=CredentialOut)
