@@ -2935,3 +2935,25 @@ Expected: every stage green. Report any red stage with its output; do not land o
 checkout, confirm it has no uncommitted edits besides the untracked Stripe guide, then
 `git merge --ff-only feat/stripe-managed-plans` (rebase the branch onto master first if master
 moved). Do not push or deploy without the user's go-ahead.
+
+---
+
+## Added after approval (2026-10-09)
+
+Two requests arrived while the plan was being executed; both were built test-first in this branch.
+
+**A. Everything an account switch needs is in the panel** ("whether any other setting or keys
+needed when we switch account ... add those in superadmin panel"). Runtime settings `app_base_url`
+and `stripe_automatic_tax` (Configuration, Billing); `POST /admin/payment-credentials/{id}/webhook-
+endpoint` and the Payments tab's "Create webhook in Stripe", which registers the endpoint in that
+credential's account, pinned to the handled API version and events, and seals its signing secret.
+Tests: `tests/test_stripe_switch_setup.py`.
+
+**B. The old account's subscriptions move with the switch** ("if switch only payment collection
+destination should change ... the old one should come to new"). `nexus/billing/stripe_carryover.py`
+recreates every live subscription in the new account, first billed where the old paid period ends,
+by card when the new account holds one and by emailed invoice otherwise, and ends the old one with
+the old key; activation runs it, plan change and cancel apply it to a missed one, the portal opens
+on the new account's customer, and "Move subscriptions here" retries. A subscription left in a
+previous account answers with what to do (`in_previous_account`) only when nothing could move it.
+Tests: `tests/test_stripe_carry_over.py`.

@@ -242,7 +242,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0066_page_visibility`. The chain is
+Alembic under `migrations/versions/`. Head: `0067_stripe_manage`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -260,7 +260,8 @@ ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_
 `tenants.platform_caller_id`) -> `0062` (`web_cache`, platform-global) -> `0063` (LinkedIn
 fields on `companies`, `company_countries` and `prospect_cursors`, all platform-global;
 `prospect_runs`, tenant-scoped) -> `0064` (`prospect_lists.kind`, `prospect_lists.archived_at`) ->
-`0065` (`provider_settings.base_url`) -> `0066` (`page_visibility`, platform-global). Every tenant-scoped table gets RLS via
+`0065` (`provider_settings.base_url`) -> `0066` (`page_visibility`, platform-global) -> `0067` (`platform_admins` backfill of
+`stripe.manage`, no DDL). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -627,16 +628,21 @@ it. `POST /admin/billing/plans` closes that; `PUT .../status` publishes or holds
 - **The margin check warns, it does not block**, unlike `rates.validate_rate`. A rate card below cost
   loses money on every call; a plan priced under the cost of its own credits is a normal commercial
   decision, and a hard floor would refuse the `free` tier that already exists.
-- **No Stripe object is created.** `create_checkout` calls `ensure_plan_price` on first purchase, so
-  a draft nobody bought does not litter the Stripe account with products.
+- **A draft creates nothing at Stripe; putting a plan on sale creates its price** (2026-10-09). A
+  draft nobody publishes does not litter the Stripe account. Publishing, or editing a plan that is
+  on sale, runs `stripe_catalog.apply_plan_to_provider` before the commit: a price the plan needs
+  and Stripe refuses is a 502 and nothing changes, while archiving on hold and renaming the product
+  only warn. See *Stripe-managed plans and subscriptions* below.
 
 **The Plans tab is where this is used** (`admin/PlanDialog.tsx`, 2026-10-01). For five weeks the
 server half had no screen: the tab offered only "What's included", the API client carried an
 `updatePlan` nobody called, and an operator reported "I can view plans but cannot edit or add one"
 as a regression. "New plan" creates a draft cloned from a chosen plan; "Edit" PATCHes only the fields
 that changed and never `status`; "Publish"/"Hold" use `PUT .../status` and appear only on standard
-plans in draft or active, the one case the server allows. All behind `pricing.write`. In
-Subscriptions the plan change sat behind "Manage"; it reads "Change plan" for `subscriptions.write`.
+plans in draft or active, the one case the server allows. New plan, Edit and Publish/Hold need
+`stripe.manage` (superadmin only, since 2026-10-09, because each one writes to Stripe); "What's
+included" stays on `pricing.write`. In Subscriptions the plan change sat behind "Manage"; it reads
+"Change plan" for `subscriptions.write`.
 `tests/test_plan_authoring_ui.py`.
 
 **A changed price is the price checkout charges** (2026-10-02, found while adding Edit). Checkout
@@ -709,6 +715,84 @@ synchronous callers and for `set_payment_provider` test injection, which always 
 
 `stripe_publishable_key` is read with `getattr` — Settings has no such field, because the publishable
 key has never been needed server-side.
+
+## Stripe-managed plans and subscriptions (`nexus/billing/stripe_catalog.py`, `stripe_subscriptions.py`)
+
+Reported 2026-10-09 as "product id not available" after a new Stripe credential was added.
+Production had moved from a test key to a live key and staging to a new test account, and checkout
+reused the price, product and customer ids cached in `billing_plans.meta` and
+`billing_subscriptions.psp_customer_id` without knowing which account made them, so the new account
+answered "No such price". Spec and plan: `docs/superpowers/{specs,plans}/2026-10-09-stripe-managed-plans*`.
+
+- **An id is reused only inside the account it was made in.** `meta.price_account` and
+  `sub.meta.psp_customer_account` record it (`provider.account_id()`, cached per key). A cache from
+  before that is asked about once (`object_exists`; a 404 means another account). Ids from another
+  account move to `previous_stripe` / `previous_psp_customers`, never deleted. `plan_price_id` and
+  `customer_id_for` are the only readers; checkout and `collect_invoice` both go through them.
+- **NEXUS is the catalog** (decided with the product owner). Activating a credential as a
+  superadmin runs `sync_plans`, which creates every plan on sale in that account and returns
+  created / reused / failed per plan; "Sync to Stripe" on the Plans tab runs it on demand. Within one
+  account a plan keeps one product, and a changed amount, currency or interval makes a new price and
+  archives the old one (subscriptions on it keep billing).
+- **Everything that writes to Stripe needs `stripe.manage`**, a tenth platform permission held only
+  by the `superadmin` preset (migration `0067` backfills rows holding every earlier permission,
+  through `permissions.widened_with`; a narrowed superadmin stays narrowed). Finance keeps
+  `pricing.write` for rate cards and "What's included", and loses plan create, edit and publish.
+- **A superadmin starts a workspace on Stripe** (`POST /admin/billing/tenants/{id}/stripe-subscription`,
+  Customers tab dialog): an emailed Stripe invoice (`collection_method=send_invoice`, 14 days to pay
+  by default, 1-90, to the owner unless another address is given) or a Checkout link (nothing changes
+  until the customer pays; the existing webhook applies it). Refused for a workspace already live on
+  Stripe, for plans with nothing to bill, and with no Stripe credential in force (409).
+- **Invoiced credits arrive when the invoice is paid** (decided with the product owner). The
+  subscription carries `metadata[nexus_credits]=on_payment`, the webhook records
+  `meta.credits_pending_plan` instead of granting, and `invoice.paid` grants it once. Card
+  subscriptions are unchanged.
+- **A plan change for a Stripe-billed workspace happens at Stripe, now, prorated**
+  (`change_stripe_plan`, `proration_behavior=always_invoice`), and our row moves only after Stripe
+  agreed. Without `stripe.manage` it is a 403 naming the reason; a workspace not billed through
+  Stripe changes plan exactly as before.
+- **Switching the account changes only where the money goes** (product owner, 2026-10-09;
+  `stripe_carryover.py`, `tests/test_stripe_carry_over.py`). Stripe cannot move a subscription or a
+  card between accounts through its API, so a superadmin's activation (after the plan sync) RECREATES
+  every live subscription from the previous account: same plan, first billed where the old paid
+  period ends (`billing_cycle_anchor`, `proration_behavior=none`; `trial_end` for a trial), so
+  nothing is charged twice. It charges the card when the new account holds one for the customer
+  (Stripe's own migration copies customers with their ids and cards, and `customer_id_for` adopts
+  them), otherwise it emails an invoice, which asks for money and never takes it: a workspace that
+  only paid with a test card is never charged a real one. Then the old subscription is set to end at
+  period end with `metadata[nexus_carried_to]`, read with the old key from the stored credentials
+  or the environment. Rules that hold it together:
+  - **No old key, no move.** A new subscription beside an old one nobody can stop bills twice, so
+    it fails with `NO_OLD_KEY` and says what to do. Keep the old credential stored (activating a new
+    one deactivates it, it does not delete it).
+  - **If the old account refuses to end it, the new one is cancelled at once**: never two renewing.
+  - **A half-finished move is finished, not repeated**: the old subscription names the new one.
+  - **One the old account already ends is left**: the customer chose to leave.
+  - **No credits are granted** (the plan does not change), and the webhook keeps our period start
+    for the carried first period: the period roll keys its invoice on that start's month, and
+    Stripe's start (the switch) would shift it. Events about a retired id
+    (`previous_psp_subscriptions`) are ignored, or the old one's end would cancel the new one.
+  - **Anything acting on a subscription moves it first**: plan change carries a missed one before
+    repricing, cancel ends one still in an old account there, the portal opens on the new account's
+    customer. `POST /admin/billing/subscriptions/stripe-carry-over` ("Move subscriptions here" on
+    the live Payments row) is the retry. `in_previous_account` is the 409 left for when Stripe still
+    answers 404.
+
+**What an account switch needs is in the panel** (asked 2026-10-09, `tests/test_stripe_switch_setup.py`).
+Payments tab: the secret and publishable keys, then **Create webhook in Stripe**
+(`POST /admin/payment-credentials/{id}/webhook-endpoint`, `stripe.manage`), which uses that
+credential's own key, so a new account is set up completely before it goes live. It creates the
+endpoint at `{app_base_url}/api/billing/webhooks/stripe` pinned to `StripePaymentProvider.API_VERSION`
+with exactly `HANDLED_EVENTS`, tags it `metadata[nexus]=WEBHOOK_TAG`, removes only our own earlier
+endpoints at that URL (others are reported, not touched), and seals the signing secret onto the
+credential; the secret is never returned. Configuration, Billing: **App public address**
+(`app_base_url`, validated by `_validate_public_base_url`: an https origin with no path, private
+hosts refused outside local; read by checkout, the portal, the console's Checkout links and
+password-reset emails) and **Stripe Tax at Checkout** (`stripe_automatic_tax`, which makes
+Stripe refuse every Checkout unless Stripe Tax is set up in that account). The portal configuration
+is found or created per account by itself. The restricted key needs Subscriptions: Write and Payment
+Methods: Read, and Webhook Endpoints: Write only for the button;
+`docs/billing/stripe-connection-guide.txt` lists every scope and the switch procedure.
 
 ## Usage invoices are real invoices (`nexus/billing/collection.py`)
 

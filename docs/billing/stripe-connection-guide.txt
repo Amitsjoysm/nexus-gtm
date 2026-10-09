@@ -1,0 +1,476 @@
+NEXUS GTM - CONNECTING STRIPE, STEP BY STEP
+===========================================
+
+Checked against branch feat/stripe-managed-plans, 2026-10-09.
+Every permission, event and setting below comes from what the code calls
+(nexus/billing/payments.py, stripe_catalog.py, stripe_subscriptions.py,
+stripe_carryover.py, webhooks.py, credentials.py).
+
+Do everything in TEST mode (a Stripe sandbox) first, prove it end to end, then repeat
+in LIVE mode. Stripe keeps the two completely separate: different keys, customers,
+products, webhook endpoints and portal settings.
+
+Never paste a key or signing secret into chat, a ticket, an email or a file in the
+repo. Keys go only into the NEXUS Payments tab, or into the deployment's secret env.
+
+Everything that writes to Stripe from the console needs the "Manage Stripe plans &
+subscriptions" permission (stripe.manage), which only the SUPERADMIN preset holds.
+Finance and support admins can still read billing, edit rate cards and change what a
+plan includes, but cannot create, edit or publish plans, start Stripe subscriptions,
+move a Stripe-billed workspace to another plan, or register the webhook.
+
+
+-------------------------------------------------------------------------------
+0. WHAT YOU WILL COLLECT, AND WHERE EACH ONE GOES
+-------------------------------------------------------------------------------
+
+  Value                          Looks like        Goes into
+  -----------------------------  ----------------  -------------------------------
+  Secret API key (restricted     rk_test_... /     Superadmin -> Billing console ->
+  key recommended)               rk_live_...       Payments -> Secret key
+                                 (or sk_...)
+  Webhook signing secret         whsec_...         Nothing to type if you press
+                                                   "Create webhook in Stripe" (step 6).
+                                                   Otherwise Payments -> Webhook
+                                                   signing secret.
+  Publishable key (optional)     pk_test_... /     Payments -> Publishable key
+                                 pk_live_...       (stored, not used server-side)
+  Stripe account id              acct_...          Nothing to type. NEXUS reads it
+                                                   back when you press Verify;
+                                                   check it is YOUR business.
+  App public address             https://host      Configuration -> Billing ->
+                                                   "App public address"
+  Stripe Tax at Checkout         on / off          Configuration -> Billing ->
+                                                   "Stripe Tax at Checkout"
+
+No deployment env change is needed any more: an active Payments credential selects
+Stripe on its own, and the app address and the tax switch are panel settings. The env
+values (NEXUS_PAYMENT_PROVIDER, NEXUS_APP_BASE_URL, NEXUS_STRIPE_AUTOMATIC_TAX,
+NEXUS_STRIPE_SECRET_KEY, NEXUS_STRIPE_WEBHOOK_SECRET) still work as a fallback, and
+the panel overrides them.
+
+A Payments credential cannot be edited after it is saved (add, verify, activate,
+deactivate, delete only). With the "Create webhook in Stripe" button you can save the
+key alone, verify it, create the webhook (which stores the signing secret on that
+credential) and only then activate it.
+
+
+-------------------------------------------------------------------------------
+1. WHICH URL FOR WHICH ENVIRONMENT
+-------------------------------------------------------------------------------
+
+  Environment   App public address                     Webhook URL Stripe posts to
+  ------------  -------------------------------------  ---------------------------------------------
+  Production    https://gtm.infojoy.com                https://gtm.infojoy.com/api/billing/webhooks/stripe
+  Staging       https://staging-gtm.infojoy.com        https://staging-gtm.infojoy.com/api/billing/webhooks/stripe
+  Local         http://localhost:8099                  Stripe cannot reach localhost. Use the
+                                                       Stripe CLI forwarder (step 3, "Local").
+
+Where the Superadmin console is:
+  Production / staging : https://<host>/admin/billing
+  Local                : https://localhost/admin/billing   (accept the self-signed
+                         certificate; http://localhost:8099 returns 403 for /admin)
+
+Tabs used in this guide (Superadmin -> Billing console):
+  Payments       - add / verify / create webhook / activate the Stripe credential,
+                   and "Move subscriptions here"
+  Configuration  - Runtime settings (Billing: App public address, Stripe Tax) and
+                   the Stripe webhook panel
+  Plans          - New plan, Edit, Publish / Hold, Sync to Stripe
+  Customers      - Start a Stripe subscription, Change plan, Edit terms, Cancel
+  Subscriptions  - which workspaces Stripe bills
+
+
+-------------------------------------------------------------------------------
+2. STEP 1 - ACTIVATE THE STRIPE ACCOUNT
+-------------------------------------------------------------------------------
+
+1. Sign in at https://dashboard.stripe.com with an owner/admin account.
+2. Turn on two-factor authentication for your Stripe user (Settings -> Personal
+   details). Stripe asks for it when you create keys.
+3. Test mode: switch to Test mode / your Sandbox, and submit the activation form.
+   Test mode accepts placeholder business details; it only has to be submitted.
+4. Live mode: Settings -> Business -> complete business details, representative,
+   bank account for payouts, statement descriptor, support email and phone.
+5. Wait until the account shows "Payments enabled" / charges enabled.
+
+Why: until charges are enabled, Checkout still OPENS but the payment fails at the
+end. "Checkout opened" is not proof a card will be accepted.
+
+
+-------------------------------------------------------------------------------
+3. STEP 2 - CREATE THE API KEY (ALL SCOPES NEXUS NEEDS)
+-------------------------------------------------------------------------------
+
+Recommended: a RESTRICTED key (rk_...), which can do only what NEXUS uses.
+A standard secret key (sk_...) also works, but it can do everything in the account.
+
+1. Stripe Dashboard -> Developers -> API keys (make sure you are in the right mode).
+2. Click "Create restricted key". Choose "start from zero permissions" if offered.
+3. Key name: nexus-billing-test   (later: nexus-billing-live)
+4. Set these permissions. Everything NOT listed stays "None".
+
+  REQUIRED
+  Permission (Dashboard name)   Level   What NEXUS calls with it
+  ----------------------------  ------  -----------------------------------------------
+  Accounts                      Read    GET /v1/account - Verify reads which business
+  (Core; some dashboards show           the key belongs to, and every cached price and
+  it under Connect)                     customer id is checked against that account.
+  Customers                     Write   POST /v1/customers (one Stripe customer per
+                                        workspace), GET /v1/customers/{id}
+  Products                      Write   POST /v1/products - created when a plan goes
+                                        on sale; renamed when the plan is renamed
+  Prices                        Write   POST /v1/prices - the plan's recurring price;
+                                        an old price is archived when the amount changes
+                                        or the plan is held
+  Checkout Sessions             Write   POST /v1/checkout/sessions - self-serve upgrade
+                                        and the console's Checkout links
+  Customer Portal               Write   POST /v1/billing_portal/sessions and
+                                        /v1/billing_portal/configurations - NEXUS
+                                        creates its own portal configuration
+  Invoices                      Write   POST /v1/invoices, /v1/invoiceitems,
+                                        /v1/invoices/{id}/finalize, /send, /pay -
+                                        usage and enterprise invoices, and the first
+                                        invoice of an emailed-invoice subscription
+  Subscriptions                 Write   POST /v1/subscriptions - start a subscription by
+                                        emailed invoice, change its plan (prorated),
+                                        cancel it, and carry subscriptions over when
+                                        the Stripe account changes; GET for the nightly
+                                        reconciliation
+  Payment Methods               Read    GET /v1/payment_methods - when subscriptions are
+                                        carried into a new account, whether the customer
+                                        has a card there to charge
+
+  OPTIONAL
+  Webhook Endpoints             Write   Only for the "Create webhook in Stripe" button
+                                        (step 6). Without it, create the endpoint by
+                                        hand (step 3) and give at most Read (for
+                                        scripts/stripe_status.py).
+
+  NOT USED (leave as None)
+  Payment Intents, Charges and Refunds. If a later release starts off-session charges
+  or refunds, add Payment Intents: Write, Payment Methods: Write, Charges and
+  Refunds: Write.
+
+  NOT NEEDED
+  Promotion Codes / Coupons (Checkout reads them on Stripe's side), Tax (Stripe
+  computes it inside Checkout), Events, Balance, Payouts, Disputes, Connect,
+  Issuing, Terminal, Treasury, Reporting, etc.
+
+5. Click "Create key", complete the 2FA prompt, copy the key once, and store it in
+   your password manager. Stripe will not show it again.
+6. Also copy the Publishable key (pk_...) from the same page if you want it
+   recorded. NEXUS stores it but does not need it.
+
+If a restricted key is missing a permission, Stripe answers with an error naming
+the permission to add, and NEXUS shows that text in the message on screen or in the
+app log ("stripe /<path> -> 403 ..."). Developers -> API keys -> (...) next to the
+key -> "View request logs" shows every call the key made.
+
+
+-------------------------------------------------------------------------------
+4. STEP 3 - THE WEBHOOK ENDPOINT
+-------------------------------------------------------------------------------
+
+This is how Stripe tells NEXUS that a customer paid, changed card, failed a payment
+or cancelled. Without it a customer can pay and never get their plan.
+
+  URL        : <App public address>/api/billing/webhooks/stripe
+  API version: 2024-06-20   <-- MUST be this. See "Why the version matters".
+  Events     : exactly these 13
+
+      checkout.session.completed
+      customer.subscription.created
+      customer.subscription.updated
+      customer.subscription.deleted
+      customer.subscription.trial_will_end
+      invoice.paid
+      invoice.payment_failed
+      invoice.finalized
+      invoice.upcoming
+      payment_intent.succeeded
+      payment_intent.payment_failed
+      charge.refunded
+      charge.dispute.created
+
+RECOMMENDED - the button (step 6). It is also the only way to pin the version if
+the dashboard does not offer 2024-06-20. Set the App public address first; then on the
+Payments tab press "Create webhook in Stripe" on the verified credential. NEXUS
+creates the endpoint in that credential's Stripe account with this URL, this API
+version and these 13 events, stores its signing secret on the credential (sealed,
+never shown), and replaces only an endpoint NEXUS made earlier for the same URL.
+An endpoint somebody made by hand for the same URL is left alone and named in the
+message: delete it in Stripe, or it fails every delivery.
+
+Option A - Dashboard
+  1. Developers -> Webhooks (Workbench) -> "Add destination" / "Add endpoint".
+  2. Events from: Your account.
+  3. API version: choose 2024-06-20. If the dropdown does not offer it, use the
+     button instead: it always pins this version.
+  4. Select the 13 events above (not "all events").
+  5. Destination type: Webhook endpoint. Paste the URL. Description: NEXUS billing.
+  6. Create. Open the endpoint -> "Signing secret" -> Reveal -> copy whsec_...
+
+Why the version matters: NEXUS calls Stripe with API version 2024-06-20, and its
+webhook handler reads fields in that shape (a subscription's current_period_start /
+current_period_end, and an invoice's subscription and payment_intent). Versions from
+2025-03-31 onward moved or removed those fields. A new Stripe account defaults to a
+recent version, so an endpoint left on the default sends events NEXUS cannot fully
+read: period dates stop updating, and invoice.paid cannot be matched to a workspace.
+
+Local (no public URL)
+  Install the Stripe CLI, then:
+    stripe login
+    stripe listen --forward-to http://localhost:8099/api/billing/webhooks/stripe
+  It prints a whsec_... valid only while "stripe listen" runs; use that one locally.
+  The CLI sends events in your account's DEFAULT API version, so on a new account
+  period dates may not update locally. Do the full check on staging.
+
+Clock: NEXUS refuses events signed more than 300 seconds from its own clock, so the
+server must keep correct time (NTP).
+
+
+-------------------------------------------------------------------------------
+5. STEP 4 - CUSTOMER PORTAL AND OTHER STRIPE SETTINGS
+-------------------------------------------------------------------------------
+
+Customer portal: nothing to configure for it to work. NEXUS creates and uses its own
+portal configuration in each Stripe account: cards, invoices, billing address and
+cancellation at period end on, plan switching OFF (a switch made in the portal would
+change the Stripe price but not the workspace's plan). Optionally set your terms of
+service and privacy policy URLs under Settings -> Billing -> Customer portal ->
+Business information.
+
+- Tax: only if you want Stripe to calculate VAT / sales tax. Set up Stripe Tax
+  (Settings -> Tax: origin address, registrations) FIRST, then switch on
+  Configuration -> Billing -> "Stripe Tax at Checkout". On without Stripe Tax set up
+  makes Stripe refuse every Checkout. It also makes Checkout ask for an address.
+- Discounts: Checkout shows a promotion-code box. Create Coupons and customer-facing
+  Promotion codes in Product catalog -> Coupons.
+- Branding: Settings -> Branding (logo, colours) for Checkout, portal, invoices.
+- Customer emails: Settings -> Customer emails -> successful payments, refunds and
+  finalized invoices, if you want Stripe to email receipts. Emailed-invoice
+  subscriptions are sent by NEXUS asking Stripe to send them; they do not depend on
+  this setting.
+- Do NOT create products or prices by hand for NEXUS plans. NEXUS creates them in
+  the account in force (step 7), tagged with metadata plan_id.
+
+
+-------------------------------------------------------------------------------
+6. STEP 5 - SET THE APP PUBLIC ADDRESS
+-------------------------------------------------------------------------------
+
+Configuration -> Billing -> "App public address": the exact https origin customers
+use, no path, no trailing slash (e.g. https://gtm.infojoy.com). Checkout and the
+portal return there, password-reset emails link to it, and the webhook URL is built
+from it. A wrong value sends customers to another origin after paying, where they
+look logged out, and a webhook created from it can never be reached. The panel
+refuses a value with a path, a private address on staging/production, or no https.
+
+
+-------------------------------------------------------------------------------
+7. STEP 6 - ADD, VERIFY, CREATE THE WEBHOOK, ACTIVATE
+-------------------------------------------------------------------------------
+
+1. Sign in as a platform SUPERADMIN -> /admin/billing -> Payments tab.
+2. Add an account:
+     Label                  : e.g. "Marketjoy - live"  (say test or live)
+     Secret key             : rk_live_... (or sk_live_...)
+     Webhook signing secret : leave blank if you will press the button, or paste the
+                              whsec_ from step 3
+     Publishable key        : optional
+   Save. It starts inactive and unverified, always.
+3. Press Verify. NEXUS reads your Stripe account and shows its id (acct_...) and
+   business name, and Live mode / Test mode from the key. Check they are YOURS.
+4. Press "Create webhook in Stripe" (needs the App public address, step 5, and
+   Webhook Endpoints: Write). The message says how many events it registered.
+5. Press "Make live". Only a verified account can go live, and exactly one is live
+   at a time; the previous one is switched off, not deleted. Done by a superadmin,
+   this also:
+   - creates every plan on sale in this Stripe account (product + price), and
+   - moves the previous account's live subscriptions into this one (section 8).
+   The message reports both: plans created / already there, subscriptions moved,
+   and the reason for anything that did not move.
+   The app and worker pick the new account up within 30 seconds; no restart.
+
+After that, "Sync to Stripe" on the Plans tab re-creates any plan that is missing in
+the account, and "Move subscriptions here" on the live Payments row retries the move.
+
+
+-------------------------------------------------------------------------------
+8. SWITCHING STRIPE ACCOUNTS (TEST -> LIVE, OR A NEW ACCOUNT)
+-------------------------------------------------------------------------------
+
+Switching the account changes only where the money goes. You do steps 2-7 for the
+new account; NEXUS moves everything else:
+
+  Plans          created in the new account when it goes live (and by Sync to Stripe).
+  Customers      created in the new account the first time each workspace needs one
+                 (checkout, invoice, portal). A customer Stripe copied into the new
+                 account (Stripe support can migrate customers and cards between
+                 accounts; ids are kept) is reused, with its card.
+  Subscriptions  every live one in the old account is RECREATED in the new account on
+                 the same plan, first billed when the period already paid in the old
+                 account ends, so nobody is charged twice and no credits are granted
+                 twice. If the new account holds a card for the customer it is charged
+                 as before; otherwise each renewal is an emailed Stripe invoice (14 days
+                 to pay), which asks for money and never takes it. The old subscription
+                 is set to end at that same moment, using the old key.
+
+Rules to know:
+- KEEP THE OLD CREDENTIAL STORED until the move has finished. Only the old key can
+  end the old subscription; without it NEXUS does not move that workspace (a new
+  subscription beside an old one that keeps renewing would bill twice) and says so.
+- If the old account refuses to end a subscription, the new one is cancelled at once
+  and the message says why. Fix it, then "Move subscriptions here".
+- A subscription already ending in the old account is left alone.
+- Plan change and cancel move a subscription first if the switch missed it; cancel
+  of one still in the old account cancels it there.
+- TEST -> LIVE: test subscriptions become real live subscriptions, billed by emailed
+  invoice at their next renewal (a test card never reaches a live account). Cancel
+  any internal or test workspaces you do not want invoiced (Customers -> the
+  workspace -> Cancel) after the switch.
+- Delete the old credential and roll its key in Stripe only once every subscription
+  has moved (the Subscriptions tab and the activation message show it).
+
+
+-------------------------------------------------------------------------------
+9. WHAT A SUPERADMIN CAN DO FROM THE CONSOLE
+-------------------------------------------------------------------------------
+
+Plans tab
+  - New plan: a draft cloned from an existing plan. A draft creates nothing in Stripe.
+  - Edit: name, price, credits, seats. On a plan that is on sale, a changed price
+    makes a new Stripe price (the old one is archived; customers already paying keep
+    their price until their plan is changed).
+  - Publish / Hold: Publish puts it on sale and creates its Stripe price; Hold takes
+    it off the price list and archives the price (existing subscribers unaffected).
+  - Sync to Stripe: make every plan on sale exist in the account in force.
+
+Customers tab -> a workspace
+  - Start a Stripe subscription:
+      Email an invoice  - the subscription starts now, Stripe emails the first invoice
+                          (14 days to pay by default, 1-90, to the owner or another
+                          address); the plan's credits arrive when it is paid.
+      Checkout link     - a link to send the customer; nothing changes until they pay.
+  - Change plan: for a Stripe-billed workspace the change happens at Stripe, now,
+    prorated, with the difference invoiced. Card-billed: credits now; invoiced:
+    credits when the proration invoice is paid.
+  - Edit terms: status, trial end, period end, seats. Never calls Stripe.
+  - Cancel at period end / end now: cancels at Stripe first.
+
+
+-------------------------------------------------------------------------------
+10. STEP 7 - PROVE THE WEBHOOK WORKS
+-------------------------------------------------------------------------------
+
+A. From NEXUS: /admin/billing -> Configuration -> Stripe webhook panel. It shows the
+   path, whether a signing secret is configured and where it came from, and the 13
+   events. Press "Test connection": NEXUS posts a correctly signed test event at its
+   own endpoint and expects 200. This proves the secret and the route, not that
+   Stripe can reach your host (DNS / firewall).
+
+B. From Stripe: Developers -> Webhooks -> your endpoint -> "Send test event" (or run:
+   stripe trigger invoice.finalized). The delivery log must show 200.
+   400 = signing secret mismatch (wrong whsec, or an endpoint from the other mode).
+
+C. Scripts (inside the app container):
+   docker exec nexus-gtm-app-1 python /app/scripts/stripe_status.py
+     -> account flags, webhook endpoints, portal configurations. It reads
+        NEXUS_STRIPE_SECRET_KEY from the env only, not the Payments tab.
+   docker exec nexus-gtm-app-1 python /app/scripts/verify_stripe_webhook.py \
+       --url http://localhost:8000 --tenant <throwaway-workspace-id>
+     -> signs realistic events with the secret in force and checks valid, replay,
+        bad signature, stale timestamp, missing header and edited body. Use a
+        throwaway workspace; it writes a real subscription row.
+
+
+-------------------------------------------------------------------------------
+11. STEP 8 - END-TO-END TEST (TEST MODE)
+-------------------------------------------------------------------------------
+
+1. As an ADMIN/OWNER of a test workspace -> Settings -> Billing -> pick Launch ->
+   Checkout opens on checkout.stripe.com.
+2. Pay with 4242 4242 4242 4242, any future expiry, any CVC, any postcode.
+3. You land on /settings/billing?checkout=success. Within seconds the plan reads
+   Launch and the credits increase (Superadmin -> Customers), and Stripe shows 200
+   for checkout.session.completed and customer.subscription.created.
+4. "Manage payment method" opens the portal. Update the card.
+5. As superadmin, Customers -> another test workspace -> Start a Stripe subscription
+   -> Email an invoice. Stripe emails the invoice; pay it from its page and the
+   credits arrive.
+6. Change that workspace's plan from the console: Stripe shows the prorated invoice.
+7. Failure path: in the portal set the card to 4000 0000 0000 0341, then use a test
+   clock or wait for renewal; the subscription must read past_due in NEXUS.
+8. Cancel in the portal or the console: "cancels at period end" in NEXUS, and
+   customer.subscription.deleted at period end marks it cancelled.
+
+
+-------------------------------------------------------------------------------
+12. STEP 9 - GO LIVE
+-------------------------------------------------------------------------------
+
+  [ ] Live account activated, charges enabled, payouts bank verified
+  [ ] Live restricted key "nexus-billing-live" with the permissions in step 2
+  [ ] App public address set (Configuration -> Billing)
+  [ ] Stripe Tax decided; "Stripe Tax at Checkout" matches
+  [ ] Payments: add the live key, Verify (check acct_ and business name),
+      Create webhook in Stripe, Make live
+  [ ] The activation message: plans created, subscriptions moved, nothing failed
+  [ ] Configuration -> webhook panel -> Test connection = OK
+  [ ] Stripe shows a 200 delivery on the live endpoint (send a test event)
+  [ ] Cancel internal / test workspaces you do not want invoiced (section 8)
+  [ ] One real low-value purchase by your own team, then refund it in Stripe
+  [ ] Staging keeps TEST keys only. Staging must never hold live keys.
+
+
+-------------------------------------------------------------------------------
+13. TROUBLESHOOTING
+-------------------------------------------------------------------------------
+
+  Symptom                                   Likely cause / fix
+  ----------------------------------------  -------------------------------------------
+  "No such price" / product id not          Fixed by this release: ids are reused only
+  available after a new key                 in the account that made them. Press Sync
+                                            to Stripe on the Plans tab.
+  Buttons say "No Stripe credential is      No live Payments account and no env key.
+  in force"
+  Verify fails with 401                     Wrong/revoked key, or the other mode's key.
+  Verify fails with 403 / permission        Restricted key lacks Accounts: Read.
+  Any action fails with 403                 The key lacks the permission named in the
+                                            error. Add it (step 2 table).
+  "Create webhook" says set the app's       App public address is empty or invalid
+  public address                            (Configuration -> Billing).
+  "Create webhook" says another endpoint    One made by hand for the same URL. Delete it
+  already points at the URL                 in Stripe; it would fail every delivery.
+  A subscription "could not be moved":      Keep / re-add the old account's key as a
+  the previous key is not stored            Payments credential (do not make it live),
+                                            then "Move subscriptions here".
+  Customer paid but plan did not change     Webhook not delivered: endpoint missing,
+                                            wrong mode, wrong URL, or signing secret
+                                            mismatch (Stripe shows 400). Fix, then
+                                            "Resend" the event from Stripe.
+  Period end / past_due never updates       Endpoint not on API version 2024-06-20.
+                                            Recreate it with the button.
+  Every checkout fails after enabling tax   Stripe Tax not set up; switch "Stripe Tax at
+                                            Checkout" off.
+  Customer lands logged out after paying    App public address is not the exact origin
+                                            customers use.
+  Webhook 400 on valid events               Server clock off by more than 300s, or whsec
+                                            from a different endpoint/mode.
+  "Custom" / enterprise workspace gets 409  By design: billed by invoice from the admin
+  on Checkout or Portal                     side.
+  Free plan cannot be bought                By design: Free is refused by Checkout.
+  A finance admin cannot edit a plan        By design: plan create, edit and publish
+                                            write to Stripe, so they are superadmin only.
+
+
+-------------------------------------------------------------------------------
+14. WHAT NEXUS DOES NOT DO
+-------------------------------------------------------------------------------
+
+- Plan switching inside the Stripe portal is off, on purpose (section 5).
+- It cannot move a subscription without the old account's key (section 8).
+- It does not copy cards between Stripe accounts. Only Stripe support can; ask them
+  before switching if you want customers charged automatically in the new account.
+- scripts/stripe_status.py reads the env key, not the Payments tab credential.
