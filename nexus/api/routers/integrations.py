@@ -458,6 +458,14 @@ async def test_crm_connection(
         connector = await resolve_crm_connector(ts)
         result = await connector.test_connection()
         source = connector.source
+        if (row is None or not has_credentials(row)) and not result.ok:
+            # Nothing of the workspace's own was tested: say whose token answered, or a stale
+            # deployment token reads as "the token I just made is invalid".
+            result = CRMTestResult(
+                ok=False, label=result.label,
+                detail="This tested the deployment's default CRM, because this workspace has no "
+                       "token of its own saved: " + (result.detail or "it failed."),
+            )
 
     if row is not None:
         if result.ok:

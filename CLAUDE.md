@@ -226,6 +226,11 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
   - A pasted `Bearer ` prefix and whitespace inside the token are removed on save.
   - An "API base" of `app*.hubspot.com` (the web app's address bar) is refused with
     `api.hubapi.com`; regional API hosts (`api-eu1.hubapi.com`) are still accepted.
+  - **Test checked only what was SAVED.** Paste a token, press Test without Save, and it tested
+    the deployment's env token (`source: env`, the card's "Using deployment default"), whose stale
+    value read as "the token I just made is invalid". Test now saves a typed token first; a
+    failure with no workspace token says it tested the deployment's default; and "A token is
+    saved" appears only when the WORKSPACE has one (the env token was shown as if it were theirs).
 - **Both directions are reachable from the screen.** `imports/crm_pull.py` has read accounts and
   contacts from both CRMs since it was written and no screen called either — the Integrations page's
   only Sync button imported hand-typed rows. `CrmPullPanel` wires `POST /imports/accounts/crm` and

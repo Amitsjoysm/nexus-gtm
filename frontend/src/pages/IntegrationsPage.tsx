@@ -111,6 +111,8 @@ function CrmConnectionCard() {
   const [confirmClear, setConfirmClear] = useState(false);
 
   const conn = state.data;
+  // The deployment's own token is not this workspace's: "a token is saved" only when it has one.
+  const ownToken = !!conn && conn.source === "tenant" && conn.has_credentials;
 
   async function onSave(e: FormEvent) {
     e.preventDefault();
@@ -134,6 +136,12 @@ function CrmConnectionCard() {
   async function onTest() {
     setTesting(true);
     try {
+      // Test what is in the box. It used to test only what was saved before (or the deployment's
+      // own token), so a correct new token pasted and tested read "invalid or expired".
+      if (token.trim()) {
+        await api.setCrmConnection({ provider, access_token: token.trim(), api_base: apiBase.trim() });
+        setToken("");
+      }
       const res = await api.testCrmConnection();
       state.refetch();
       if (res.ok) toast.success("Connection verified", res.label || res.detail);
@@ -208,11 +216,11 @@ function CrmConnectionCard() {
 
             <Field
               label="Private app access token"
-              required={!conn.has_credentials}
+              required={!ownToken}
               hint={
-                conn.has_credentials
+                ownToken
                   ? "A token is saved. Leave this blank to keep it."
-                  : "In HubSpot: Development → Legacy apps → Private app (older portals: Settings → Integrations → Private Apps). Paste its access token, which starts with pat-. A Personal Access Key will not work."
+                  : `${conn.source === "env" ? "This workspace has no token of its own yet, so syncs use the deployment's default CRM. " : ""}In HubSpot: Development → Legacy apps → Private app (older portals: Settings → Integrations → Private Apps). Paste its access token, which starts with pat-. A Personal Access Key will not work.`
               }
             >
               <Input
@@ -220,7 +228,7 @@ function CrmConnectionCard() {
                 autoComplete="off"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
-                placeholder={conn.has_credentials ? "••••••••  (saved)" : "pat-na1-…"}
+                placeholder={ownToken ? "••••••••  (saved)" : "pat-na1-…"}
               />
             </Field>
 

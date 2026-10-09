@@ -90,6 +90,40 @@ async def test_a_regional_api_host_is_still_accepted(client):
     assert r.status_code == 200, r.text
 
 
+async def test_a_test_with_no_workspace_token_says_it_tested_the_deployment_default(
+        client, monkeypatch):
+    """With no token of its own, a workspace's Test reaches the deployment's connector. That is the
+    right thing to test, and the wrong thing to report as if it were the workspace's: a stale
+    deployment token read as "the token I just made is invalid"."""
+    from nexus.ingestion import crm
+
+    class EnvConnector(crm.StubCRMConnector):
+        async def test_connection(self):
+            return crm.CRMTestResult(ok=False, label="HubSpot",
+                                     detail="Invalid or expired access token.")
+
+    monkeypatch.setattr("nexus.ingestion.crm_credentials.get_crm_connector",
+                        lambda: EnvConnector())
+    token = await signup(client, slug="envonly", email="rep@envonly.io")
+    r = await client.post("/api/integrations/crm/connection/test", headers=auth(token))
+    assert r.json()["ok"] is False
+    assert "deployment's default" in r.json()["detail"]
+    assert "Invalid or expired" in r.json()["detail"]
+
+
+def test_test_checks_the_token_in_the_box_not_only_the_saved_one():
+    """Typing a token and pressing Test used to test whatever was saved before (or the deployment
+    default), so a correct new token read as invalid. Test now saves a typed token first."""
+    from pathlib import Path
+
+    page = (Path(__file__).resolve().parents[1]
+            / "frontend/src/pages/IntegrationsPage.tsx").read_text(encoding="utf-8")
+    on_test = page[page.index("async function onTest"):page.index("async function onClear")]
+    assert "token.trim()" in on_test and "setCrmConnection" in on_test
+    # "A token is saved" only when the workspace has one: the deployment's is not theirs.
+    assert 'conn.source === "tenant" && conn.has_credentials' in page
+
+
 def test_the_form_says_where_the_right_token_is_and_which_one_does_not_work():
     from pathlib import Path
 
