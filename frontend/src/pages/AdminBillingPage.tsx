@@ -301,19 +301,23 @@ function Plans() {
       header: "Stripe",
       width: "140px",
       hideOnMobile: true,
-      // Only standard plans with a price exist at Stripe; the rest charge nobody.
-      render: (r) =>
-        r.plan_class === "standard" && r.base_price_cents > 0 ? (
-          r.stripe_price_id ? (
+      // Only standard plans with a price exist at Stripe; the rest charge nobody. A plan that is
+      // not on sale reads quietly, so "Not in Stripe" only ever flags something to sync.
+      render: (r) => {
+        if (r.plan_class !== "standard" || r.base_price_cents <= 0) {
+          return <span className={styles.subtle}>No price</span>;
+        }
+        if (r.stripe_price_id) {
+          return (
             <Badge tone="success" title={`${r.stripe_price_id} in ${r.stripe_account}`}>
               In Stripe
             </Badge>
-          ) : (
-            <Badge tone="neutral">Not in Stripe</Badge>
-          )
-        ) : (
-          <span className={styles.subtle}>No price</span>
-        ),
+          );
+        }
+        return r.status === "active"
+          ? <Badge tone="neutral">Not in Stripe</Badge>
+          : <span className={styles.subtle}>Not sold</span>;
+      },
     },
     {
       key: "base_price_cents",
