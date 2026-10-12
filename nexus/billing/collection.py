@@ -51,6 +51,13 @@ async def collect_invoice(
         raise CollectionError(
             f"invoice {invoice_id} is {inv.status}; only {COLLECTABLE_STATUSES} can be collected"
         )
+    from nexus.billing.dunning import is_providers_invoice
+
+    if is_providers_invoice(inv):
+        # Raising our own invoice for it would bill the same money twice (2026-10-12).
+        raise CollectionError(
+            f"invoice {invoice_id} was raised by Stripe, and Stripe collects it itself"
+        )
 
     if inv.total_cents <= 0:
         inv.status = "paid"

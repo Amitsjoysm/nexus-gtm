@@ -47,11 +47,26 @@ def _schedule() -> tuple[int, ...]:
         return DEFAULT_SCHEDULE_DAYS
 
 
+def is_providers_invoice(invoice: BillingInvoice) -> bool:
+    """A local copy of an invoice Stripe raised for a subscription (`webhooks._record_provider_
+    invoice`). Stripe collects it, retries it and owns its dunning; we only show it.
+
+    Found 2026-10-12: a renewal that failed twice put such a copy into OUR dunning (the retry's
+    `invoice.payment_failed` stamps `payment_failed_at`), which raised a second Stripe invoice for
+    the same money while Stripe's own retries went on collecting the first."""
+    return ((invoice.meta or {}).get("origin") == "provider"
+            or str(invoice.period_key or "").startswith("stripe:"))
+
+
 def is_due(invoice: BillingInvoice, *, now=None) -> bool:
     """True when this invoice is owed money and its next attempt time has arrived."""
     if invoice.status != "finalized" or invoice.total_cents <= 0:
         return False
     meta = invoice.meta or {}
+    if is_providers_invoice(invoice):
+        # Stripe raised it and Stripe retries it. Collecting it here as well raised a second
+        # invoice for the same money (2026-10-12).
+        return False
     # Only invoices that have actually been attempted and failed enter dunning. An invoice that
     # has never been collected is the collection job's business, not dunning's.
     if not meta.get("payment_failed_at") and not meta.get("dunning_attempts"):

@@ -905,6 +905,14 @@ Two things about the Stripe call that are the opposite of what they look like:
   and is payable from its hosted page; reporting that as a failed creation would hide a real invoice
   and invite a second one for the same period.
 
+**An invoice Stripe raised is Stripe's to collect, never also ours** (2026-10-12,
+`dunning.is_providers_invoice`, `tests/test_stripe_invoices_are_stripes_to_collect.py`). The local
+copy `_record_provider_invoice` keeps of a subscription invoice (origin `provider`, period key
+`stripe:<id>`) entered OUR dunning on its second `invoice.payment_failed`, which stamps
+`payment_failed_at`; dunning then raised a new Stripe invoice for the same money while Stripe's own
+retries went on collecting the first, so a card that recovered paid twice. Dunning skips such an
+invoice and `collect_invoice` refuses it.
+
 `hosted_invoice_url` / `invoice_pdf_url` land in `invoice.meta` and are surfaced on the customer's
 own `/billing/invoices`. Empty for the noop provider, and the UI hides the link rather than offering
 a URL that goes nowhere — a plausible-looking link that 404s is worse than a visibly absent one.
