@@ -318,7 +318,14 @@ export function BillingPage() {
 
         {/* Above usage and invoices: someone who came here from a locked nav item is here to
             change plan, not to read a meter. */}
-        <PlanPicker usage={usage.data ?? null} />
+        <PlanPicker
+          usage={usage.data ?? null}
+          onChanged={() => {
+            usage.refetch();
+            credits.refetch();
+            invoices.refetch();
+          }}
+        />
 
         {/* The answer to "where did my credits go?", above the plan limits: under credits-only
             billing the balance is what stops a call, so it is what the customer came to read. */}

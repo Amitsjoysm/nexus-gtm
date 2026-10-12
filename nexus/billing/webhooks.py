@@ -606,6 +606,11 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
 
     meta_in = _metadata(obj)
     sub, tenant_id = await _resolve_subscription(session, obj, event)
+    if sub is not None:
+        # Re-read under the row lock a customer's plan switch holds while Stripe answers it, so
+        # this decides on the plan the switch left rather than the one before it: otherwise both
+        # would credit the same new plan (2026-10-12). SQLite has no row locks and skips it.
+        await session.refresh(sub, with_for_update=True)
     if _is_retired(sub, obj, event):
         outcome["note"] = "subscription moved to another Stripe account"
         return outcome

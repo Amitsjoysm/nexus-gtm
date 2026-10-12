@@ -905,6 +905,26 @@ Two things about the Stripe call that are the opposite of what they look like:
   and is payable from its hosted page; reporting that as a failed creation would hide a real invoice
   and invite a second one for the same period.
 
+**A paying workspace switches plan on the subscription it has** (2026-10-12,
+`POST /billing/switch-plan`, `tests/test_switch_plan.py`). What Checkout's refusal points to. The
+price list shows "Switch to X" when `UsageOut.switch_in_place`, and a dialog states the terms before
+any money moves:
+- **The new plan starts today and is charged in full now** (`billing_cycle_anchor=now`,
+  `proration_behavior=none`); the rest of the current period is not refunded and the credits held
+  stay. Chosen so every credit granted is matched by a payment: with proration and credits up
+  front, upgrading on the last day of a period bought the whole allowance for a few cents.
+- **Applied only if paid** (`payment_behavior=pending_if_incomplete`). A refused card is a 402
+  "Nothing changed", and its pending update is dropped by voiding the invoice; a bank asking to
+  confirm returns `confirm_payment` with Stripe's invoice page, and the plan moves when the
+  webhook says it applied.
+- **Credits once, keyed `plan_switch:<invoice>`.** Our row moves only after Stripe agreed, under a
+  row lock that the webhook also takes (`session.refresh(sub, with_for_update=True)`), so its
+  `customer.subscription.updated` sees the plan already moved and grants nothing more.
+- Only an `active`, card-billed subscription that is not set to end, to a paid plan on sale in the
+  same currency; each refusal says what to do instead (past due: update the card; Free: cancel in
+  the portal). A `sub_` id with no Stripe credential in force is refused. Stripe idempotency key
+  `switch:<sub>:<plan>:<period start>`, so a double click charges once.
+
 **A Stripe renewal is credited when Stripe is paid for it, once** (2026-10-12,
 `webhooks._grant_renewal_credits`, `tests/test_stripe_renewal_credits.py`). `roll_period` granted a
 period's credits at OUR boundary, before Stripe had tried the card, so an unpaid renewal had

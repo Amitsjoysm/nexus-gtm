@@ -73,6 +73,9 @@ class UsageOut(BaseModel):
     # invoice arrives, because "why is my bill different" is the question this answers.
     pending_proration_cents: int = 0
     proration_lines: list[ProrationLineOut] = []
+    # True when the workspace pays through a live Stripe subscription: its price list switches plan
+    # on that subscription (`/billing/switch-plan`) instead of opening a second Checkout.
+    switch_in_place: bool = False
 
 
 @router.get("/usage", response_model=UsageOut)
@@ -191,6 +194,8 @@ async def get_usage(
             )
             for a in sorted(adjustments, key=proration_sort_key)
         ],
+        switch_in_place=bool(sub is not None and sub.status in ("trialing", "active", "past_due")
+                             and (sub.psp_subscription_id or "").strip()),
     )
 
 
@@ -771,6 +776,168 @@ async def create_portal(
         id=str(session_out.get("id", "")), url=str(session_out.get("url", "")),
         provider=str(session_out.get("provider", provider.name)),
     )
+
+
+class SwitchPlanIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    plan_id: str
+
+
+class SwitchPlanOut(BaseModel):
+    #: `switched`: on the new plan now. `confirm_payment`: the bank wants the customer to confirm
+    #: the payment on Stripe's invoice page; the plan changes once they do.
+    status: str
+    plan_id: str
+    charged_cents: int = 0
+    currency: str = "USD"
+    invoice_id: str = ""
+    hosted_invoice_url: str = ""
+    period_end: str | None = None
+
+
+@router.post("/switch-plan", response_model=SwitchPlanOut)
+async def switch_plan(
+    body: SwitchPlanIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> SwitchPlanOut:
+    """Change plan on the Stripe subscription this workspace already pays (2026-10-12).
+
+    Checkout refuses a workspace that pays through Stripe, because a second Checkout made a second
+    subscription and Stripe billed both. The new plan starts today and is charged in full now, the
+    rest of the current period is not refunded and the credits already held stay: every credit
+    handed out is matched by a payment, which a prorated switch with credits granted up front would
+    not be (upgrade on the last day for a few cents, take the whole allowance). It applies only if
+    the payment succeeds. Our row moves only after Stripe agreed, under a row lock the webhook
+    also takes, so its credits cannot be granted twice.
+    """
+    from nexus.billing.credits import grant_credits
+    from nexus.billing.payments import PaymentError, PaymentNotConfigured, resolve_payment_provider
+    from nexus.billing.rollups import period_key
+    from nexus.billing.stripe_subscriptions import (
+        NO_CREDENTIAL,
+        in_previous_account,
+        stripe_subscription_of,
+    )
+    from nexus.billing.subscriptions import take_plan_terms
+    from nexus.billing.webhooks import _epoch
+    from nexus.core.db import utcnow
+
+    plan = await ts.session.get(BillingPlan, body.plan_id)
+    if plan is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown plan '{body.plan_id}'")
+    billed = await stripe_subscription_of(ts)
+    if billed is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This workspace does not pay through Stripe yet, so there is nothing to switch. "
+            "Choose Continue to checkout on the plan you want.")
+    await _reject_if_admin_managed(ts, billed)
+    if plan.status != "active" or plan.plan_class in ADMIN_MANAGED_PLAN_CLASSES:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"'{plan.name}' is not on sale.")
+    if plan.plan_class in UNPURCHASABLE_PLAN_CLASSES or int(plan.base_price_cents or 0) <= 0:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"To move to {plan.name}, cancel your plan with Manage payment method. It moves to "
+            f"{plan.name} when the period you paid for ends.")
+    if billed.plan_id == plan.id:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"This workspace is already on {plan.name}.")
+    current = await ts.session.get(BillingPlan, billed.plan_id)
+    if billed.status == "past_due":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A payment for this workspace is overdue. Update your card with Manage payment "
+            "method, then switch.")
+    if billed.status != "active":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Plans can be switched once the trial has ended. Nothing was changed.")
+    if billed.cancel_at_period_end:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Your plan is set to end. Renew it with Manage payment method first, then switch.")
+    if str((billed.meta or {}).get("collection") or "") == "send_invoice":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This workspace is billed by invoice. Ask your account team to change its plan.")
+    if current is not None and (current.currency or "USD") != (plan.currency or "USD"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{plan.name} is sold in {plan.currency}, and this workspace pays in "
+            f"{current.currency}.")
+
+    # One switch at a time per workspace, and the webhook waits for it (row lock; SQLite ignores).
+    await ts.session.execute(
+        ts.select(BillingSubscription, BillingSubscription.id == billed.id).with_for_update())
+
+    psp = (billed.psp_subscription_id or "").strip()
+    provider = await resolve_payment_provider()
+    if provider.name != "stripe" and psp.startswith("sub_"):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"This workspace is billed through Stripe. {NO_CREDENTIAL}")
+    try:
+        from nexus.billing.stripe_catalog import current_account, plan_price_id
+
+        if provider.name == "stripe":
+            from nexus.billing.stripe_carryover import ensure_in_current_account
+
+            moved = await ensure_in_current_account(ts.session, billed, provider,
+                                                    actor=principal.user_id)
+            if moved["outcome"] in ("failed", "skipped"):
+                raise HTTPException(status.HTTP_409_CONFLICT,
+                                    str(moved.get("detail") or "It cannot be switched now."))
+            psp = (billed.psp_subscription_id or "").strip()
+        price_id = await plan_price_id(plan, provider, account=await current_account(provider))
+        await ts.session.flush()
+        started = billed.current_period_start
+        anchor = int(started.timestamp()) if started is not None else 0
+        result = await provider.switch_subscription_now(
+            subscription_id=psp, price_id=price_id, plan_id=plan.id,
+            idempotency_key=f"switch:{psp}:{plan.id}:{anchor}")
+    except PaymentNotConfigured as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except PaymentError as exc:
+        gone = in_previous_account(exc, psp)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT if gone else status.HTTP_502_BAD_GATEWAY,
+            gone or f"Stripe refused the switch, so nothing changed: {exc}") from exc
+
+    charged = result.get("amount_paid")
+    charged_cents = int(charged) if isinstance(charged, int) else int(plan.base_price_cents or 0)
+    out = SwitchPlanOut(status="switched", plan_id=plan.id, charged_cents=charged_cents,
+                        currency=plan.currency or "USD",
+                        invoice_id=str(result.get("invoice_id") or ""),
+                        hosted_invoice_url=str(result.get("hosted_invoice_url") or ""))
+    if not result.get("applied"):
+        if result.get("needs_action") and out.hosted_invoice_url:
+            out.status = "confirm_payment"
+            return out
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"{result.get('decline') or 'The payment was refused.'} Nothing changed. Update your "
+            "card with Manage payment method and try again.")
+
+    previous = billed.plan_id
+    take_plan_terms(billed, plan)
+    start, end = _epoch(result.get("current_period_start")), _epoch(result.get("current_period_end"))
+    if start is not None:
+        billed.current_period_start = start
+    if end is not None:
+        billed.current_period_end = end
+    billed.meta = {**(billed.meta or {}), "previous_plan_id": previous,
+                   "changed_by": principal.user_id, "changed_at": utcnow().isoformat(),
+                   "changed_via": "self_serve_switch", "switch_invoice": out.invoice_id}
+    await ts.flush()
+    if plan.included_credits:
+        await grant_credits(
+            ts, plan.included_credits, kind="grant", reason=f"{plan.name} included credits",
+            idempotency_key=f"plan_switch:{out.invoice_id or psp + ':' + plan.id + ':' + str(anchor)}",
+            period_key=period_key(utcnow(), "period"))
+    out.period_end = billed.current_period_end.isoformat() if billed.current_period_end else None
+    logger.info("workspace %s switched %s -> %s at Stripe (%s)", ts.tenant_id, previous, plan.id,
+                psp)
+    return out
 
 
 # ---- entitlements: what this workspace's plan actually includes -------------------------------

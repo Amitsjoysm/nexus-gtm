@@ -1295,6 +1295,8 @@ export interface BillingUsage {
   /** Net of every adjustment already committed to this period's invoice. */
   pending_proration_cents: number;
   proration_lines: ProrationLine[];
+  /** Pays through a live Stripe subscription: a plan change switches it in place, never a second Checkout. */
+  switch_in_place?: boolean;
 }
 
 /** A named switch a plan entitlement can hang off. Platform-global, not per-tenant. */
@@ -1472,6 +1474,17 @@ export interface HostedSession {
   url: string;
   provider: string;
   plan_id: string | null;
+}
+
+/** `POST /billing/switch-plan`. `confirm_payment`: the bank wants the customer to confirm on Stripe's invoice page. */
+export interface PlanSwitchResult {
+  status: "switched" | "confirm_payment";
+  plan_id: string;
+  charged_cents: number;
+  currency: string;
+  invoice_id: string;
+  hosted_invoice_url: string;
+  period_end: string | null;
 }
 
 /**

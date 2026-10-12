@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { Badge, Button, Card, CardHeader, Icons, Skeleton, useToast } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, Icons, Modal, Skeleton, useToast } from "@/components/ui";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -38,7 +38,14 @@ import styles from "./PlanPicker.module.css";
  * server's `family`, and one Annual | Monthly switch decides which row every card shows; checkout
  * buys exactly the row on screen.
  */
-export function PlanPicker({ usage }: { usage: BillingUsage | null }) {
+export function PlanPicker({
+  usage,
+  onChanged,
+}: {
+  usage: BillingUsage | null;
+  /** Called after a plan switch lands, so the rest of the billing page re-reads. */
+  onChanged?: () => void;
+}) {
   const api = useApiClient();
   const toast = useToast();
   const plans = useApi<SellablePlan[]>((signal) => api.billingPlans(signal), []);
@@ -65,6 +72,12 @@ export function PlanPicker({ usage }: { usage: BillingUsage | null }) {
   // the price list, so it is derived on every render rather than copied into state by an effect.
   const [chosen, setChosen] = useState<BillingInterval | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  // A workspace already paying through Stripe changes plan on that subscription, after reading
+  // the terms here. Checkout would open a second subscription billed beside the first.
+  const switchInPlace = usage?.switch_in_place === true;
+  const [confirming, setConfirming] = useState<SellablePlan | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const currentRow = (plans.data ?? []).find((p) => p.current) ?? null;
 
   const families = useMemo(() => groupFamilies(plans.data ?? []), [plans.data]);
   const interval = chosen ?? defaultInterval(families);
@@ -101,6 +114,31 @@ export function PlanPicker({ usage }: { usage: BillingUsage | null }) {
         detail,
       );
       setBusy(null);
+    }
+  }
+
+  async function switchTo(plan: SellablePlan) {
+    setSwitching(true);
+    try {
+      const result = await api.billingSwitchPlan(plan.id);
+      if (result.status === "confirm_payment") {
+        toast.success("Your bank needs you to confirm the payment", "Opening the invoice to confirm it.");
+        // A provider page, not a route: the plan changes once the payment is confirmed there.
+        window.location.assign(result.hosted_invoice_url);
+        return;
+      }
+      setConfirming(null);
+      toast.success(
+        `You're on ${plan.name}`,
+        `${formatPrice(result.charged_cents, result.currency)} was charged to the card on file.`,
+      );
+      refetch();
+      onChanged?.();
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.detail : "Please try again.";
+      toast.error("Couldn't switch plan", detail);
+    } finally {
+      setSwitching(false);
     }
   }
 
@@ -178,13 +216,85 @@ export function PlanPicker({ usage }: { usage: BillingUsage | null }) {
                 interval={interval}
                 animate={chosen !== null}
                 busy={busy}
+                switchInPlace={switchInPlace}
                 onCheckout={(planId) => go("checkout", planId)}
+                onSwitch={setConfirming}
               />
             ))}
           </ul>
         </>
       )}
+
+      {confirming && (
+        <SwitchDialog
+          plan={confirming}
+          current={currentRow}
+          switching={switching}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => void switchTo(confirming)}
+        />
+      )}
     </Card>
+  );
+}
+
+/** Per month, whatever the interval, so a smaller plan can be told apart from a cheaper bill. */
+function monthlyCents(plan: SellablePlan): number {
+  return plan.interval === "year" ? perMonthCents(plan) : plan.base_price_cents;
+}
+
+/**
+ * The terms of a switch, before any money moves. The new plan starts today and is charged in full
+ * now; nothing is refunded and the credits already held stay. Said plainly here because it is the
+ * opposite of the proration a customer might expect, and the button names the amount.
+ */
+function SwitchDialog({
+  plan,
+  current,
+  switching,
+  onCancel,
+  onConfirm,
+}: {
+  plan: SellablePlan;
+  current: SellablePlan | null;
+  switching: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const price = formatPrice(plan.base_price_cents, plan.currency);
+  const smaller = current !== null && monthlyCents(plan) < monthlyCents(current);
+  return (
+    <Modal
+      open
+      onClose={switching ? () => undefined : onCancel}
+      title={`Switch to ${plan.name}?`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onCancel} disabled={switching}>
+            Keep {current?.name ?? "my plan"}
+          </Button>
+          <Button onClick={onConfirm} loading={switching}>
+            Switch and pay {price}
+          </Button>
+        </>
+      }
+    >
+      <p className={styles.note}>
+        {plan.name} starts today and {price} is charged now to the card on file. It then renews
+        {plan.interval === "year" ? " every year" : " every month"} from today.
+      </p>
+      <p className={styles.contract}>
+        The rest of your current period is not refunded, and the credits you already have stay in
+        your balance. If the payment does not go through, nothing changes.
+      </p>
+      {smaller && (
+        <p className={styles.contract}>
+          To move to a smaller plan when your current period ends instead, cancel with Manage
+          payment method and choose {plan.name} then.
+        </p>
+      )}
+    </Modal>
   );
 }
 
@@ -252,14 +362,19 @@ function PlanCard({
   interval,
   animate,
   busy,
+  switchInPlace,
   onCheckout,
+  onSwitch,
 }: {
   family: PlanFamily;
   interval: BillingInterval;
   /** True once the switch has been used: the price only moves when someone moved it. */
   animate: boolean;
   busy: string | null;
+  /** The workspace pays through Stripe: paid plans switch in place instead of checking out. */
+  switchInPlace: boolean;
   onCheckout: (planId: string) => void;
+  onSwitch: (plan: SellablePlan) => void;
 }) {
   const reduceMotion = useReducedMotion();
   const noteId = useId();
@@ -368,6 +483,15 @@ function PlanCard({
             aria-describedby={note ? noteId : undefined}
           >
             Your plan
+          </Button>
+        ) : switchInPlace && plan.base_price_cents > 0 ? (
+          <Button
+            size="lg"
+            onClick={() => onSwitch(plan)}
+            disabled={busy !== null}
+            aria-describedby={note ? noteId : undefined}
+          >
+            Switch to {tier.name}
           </Button>
         ) : (
           <Button

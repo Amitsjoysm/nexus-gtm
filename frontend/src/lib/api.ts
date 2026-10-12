@@ -115,6 +115,7 @@ import type {
   TrainingConsentState,
   SellablePlan,
   HostedSession,
+  PlanSwitchResult,
   PlatformAdmin,
   PlatformIdentity,
   EmailAccount,
@@ -1214,6 +1215,17 @@ export class ApiClient {
   // why both money actions failed the moment they were first clicked.
   billingCheckout(planId: string) {
     return this.request<HostedSession>("/billing/checkout", {
+      method: "POST",
+      body: { plan_id: planId },
+    });
+  }
+  /**
+   * Changes plan on the Stripe subscription this workspace already pays: starts today, charged in
+   * full now, applied only if the payment succeeds. Checkout refuses a paying workspace, because a
+   * second Checkout was a second subscription billed beside the first.
+   */
+  billingSwitchPlan(planId: string) {
+    return this.request<PlanSwitchResult>("/billing/switch-plan", {
       method: "POST",
       body: { plan_id: planId },
     });

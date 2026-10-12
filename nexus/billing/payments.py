@@ -265,6 +265,18 @@ class PaymentProvider(abc.ABC):
         was never recorded here (2026-10-12)."""
         return {}
 
+    async def switch_subscription_now(
+        self, *, subscription_id: str, price_id: str, plan_id: str, idempotency_key: str,
+    ) -> dict:
+        """Move a subscription to ``price_id`` starting NOW, charged in full now, applied only if
+        that payment succeeds (2026-10-12, the customer's own plan switch).
+
+        Returns ``{"applied", "needs_action", "decline", "invoice_id", "hosted_invoice_url",
+        "amount_paid", "current_period_start", "current_period_end"}``. ``applied`` false with
+        ``needs_action`` means the bank wants the customer to confirm on the invoice page; without
+        it, the payment was refused and nothing is left pending."""
+        raise PaymentError(f"{self.name} cannot switch a subscription's plan")
+
 
 class NoopPaymentProvider(PaymentProvider):
     """Offline default. Records intent, moves no money, never fails.
@@ -299,6 +311,9 @@ class NoopPaymentProvider(PaymentProvider):
         self.completed_sessions: set[str] = set()
         #: Charges a test stages, as Stripe would describe them.
         self.charge_objects: dict[str, dict[str, Any]] = {}
+        self.switches: list[dict[str, Any]] = []
+        #: What the next plan switch's payment does: ``paid``, ``declined`` or ``requires_action``.
+        self.switch_outcome = "paid"
 
     async def ensure_customer(self, *, tenant_id: str, email: str, name: str = "") -> str:
         cid = self.customers.setdefault(tenant_id, f"noop_cus_{tenant_id[:12]}")
@@ -400,6 +415,31 @@ class NoopPaymentProvider(PaymentProvider):
 
     async def get_charge(self, charge_id: str) -> dict:
         return dict(self.charge_objects.get(charge_id) or {})
+
+    async def switch_subscription_now(
+        self, *, subscription_id: str, price_id: str, plan_id: str, idempotency_key: str,
+    ) -> dict:
+        n = len(self.switches) + 1
+        self.switches.append({"subscription_id": subscription_id, "price_id": price_id,
+                              "plan_id": plan_id, "idempotency_key": idempotency_key,
+                              "outcome": self.switch_outcome})
+        now = int(time.time())
+        applied = self.switch_outcome == "paid"
+        if applied:
+            current = self.subscriptions.get(subscription_id) or {"id": subscription_id}
+            self.subscriptions[subscription_id] = {
+                **current, "status": "active", "price_id": price_id,
+                "metadata": {**(current.get("metadata") or {}), "plan_id": plan_id}}
+        return {
+            "applied": applied,
+            "needs_action": self.switch_outcome == "requires_action",
+            "decline": "" if applied else "Your card was declined.",
+            "invoice_id": f"noop_in_switch_{n}",
+            "hosted_invoice_url": f"https://invoice.local.test/noop_in_switch_{n}",
+            "amount_paid": None,
+            "current_period_start": now if applied else 0,
+            "current_period_end": now + 30 * 86400 if applied else 0,
+        }
 
     async def get_subscription(self, *, subscription_id: str) -> dict:
         # Whatever a test staged in `self.subscriptions`, else unknown. Lets reconciliation be
@@ -1009,6 +1049,50 @@ class StripePaymentProvider(PaymentProvider):
     async def get_charge(self, charge_id: str) -> dict:
         self._require()
         return await self._get(f"/charges/{charge_id}")
+
+    async def switch_subscription_now(
+        self, *, subscription_id: str, price_id: str, plan_id: str, idempotency_key: str,
+    ) -> dict:
+        """One price item swapped, the period restarted today and charged in full, applied only
+        if paid (`pending_if_incomplete`). A refused card's pending update is dropped at once by
+        voiding its invoice, so nothing applies later behind the customer's back; one waiting for
+        the bank's confirmation is left for the customer to confirm on the invoice page."""
+        self._require()
+        current = await self._get(f"/subscriptions/{subscription_id}")
+        items = (current.get("items") or {}).get("data") or []
+        if len(items) != 1:
+            raise PaymentError(
+                f"stripe subscription {subscription_id} has {len(items)} items; "
+                "change it in the Stripe dashboard")
+        data = await self._post(f"/subscriptions/{subscription_id}", {
+            "items[0][id]": str(items[0]["id"]), "items[0][price]": price_id,
+            "billing_cycle_anchor": "now", "proration_behavior": "none",
+            "payment_behavior": "pending_if_incomplete", "metadata[plan_id]": plan_id,
+            "expand[0]": "latest_invoice.payment_intent",
+        }, idempotency_key=idempotency_key)
+        invoice = data.get("latest_invoice") if isinstance(data.get("latest_invoice"), dict) else {}
+        intent = invoice.get("payment_intent") if isinstance(invoice.get("payment_intent"),
+                                                             dict) else {}
+        applied = not data.get("pending_update")
+        needs_action = not applied and str(intent.get("status") or "") == "requires_action"
+        decline = ""
+        if not applied and not needs_action:
+            decline = str((intent.get("last_payment_error") or {}).get("message")
+                          or "The payment was refused.")
+            if invoice.get("id"):
+                try:
+                    await self._post(f"/invoices/{invoice['id']}/void", {})
+                except PaymentError:
+                    logger.warning("could not void %s after a refused plan switch; Stripe drops "
+                                   "the pending update when it expires", invoice.get("id"))
+        return {
+            "applied": applied, "needs_action": needs_action, "decline": decline,
+            "invoice_id": str(invoice.get("id") or ""),
+            "hosted_invoice_url": str(invoice.get("hosted_invoice_url") or ""),
+            "amount_paid": invoice.get("amount_paid"),
+            "current_period_start": int(data.get("current_period_start") or 0),
+            "current_period_end": int(data.get("current_period_end") or 0),
+        }
 
     async def create_invoice(
         self, *, customer_id: str, lines: list[dict], currency: str = "USD",
