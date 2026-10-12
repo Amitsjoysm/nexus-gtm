@@ -229,8 +229,11 @@ INVOICE_EVENTS = (
 PAYMENT_EVENTS = (
     "payment_intent.succeeded",
     "payment_intent.payment_failed",
+    # Refunds, chargebacks and fraud warnings: `payment_risk.apply` (2026-10-12).
     "charge.refunded",
     "charge.dispute.created",
+    "charge.dispute.closed",
+    "radar.early_fraud_warning.created",
 )
 
 #: Every event type `apply_event` acts on: what the operator selects in Stripe. The webhook panel
@@ -811,6 +814,11 @@ async def _record_provider_invoice(session, sub, obj: dict, psp_invoice_id: str)
         "hosted_invoice_url": str(obj.get("hosted_invoice_url") or ""),
         "invoice_pdf_url": str(obj.get("invoice_pdf") or ""),
     }
+    # On the indexed columns too, the PaymentIntent included: a dispute or fraud warning names the
+    # PaymentIntent and not the invoice, and this is how it finds the money it is about
+    # (2026-10-12). Fill-only, like everything else that writes these columns.
+    row.psp_invoice_id = row.psp_invoice_id or psp_invoice_id or None
+    row.psp_reference = row.psp_reference or _str(obj.get("payment_intent")) or None
     if existing is None:
         session.add(row)
     await session.flush()
@@ -1042,6 +1050,13 @@ async def handle_event(session, event: VerifiedEvent) -> dict:
     if event.event_type not in PAYMENT_EVENTS:
         return outcome
 
+    from nexus.billing import payment_risk
+
+    if event.event_type in payment_risk.RISK_EVENTS:
+        # Their objects are a charge, a dispute or a fraud warning, never the PaymentIntent this
+        # function used to look their own id up as, so they matched nothing (2026-10-12).
+        return await payment_risk.apply(session, event.event_type, obj, outcome)
+
     # Find the invoice this event concerns by the reference we stored when collecting. Reading
     # across tenants is correct here: the event arrives with no tenant context, and the
     # provider reference is globally unique.
@@ -1076,12 +1091,6 @@ async def handle_event(session, event: VerifiedEvent) -> dict:
             (obj.get("last_payment_error") or {}).get("message", "")
         )[:300]
         meta["payment_failed_at"] = utcnow().isoformat()
-    elif event.event_type == "charge.refunded":
-        meta["refunded_at"] = utcnow().isoformat()
-        meta["amount_refunded"] = obj.get("amount_refunded")
-    elif event.event_type == "charge.dispute.created":
-        meta["disputed_at"] = utcnow().isoformat()
-        meta["dispute_reason"] = str(obj.get("reason", ""))[:120]
 
     invoice.meta = meta
     await session.flush()

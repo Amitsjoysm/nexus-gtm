@@ -750,7 +750,7 @@ synchronous callers and for `set_payment_provider` test injection, which always 
   names NEXUS's own configuration (`PORTAL_CONFIG_TAG`, found by metadata or created once per
   account): cards, invoices, address and at-period-end cancellation on, `subscription_update` off.
   If it cannot be created the portal does not open: failing closed beats charging the wrong price.
-- **The panel tells the truth.** `webhooks.HANDLED_EVENTS` (15 since 2026-10-12) is what the webhook panel lists; it
+- **The panel tells the truth.** `webhooks.HANDLED_EVENTS` (17 since 2026-10-12) is what the webhook panel lists; it
   summed two of the three tuples and showed 9, and a test checks every `event_type ==` branch is in
   it. Live/Test comes from the key prefix (`credentials.stripe_key_mode`: `sk_`/`rk_` x
   `live_`/`test_`); it was "charges enabled and not `sk_test_`", so a restricted test key read Live.
@@ -904,6 +904,26 @@ Two things about the Stripe call that are the opposite of what they look like:
 - A finalize that succeeds followed by a payment that fails **still returns the invoice**. It exists
   and is payable from its hosted page; reporting that as a failed creation would hide a real invoice
   and invite a second one for the same period.
+
+**Refunds, chargebacks and fraud warnings reach the workspace** (2026-10-12,
+`nexus/billing/payment_risk.py`, `tests/test_disputes_and_refunds.py`). The webhook looked the
+event's OWN id up as a PaymentIntent, but a refund's object is a charge and a dispute's a dispute,
+so none had ever matched an invoice. Now the payment is found by the PaymentIntent or invoice the
+object names (a Stripe invoice's local copy records its PaymentIntent on `psp_reference` for this),
+else by asking Stripe about the charge (`get_charge`) and matching its customer.
+- **Refund: recorded on the invoice, nothing else.** Refunding is an operator's decision in Stripe,
+  and so is what the customer keeps; a goodwill refund that took credits back would undo itself.
+- **Dispute opened, or `radar.early_fraud_warning.created`: the credits that payment bought are
+  held**, capped at the unspent balance, as a negative `adjustment` with capability
+  `billing.dispute_hold` (so the credit report names it), keyed `payment_hold:<charge>` so a fraud
+  warning then a dispute on one payment hold once. Stripe debits a disputed amount at once; the
+  money has left. The plan's included credits are the amount (the invoice's plan, else the
+  workspace's). ERROR log, `dispute_opened` / `fraud_warning` counters, and `open_disputes` /
+  `fraud_warnings` on the subscription row.
+- **Dispute won: the hold is released** (`payment_release:<charge>`). Lost: it stays and the row
+  lists it in `lost_disputes`.
+- **Nothing cancels a subscription or refunds money automatically.** A card flagged by mistake
+  would lose its customer to a decision nobody could take back; both stay operator actions.
 
 **An invoice Stripe raised is Stripe's to collect, never also ours** (2026-10-12,
 `dunning.is_providers_invoice`, `tests/test_stripe_invoices_are_stripes_to_collect.py`). The local

@@ -281,7 +281,7 @@ def test_every_event_the_handler_branches_on_is_in_the_published_list():
     src = (ROOT / "nexus" / "billing" / "webhooks.py").read_text(encoding="utf-8")
     compared = set(re.findall(r'event_type == "([a-z_.]+)"', src))
     assert compared <= set(HANDLED_EVENTS), compared - set(HANDLED_EVENTS)
-    assert len(HANDLED_EVENTS) == len(set(HANDLED_EVENTS)) == 15
+    assert len(HANDLED_EVENTS) == len(set(HANDLED_EVENTS)) == 17
     for event in ("payment_intent.succeeded", "payment_intent.payment_failed",
                   "charge.refunded", "charge.dispute.created"):
         assert event in HANDLED_EVENTS

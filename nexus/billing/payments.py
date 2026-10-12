@@ -259,6 +259,12 @@ class PaymentProvider(abc.ABC):
         and leave a workspace with two subscriptions. The default has nothing to expire."""
         return "expired"
 
+    async def get_charge(self, charge_id: str) -> dict:
+        """A charge as the provider has it (at least ``customer``, ``invoice``, ``payment_intent``),
+        or {}. Read to find the workspace a dispute or fraud warning concerns when the payment
+        was never recorded here (2026-10-12)."""
+        return {}
+
 
 class NoopPaymentProvider(PaymentProvider):
     """Offline default. Records intent, moves no money, never fails.
@@ -291,6 +297,8 @@ class NoopPaymentProvider(PaymentProvider):
         self.expired_sessions: list[str] = []
         #: Session ids a test marks as paid, so expiring them reports ``complete`` as Stripe does.
         self.completed_sessions: set[str] = set()
+        #: Charges a test stages, as Stripe would describe them.
+        self.charge_objects: dict[str, dict[str, Any]] = {}
 
     async def ensure_customer(self, *, tenant_id: str, email: str, name: str = "") -> str:
         cid = self.customers.setdefault(tenant_id, f"noop_cus_{tenant_id[:12]}")
@@ -389,6 +397,9 @@ class NoopPaymentProvider(PaymentProvider):
             return "complete"
         self.expired_sessions.append(session_id)
         return "expired"
+
+    async def get_charge(self, charge_id: str) -> dict:
+        return dict(self.charge_objects.get(charge_id) or {})
 
     async def get_subscription(self, *, subscription_id: str) -> dict:
         # Whatever a test staged in `self.subscriptions`, else unknown. Lets reconciliation be
@@ -994,6 +1005,10 @@ class StripePaymentProvider(PaymentProvider):
         except PaymentError:
             data = await self._get(f"/checkout/sessions/{session_id}")
         return str(data.get("status") or "")
+
+    async def get_charge(self, charge_id: str) -> dict:
+        self._require()
+        return await self._get(f"/charges/{charge_id}")
 
     async def create_invoice(
         self, *, customer_id: str, lines: list[dict], currency: str = "USD",
