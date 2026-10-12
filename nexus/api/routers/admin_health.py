@@ -142,9 +142,38 @@ async def _probe_payments() -> tuple[str, str]:
                 "subscription will never reach this database. " + ", ".join(notes)
             )
         notes.append(f"{len(endpoints)} webhook endpoint(s)")
-        if not account.get("charges_enabled"):
+    # What Checkout would refuse on, read the same way the checkout preflight reads it, so this row
+    # names the cause of "no valid payment methods" before a customer meets it (2026-10-12).
+    from nexus.billing.checkout_readiness import checkout_readiness
+
+    try:
+        ready = await checkout_readiness(provider, currencies=await _currencies_on_sale(),
+                                         fresh=True)
+    except Exception as exc:  # noqa: BLE001 - the row reports what it could not read
+        notes.append(f"checkout readiness unreadable: {exc}")
+        ready = None
+    if ready is not None:
+        notes.extend(f"CHECKOUT BLOCKED: {b}" for b in ready.blocking)
+        notes.extend(f"checkout: {w}" for w in ready.warnings)
+        if ready.blocking:
+            return ERROR, ", ".join(notes)
+        if ready.warnings:
             return DEGRADED, ", ".join(notes)
-        return OK, ", ".join(notes)
+    if not account.get("charges_enabled"):
+        return DEGRADED, ", ".join(notes)
+    return OK, ", ".join(notes)
+
+
+async def _currencies_on_sale() -> set[str]:
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingPlan
+
+    async with get_platform_sessionmaker()() as session:
+        rows = (await session.scalars(select(BillingPlan.currency).where(
+            BillingPlan.status == "active", BillingPlan.base_price_cents > 0))).all()
+    return {str(c or "USD").upper() for c in rows} or {"USD"}
 
 
 async def _actor_permission(http, key: str, actor_id: str) -> tuple[int, str]:

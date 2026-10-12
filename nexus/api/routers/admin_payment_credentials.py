@@ -250,6 +250,41 @@ async def register_webhook_endpoint(
     return result
 
 
+@router.post("/{credential_id}/checkout-check", response_model=dict)
+async def check_checkout(
+    credential_id: str,
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> dict:
+    """Would Stripe Checkout open with a way to pay on this credential's account? Read-only.
+
+    The answer to "There are no valid payment methods available for this session" (reported
+    2026-10-12): the account's charges, card capability, payment method settings and, for an
+    Indian account, the currencies the plans on sale use (`checkout_readiness`). Uses the
+    credential's OWN key, so a new account is checked before it goes live.
+    """
+    from nexus.api.routers.admin_health import _currencies_on_sale
+    from nexus.billing.checkout_readiness import checkout_readiness
+    from nexus.billing.credentials import CredentialError, secret_for
+    from nexus.billing.payments import PaymentError, StripePaymentProvider
+    from nexus.models.payment_credential import PaymentCredential
+
+    async with get_platform_sessionmaker()() as session:
+        row = await session.get(PaymentCredential, credential_id)
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such credential")
+        try:
+            key = await secret_for(row)
+        except CredentialError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    try:
+        ready = await checkout_readiness(StripePaymentProvider(key),
+                                         currencies=await _currencies_on_sale(), fresh=True)
+    except PaymentError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"Stripe would not show the account: {exc}") from exc
+    return ready.as_dict()
+
+
 @router.post("/{credential_id}/deactivate", response_model=CredentialOut)
 async def deactivate_payment_credential(
     credential_id: str,

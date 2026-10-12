@@ -836,6 +836,26 @@ is found or created per account by itself. The restricted key needs Subscription
 Methods: Read, and Webhook Endpoints: Write only for the button;
 `docs/billing/stripe-connection-guide.txt` lists every scope and the switch procedure.
 
+**Checkout says why Stripe cannot take payment, before a customer finds out**
+(`nexus/billing/checkout_readiness.py`, 2026-10-12, `tests/test_checkout_readiness.py`). Reported:
+"Continue to checkout" opened Stripe's page and it read "There are no valid payment methods
+available for this session". Our session names no `payment_method_types`, so Stripe picks from the
+ACCOUNT's own payment method settings when the page renders, and creating the session succeeds
+whatever they say: nothing on our side could see it.
+- Blocking: charges not enabled (an account Stripe has not finished activating, with the count of
+  requirements due), the `card_payments` capability not active, cards switched off in the default
+  payment method configuration. Checkout then answers 409 "Nothing was charged" instead of opening
+  a dead page, and logs the cause at WARNING.
+- Warning only: an **Indian** account selling in anything but INR (Stripe lets a buyer in India pay
+  an Indian business only in INR, so exactly that message is what an Indian buyer sees; buyers
+  elsewhere can pay), and a restricted key that cannot read Payment Method Configurations.
+- An Indian account's Checkout collects the billing address (`account_country`), which Stripe
+  requires for India's export payments.
+- **The check fails open**: if it raises, checkout goes ahead as before. Cached 10 minutes per key.
+  Platform health's `payments` row reads it (ERROR on blocking, DEGRADED on warnings) for the
+  currencies on sale, and the Payments tab's **Check checkout** asks it about one credential's own
+  account (`POST /admin/payment-credentials/{id}/checkout-check`, `pricing.write`) before it goes live.
+
 ## Usage invoices are real invoices (`nexus/billing/collection.py`)
 
 Subscriptions ran through Stripe end to end and got hosted invoices, PDFs and line items.

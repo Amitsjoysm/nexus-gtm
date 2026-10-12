@@ -98,6 +98,31 @@ export function PaymentsTab() {
     }
   }
 
+  // What "Check checkout" found, per account: shown under it until the next check.
+  const [checks, setChecks] = useState<Record<string, { blocking: string[]; warnings: string[] }>>({});
+
+  async function checkCheckout(rowItem: PaymentCredential) {
+    setBusy(rowItem.id);
+    try {
+      const res = await api.checkPaymentCheckout(rowItem.id);
+      setChecks((current) => ({ ...current, [rowItem.id]: res }));
+      if (res.ok && res.warnings.length === 0) {
+        toast.success(
+          "Checkout can take payment",
+          `${res.country || "This"} account: charges on, card payments ${res.card_payments || "available"}.`,
+        );
+      } else if (res.ok) {
+        toast.success("Checkout can take payment, with a warning", "Read the note under the account.");
+      } else {
+        toast.error("Checkout cannot take payment", "Read what to fix under the account.");
+      }
+    } catch (err) {
+      fail("Couldn't check checkout", err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function verify(rowItem: PaymentCredential) {
     setBusy(rowItem.id);
     try {
@@ -327,6 +352,16 @@ export function PaymentsTab() {
               {r.status === "failed" && r.last_error && (
                 <p className={styles.error}>{r.last_error}</p>
               )}
+              {checks[r.id] && (checks[r.id].blocking.length > 0 || checks[r.id].warnings.length > 0) && (
+                <div aria-live="polite">
+                  {checks[r.id].blocking.map((b) => (
+                    <p key={b} className={styles.error}>{b}</p>
+                  ))}
+                  {checks[r.id].warnings.map((w) => (
+                    <p key={w} className={styles.note}>{w}</p>
+                  ))}
+                </div>
+              )}
 
               <div className={styles.actions}>
                 <Button
@@ -337,6 +372,19 @@ export function PaymentsTab() {
                   disabled={busy !== null}
                 >
                   Verify
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void checkCheckout(r)}
+                  disabled={busy !== null || r.status !== "verified"}
+                  title={
+                    r.status === "verified"
+                      ? "Check that Stripe Checkout can take a payment on this account"
+                      : "Verify this account first"
+                  }
+                >
+                  Check checkout
                 </Button>
                 {r.active ? (
                   <Button

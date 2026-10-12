@@ -1893,6 +1893,16 @@ export class ApiClient {
       `/admin/payment-credentials/${id}/verify`, { method: "POST" },
     );
   }
+  /**
+   * Would Stripe Checkout open with a way to pay on this credential's account? The answer to "There
+   * are no valid payment methods available": blocking causes, warnings, and the account's facts.
+   */
+  checkPaymentCheckout(id: string) {
+    return this.request<{
+      ok: boolean; blocking: string[]; warnings: string[]; account_id: string; country: string;
+      default_currency: string; charges_enabled: boolean; card_payments: string;
+    }>(`/admin/payment-credentials/${id}/checkout-check`, { method: "POST" });
+  }
   activatePaymentCredential(id: string) {
     return this.request<PaymentCredential>(
       `/admin/payment-credentials/${id}/activate`, { method: "POST" },

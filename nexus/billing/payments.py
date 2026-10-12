@@ -487,6 +487,9 @@ _portal_configurations: dict[str, str] = {}
 #: for a given key, and every cached plan, price and customer id is checked against it.
 _account_ids: dict[str, str] = {}
 
+#: The account's country per key digest, for the same reason: it cannot change for a given key.
+_account_countries: dict[str, str] = {}
+
 
 class StripePaymentProvider(PaymentProvider):
     """Stripe over the REST API, using the vendored HTTP client (no new dependency).
@@ -720,6 +723,19 @@ class StripePaymentProvider(PaymentProvider):
             _account_ids[digest] = account
         return _account_ids[digest]
 
+    async def account_country(self) -> str:
+        """The account's two-letter country, or "" when it cannot be read. Never raises."""
+        import hashlib
+
+        digest = hashlib.sha256(self.secret_key.encode()).hexdigest()
+        if digest not in _account_countries:
+            try:
+                _account_countries[digest] = str(
+                    (await self._get("/account")).get("country") or "").upper()
+            except Exception:
+                return ""
+        return _account_countries[digest]
+
     async def object_exists(self, kind: str, object_id: str) -> bool:
         self._require()
         if kind not in ("prices", "products", "customers", "subscriptions"):
@@ -931,6 +947,11 @@ class StripePaymentProvider(PaymentProvider):
             if customer_id:
                 # Only valid alongside an existing customer; sending it without one is an error.
                 form["customer_update[address]"] = "auto"
+        if "billing_address_collection" not in form and await self.account_country() == "IN":
+            # Stripe requires the buyer's name and billing address on an Indian account's
+            # international payments, and Checkout collects the address only when asked
+            # (2026-10-12, with "no valid payment methods" reported at Checkout).
+            form["billing_address_collection"] = "required"
         # Deliberately NO idempotency key. Checkout sessions expire, and replaying the key
         # would hand a customer a dead URL instead of a fresh one; nothing is charged by
         # creating a session, so there is no double-spend to guard against.

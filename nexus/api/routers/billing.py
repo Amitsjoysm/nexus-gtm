@@ -12,6 +12,8 @@ abandoned the page or changed something in the portal.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -28,6 +30,8 @@ from nexus.models.billing import (
     BillingUsageRollup,
     proration_sort_key,
 )
+
+logger = logging.getLogger("nexus.api.billing")
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -502,6 +506,29 @@ async def list_sellable_plans(
     return out
 
 
+async def _refuse_if_checkout_cannot_take_payment(provider, currency: str) -> None:
+    """A 409 with a sentence, instead of sending the customer to a Stripe page that says "There are
+    no valid payment methods available" (reported 2026-10-12). Only for what definitely stops
+    payment (`checkout_readiness` blocking causes); the reason goes to the log and to Platform
+    health, where the person who can fix it looks. A check that cannot run lets checkout go ahead:
+    a failing diagnostic must not stop sales."""
+    from nexus.billing import checkout_readiness
+
+    try:
+        ready = await checkout_readiness.checkout_readiness(provider, currencies={currency})
+    except Exception:
+        logger.warning("checkout readiness could not be read; continuing", exc_info=True)
+        return
+    if ready.blocking:
+        logger.warning("checkout refused, the Stripe account cannot take payment: %s",
+                       " ".join(ready.blocking))
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Payments cannot be taken right now, so checkout did not open. Nothing was charged. "
+            "The platform team has been alerted; please try again later or contact support.",
+        )
+
+
 @router.post("/checkout", response_model=HostedSessionOut)
 async def create_checkout(
     body: CheckoutRequest,
@@ -547,6 +574,7 @@ async def create_checkout(
     await _reject_if_admin_managed(ts, sub)
 
     provider = await resolve_payment_provider()
+    await _refuse_if_checkout_cannot_take_payment(provider, plan.currency)
     try:
         # The price object has to exist at the PSP before a Checkout line item can reference it.
         #
