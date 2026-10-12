@@ -1019,6 +1019,33 @@ async def handle_pool_found_people(payload: dict) -> dict:
                                    verified=payload.get("verified") or [])
 
 
+async def handle_end_replaced_subscription(payload: dict) -> dict:
+    """End, at Stripe and now, a subscription a newer started one replaced (2026-10-12).
+
+    Queued by the webhook when a workspace that was paying for one subscription starts another, so
+    the old one does not go on billing beside it. The replacement is read back first and the old
+    one is ended only while the replacement is running: a stale or mistaken event must never end
+    the subscription a customer is paying on. A Stripe refusal RAISES, so the job is retried and
+    then dead-lettered with both ids in view; cancelling an already-cancelled one is a success.
+    """
+    from nexus.billing.payments import resolve_payment_provider
+
+    old = str(payload.get("subscription_id") or "")
+    new = str(payload.get("replaced_by") or "")
+    if not old or not new:
+        return {"error": "subscription_id and replaced_by are required"}
+    provider = await resolve_payment_provider()
+    replacement = await provider.get_subscription(subscription_id=new)
+    if str(replacement.get("status") or "") not in ("active", "trialing"):
+        logger.error("not ending %s: its replacement %s is %r at Stripe; check tenant %s by hand",
+                     old, new, replacement.get("status"), payload.get("tenant_id"))
+        return {"skipped": "replacement_not_running", "subscription_id": old, "replaced_by": new}
+    await provider.cancel_subscription(subscription_id=old, at_period_end=False)
+    logger.warning("ended Stripe subscription %s, replaced by %s (tenant %s)", old, new,
+                   payload.get("tenant_id"))
+    return {"ended": old, "replaced_by": new}
+
+
 async def handle_refresh_mailbox_tokens(payload: dict) -> dict:
     """Refresh each connected SDR mailbox at least once a day (spec §9 mailbox status).
 
@@ -1370,6 +1397,8 @@ HANDLERS: dict[str, Handler] = {
     # Replay target for a credit grant the Stripe webhook could not deliver. Registered so
     # the dead-letter replay button is not a no-op; never enqueued on a schedule.
     "billing_grant_plan_credits": handle_grant_plan_credits,
+    # Queued by the Stripe webhook when a started subscription replaces a live one.
+    "billing_end_replaced_subscription": handle_end_replaced_subscription,
     "expire_trials": handle_expire_trials,
     "refresh_mailbox_tokens": handle_refresh_mailbox_tokens,
     "ship_ledger": handle_ship_ledger,

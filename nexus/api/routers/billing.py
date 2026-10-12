@@ -340,6 +340,39 @@ def _default_url(suffix: str) -> str:
     return f"{base}{suffix}" if base else suffix
 
 
+def _own_url(value: str, default_suffix: str) -> str:
+    """Where Stripe sends the customer back: this app, or a 422 (2026-10-12).
+
+    The address came from the request body and went to Stripe unchecked, so anyone with a
+    workspace could mint a genuine Stripe page that ends on a site of their choosing: an open
+    redirect behind a payment page. A path is taken relative to `app_base_url`; a full address
+    must be on that origin. With no `app_base_url` (local) there is nothing to compare against
+    and the value passes as before; production refuses to take money without one anyway, since
+    Stripe needs absolute return addresses.
+    """
+    from urllib.parse import urlsplit
+
+    from nexus.core.config import get_settings
+
+    if not value:
+        return _default_url(default_suffix)
+    base = (get_settings().app_base_url or "").rstrip("/")
+    if not base:
+        return value
+    refused = HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Return addresses must be on this app.")
+    # Backslashes, spaces and control characters: browsers read "/\evil.example" as
+    # "//evil.example", and nothing legitimate needs any of them.
+    if any(ch == "\\" or ord(ch) <= 0x20 for ch in value):
+        raise refused
+    if value.startswith("/") and not value.startswith("//"):
+        return f"{base}{value}"
+    ours, theirs = urlsplit(base), urlsplit(value)
+    if (theirs.scheme, theirs.netloc.lower()) != (ours.scheme, ours.netloc.lower()):
+        raise refused
+    return value
+
+
 async def _current_subscription(ts: TenantSession) -> BillingSubscription | None:
     from nexus.billing.subscriptions import ACTIVE_STATUSES
 
@@ -529,6 +562,54 @@ async def _refuse_if_checkout_cannot_take_payment(provider, currency: str) -> No
         )
 
 
+async def _refuse_a_second_subscription(ts: TenantSession) -> None:
+    """A workspace already paying through Stripe gets a sentence, not a second subscription.
+
+    Found 2026-10-12: a workspace on Launch pressed "Continue to checkout" on Accelerate, Checkout
+    created a SECOND Stripe subscription, our row moved to it, and Stripe billed both. A plan change
+    for a paying workspace happens on its existing subscription (`POST /billing/switch-plan`)."""
+    from nexus.billing.stripe_subscriptions import stripe_subscription_of
+
+    billed = await stripe_subscription_of(ts)
+    if billed is None:
+        return
+    current = await ts.session.get(BillingPlan, billed.plan_id)
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        f"This workspace already pays for {current.name if current else billed.plan_id} through "
+        "Stripe, so a second checkout would charge it twice. Nothing was charged. To change plan, "
+        "choose Switch on the plan you want.",
+    )
+
+
+async def _expire_the_page_opened_before(provider, track: BillingSubscription) -> None:
+    """Only the newest Checkout page for a workspace can be paid (2026-10-12).
+
+    Two tabs, or a page left open, are two pages that can each start a subscription. Expiring the
+    previous one first means at most one is payable. If the customer had already paid on it, its
+    subscription is on its way through the webhook and buying again would double it, so that is a
+    409. A failure to expire is logged and does not stop the sale: the webhook still refuses to
+    follow two subscriptions."""
+    import time as _time
+
+    opened = (track.meta or {}).get("open_checkout") or {}
+    session_id = str(opened.get("id") or "")
+    if not session_id or int(opened.get("expires_at") or 0) <= _time.time():
+        return
+    try:
+        state = await provider.expire_checkout_session(session_id)
+    except Exception:
+        logger.warning("could not expire checkout session %s; continuing", session_id,
+                       exc_info=True)
+        return
+    if state == "complete":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A checkout for this workspace has just completed, and its plan arrives within a "
+            "minute. Refresh this page before buying again. Nothing more was charged.",
+        )
+
+
 @router.post("/checkout", response_model=HostedSessionOut)
 async def create_checkout(
     body: CheckoutRequest,
@@ -570,11 +651,26 @@ async def create_checkout(
             f"billing portal instead.",
         )
 
+    success_url = _own_url(body.success_url, "/settings/billing?checkout=success")
+    cancel_url = _own_url(body.cancel_url, "/settings/billing?checkout=cancelled")
+
     sub = await _current_subscription(ts)
     await _reject_if_admin_managed(ts, sub)
+    await _refuse_a_second_subscription(ts)
+
+    # Every checkout for this workspace runs one at a time (a row lock; SQLite ignores it), so two
+    # requests cannot both find no open page and open one each.
+    from nexus.billing.subscriptions import _any_subscription
+
+    track = sub or await _any_subscription(ts)
+    if track is not None:
+        await ts.session.execute(
+            ts.select(BillingSubscription, BillingSubscription.id == track.id).with_for_update())
 
     provider = await resolve_payment_provider()
     await _refuse_if_checkout_cannot_take_payment(provider, plan.currency)
+    if track is not None:
+        await _expire_the_page_opened_before(provider, track)
     try:
         # The price object has to exist at the PSP before a Checkout line item can reference it.
         #
@@ -601,10 +697,13 @@ async def create_checkout(
 
         session_out = await provider.create_checkout_session(
             tenant_id=ts.tenant_id, plan_id=plan.id, price_id=price_id,
-            customer_id=customer_id,
-            success_url=body.success_url or _default_url("/settings/billing?checkout=success"),
-            cancel_url=body.cancel_url or _default_url("/settings/billing?checkout=cancelled"),
+            customer_id=customer_id, success_url=success_url, cancel_url=cancel_url,
         )
+        if track is not None and session_out.get("id"):
+            track.meta = {**(track.meta or {}), "open_checkout": {
+                "id": str(session_out["id"]), "plan_id": plan.id,
+                "expires_at": int(session_out.get("expires_at") or 0)}}
+            await ts.flush()
     except PaymentNotConfigured as exc:
         # 503, not 500: the deployment is missing a key, and saying so plainly is what lets an
         # operator fix it. There is nothing the caller can retry.
@@ -631,6 +730,7 @@ async def create_portal(
         resolve_payment_provider,
     )
 
+    return_url = _own_url(body.return_url, "/settings/billing")
     sub = await _current_subscription(ts)
     await _reject_if_admin_managed(ts, sub)
 
@@ -660,8 +760,7 @@ async def create_portal(
     await ts.flush()
     try:
         session_out = await provider.create_billing_portal_session(
-            customer_id=customer_id,
-            return_url=body.return_url or _default_url("/settings/billing"),
+            customer_id=customer_id, return_url=return_url,
         )
     except PaymentNotConfigured as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc

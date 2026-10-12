@@ -33,13 +33,19 @@ def _capture() -> tuple[StripePaymentProvider, list]:
     return p, posted
 
 
+def _checkout_form(posted: list) -> dict:
+    """The Checkout session's own form. Creating one may first read the account's country
+    (cached per key), so it is not always the first request sent."""
+    return next(form for path, form in posted if path.endswith("/checkout/sessions"))
+
+
 async def test_checkout_accepts_promotion_codes():
     p, posted = _capture()
     await p.create_checkout_session(
         tenant_id="t1", plan_id="growth", price_id="price_1",
         success_url="https://a/ok", cancel_url="https://a/no",
     )
-    _, form = posted[0]
+    form = _checkout_form(posted)
     assert form.get("allow_promotion_codes") == "true", (
         "the coupon field is absent from Checkout, so sales cannot discount at all"
     )
@@ -56,7 +62,7 @@ async def test_tax_is_off_unless_the_deployment_turns_it_on(monkeypatch):
         tenant_id="t1", plan_id="growth", price_id="price_1",
         success_url="https://a/ok", cancel_url="https://a/no",
     )
-    _, form = posted[0]
+    form = _checkout_form(posted)
     assert "automatic_tax[enabled]" not in form
 
 
@@ -69,7 +75,7 @@ async def test_tax_is_requested_when_the_deployment_turns_it_on(monkeypatch):
         tenant_id="t1", plan_id="growth", price_id="price_1",
         success_url="https://a/ok", cancel_url="https://a/no",
     )
-    _, form = posted[0]
+    form = _checkout_form(posted)
     assert form.get("automatic_tax[enabled]") == "true"
     # Stripe needs an address to compute a rate, and will not collect one unless asked.
     assert form.get("billing_address_collection") == "required"

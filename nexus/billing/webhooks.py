@@ -200,7 +200,21 @@ SUBSCRIPTION_EVENTS = (
     # they knew about it was the charge. Recorded on the row rather than acted on: what to SEND
     # is a product decision, and the notification layer reads this.
     "customer.subscription.trial_will_end",
+    # Checkout's later word on a bank debit or another delayed method (2026-10-12). Such a session
+    # completes with `payment_status: unpaid`, and the money arrives, or does not, days later.
+    "checkout.session.async_payment_succeeded",
+    "checkout.session.async_payment_failed",
 )
+
+#: Checkout says the customer paid (or owed nothing).
+_CHECKOUT_PAID = ("paid", "no_payment_required")
+#: Stripe says the subscription is running. `incomplete` has not started: its first payment is
+#: still processing or failed, and it expires on its own.
+_STARTED = ("active", "trialing")
+#: Our row's statuses in which a Stripe subscription is billing the customer.
+_LIVE = ("trialing", "active", "past_due")
+#: How many retired subscription ids a row remembers.
+_RETIRED_HISTORY = 10
 
 INVOICE_EVENTS = (
     "invoice.paid",
@@ -331,6 +345,95 @@ def _is_retired(sub, obj: dict, event: VerifiedEvent) -> bool:
     return any(str((p or {}).get("id") or "") == psp for p in previous)
 
 
+def _event_subscription_id(event: VerifiedEvent, obj: dict) -> str:
+    if event.event_type.startswith("customer.subscription."):
+        return _str(obj.get("id"))
+    return _str(obj.get("subscription"))
+
+
+def _has_started(event: VerifiedEvent, obj: dict) -> bool:
+    """Whether this event proves the subscription it is about has started: its first payment
+    arrived, or it is in a trial. Nothing else may move a workspace onto a plan (2026-10-12)."""
+    kind = event.event_type
+    if kind == "checkout.session.async_payment_succeeded":
+        return True
+    if kind == "checkout.session.completed":
+        return str(obj.get("payment_status") or "") in _CHECKOUT_PAID
+    if kind in ("customer.subscription.created", "customer.subscription.updated"):
+        return str(obj.get("status") or "") in _STARTED
+    return False
+
+
+def _event_created(event: VerifiedEvent) -> int:
+    try:
+        return int(event.payload.get("created") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _remember_retired(meta: dict, old: str, *, reason: str, replaced_by: str) -> None:
+    from nexus.core.db import utcnow
+
+    previous = list(meta.get("previous_psp_subscriptions") or [])
+    if not any(str((p or {}).get("id") or "") == old for p in previous):
+        previous.append({"id": old, "reason": reason, "replaced_by": replaced_by,
+                         "at": utcnow().isoformat()})
+    meta["previous_psp_subscriptions"] = previous[-_RETIRED_HISTORY:]
+
+
+async def _queue_end_of_replaced(payload: dict) -> None:
+    """Ask the worker to end a replaced subscription at Stripe. A job, so a Stripe blip is retried
+    and a lasting failure lands in dead letters with the ids. Never raises."""
+    try:
+        from nexus.workers.queue import Job, get_task_queue
+
+        await get_task_queue().enqueue(Job(name=END_REPLACED_JOB, payload=payload))
+    except Exception:
+        logger.error("could not queue the end of replaced subscription %s; it may still bill",
+                     payload, exc_info=True)
+
+
+#: Job that ends, at Stripe, a subscription a newer started one replaced.
+END_REPLACED_JOB = "billing_end_replaced_subscription"
+
+
+async def _not_followed_yet(session, sub, event: VerifiedEvent, obj: dict, psp: str,
+                            outcome: dict) -> dict:
+    """An event about a subscription this row does not follow, which has not started.
+
+    It changes nothing about the plan, the status or the credits: an abandoned attempt expiring
+    must not cancel the plan the workspace is on, and an unpaid one must not grant a plan. A
+    subscription waiting for its first payment is noted so an operator can see it."""
+    from nexus.core.db import utcnow
+    from nexus.core.tenancy import apply_rls
+
+    meta = dict(sub.meta or {})
+    before = dict(meta)
+    waiting = (event.event_type == "checkout.session.completed"
+               or (event.event_type in ("customer.subscription.created",
+                                        "customer.subscription.updated")
+                   and str(obj.get("status") or "") == "incomplete"))
+    if waiting:
+        meta["pending_psp_subscription"] = psp
+        outcome["note"] = f"waiting for the first payment on {psp}"
+    else:
+        if meta.get("pending_psp_subscription") == psp:
+            meta.pop("pending_psp_subscription", None)
+        outcome["note"] = f"{psp} is not the subscription this workspace follows; nothing changed"
+    if event.event_type == "checkout.session.async_payment_failed":
+        meta["checkout_payment_failed_at"] = utcnow().isoformat()
+        outcome["note"] = f"the payment for {psp} failed; nothing changed"
+        if str(((meta.get("open_checkout") or {}).get("id")) or "") == _str(obj.get("id")):
+            # That page is spent: let the customer try again straight away.
+            meta.pop("open_checkout", None)
+    if meta != before:
+        await apply_rls(session, sub.tenant_id)
+        sub.meta = meta
+        await session.flush()
+    outcome["tenant_id"] = sub.tenant_id
+    return outcome
+
+
 def _same_moment(a, b) -> bool:
     if a is None or b is None:
         return False
@@ -455,10 +558,41 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
     from nexus.core.tenancy import apply_rls
     from nexus.models.billing import BillingPlan, BillingSubscription
 
+    from nexus.billing.payments import CARRIED_FROM_KEY
+
     meta_in = _metadata(obj)
     sub, tenant_id = await _resolve_subscription(session, obj, event)
     if _is_retired(sub, obj, event):
         outcome["note"] = "subscription moved to another Stripe account"
+        return outcome
+    started = _has_started(event, obj)
+
+    # ONE subscription per workspace, and only one that has started (2026-10-12). An event about a
+    # subscription this row does not follow moves it only when that subscription has started and
+    # the event is not older than the last one applied; a stale delivery about an old subscription
+    # must never take the row off the one actually billing.
+    psp_in = _event_subscription_id(event, obj)
+    following = (sub.psp_subscription_id or "") if sub is not None else ""
+    end_replaced = ""
+    if sub is not None and event.event_type == "checkout.session.async_payment_failed":
+        return await _not_followed_yet(session, sub, event, obj, psp_in, outcome)
+    if sub is not None and psp_in and psp_in != following:
+        last = int((sub.meta or {}).get("psp_event_created") or 0)
+        if not started or (last and 0 < _event_created(event) < last):
+            return await _not_followed_yet(session, sub, event, obj, psp_in, outcome)
+        if following:
+            carried = bool(meta_in.get(CARRIED_FROM_KEY))
+            meta_now = dict(sub.meta or {})
+            _remember_retired(meta_now, following, reason="carried" if carried else "replaced",
+                              replaced_by=psp_in)
+            sub.meta = meta_now
+            # Ended at Stripe only when it was billing. A carried one is the account switch's
+            # to end, in the old account.
+            if sub.status in _LIVE and not carried:
+                end_replaced = following
+    elif sub is None and not started:
+        # Nothing to follow and nothing proven paid: no row is born from it.
+        outcome["note"] = "no matching subscription"
         return outcome
     # A row created below is born on the bought plan, so both "did the plan change?" guards would
     # read it as unchanged and skip the grant: the customer pays and holds no credits. Moving onto
@@ -496,18 +630,25 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
     outcome["subscription_id"] = sub.id
     meta = dict(sub.meta or {})
 
-    if event.event_type == "checkout.session.completed":
+    if psp_in and meta.get("pending_psp_subscription") == psp_in and started:
+        meta.pop("pending_psp_subscription", None)
+
+    if event.event_type in ("checkout.session.completed",
+                            "checkout.session.async_payment_succeeded"):
         # A completed Checkout says "this customer now has a subscription at the provider".
         # Record the linkage; the authoritative status/period arrive in the
-        # customer.subscription.created event that follows.
+        # customer.subscription.created event that follows. Only once it is PAID: a bank debit
+        # completes the session unpaid and settles days later, as `async_payment_succeeded`.
         psp_sub_id = _str(obj.get("subscription"))
         psp_cus_id = _str(obj.get("customer"))
-        if psp_sub_id:
+        if psp_sub_id and started:
             sub.psp_subscription_id = psp_sub_id
         if psp_cus_id:
             sub.psp_customer_id = psp_cus_id
+        if str(((meta.get("open_checkout") or {}).get("id")) or "") == _str(obj.get("id")):
+            meta.pop("open_checkout", None)
         plan_id = str(meta_in.get("plan_id") or "")
-        if plan_id and (bought := await session.get(BillingPlan, plan_id)) is not None:
+        if started and plan_id and (bought := await session.get(BillingPlan, plan_id)) is not None:
             changed = created or sub.plan_id != plan_id
             # Taking a new plan means taking its terms, interval and currency included — the same
             # rule, through the same function, that change_plan applies.
@@ -518,7 +659,7 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
                 # the free tier left behind — reported from production, and the single most
                 # visible way a successful payment can look like a broken product.
                 await _grant_plan_credits(session, sub, bought)
-        if str(obj.get("payment_status") or "") in ("paid", "no_payment_required"):
+        if started:
             sub.status = "active"
             sub.cancel_at_period_end = False
         meta["checkout_session_id"] = _str(obj.get("id"))
@@ -569,9 +710,12 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
             bought = await session.get(BillingPlan, plan_id)
             if bought is not None:
                 take_plan_terms(sub, bought)
-                if _credits_on_payment(meta_in):
+                if _credits_on_payment(meta_in) or not started:
                     # Paid by emailed invoice (started from the console, 2026-10-09): the credits
-                    # wait for `invoice.paid`, so a customer who never pays never spends them.
+                    # wait for `invoice.paid`, so a customer who never pays never spends them. So
+                    # does a plan Stripe reports while the subscription is not running (past_due,
+                    # unpaid, incomplete): the plan is what Stripe bills, the credits are what was
+                    # paid for (2026-10-12).
                     meta["credits_pending_plan"] = bought.id
                 else:
                     # Same reasoning as the Checkout branch above. Stripe can deliver the plan on
@@ -582,8 +726,25 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
         outcome["provider_status"] = raw_status
 
     meta["psp_synced_from_event"] = event.event_id
+    if _event_created(event) > int(meta.get("psp_event_created") or 0):
+        meta["psp_event_created"] = _event_created(event)
     sub.meta = meta
     await session.flush()
+    if end_replaced:
+        # Two subscriptions would bill this workspace. The newer one has started, so the older
+        # one is ended at Stripe now; refunding any overlap is an operator's call, so it is
+        # logged loudly and counted rather than decided here.
+        logger.error("workspace %s: Stripe subscription %s replaced %s; ending the old one",
+                     sub.tenant_id, psp_in, end_replaced)
+        try:
+            from nexus.core import metrics
+
+            metrics.record_webhook_event("stripe", "subscription_replaced")
+        except Exception:
+            pass
+        await _queue_end_of_replaced({"tenant_id": sub.tenant_id,
+                                      "subscription_id": end_replaced, "replaced_by": psp_in})
+        outcome["replaced"] = end_replaced
     outcome["applied"] = True
     outcome["status"] = sub.status
     outcome["plan_id"] = sub.plan_id

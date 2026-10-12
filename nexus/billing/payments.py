@@ -251,6 +251,14 @@ class PaymentProvider(abc.ABC):
         """In the OLD account: stop renewing at period end and record where it went."""
         raise PaymentError(f"{self.name} cannot end a carried subscription")
 
+    async def expire_checkout_session(self, session_id: str) -> str:
+        """Make an open Checkout page unpayable. Returns the session's status afterwards:
+        ``expired``, or ``complete`` when the customer had already paid on it (2026-10-12).
+
+        Opening Checkout again expires the page opened before, so two tabs cannot both be paid
+        and leave a workspace with two subscriptions. The default has nothing to expire."""
+        return "expired"
+
 
 class NoopPaymentProvider(PaymentProvider):
     """Offline default. Records intent, moves no money, never fails.
@@ -280,6 +288,9 @@ class NoopPaymentProvider(PaymentProvider):
         self.renames: list[dict[str, Any]] = []
         self.price_changes: list[dict[str, Any]] = []
         self._subs_by_key: dict[str, dict[str, Any]] = {}
+        self.expired_sessions: list[str] = []
+        #: Session ids a test marks as paid, so expiring them reports ``complete`` as Stripe does.
+        self.completed_sessions: set[str] = set()
 
     async def ensure_customer(self, *, tenant_id: str, email: str, name: str = "") -> str:
         cid = self.customers.setdefault(tenant_id, f"noop_cus_{tenant_id[:12]}")
@@ -372,6 +383,12 @@ class NoopPaymentProvider(PaymentProvider):
         }
         self.checkout_sessions.append(record)
         return record
+
+    async def expire_checkout_session(self, session_id: str) -> str:
+        if session_id in self.completed_sessions:
+            return "complete"
+        self.expired_sessions.append(session_id)
+        return "expired"
 
     async def get_subscription(self, *, subscription_id: str) -> dict:
         # Whatever a test staged in `self.subscriptions`, else unknown. Lets reconciliation be
@@ -967,6 +984,16 @@ class StripePaymentProvider(PaymentProvider):
             "tenant_id": tenant_id,
             "plan_id": plan_id,
         }
+
+    async def expire_checkout_session(self, session_id: str) -> str:
+        """POST .../expire. Stripe refuses a session that is no longer open, so a refusal is
+        answered by reading the session: ``complete`` means the customer paid on it."""
+        self._require()
+        try:
+            data = await self._post(f"/checkout/sessions/{session_id}/expire", {})
+        except PaymentError:
+            data = await self._get(f"/checkout/sessions/{session_id}")
+        return str(data.get("status") or "")
 
     async def create_invoice(
         self, *, customer_id: str, lines: list[dict], currency: str = "USD",

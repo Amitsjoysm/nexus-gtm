@@ -750,7 +750,7 @@ synchronous callers and for `set_payment_provider` test injection, which always 
   names NEXUS's own configuration (`PORTAL_CONFIG_TAG`, found by metadata or created once per
   account): cards, invoices, address and at-period-end cancellation on, `subscription_update` off.
   If it cannot be created the portal does not open: failing closed beats charging the wrong price.
-- **The panel tells the truth.** `webhooks.HANDLED_EVENTS` (13) is what the webhook panel lists; it
+- **The panel tells the truth.** `webhooks.HANDLED_EVENTS` (15 since 2026-10-12) is what the webhook panel lists; it
   summed two of the three tuples and showed 9, and a test checks every `event_type ==` branch is in
   it. Live/Test comes from the key prefix (`credentials.stripe_key_mode`: `sk_`/`rk_` x
   `live_`/`test_`); it was "charges enabled and not `sk_test_`", so a restricted test key read Live.
@@ -855,6 +855,36 @@ whatever they say: nothing on our side could see it.
   Platform health's `payments` row reads it (ERROR on blocking, DEGRADED on warnings) for the
   currencies on sale, and the Payments tab's **Check checkout** asks it about one credential's own
   account (`POST /admin/payment-credentials/{id}/checkout-check`, `pricing.write`) before it goes live.
+
+**One Stripe subscription per workspace, and only one that has started** (2026-10-12,
+`tests/test_one_stripe_subscription.py`). Found auditing the payment paths: a workspace paying for
+Launch pressed "Continue to checkout" on Accelerate, Checkout made a SECOND subscription, our row
+moved to it and Stripe billed both; the old one's events still reached the row by
+`metadata.tenant_id`, flipping the plan back, and its `deleted` cancelled a paying workspace.
+- **Checkout refuses a workspace already paying through Stripe** (409, "would charge it twice").
+  A plan change for it happens on its existing subscription.
+- **Only the newest Checkout page can be paid.** The session opened is stored on the subscription
+  row (`meta.open_checkout`); opening another expires it first (`expire_checkout_session`), under a
+  row lock so two requests cannot both open one. If the customer had already paid on it, 409 "just
+  completed". A failure to expire is logged and does not stop the sale.
+- **Return addresses stay on this app** (`_own_url`): a path is taken relative to `app_base_url`,
+  a full address must be on that origin, backslashes and control characters are refused; 422
+  otherwise. With no `app_base_url` (local) values pass as before.
+- **The webhook moves a row only for a subscription that has STARTED**: Checkout `paid` or
+  `no_payment_required`, `checkout.session.async_payment_succeeded`, or Stripe status `active` or
+  `trialing`. A bank debit completes Checkout `unpaid` and settles days later, and an `incomplete`
+  subscription expires on its own; before this both moved the workspace onto the paid plan with its
+  credits, and the expiry then cancelled the free plan it had. Now they only note
+  `meta.pending_psp_subscription`. A plan Stripe reports while the followed subscription is not
+  running (`past_due`, `unpaid`) is taken, its credits wait for `invoice.paid`.
+- **A started subscription replacing a live one retires the old one**: its id goes into
+  `previous_psp_subscriptions` (so `_is_retired` ignores its later events), ERROR log, the
+  `subscription_replaced` webhook counter, and the `billing_end_replaced_subscription` job ends it
+  at Stripe now. The job ends it only while the replacement reads `active`/`trialing` at Stripe,
+  so a stale event can never end the subscription a customer pays on, and a refusal raises into
+  retries and dead letters. Refunding any overlap is an operator's call. An event older
+  (`created`) than the last one applied cannot move the row to another subscription, and a carried
+  subscription (`nexus_carried_from`) is the account switch's to end, not this job's.
 
 ## Usage invoices are real invoices (`nexus/billing/collection.py`)
 
