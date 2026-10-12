@@ -519,6 +519,11 @@ async def roll_period(ts: TenantSession) -> bool:
     sub.current_period_end = next_period_end(now, sub.interval)
     await ts.flush()
 
+    if (sub.psp_subscription_id or "").startswith("sub_"):
+        # Billed by Stripe: the period is credited when Stripe is PAID for it, by the renewal
+        # invoice's `invoice.paid` (webhooks, 2026-10-12). Granting here credited a period before
+        # the card was even tried, and missed it whenever Stripe moved the period first.
+        return True
     plan = await ts.session.get(BillingPlan, sub.plan_id)
     await grant_plan_credits(ts, plan, at=now)
     return True

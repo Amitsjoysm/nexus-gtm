@@ -905,6 +905,16 @@ Two things about the Stripe call that are the opposite of what they look like:
   and is payable from its hosted page; reporting that as a failed creation would hide a real invoice
   and invite a second one for the same period.
 
+**A Stripe renewal is credited when Stripe is paid for it, once** (2026-10-12,
+`webhooks._grant_renewal_credits`, `tests/test_stripe_renewal_credits.py`). `roll_period` granted a
+period's credits at OUR boundary, before Stripe had tried the card, so an unpaid renewal had
+already been spent; and when Stripe's `customer.subscription.updated` moved the row's period first
+(it fires at the same moment) the roll never ran and the renewal was not credited at all. Now
+`invoice.paid` with `billing_reason: subscription_cycle`, for the subscription the row follows,
+grants the plan's credits keyed `stripe_renewal:<invoice>`, and the roll grants nothing when
+`psp_subscription_id` starts `sub_`. The first invoice (`subscription_create`) is the purchase,
+already credited by Checkout or the subscription event. Workspaces billed here roll as before.
+
 **Refunds, chargebacks and fraud warnings reach the workspace** (2026-10-12,
 `nexus/billing/payment_risk.py`, `tests/test_disputes_and_refunds.py`). The webhook looked the
 event's OWN id up as a PaymentIntent, but a refund's object is a charge and a dispute's a dispute,

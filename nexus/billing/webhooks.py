@@ -475,6 +475,47 @@ async def _grant_pending_credits(session, sub, outcome: dict) -> None:
     await session.flush()
 
 
+async def _grant_renewal_credits(session, sub, obj: dict, outcome: dict) -> None:
+    """A paid Stripe RENEWAL credits its period, once per invoice (2026-10-12).
+
+    The period roll used to grant before Stripe had tried the card, and missed the grant whenever
+    Stripe moved the period first. Only `subscription_cycle` counts: the first invoice paid for the
+    purchase (credited by the Checkout or subscription event), and a plan change pays for its own.
+    Only the subscription this row follows. Never raises, like `_grant_plan_credits`."""
+    from nexus.core.tenancy import TenantSession, apply_rls
+    from nexus.models.billing import BillingPlan
+
+    invoice_id = _str(obj.get("id"))
+    if (str(obj.get("billing_reason") or "") != "subscription_cycle" or not invoice_id
+            or _str(obj.get("subscription")) != (sub.psp_subscription_id or "")):
+        return
+    try:
+        from nexus.billing.credits import grant_credits
+        from nexus.billing.rollups import period_key
+        from nexus.core.db import utcnow
+
+        plan = await session.get(BillingPlan, sub.plan_id)
+        if plan is None or not plan.included_credits:
+            return
+        await apply_rls(session, sub.tenant_id)
+        if await grant_credits(
+            TenantSession(session, sub.tenant_id), plan.included_credits, kind="grant",
+            reason=f"{plan.name} included credits",
+            idempotency_key=f"stripe_renewal:{invoice_id}",
+            period_key=period_key(utcnow(), "period"),
+        ):
+            outcome["renewal_credits_for"] = plan.id
+    except Exception as exc:
+        logger.warning("could not credit renewal %s for %s", invoice_id, sub.tenant_id,
+                       exc_info=True)
+        try:
+            await _dead_letter_credit_grant(sub.tenant_id, sub.plan_id,
+                                            f"renewal {invoice_id}: {type(exc).__name__}: {exc}")
+        except Exception:
+            logger.exception("renewal credit dead-letter FAILED tenant=%s invoice=%s",
+                             sub.tenant_id, invoice_id)
+
+
 async def _grant_plan_credits(session, sub, plan) -> None:
     """Deliver a newly-bought plan's included credits. Never raises.
 
@@ -847,6 +888,7 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
         outcome["tenant_id"] = sub.tenant_id
     if event.event_type == "invoice.paid" and sub is not None:
         await _grant_pending_credits(session, sub, outcome)
+        await _grant_renewal_credits(session, sub, obj, outcome)
 
     if event.event_type == "invoice.upcoming":
         # A PREVIEW of the next renewal. It has no persisted invoice at the provider and none
