@@ -9,7 +9,7 @@ while Stripe's own retries went on collecting the original. A card that recovere
 """
 from __future__ import annotations
 
-from tests.test_billing_checkout_api import _seeded_tenant, noop_provider  # noqa: F401
+from tests.test_billing_checkout_api import _seeded_tenant
 from tests.test_one_stripe_subscription import _follow
 from tests.test_stripe_invoice_credits import _send
 

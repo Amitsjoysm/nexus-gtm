@@ -23,7 +23,7 @@ import time
 import pytest
 
 from tests.conftest import auth
-from tests.test_billing_checkout_api import _seeded_tenant, noop_provider  # noqa: F401
+from tests.test_billing_checkout_api import _seeded_tenant
 from tests.test_stripe_invoice_credits import _send, _state
 
 

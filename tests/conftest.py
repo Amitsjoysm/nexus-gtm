@@ -237,6 +237,18 @@ def no_auth_rate_limit(monkeypatch):
     monkeypatch.setattr(get_settings(), "auth_rate_limit_enabled", False)
 
 
+@pytest.fixture
+def noop_provider():
+    """A fresh offline payment provider for one test, restored afterwards. Shared by the payment
+    suites; `test_billing_checkout_api.py` keeps its own identical copy."""
+    from nexus.billing.payments import NoopPaymentProvider, set_payment_provider
+
+    provider = NoopPaymentProvider()
+    set_payment_provider(provider)
+    yield provider
+    set_payment_provider(None)
+
+
 async def seed_relevance_profile(ts, **overrides):
     """Give a test tenant something to sell.
 
