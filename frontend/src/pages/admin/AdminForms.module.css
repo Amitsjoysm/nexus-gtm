@@ -36,6 +36,16 @@
   color: var(--text-muted);
 }
 
+/* A checkbox with its visible label beside it; the whole row is the click target. */
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-default);
+  cursor: pointer;
+}
+
 /* A link the superadmin copies and sends (a Stripe Checkout link). The value wraps rather than
    scrolling, so the whole URL is readable before it is copied. */
 .linkResult {

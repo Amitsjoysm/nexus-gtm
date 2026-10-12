@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Field, Input, Modal, Select, Textarea, useToast } from "@/components/ui";
+import { Button, Checkbox, Field, Input, Modal, Select, Textarea, useToast } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import type { AdminPlan } from "@/lib/types";
@@ -40,6 +40,19 @@ function whole(text: string): number | null {
   return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
+/** The discount the seeded ladder uses ($99 a month -> $950 a year), and the server's ceiling. */
+const DEFAULT_ANNUAL_DISCOUNT = "20";
+const MAX_ANNUAL_DISCOUNT = 90;
+
+/**
+ * Twelve months less the discount, to the nearest whole unit, halves up. The SAME integer expression
+ * as `annual_price_cents` in `nexus/billing/plan_authoring.py`, so the preview quotes exactly the
+ * price the server makes the plan at.
+ */
+function annualCents(monthlyCents: number, pct: number): number {
+  return Math.floor((monthlyCents * 12 * (100 - pct) + 5000) / 10000) * 100;
+}
+
 /**
  * Create a plan the price list can sell, or edit a plan's commercial terms.
  *
@@ -74,6 +87,9 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
   const [maxSeats, setMaxSeats] = useState("");
   const [trialDays, setTrialDays] = useState("0");
   const [description, setDescription] = useState("");
+  // A monthly tier is sold yearly too, as its own `-annual` plan the price list pairs with it.
+  const [withAnnual, setWithAnnual] = useState(true);
+  const [discount, setDiscount] = useState(DEFAULT_ANNUAL_DISCOUNT);
   const [busy, setBusy] = useState(false);
 
   // The plans a new tier can start from: real tiers, never another workspace's bespoke deal.
@@ -97,6 +113,8 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
     setMaxSeats(plan?.max_seats != null ? String(plan.max_seats) : "");
     setTrialDays(plan ? String(plan.trial_days) : "0");
     setDescription(plan?.description ?? "");
+    setWithAnnual(true);
+    setDiscount(DEFAULT_ANNUAL_DISCOUNT);
   }, [open, plan, bases]);
 
   const effectiveId = creating ? (idTouched ? slug(planId) : slug(name)) : plan?.id ?? "";
@@ -108,6 +126,9 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
   const creditCount = whole(credits);
   const seatLimit = maxSeats.trim() === "" ? null : whole(maxSeats);
   const trial = whole(trialDays);
+  const makeAnnual = creating && billing === "month" && withAnnual;
+  const discountPct = whole(discount);
+  const annualId = `${effectiveId}-annual`;
 
   const errors = {
     name: name.trim() ? undefined : "Give the plan a name.",
@@ -126,6 +147,13 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
     credits: creditCount == null ? "Enter a whole number of credits." : undefined,
     maxSeats: maxSeats.trim() !== "" && seatLimit == null ? "A whole number, or blank for no limit." : undefined,
     trial: trial == null ? "A whole number of days." : undefined,
+    discount: !makeAnnual
+      ? undefined
+      : discountPct == null || discountPct > MAX_ANNUAL_DISCOUNT
+        ? `A whole number from 0 to ${MAX_ANNUAL_DISCOUNT}.`
+        : plans.some((p) => p.id === annualId)
+          ? `${annualId} already exists. Untick this, or choose another plan id.`
+          : undefined,
   };
   const valid = Object.values(errors).every((e) => e === undefined);
 
@@ -145,12 +173,18 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
           interval: billing,
           max_seats: seatLimit,
           trial_days: trial,
+          annual_discount_pct: makeAnnual ? discountPct : null,
         });
         toast.success(
-          `${name.trim()} saved as a draft`,
-          "It is not on the price list yet. Check what it includes, then publish it from the Plans list.",
+          result.annual
+            ? `${name.trim()} and ${name.trim()} (annual) saved as drafts`
+            : `${name.trim()} saved as a draft`,
+          result.annual
+            ? "Neither is on the price list yet. Check what they include, then publish both from the Plans list."
+            : "It is not on the price list yet. Check what it includes, then publish it from the Plans list.",
         );
         if (result.warning) toast.error("Check the price", result.warning);
+        else if (result.annual?.warning) toast.error("Check the annual price", result.annual.warning);
       } else if (plan) {
         // Only what changed, so a field nobody touched is never rewritten.
         const body: Record<string, unknown> = {};
@@ -272,6 +306,37 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
             {twin.interval === "year" ? " a year" : " a month"}. Customers see the annual price
             first, so edit both when the tier&rsquo;s price changes.
           </p>
+        )}
+
+        {creating && billing === "month" && (
+          <fieldset className={styles.fieldset}>
+            <legend className={styles.legend}>Annual plan</legend>
+            <label className={styles.checkRow}>
+              <Checkbox
+                label="Also create the annual plan"
+                checked={withAnnual}
+                onChange={(e) => setWithAnnual(e.target.checked)}
+              />
+              <span>Also sell it yearly, as {annualId}</span>
+            </label>
+            {withAnnual && (
+              <>
+                <Field
+                  label="Annual discount (%)"
+                  hint="Off twelve monthly payments. Credits stay twelve months' worth."
+                  error={errors.discount}
+                >
+                  <Input type="number" min="0" max={MAX_ANNUAL_DISCOUNT} step="1" value={discount}
+                    onChange={(e) => setDiscount(e.target.value)} />
+                </Field>
+                <p className={styles.hint} aria-live="polite">
+                  {priceCents != null && discountPct != null && discountPct <= MAX_ANNUAL_DISCOUNT
+                    ? `${name.trim() || "The plan"} (annual): ${formatPrice(annualCents(priceCents, discountPct), "USD")} a year instead of ${formatPrice(priceCents * 12, "USD")}${creditCount != null ? `, ${(creditCount * 12).toLocaleString()} credits a year` : ""}. Created as a draft beside the monthly plan; the price list shows them as one card.`
+                    : "Enter the monthly price to see the annual price."}
+                </p>
+              </>
+            )}
+          </fieldset>
         )}
 
         <div className={styles.row}>

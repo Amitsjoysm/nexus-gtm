@@ -634,6 +634,24 @@ it. `POST /admin/billing/plans` closes that; `PUT .../status` publishes or holds
   and Stripe refuses is a 502 and nothing changes, while archiving on hold and renaming the product
   only warn. See *Stripe-managed plans and subscriptions* below.
 
+**A new monthly plan brings its annual plan, at a chosen % off** (2026-10-12, `annual_discount_pct`,
+`tests/test_plan_annual_twin.py`). The price list sells a tier as two rows, `X` and `X-annual`,
+paired by name into one card; a plan made in Admin had no annual unless someone made a second plan
+by hand with exactly the right id, price and credits. Creating a monthly plan with the option
+(the dialog ticks it by default, 20% like the seeded ladder) makes `<id>-annual` in the same
+transaction, same base, entitlements, seats, trial and status:
+- **price and seat price** are twelve months less the discount, to the nearest whole unit, halves up
+  (`annual_price_cents`, integer arithmetic; `PlanDialog.annualCents` is the same expression, so the
+  preview is the price the plan is made at). $99 at 20% is $950, the seeded Launch annual.
+- **credits are exactly twelve months'**: the discount is on price, never on credits, as the seed
+  does, or credits per dollar compound past the design ceiling.
+- sorted beside the monthly (`sort_order + 1`); `meta.annual_of` and `meta.annual_discount_pct`
+  record where it came from.
+- the annual id taken, too long to keep its `-annual` suffix, a yearly plan, or a discount outside
+  0-90 refuses the WHOLE create: half a pair is what this prevents. Created on sale, both get their
+  Stripe price and are fitted to the price list monthly first, so the annual joins the monthly's
+  card or both are hidden together. Afterwards they are two plans, edited and published separately.
+
 **The Plans tab is where this is used** (`admin/PlanDialog.tsx`, 2026-10-01). For five weeks the
 server half had no screen: the tab offered only "What's included", the API client carried an
 `updatePlan` nobody called, and an operator reported "I can view plans but cannot edit or add one"

@@ -1787,10 +1787,13 @@ export class ApiClient {
     plan_id: string; name: string; base_plan_id: string; base_price_cents: number;
     included_credits: number; description?: string; seat_price_cents?: number | null;
     interval?: string; max_seats?: number | null; trial_days?: number;
+    /** Monthly plans only: also create `<plan_id>-annual` at this % off twelve months. */
+    annual_discount_pct?: number | null;
   }) {
-    return this.request<{ plan_id: string; status: string; warning?: string | null }>(
-      "/admin/billing/plans", { method: "POST", body },
-    );
+    return this.request<{
+      plan_id: string; status: string; warning?: string | null;
+      annual?: { plan_id: string; base_price_cents: number; warning?: string | null };
+    }>("/admin/billing/plans", { method: "POST", body });
   }
   /** Publish a standard plan to the price list ("active"), or hold it ("draft"). */
   setPlanStatus(planId: string, status: "active" | "draft") {

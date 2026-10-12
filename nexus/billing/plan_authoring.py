@@ -54,6 +54,37 @@ class PlanAuthoringError(ValueError):
     """The plan cannot be created as asked."""
 
 
+# ---- the annual twin (2026-10-12) ---------------------------------------------------------------
+# The price list sells a tier twice, as `X` (monthly) and `X-annual` (yearly), two rows that pair by
+# name (`plans.interval_pairs`) into one card with a Monthly/Annual switch. A plan made here had no
+# annual unless somebody made a second plan by hand with exactly the right id, price and credits.
+
+#: The annual discount the seeded ladder uses (Launch $99 a month -> $950 a year).
+DEFAULT_ANNUAL_DISCOUNT_PCT = 20
+#: Beyond this an "annual discount" is a giveaway typed by mistake.
+MAX_ANNUAL_DISCOUNT_PCT = 90
+
+
+def annual_price_cents(monthly_cents: int, discount_pct: int) -> int:
+    """Twelve months less the discount, to the nearest whole unit, halves up.
+
+    Integer arithmetic, so it is exact and identical to the preview in `PlanDialog.tsx`, which uses
+    the same expression: a dialog that quotes one price and a plan made at another is the bug.
+    $99 at 20% is 950.40 and becomes $950, the seeded Launch annual."""
+    return ((int(monthly_cents) * 12 * (100 - int(discount_pct)) + 5000) // 10000) * 100
+
+
+def _annual_twin_id(plan_id: str) -> str:
+    from nexus.billing.plans import ANNUAL_ID_SUFFIX
+
+    twin = plan_id + ANNUAL_ID_SUFFIX
+    if len(twin) > 60:
+        # `normalise_plan_id` cuts at 60, and a cut id no longer ends in `-annual`, so it would
+        # never pair with its monthly plan.
+        raise PlanAuthoringError("the plan id is too long to have an annual plan beside it")
+    return twin
+
+
 def normalise_plan_id(raw: str) -> str:
     """`Scale Annual` -> `scale-annual`. Ids appear in URLs, Stripe metadata and audit rows."""
     slug = _ID_RE.sub("-", (raw or "").strip().lower()).strip("-")
@@ -189,8 +220,16 @@ async def create_sellable_plan(
     status: str = "draft",
     entitlement_overrides: dict[str, dict] | None = None,
     metered_from_zero: bool = False,
+    annual_discount_pct: int | None = None,
 ) -> dict:
     """Create a plan the public price list can sell. Returns a summary plus any margin warning.
+
+    ``annual_discount_pct`` (monthly plans only) also creates ``<id>-annual`` in the same
+    transaction: the same base, entitlements, seats, trial and status, priced at twelve months less
+    the discount (`annual_price_cents`, seat price too), with exactly twelve months of credits (the
+    discount is on price, never on credits, as the seeded ladder does), sorted beside the monthly.
+    The summary carries it under ``annual``. Its id taken, or the id too long, refuses the whole
+    create: half a pair is the thing this exists to prevent.
 
     ``metered_from_zero`` builds a **pay-as-you-go** plan: every metered entitlement gets
     ``quota=0`` so that all consumption is overage and therefore rated onto an invoice.
@@ -214,6 +253,18 @@ async def create_sellable_plan(
         # Refused rather than updated. This endpoint creates; silently repricing a plan customers
         # are already subscribed to, because someone reused an id, is not a create.
         raise PlanAuthoringError(f"plan '{plan_id}' already exists")
+    twin_id = ""
+    if annual_discount_pct is not None:
+        # Checked before anything is written, so a refusal leaves neither plan behind.
+        if interval != "month":
+            raise PlanAuthoringError("only a monthly plan can have an annual plan made beside it")
+        if not 0 <= int(annual_discount_pct) <= MAX_ANNUAL_DISCOUNT_PCT:
+            raise PlanAuthoringError(
+                f"the annual discount must be between 0 and {MAX_ANNUAL_DISCOUNT_PCT}%")
+        twin_id = _annual_twin_id(plan_id)
+        if await session.get(BillingPlan, twin_id) is not None:
+            raise PlanAuthoringError(
+                f"plan '{twin_id}' already exists, so the annual plan cannot be made")
 
     base = await session.get(BillingPlan, base_plan_id)
     if base is None:
@@ -255,11 +306,36 @@ async def create_sellable_plan(
         session, base_price_cents=base_price_cents, included_credits=included_credits,
     )
 
+    annual = None
+    if twin_id:
+        pct = int(annual_discount_pct)
+        annual = await create_sellable_plan(
+            session,
+            plan_id=twin_id,
+            name=f"{plan.name} (annual)",
+            base_plan_id=base_plan_id,
+            base_price_cents=annual_price_cents(plan.base_price_cents, pct),
+            included_credits=plan.included_credits * 12,
+            description=f"{plan.name}, paid yearly. {pct}% off.",
+            seat_price_cents=annual_price_cents(plan.seat_price_cents or 0, pct),
+            currency=currency,
+            interval="year",
+            max_seats=plan.max_seats,
+            trial_days=plan.trial_days,
+            sort_order=plan.sort_order + 1,
+            status=status,
+            entitlement_overrides=entitlement_overrides,
+            metered_from_zero=metered_from_zero,
+        )
+        twin = await session.get(BillingPlan, twin_id)
+        twin.meta = {**(twin.meta or {}), "annual_of": plan_id, "annual_discount_pct": pct}
+        await session.flush()
+
     # **No Stripe object is created here.** A draft is not for sale, and pricing one would litter
     # the Stripe account with products for tiers that were never sold. A plan created or published
     # ON SALE is made to exist at Stripe by the endpoint (`stripe_catalog.apply_plan_to_provider`,
     # decided 2026-10-09), so a plan on the price list is always buyable.
-    return {
+    summary = {
         "plan_id": plan_id,
         "status": plan.status,
         "plan_class": plan.plan_class,
@@ -273,6 +349,9 @@ async def create_sellable_plan(
         "warning": warning,
         "sellable": plan.status == "active",
     }
+    if annual is not None:
+        summary["annual"] = annual
+    return summary
 
 
 async def _zero_quota_overrides(session: AsyncSession,

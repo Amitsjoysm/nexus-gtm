@@ -1162,6 +1162,9 @@ class SellablePlanIn(BaseModel):
     # overage onto an invoice. Without it a zero-allowance plan inherits unlimited entitlements
     # and bills nothing — rating skips any capability whose quota is None.
     metered_from_zero: bool = False
+    # A monthly plan only: also make `<plan_id>-annual` at this % off twelve months, so the tier is
+    # sold both ways as one card (`plan_authoring.annual_price_cents`). Omitted, nothing else is made.
+    annual_discount_pct: int | None = None
 
 
 class PlanStatusIn(BaseModel):
@@ -1210,27 +1213,30 @@ async def create_sellable_plan_endpoint(
                 status=body.status,
                 entitlement_overrides=body.entitlement_overrides or None,
                 metered_from_zero=body.metered_from_zero,
+                annual_discount_pct=body.annual_discount_pct,
             )
         except PlanAuthoringError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
         if result.get("status") == "active":
             from nexus.billing.payments import PaymentError, resolve_payment_provider
+            from nexus.billing.price_list import fit_after_publish, is_shown
             from nexus.billing.stripe_catalog import apply_plan_to_provider
 
-            plan = await session.get(BillingPlan, result["plan_id"])
-            try:
-                result["stripe"] = await apply_plan_to_provider(
-                    plan, await resolve_payment_provider())
-            except PaymentError as exc:
-                raise HTTPException(
-                    status.HTTP_502_BAD_GATEWAY,
-                    f"Stripe refused, the plan was not created: {exc}",
-                ) from exc
-            from nexus.billing.price_list import fit_after_publish, is_shown
-
-            result["note"] = await fit_after_publish(session, plan)
-            result["shown"] = is_shown(plan)
-            await session.flush()
+            provider = await resolve_payment_provider()
+            # The monthly plan first, then its annual twin: the annual joins the monthly's card, or
+            # both are hidden together when the price list is full, never one of the pair.
+            for summary in [result] + ([result["annual"]] if result.get("annual") else []):
+                plan = await session.get(BillingPlan, summary["plan_id"])
+                try:
+                    summary["stripe"] = await apply_plan_to_provider(plan, provider)
+                except PaymentError as exc:
+                    raise HTTPException(
+                        status.HTTP_502_BAD_GATEWAY,
+                        f"Stripe refused, the plan was not created: {exc}",
+                    ) from exc
+                summary["note"] = await fit_after_publish(session, plan)
+                summary["shown"] = is_shown(plan)
+                await session.flush()
         await record_admin_action(
             session, actor=principal.user_id, action="plan.create",
             target=result["plan_id"], after=result,
