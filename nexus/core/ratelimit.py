@@ -124,6 +124,17 @@ def rate_limit(bucket: str) -> Callable[[Request], None]:
     return _dep
 
 
+async def hit(key: str, *, window: int, limit: int) -> int | None:
+    """Count one hit against ``key``; seconds to wait when over ``limit``, else None.
+
+    For limits that are not per client IP, such as one connected AI app's calls per minute
+    (``nexus/mcp``). Same stores and the same never-fail-closed rule as :func:`rate_limit`."""
+    hits = await _shared_count(key, window)
+    if hits is not None:
+        return window if hits > limit else None
+    return _local_exceeded(key, window, limit)
+
+
 def reset_rate_limits() -> None:
     """Clear all counters (test helper / manual reset)."""
     _HITS.clear()
