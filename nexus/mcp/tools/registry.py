@@ -61,7 +61,7 @@ def describe(spec: ToolSpec, prices: dict[str, float]) -> dict:
             description += (f" Costs {price:g} credits {spec.price_unit}. The balance is checked "
                             "before anything is spent.")
         else:
-            description += " Costs credits, as in the NEXUS app; the balance is checked first."
+            description += " Costs credits, as in the app; the balance is checked first."
     return {
         "name": spec.name,
         "title": spec.title,

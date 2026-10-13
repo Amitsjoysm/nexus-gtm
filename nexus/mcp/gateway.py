@@ -25,6 +25,7 @@ import httpx
 from jose import jwt
 
 from nexus.mcp.credentials import Actor
+from nexus.mcp.brand import PRODUCT_NAME
 
 logger = logging.getLogger("nexus.mcp.gateway")
 
@@ -115,10 +116,10 @@ def _payment_message(body: object) -> str:
     capability = payload.get("capability") or "this action"
     reason = payload.get("reason") or ""
     if reason == "credits_exhausted" or "credit" in _detail(body).lower():
-        return (f"Not enough credits for {capability}. Add credits in NEXUS > Billing, or ask an "
+        return (f"Not enough credits for {capability}. Add credits in {PRODUCT_NAME} > Billing, or ask an "
                 "admin to change the plan. Nothing was charged.")
     return (f"The workspace's plan does not include {capability}. An admin can change the plan in "
-            "NEXUS > Billing. Nothing was charged.")
+            f"{PRODUCT_NAME} > Billing. Nothing was charged.")
 
 
 class Gateway:
@@ -156,7 +157,7 @@ class Gateway:
                                             headers=headers)
             except Exception:
                 logger.exception("tool request %s %s failed", method, path)
-                return ToolOutcome(False, None, "NEXUS could not finish this. Reference: "
+                return ToolOutcome(False, None, f"{PRODUCT_NAME} could not finish this. Reference: "
                                    f"{request_id}.", 500)
         try:
             body = resp.json()
@@ -174,7 +175,7 @@ class Gateway:
         if status >= 500:
             logger.warning("tool request %s %s answered %s (request %s)", method, path, status,
                            request_id)
-            return ToolOutcome(False, body, "NEXUS could not finish this. Reference: "
+            return ToolOutcome(False, body, f"{PRODUCT_NAME} could not finish this. Reference: "
                                f"{request_id}.", status)
         message = _detail(body) or {
             400: "The request was not valid.", 403: "You do not have permission to do this.",

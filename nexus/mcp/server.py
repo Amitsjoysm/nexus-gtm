@@ -16,10 +16,11 @@ from nexus.mcp import protocol, safety, schema
 from nexus.mcp.credentials import Actor
 from nexus.mcp.gateway import Gateway, ToolOutcome
 from nexus.mcp.tools import TOOLS, by_name, describe, load_prices
+from nexus.mcp.brand import PRODUCT_NAME, SERVER_ID
 
 logger = logging.getLogger("nexus.mcp.server")
 
-SERVER_INFO = {"name": "nexus-gtm", "title": "NEXUS GTM", "version": "1.0.0"}
+SERVER_INFO = {"name": SERVER_ID, "title": PRODUCT_NAME, "version": "1.0.0"}
 CAPABILITIES = {"tools": {"listChanged": False}}
 #: How long a client may cache tools/list (2026-07-28 `CacheableResult`). The list changes only
 #: when the connection's permissions do, and a permission change takes effect within the
@@ -84,7 +85,7 @@ async def call_tool(app, actor: Actor, params: dict) -> dict:
         metrics.record_mcp_tool(name, "refused")
         return _tool_result({
             "error": f"This connection is not allowed to {_SCOPE_WORDS[spec.scope]}. The user can "
-                     "change its permissions in NEXUS > AI apps.",
+                     f"change its permissions in {PRODUCT_NAME} > AI apps.",
         }, is_error=True)
     try:
         args = schema.validate(spec.input_schema, params.get("arguments"))

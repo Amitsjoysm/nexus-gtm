@@ -9,6 +9,7 @@ import {
   DashboardIcon,
   FileTextIcon,
   InboxIcon,
+  LinkIcon,
   ListIcon,
   MailIcon,
   MessageIcon,
@@ -112,6 +113,8 @@ export const NAV_ITEMS: NavItem[] = [
     to: "/relevance", label: "Relevance", icon: <TargetIcon />, minRole: "manager",
     capability: "module.relevance",
   },
+  // Every member: each person connects their own AI apps, acting as themselves (MCP).
+  { to: "/connected-apps", label: "AI apps", icon: <LinkIcon />, capability: "module.mcp" },
   { to: "/members", label: "Members", icon: <UsersIcon />, minRole: "manager" },
   {
     to: "/integrations", label: "Integrations", icon: <PlugIcon />, minRole: "admin",

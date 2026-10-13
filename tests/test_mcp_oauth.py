@@ -374,6 +374,21 @@ def test_redirect_matching_rules():
     assert not oauth.redirect_matches(["http://127.0.0.1/cb"], "http://localhost:9/cb")
 
 
+def test_verification_needs_more_than_a_name():
+    from nexus.models.mcp import OAuthClient
+
+    def client(kind, client_id, uris):
+        return OAuthClient(kind=kind, client_id=client_id, client_name="Claude", redirect_uris=uris)
+
+    assert oauth.is_verified(client("registered", "nxc_1", ["https://x.example/cb"]))
+    assert oauth.is_verified(client("cimd", CIMD_URL, ["http://localhost/callback"]))
+    assert oauth.is_verified(client("dcr", "dcr_1", [REDIRECT]))
+    assert not oauth.is_verified(client("dcr", "dcr_2", [REDIRECT, "https://evil.example/cb"]))
+    assert not oauth.is_verified(client("dcr", "dcr_3", ["http://localhost:5000/cb"]))
+    assert not oauth.is_verified(client("cimd", "https://evil.example/claude.json",
+                                        ["https://evil.example/cb"]))
+
+
 def test_pkce():
     verifier, challenge = _pkce()
     assert oauth.pkce_ok(verifier, challenge)

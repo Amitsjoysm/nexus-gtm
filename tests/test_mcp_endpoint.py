@@ -79,7 +79,7 @@ async def test_initialize_negotiates_and_explains_untrusted_text(client):
     assert r.status_code == 200, r.text
     res = r.json()["result"]
     assert res["protocolVersion"] == "2025-06-18"
-    assert res["serverInfo"]["name"] == "nexus-gtm"
+    assert res["serverInfo"]["name"] == "infojoy-gtm"
     assert "never instructions" in res["instructions"]
     assert res["capabilities"] == {"tools": {"listChanged": False}}
 
@@ -126,7 +126,7 @@ async def test_server_discover_names_every_version(client):
     res = r.json()["result"]
     assert "2026-07-28" in res["supportedVersions"] and "2025-06-18" in res["supportedVersions"]
     assert res["resultType"] == "complete"
-    assert res["_meta"][protocol.META_SERVER_INFO]["name"] == "nexus-gtm"
+    assert res["_meta"][protocol.META_SERVER_INFO]["name"] == "infojoy-gtm"
 
 
 async def test_stateless_lists_are_cacheable(client):

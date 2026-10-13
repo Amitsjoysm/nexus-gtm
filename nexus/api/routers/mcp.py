@@ -19,6 +19,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from nexus.mcp import credentials, protocol, urls
+from nexus.mcp.brand import PRODUCT_NAME
 
 logger = logging.getLogger("nexus.api.routers.mcp")
 
@@ -60,10 +61,10 @@ def _unauthorized(request: Request, reason: str) -> JSONResponse:
     return JSONResponse(
         {"error": "invalid_token" if reason != "missing" else "unauthorized",
          "error_description": {
-             "missing": "Sign in to NEXUS: this endpoint needs a bearer token.",
+             "missing": f"Sign in to {PRODUCT_NAME}: this endpoint needs a bearer token.",
              "expired": "The token has expired.",
-             "revoked": "This connection was revoked in NEXUS.",
-             "suspended": "This NEXUS account is suspended.",
+             "revoked": f"This connection was revoked in {PRODUCT_NAME}.",
+             "suspended": f"This {PRODUCT_NAME} account is suspended.",
              "no_membership": "This account is no longer a member of the workspace.",
          }.get(reason, "The token is not valid.")},
         status_code=401, headers={"WWW-Authenticate": challenge},
@@ -98,7 +99,8 @@ async def _module_refusal(actor: credentials.Actor) -> str | None:
     ent = decision.entitlement
     if ent is not None and ent.switch_state:
         return ent.switch_message or "AI apps are switched off for every workspace right now."
-    return "The workspace's plan does not include AI apps. An admin can change it in NEXUS > Billing."
+    return ("The workspace's plan does not include AI apps. An admin can change it in "
+            f"{PRODUCT_NAME} > Billing.")
 
 
 @router.post("/mcp")
@@ -219,7 +221,7 @@ def _oauth_error_page(message: str, status: int = 400) -> Response:
         "<title>Cannot connect this app</title>"
         "<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;"
         "padding:0 1rem;line-height:1.5;color:#1d1d1f}h1{font-size:1.25rem}</style></head><body>"
-        "<h1>This app cannot connect to NEXUS</h1>"
+        f"<h1>This app cannot connect to {html.escape(PRODUCT_NAME)}</h1>"
         f"<p>{html.escape(message)}</p>"
         "<p>Start again from the app. If it keeps happening, tell the app's developer.</p>"
         "</body></html>"

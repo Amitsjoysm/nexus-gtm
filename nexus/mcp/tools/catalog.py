@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from nexus.mcp.gateway import Gateway, ToolOutcome
 from nexus.mcp.tools.registry import ID_PATTERN, REQUEST_ID, ToolSpec
+from nexus.mcp.brand import PRODUCT_NAME
 
 _ID = {"type": "string", "pattern": ID_PATTERN}
 _IDS = {"type": "array", "items": {"type": "string", "pattern": ID_PATTERN}, "maxItems": 500}
@@ -142,7 +143,7 @@ async def _find_contacts(gw: Gateway, args: dict) -> ToolOutcome:
         return _fail(out)
     found = out.data or []
     return _ok({"added": found, "count": len(found),
-                "note": "Found people are saved to the account in NEXUS, as Find contacts does."})
+                "note": f"Found people are saved to the account in {PRODUCT_NAME}, as Find contacts does."})
 
 
 async def _find_similar(gw: Gateway, args: dict) -> ToolOutcome:
@@ -229,7 +230,8 @@ async def _add_to_campaign(gw: Gateway, args: dict) -> ToolOutcome:
     if not out.ok:
         return _fail(out)
     data = dict(out.data or {})
-    data["note"] = "Nothing was sent. Drafts wait for review in NEXUS before anything goes out."
+    data["note"] = (f"Nothing was sent. Drafts wait for review in {PRODUCT_NAME} before "
+                    "anything goes out.")
     return _ok(data)
 
 
@@ -384,7 +386,7 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="create_account", title="Add an account", scope="write",
         description="Add a company to the workspace. Give its website domain whenever known: the "
-                    "domain is how NEXUS tells companies apart and collects their signals.",
+                    "domain is how the product tells companies apart and collects their signals.",
         input_schema=_obj({
             "name": {"type": "string", "minLength": 1, "maxLength": 255},
             "domain": {"type": "string", "maxLength": 255, "description": "e.g. acme.com"},
@@ -415,7 +417,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         name="add_contacts_to_campaign", title="Add contacts to a campaign", scope="write",
         description="Add people to a campaign: named contacts, everyone with an email at named "
                     "accounts, or a whole list. Nothing is sent: drafts wait for the user's review "
-                    "in NEXUS.",
+                    "in the app.",
         input_schema=_obj({
             "campaign_id": _ID, "contact_ids": _IDS, "account_ids": _IDS, "list_id": _ID,
         }, ("campaign_id",)),

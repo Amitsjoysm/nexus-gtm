@@ -14,6 +14,11 @@ import type {
   AgentRunResponse,
   LatestAgentRun,
   LastWebsiteAnalysis,
+  McpConnection,
+  McpKeyCreated,
+  McpScope,
+  McpSetup,
+  OAuthConsentView,
   Alert,
   AlertStatus,
   AnalyticsOverview,
@@ -1125,6 +1130,52 @@ export class ApiClient {
       `/workspace/email/accounts/${encodeURIComponent(accountId)}/claim`,
       { method: "POST" },
     );
+  }
+
+  // ---- AI apps (MCP connections) ----
+  /** Your own connected apps and API keys, or the whole workspace's (admins). */
+  listConnections(view: "mine" | "team" = "mine", signal?: AbortSignal) {
+    return this.request<McpConnection[]>("/connections", { query: { view }, signal });
+  }
+  /** The MCP server address and the tools an app can use. */
+  mcpSetup(signal?: AbortSignal) {
+    return this.request<McpSetup>("/connections/setup", { signal });
+  }
+  /** A new API key. The response is the only place the secret ever appears. */
+  createMcpKey(body: { name: string; scopes: McpScope[]; expires_in_days: number | null }) {
+    return this.request<McpKeyCreated>("/connections/keys", { method: "POST", body });
+  }
+  /** Rename a connection or change what it may do (your own only). */
+  updateConnection(id: string, body: { name?: string; scopes?: McpScope[] }) {
+    return this.request<McpConnection>(`/connections/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  }
+  /** Stop a connection at once. Yours, or anyone's in the workspace for an admin. */
+  revokeConnection(id: string) {
+    return this.request<void>(`/connections/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  /** What the consent screen shows for a signed sign-in request from /oauth/authorize. */
+  oauthRequest(request: string, signal?: AbortSignal) {
+    return this.request<OAuthConsentView>("/connections/oauth/request", {
+      query: { request },
+      signal,
+    });
+  }
+  /** Approve the app with the ticked permissions; returns where to send the browser. */
+  oauthApprove(request: string, scopes: McpScope[]) {
+    return this.request<{ redirect_to: string }>("/connections/oauth/approve", {
+      method: "POST",
+      body: { request, scopes },
+    });
+  }
+  /** Decline; returns the app's redirect carrying access_denied. */
+  oauthDeny(request: string) {
+    return this.request<{ redirect_to: string }>("/connections/oauth/deny", {
+      method: "POST",
+      body: { request },
+    });
   }
 
   // ---- alert channel connections ----

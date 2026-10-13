@@ -2765,3 +2765,59 @@ export interface LegacyCampaign {
   targets: number;
   sent: number;
 }
+
+// ---- AI apps (MCP) ----
+
+/** What a connected AI app may do. Chosen per connection; never more than the user's own role. */
+export type McpScope = "read" | "research" | "write";
+
+/** One API key or one app approved through OAuth. The key itself is never sent back. */
+export interface McpConnection {
+  id: string;
+  kind: "api_key" | "oauth";
+  name: string;
+  client_name: string;
+  client_host: string;
+  verified: boolean;
+  scopes: McpScope[];
+  key_prefix: string;
+  created_at: string | null;
+  last_used_at: string | null;
+  expires_at: string | null;
+  owner_name: string;
+  owner_email: string;
+  is_mine: boolean;
+}
+
+/** The create response: the only time the secret exists outside the server. */
+export interface McpKeyCreated {
+  connection: McpConnection;
+  secret: string;
+  server_url: string;
+}
+
+export interface McpSetupTool {
+  name: string;
+  title: string;
+  scope: McpScope;
+  description: string;
+}
+
+export interface McpSetup {
+  server_url: string;
+  public_address_set: boolean;
+  tools: McpSetupTool[];
+}
+
+/** What the OAuth consent screen shows about the app asking for access. */
+export interface OAuthConsentView {
+  client_name: string;
+  client_uri: string;
+  logo_uri: string;
+  verified: boolean;
+  redirect_host: string;
+  only_loopback: boolean;
+  scopes: McpScope[];
+  workspace_name: string;
+  user_email: string;
+}

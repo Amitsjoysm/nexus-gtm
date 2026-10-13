@@ -38,6 +38,7 @@ from nexus.core.db import get_sessionmaker, utcnow
 from nexus.mcp import credentials
 from nexus.mcp.credentials import ACCESS_PREFIX, OAUTH_SCOPE, REFRESH_PREFIX, SCOPE_FROM_OAUTH
 from nexus.models.mcp import McpConnection, OAuthClient, OAuthCode, OAuthToken
+from nexus.mcp.brand import PRODUCT_NAME
 
 REQUEST_TYP = "oauth_request"
 REQUEST_TTL = timedelta(minutes=10)
@@ -132,13 +133,24 @@ def only_loopback(client: OAuthClient) -> bool:
     return bool(uris) and all(_is_loopback(urlparse(u).hostname or "") for u in uris)
 
 
+def _verified_host(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == h or host.endswith("." + h) for h in VERIFIED_HOSTS)
+
+
 def is_verified(client: OAuthClient) -> bool:
+    """Verified when something other than the app's own say-so proves who it is: a superadmin
+    registered it, its metadata document is served from a known host, or every address it may
+    return to is https on a known host. The last holds for a self-registered client too, because a
+    code is only ever delivered to a registered redirect: a stranger naming itself "Claude" with
+    claude.ai's callback could never receive one."""
     if client.kind == "registered":
         return True
-    if client.kind != "cimd":
-        return False
-    host = (urlparse(client.client_id).hostname or "").lower()
-    return any(host == h or host.endswith("." + h) for h in VERIFIED_HOSTS)
+    if client.kind == "cimd" and _verified_host(urlparse(client.client_id).hostname or ""):
+        return True
+    uris = client.redirect_uris or []
+    return bool(uris) and all(
+        urlparse(u).scheme == "https" and _verified_host(urlparse(u).hostname or "") for u in uris)
 
 
 def parse_scope(raw: str | None) -> list[str]:
@@ -189,7 +201,7 @@ def protected_resource_metadata(base: str) -> dict:
         "authorization_servers": [base],
         "scopes_supported": [OAUTH_SCOPE[s] for s in credentials.SCOPES],
         "bearer_methods_supported": ["header"],
-        "resource_name": "NEXUS GTM",
+        "resource_name": PRODUCT_NAME,
         "resource_documentation": f"{base}/connected-apps",
     }
 

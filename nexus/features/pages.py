@@ -53,6 +53,7 @@ HIDEABLE_PAGES: tuple[PageSpec, ...] = (
     PageSpec("approvals", "/approvals", "Approvals", "module.agents"),
     PageSpec("plays", "/plays", "Plays", "module.plays"),
     PageSpec("relevance", "/relevance", "Relevance", "module.relevance"),
+    PageSpec("ai_apps", "/connected-apps", "AI apps", "module.mcp"),
     PageSpec("integrations", "/integrations", "Integrations", "module.integrations"),
 )
 

@@ -67,6 +67,8 @@ const ApprovalsPage = lazyPage(() => import("@/pages/ApprovalsPage"), "Approvals
 const ChatPage = lazyPage(() => import("@/pages/ChatPage"), "ChatPage");
 const MailboxesPage = lazyPage(() => import("@/pages/engagement/MailboxesPage"), "MailboxesPage");
 const DataUsePage = lazyPage(() => import("@/pages/DataUsePage"), "DataUsePage");
+const ConnectedAppsPage = lazyPage(() => import("@/pages/ConnectedAppsPage"), "ConnectedAppsPage");
+const OAuthConsentPage = lazyPage(() => import("@/pages/OAuthConsentPage"), "OAuthConsentPage");
 // The engagement engine's screens (spec §9). Each route is behind `RequireEngine` as well as its
 // module gate: while the engine is dark every API behind them answers 404.
 const EngagementCampaignsPage = lazyPage(
@@ -106,9 +108,42 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return isAuthed ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
+/**
+ * An AI app's sign-in request survives the trip through login. Only the consent page is
+ * remembered, and only as a path on this origin: a stored return address that could be any URL is
+ * an open redirect, and this one exists for exactly one page.
+ */
+const RETURN_KEY = "nexus.returnTo";
+
+function rememberConsent(path: string) {
+  try {
+    sessionStorage.setItem(RETURN_KEY, path);
+  } catch {
+    // Storage blocked: the person signs in and starts again from the app.
+  }
+}
+
+function takeConsentReturn(): string | null {
+  try {
+    const path = sessionStorage.getItem(RETURN_KEY);
+    sessionStorage.removeItem(RETURN_KEY);
+    return path && path.startsWith("/oauth/consent?") ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+function RequireAuthForConsent({ children }: { children: ReactNode }) {
+  const { isAuthed } = useAuth();
+  if (isAuthed) return <>{children}</>;
+  rememberConsent(window.location.pathname + window.location.search);
+  return <Navigate to="/login" replace />;
+}
+
 function RequireAnon({ children }: { children: ReactNode }) {
   const { isAuthed } = useAuth();
-  return isAuthed ? <Navigate to="/dashboard" replace /> : <>{children}</>;
+  if (!isAuthed) return <>{children}</>;
+  return <Navigate to={takeConsentReturn() ?? "/dashboard"} replace />;
 }
 
 /** Gate a route by minimum role; redirect users who lack it back to the dashboard. */
@@ -197,6 +232,15 @@ export function App() {
               <Route path="/reset-password" element={<ResetPasswordPage />} />
               {/* Public: the sign-up form links here before an account exists (D24). */}
               <Route path="/data-use" element={<DataUsePage />} />
+              {/* An AI app's OAuth sign-in: signed in, but outside the app shell. */}
+              <Route
+                path="/oauth/consent"
+                element={
+                  <RequireAuthForConsent>
+                    <OAuthConsentPage />
+                  </RequireAuthForConsent>
+                }
+              />
 
               <Route
                 element={
@@ -306,6 +350,17 @@ export function App() {
                 />
                 {/* Every member, like Alerts itself: choosing where your own alerts go is rep-level.
                     The team-channel half of the page checks the role inside. */}
+                {/* Every member connects their own AI apps; gated like any module page. */}
+                <Route
+                  path="/connected-apps"
+                  element={
+                    <RequirePage page="/connected-apps">
+                      <RequireCapability capability="module.mcp" name="AI apps">
+                        <ConnectedAppsPage />
+                      </RequireCapability>
+                    </RequirePage>
+                  }
+                />
                 <Route
                   path="/alerts/settings"
                   element={
