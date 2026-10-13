@@ -75,6 +75,7 @@ async def _query_contacts(
     include_deleted: bool,
     limit: int,
     offset: int,
+    contact_id: str | None = None,
 ) -> list[WorkspaceContactOut]:
     """The one contact query. Shared by the list view and the CSV export so the two can never
     disagree — an export that does not match what is on screen is worse than no export."""
@@ -92,6 +93,8 @@ async def _query_contacts(
         stmt = stmt.where(Contact.deleted_at.is_(None))
     if account_id:
         stmt = stmt.where(Contact.account_id == account_id)
+    if contact_id:
+        stmt = stmt.where(Contact.id == contact_id)
 
     needle = (q or "").strip().lower()
     if needle:
@@ -434,3 +437,19 @@ async def save_draft_for_contact(
         from_email=outcome.from_email,
         email_status=outcome.email_status,
     )
+
+
+# Declared LAST: routes match in declaration order, and `/export` (a GET) must win over this.
+@router.get("/{contact_id}", response_model=WorkspaceContactOut)
+async def get_contact(
+    contact_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> WorkspaceContactOut:
+    """One contact with its account context, the row the list shows. Used by the MCP `fetch` tool;
+    a deleted contact reads as not found, as it does in the list."""
+    rows = await _query_contacts(ts, q=None, account_id=None, include_deleted=False, limit=1,
+                                 offset=0, contact_id=contact_id)
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    return rows[0]

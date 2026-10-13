@@ -1,0 +1,231 @@
+# tests/test_mcp_tools.py
+"""The tool catalogue (spec 2026-10-13, task 5): its shape is what the marketplaces review, and its
+handlers run through the real API on an offline workspace."""
+from __future__ import annotations
+
+import re
+
+import pytest
+
+from nexus.mcp import credentials
+from nexus.mcp.gateway import Gateway, ToolOutcome, path_allowed
+from nexus.mcp.schema import SUPPORTED_KEYWORDS, SchemaError, validate
+from nexus.mcp.tools import TOOLS, by_name, describe
+from tests.conftest import auth, principal_from_token, signup
+
+VENDORS = ("exa", "apify", "groq", "firecrawl", "serper", "brave", "reacher", "harvestapi",
+           "anthropic", "openai", "duckduckgo", "twilio", "stripe")
+
+
+# ---- shape -----------------------------------------------------------------------------------
+
+def test_every_tool_has_a_title_and_the_hints_the_directories_require():
+    for t in TOOLS:
+        ann = t.annotations()
+        assert t.title and ann["title"] == t.title, t.name
+        assert "readOnlyHint" in ann, t.name
+        if not ann["readOnlyHint"]:
+            assert "destructiveHint" in ann and ann["destructiveHint"] is False, t.name
+
+
+def test_names_are_unique_short_and_snake_case():
+    names = [t.name for t in TOOLS]
+    assert len(names) == len(set(names)) == 18
+    for n in names:
+        assert len(n) <= 64 and re.fullmatch(r"[a-z][a-z_]*", n), n
+
+
+def test_the_order_is_read_then_research_then_write():
+    order = [t.scope for t in TOOLS]
+    assert order == sorted(order, key=["read", "research", "write"].index)
+    assert set(order) == {"read", "research", "write"}
+
+
+def test_read_tools_are_the_seven_free_ones():
+    assert [t.name for t in TOOLS if t.scope == "read"] == [
+        "search", "fetch", "list_signals", "list_inbox", "list_lists", "list_campaigns",
+        "get_credit_balance"]
+
+
+def test_descriptions_name_no_vendor():
+    for t in TOOLS:
+        text = f"{t.title} {t.description} {t.input_schema}".lower()
+        for vendor in VENDORS:
+            assert not re.search(rf"\b{vendor}\b", text), (t.name, vendor)
+
+
+def _keywords(schema: dict):
+    for key, value in schema.items():
+        yield key
+        if key == "properties":
+            for rule in value.values():
+                yield from _keywords(rule)
+        elif key == "items" and isinstance(value, dict):
+            yield from _keywords(value)
+
+
+def test_schemas_use_only_what_the_validator_enforces():
+    for t in TOOLS:
+        assert t.input_schema["type"] == "object"
+        assert t.input_schema.get("additionalProperties") is False, t.name
+        unknown = set(_keywords(t.input_schema)) - SUPPORTED_KEYWORDS
+        assert not unknown, (t.name, unknown)
+
+
+def test_research_tools_declare_their_price_and_write_tools_do_not():
+    for t in TOOLS:
+        assert bool(t.price_capability) == (t.scope == "research"), t.name
+
+
+def test_every_declared_call_is_reachable_through_the_gateway():
+    for t in TOOLS:
+        assert t.calls, t.name
+        for method, template in t.calls:
+            assert path_allowed(method, template.replace("{id}", "abc123")), (t.name, template)
+
+
+async def test_handlers_only_send_the_requests_they_declare():
+    class Recorder:
+        def __init__(self):
+            self.sent: list[tuple[str, str]] = []
+
+        async def get(self, path, params=None):
+            self.sent.append(("GET", path))
+            return ToolOutcome(True, {"account_id": "acc1", "id": "x1"} if "contacts/" in path
+                               else [])
+
+        async def post(self, path, json=None, params=None, idempotency_key=None):
+            self.sent.append(("POST", path))
+            return ToolOutcome(True, {"id": "x1", "output": {}})
+
+    samples = {"id": "account:abc123", "query": "a", "account_id": "abc123", "contact_id": "abc123",
+               "list_id": "abc123", "campaign_id": "abc123", "task_id": "abc123", "name": "n",
+               "body": "b"}
+    for t in TOOLS:
+        rec = Recorder()
+        args = validate(t.input_schema, {k: v for k, v in samples.items()
+                                         if k in t.input_schema["properties"]})
+        await t.handler(rec, args)  # type: ignore[arg-type]
+        declared = {(m, tpl.replace("{id}", "abc123")) for m, tpl in t.calls}
+        declared |= {(m, tpl.replace("{id}", "acc1")) for m, tpl in t.calls}
+        for sent in rec.sent:
+            assert sent in declared, (t.name, sent)
+            assert path_allowed(*sent)
+
+
+def test_a_path_traversal_id_is_a_schema_error():
+    with pytest.raises(SchemaError):
+        validate(by_name("find_contacts").input_schema, {"account_id": "../admin"})
+    with pytest.raises(SchemaError):
+        validate(by_name("fetch").input_schema, {"id": "account:../x"})
+
+
+def test_a_research_tool_states_its_price_from_the_rate_card():
+    entry = describe(by_name("enrich_contact"), {"enrich.contact": 4})
+    assert "4 credits per contact" in entry["description"]
+    assert entry["annotations"]["openWorldHint"] is True
+    fallback = describe(by_name("enrich_contact"), {})
+    assert "credits" in fallback["description"] and "Costs credits" in fallback["description"]
+
+
+# ---- behaviour on an offline workspace -----------------------------------------------------
+
+def _actor(token: str) -> credentials.Actor:
+    p = principal_from_token(token)
+    return credentials.Actor(
+        user_id=p.user_id, tenant_id=p.tenant_id, role=p.role, token_version=0,
+        connection_id="conn-test", kind="api_key", scopes=frozenset(credentials.SCOPES),
+        name="test")
+
+
+async def _call(client, token, tool, **args):
+    spec = by_name(tool)
+    gw = Gateway(client._transport.app, _actor(token))
+    return await spec.handler(gw, validate(spec.input_schema, args))
+
+
+async def test_create_then_search_then_fetch_an_account(client):
+    token = await signup(client, slug="tl1", email="o@tl1.com")
+    made = await _call(client, token, "create_account", name="Globex", domain="globex.com")
+    assert made.ok, made.message
+    acc_id = made.data["account"]["id"]
+    found = await _call(client, token, "search", query="globex")
+    assert found.ok and found.data["results"][0]["id"] == f"account:{acc_id}"
+    got = await _call(client, token, "fetch", id=f"account:{acc_id}")
+    assert got.ok and got.data["account"]["name"] == "Globex"
+    assert set(got.data) >= {"signals", "contacts"}
+
+
+async def test_lists_can_be_made_filled_and_read(client):
+    token = await signup(client, slug="tl2", email="o@tl2.com")
+    acc = (await _call(client, token, "create_account", name="Initech")).data["account"]["id"]
+    made = await _call(client, token, "create_list", name="Q4 targets")
+    assert made.ok, made.message
+    list_id = made.data["list"]["id"]
+    added = await _call(client, token, "add_to_list", list_id=list_id, account_ids=[acc])
+    assert added.ok and added.data["added"] == 1
+    lists = await _call(client, token, "list_lists")
+    assert lists.ok and any(row["id"] == list_id for row in lists.data["lists"])
+    one = await _call(client, token, "fetch", id=f"list:{list_id}")
+    assert one.ok and one.data["members"][0]["account_id"] == acc
+
+
+async def test_the_read_tools_answer(client):
+    token = await signup(client, slug="tl3", email="o@tl3.com")
+    for name in ("list_signals", "list_inbox", "list_campaigns", "get_credit_balance"):
+        out = await _call(client, token, name)
+        assert out.ok, (name, out.message)
+    balance = await _call(client, token, "get_credit_balance")
+    assert "balance" in balance.data
+
+
+async def test_a_contact_can_be_fetched_and_drafted_to(client):
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+    from nexus.models.account import Contact
+    from tests.conftest import seed_relevance_profile
+
+    token = await signup(client, slug="tl4", email="o@tl4.com")
+    p = principal_from_token(token)
+    acc = (await _call(client, token, "create_account", name="Hooli",
+                       domain="hooli.com")).data["account"]["id"]
+    async with get_sessionmaker()() as s:
+        ts = TenantSession(s, p.tenant_id)
+        await seed_relevance_profile(ts)
+        c = Contact(tenant_id=p.tenant_id, account_id=acc, full_name="Gavin Belson",
+                    title="CEO", email="gavin@hooli.com")
+        ts.add(c)
+        await s.commit()
+        contact_id = c.id
+    got = await _call(client, token, "fetch", id=f"contact:{contact_id}")
+    assert got.ok and got.data["contact"]["full_name"] == "Gavin Belson"
+    draft = await _call(client, token, "draft_email", contact_id=contact_id)
+    assert draft.ok, draft.message
+    assert draft.data["body"] and "subject" in draft.data
+
+
+async def test_a_missing_record_is_a_message_not_a_crash(client):
+    token = await signup(client, slug="tl5", email="o@tl5.com")
+    out = await _call(client, token, "fetch", id="account:nope123")
+    assert not out.ok and out.status == 404
+
+
+async def test_get_contact_endpoint_is_tenant_scoped(client):
+    a = await signup(client, slug="tl6a", email="o@tl6a.com")
+    b = await signup(client, slug="tl6b", email="o@tl6b.com")
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession
+    from nexus.models.account import Contact
+
+    pa = principal_from_token(a)
+    acc = (await client.post("/api/accounts", headers=auth(a), json={"name": "A Co"})).json()["id"]
+    async with get_sessionmaker()() as s:
+        ts = TenantSession(s, pa.tenant_id)
+        c = Contact(tenant_id=pa.tenant_id, account_id=acc, full_name="Ann")
+        ts.add(c)
+        await s.commit()
+        cid = c.id
+    assert (await client.get(f"/api/contacts/{cid}", headers=auth(a))).status_code == 200
+    assert (await client.get(f"/api/contacts/{cid}", headers=auth(b))).status_code == 404
+    # The export route is still the export, not a contact called "export".
+    assert (await client.get("/api/contacts/export", headers=auth(a))).status_code == 200
