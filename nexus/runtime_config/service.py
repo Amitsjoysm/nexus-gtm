@@ -157,6 +157,27 @@ def _regex_validator(pattern: str, message: str):
     return _validate
 
 
+def _validate_origin_list(value) -> None:
+    """Each entry an https origin, nothing else. A wildcard or a path is refused rather than
+    silently trimmed: this list decides which web pages may call /mcp with a user's key."""
+    from urllib.parse import urlparse
+
+    for entry in [e.strip() for e in str(value or "").split(",") if e.strip()]:
+        parsed = urlparse(entry)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError(f"'{entry}' is not an https origin, like https://tools.example.com")
+        if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            raise ValueError(f"'{entry}' has a path; give only the origin")
+
+
+def _validate_challenge_token(value) -> None:
+    import re
+
+    raw = str(value or "").strip()
+    if raw and not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", raw):
+        raise ValueError("the token is letters, digits, '.', '-' and '_', at most 200 characters")
+
+
 _validate_google_client_id = _regex_validator(
     r"[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com",
     "a Google OAuth client id looks like 123456789012-abc123.apps.googleusercontent.com",
@@ -229,6 +250,8 @@ _VALIDATORS = {
     "engagement_google_push_service_account": _validate_service_account,
     "engagement_microsoft_client_id": _validate_microsoft_client_id,
     "engagement_microsoft_tenant": _validate_microsoft_tenant,
+    "mcp_allowed_origins": _validate_origin_list,
+    "openai_apps_challenge_token": _validate_challenge_token,
 }
 
 

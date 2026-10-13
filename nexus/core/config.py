@@ -135,6 +135,17 @@ class Settings(BaseSettings):
     # Empty falls back to a relative path; set in production.
     app_base_url: str = ""
 
+    # MCP server and its OAuth authorization server (nexus/mcp/). The first three are Runtime
+    # settings (Access & security). One connected AI app may make this many tool calls a minute.
+    mcp_rate_limit_per_minute: int = 120
+    # Browser origins allowed to call /mcp, comma-separated https origins. Server-to-server clients
+    # (claude.ai, ChatGPT, the model APIs) send no Origin and are unaffected.
+    mcp_allowed_origins: str = ""
+    # The ChatGPT app directory's domain check token, served at /.well-known/openai-apps-challenge.
+    openai_apps_challenge_token: str = ""
+    oauth_access_token_ttl_s: int = 3600
+    oauth_refresh_token_ttl_days: int = 30
+
     # CORS — comma-separated origins (e.g. a Chrome extension or external SPA). Empty = same-origin.
     cors_origins: str = ""
 

@@ -92,6 +92,11 @@ _MODULES = [
          description="ICP definition and deterministic account scoring."),
     _cap("module.agents", "module", "AI agents module", default_mode="enabled",
          description="Orchestrator, agent runs and approvals."),
+    # On every plan by default (decided 2026-10-13): a connected AI app costs nothing extra, and
+    # each action it takes costs the credits it costs in the app. A gate all the same, so it can be
+    # priced or switched off from Admin without a deploy. On no plan, so this is a strict no-op.
+    _cap("module.mcp", "module", "AI apps (MCP)", default_mode="enabled",
+         description="Connect AI assistants such as Claude and ChatGPT to NEXUS."),
 ]
 
 # A module gate that only hides a menu item is a discount with no cost saving: the pages disappear

@@ -735,6 +735,31 @@ _SPECS: tuple[SettingSpec, ...] = (
                 "list is ignored rather than enforced, which is the deliberate escape hatch.",
         risk="high", placeholder="203.0.113.10, 198.51.100.0/24",
     ),
+    SettingSpec(
+        key="mcp_rate_limit_per_minute", label="AI app calls per minute", group=ACCESS,
+        kind="int", minimum=10, maximum=2000,
+        effect="How many tool calls one connected AI app (an API key or an OAuth connection) may "
+               "make per minute. Calls over it are refused with Retry-After.",
+        warning="Too low and an assistant working through a list stalls part way; the limit is "
+                "per connection, so one runaway script cannot slow anyone else down.",
+    ),
+    SettingSpec(
+        key="mcp_allowed_origins", label="AI app browser origins", group=ACCESS, kind="str",
+        effect="Comma-separated https origins whose web pages may call /mcp from a browser. AI "
+               "apps that call from their own servers (Claude, ChatGPT, the model APIs) send no "
+               "origin and are unaffected.",
+        warning="A page on an origin listed here can call NEXUS with any key a user pastes into "
+                "it. List only origins you control.",
+        risk="medium", placeholder="https://tools.example.com",
+    ),
+    SettingSpec(
+        key="openai_apps_challenge_token", label="ChatGPT domain check token", group=ACCESS,
+        kind="str",
+        effect="Served as plain text at /.well-known/openai-apps-challenge so the ChatGPT app "
+               "directory can confirm this domain is yours. Paste the token its submission form "
+               "shows.",
+        placeholder="token from the ChatGPT submission form",
+    ),
 
     # ---- reliability ----------------------------------------------------------------------------
     SettingSpec(

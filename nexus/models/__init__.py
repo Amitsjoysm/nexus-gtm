@@ -28,6 +28,7 @@ from nexus.models.jobs import DeadLetterJob
 from nexus.models.feature_switch import FeatureSwitch
 from nexus.models.page_visibility import PageVisibility
 from nexus.models.mfa import MFARecoveryCode, UserMFA
+from nexus.models.mcp import McpConnection, OAuthClient, OAuthCode, OAuthToken
 from nexus.models.signal_preference import SignalPreference
 from nexus.models.intelligence import AccountScore, AgentRun
 from nexus.models.orchestration import Approval, OrchestrationRun, RunEvent, RunStep
@@ -156,6 +157,10 @@ __all__ = [
     "DeadLetterJob",
     "UserMFA",
     "MFARecoveryCode",
+    "McpConnection",
+    "OAuthClient",
+    "OAuthCode",
+    "OAuthToken",
     "ProspectCursor",
     "ProspectRun",
     "WebCache",
