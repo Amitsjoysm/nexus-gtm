@@ -87,3 +87,18 @@ def test_the_screens_use_the_customer_facing_product_name():
         text = _read(rel)
         visible = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
         assert "NEXUS" not in visible, rel
+
+
+def test_the_page_says_when_claude_and_chatgpt_cannot_reach_the_address():
+    page = _words("pages/ConnectedAppsPage.tsx")
+    assert "setup.reachable_from_internet" in page
+    assert "cannot reach it" in page
+
+
+def test_the_page_says_which_apps_take_an_api_key():
+    """Asked "do I need a custom connector to use an API key?": Claude's and ChatGPT's connectors
+    sign in with OAuth and take no key; the key goes into the apps that run on your computer."""
+    page = _words("pages/ConnectedAppsPage.tsx")
+    assert "do not take an API key" in page
+    assert page.count("headers: { Authorization: `Bearer ${keyPlaceholder}` }") >= 2  # editors, API
+    assert "McpSetup" in _read("lib/types.ts") and "reachable_from_internet: boolean" in _read("lib/types.ts")

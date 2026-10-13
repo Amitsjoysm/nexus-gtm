@@ -24,6 +24,9 @@ This page is the public setup guide. Publish it at a stable public address (for 
 2. Choose **Connect**. Claude opens InfoJoy GTM.
 3. Sign in if asked, tick what Claude may do, and choose **Allow access**.
 
+Claude's connectors sign in this way and do not take an API key. To use a key, connect from Claude
+Code, Cursor, VS Code or a model API instead (below).
+
 ### ChatGPT
 
 1. Find **InfoJoy GTM** in the ChatGPT app directory and choose **Connect**. To add it by address
@@ -37,7 +40,8 @@ This page is the public setup guide. Publish it at a stable public address (for 
 claude mcp add --transport http infojoy-gtm https://gtm.infojoy.com/mcp
 ```
 
-Then run `/mcp` in Claude Code and choose InfoJoy GTM to sign in. Or install the plugin, which
+Then run `/mcp` in Claude Code and choose InfoJoy GTM to sign in. To use an API key instead, add
+`--header "Authorization: Bearer YOUR_API_KEY"` to the command. Or install the plugin, which
 also adds skills for inbox triage, account research and list building:
 
 ```
@@ -60,7 +64,13 @@ Add to `.vscode/mcp.json`:
 { "servers": { "infojoy-gtm": { "type": "http", "url": "https://gtm.infojoy.com/mcp" } } }
 ```
 
-Both editors open InfoJoy GTM to sign in the first time a tool is used.
+Both editors open InfoJoy GTM to sign in the first time a tool is used. To use an API key
+instead, add a `headers` entry beside `url`, the same in both files:
+
+```json
+{ "mcpServers": { "infojoy-gtm": { "url": "https://gtm.infojoy.com/mcp",
+  "headers": { "Authorization": "Bearer YOUR_API_KEY" } } } }
+```
 
 ### Scripts and model APIs
 
@@ -114,6 +124,10 @@ workspace's audit log. See the privacy policy at `https://gtm.infojoy.com/privac
 ## Troubleshooting
 
 - **"Couldn't reach the server"**: check the address is exactly `https://gtm.infojoy.com/mcp`.
+  Claude and ChatGPT connect from their own servers on the internet, so a company network address
+  or `localhost` will not work for them.
+- **Where do I paste my API key in Claude?** You don't: Claude's connectors sign in instead. Keys
+  are for Claude Code, Cursor, VS Code and scripts.
 - **The app says it isn't allowed to do something**: change the connection's permissions in
   **AI apps**.
 - **"Not enough credits"**: add credits in **Billing**, or ask an admin.

@@ -89,6 +89,9 @@ class SetupTool(BaseModel):
 class SetupOut(BaseModel):
     server_url: str
     public_address_set: bool
+    # False for localhost, private and internal addresses: Claude and ChatGPT connect from the
+    # internet, so their connector steps cannot work there (apps on the user's computer still do).
+    reachable_from_internet: bool
     tools: list[SetupTool]
 
 
@@ -214,9 +217,11 @@ async def setup(
     from nexus.core.config import get_settings
     from nexus.mcp.tools import TOOLS, describe
 
+    server_url = urls.mcp_url(request)
     return SetupOut(
-        server_url=urls.mcp_url(request),
+        server_url=server_url,
         public_address_set=bool((get_settings().app_base_url or "").strip()),
+        reachable_from_internet=urls.internet_reachable(server_url),
         tools=[SetupTool(name=t.name, title=t.title, scope=t.scope,
                          description=describe(t, {})["description"]) for t in TOOLS],
     )

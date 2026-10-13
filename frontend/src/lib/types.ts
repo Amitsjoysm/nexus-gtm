@@ -2806,6 +2806,8 @@ export interface McpSetupTool {
 export interface McpSetup {
   server_url: string;
   public_address_set: boolean;
+  /** False for localhost and private addresses, which Claude and ChatGPT cannot open. */
+  reachable_from_internet: boolean;
   tools: McpSetupTool[];
 }
 

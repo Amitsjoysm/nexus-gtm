@@ -127,7 +127,48 @@ async def test_setup_lists_the_server_and_every_tool(client):
     token = await signup(client, slug="ca8", email="o@ca8.com")
     body = (await client.get("/api/connections/setup", headers=auth(token))).json()
     assert body["server_url"] == "http://test/mcp" and body["public_address_set"] is False
+    assert body["reachable_from_internet"] is False
     assert len(body["tools"]) == 18
+
+
+async def test_setup_says_whether_claude_and_chatgpt_can_reach_the_address(client, monkeypatch):
+    """A workspace testing on localhost followed the Claude steps and nothing connected: the
+    connector is opened from Claude's servers, which cannot reach this machine. The page needs to
+    know that to say so."""
+    from nexus.core.config import get_settings
+
+    token = await signup(client, slug="ca10", email="o@ca10.com")
+    monkeypatch.setattr(get_settings(), "app_base_url", "https://localhost")
+    body = (await client.get("/api/connections/setup", headers=auth(token))).json()
+    assert body["public_address_set"] is True and body["reachable_from_internet"] is False
+    monkeypatch.setattr(get_settings(), "app_base_url", "https://gtm.example.com")
+    body = (await client.get("/api/connections/setup", headers=auth(token))).json()
+    assert body["server_url"] == "https://gtm.example.com/mcp"
+    assert body["reachable_from_internet"] is True
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://gtm.infojoy.com/mcp", True),
+    ("https://203.0.113.9/mcp", False),  # documentation range: reserved, never routed
+    ("https://8.8.8.8/mcp", True),
+    ("https://localhost/mcp", False),
+    ("http://localhost:8099/mcp", False),
+    ("http://127.0.0.1:9129/mcp", False),
+    ("http://[::1]:8000/mcp", False),
+    ("http://10.0.0.4/mcp", False),
+    ("http://192.168.1.20/mcp", False),
+    ("http://169.254.169.254/mcp", False),
+    ("http://app.localhost/mcp", False),
+    ("http://nexus.local/mcp", False),
+    ("http://gtm.test/mcp", False),
+    ("http://app.internal/mcp", False),
+    ("http://app:8000/mcp", False),
+    ("", False),
+])
+def test_which_addresses_the_internet_can_reach(url, expected):
+    from nexus.mcp.urls import internet_reachable
+
+    assert internet_reachable(url) is expected
 
 
 async def test_creating_a_key_is_refused_while_ai_apps_are_switched_off(client):

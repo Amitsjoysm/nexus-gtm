@@ -131,7 +131,8 @@ function ClientGuide({ client, url }: { client: ClientId; url: string }) {
             <p key="b">Name it {PRODUCT_NAME} and paste the server address above.</p>,
             <p key="c">
               Choose <strong>Connect</strong>. Claude opens {PRODUCT_NAME}, where you choose what it may
-              do and approve. No API key is needed.
+              do and approve. Claude's connectors do not take an API key; to use a key, connect from
+              Claude Code, Cursor, VS Code or a model API instead.
             </p>,
           ]}
         </Steps>
@@ -192,7 +193,21 @@ function ClientGuide({ client, url }: { client: ClientId; url: string }) {
                 code={JSON.stringify({ servers: { [SERVER_ID]: { type: "http", url } } }, null, 2)}
               />
             </div>,
-            <p key="c">Both open {PRODUCT_NAME} to sign in the first time a tool is used.</p>,
+            <div key="c">
+              <p>
+                Both open {PRODUCT_NAME} to sign in the first time a tool is used. Prefer a key? Create
+                one below and add a <code className={styles.inlineCode}>headers</code> entry beside{" "}
+                <code className={styles.inlineCode}>url</code>, the same in both files:
+              </p>
+              <Snippet
+                label="Cursor configuration with an API key"
+                code={JSON.stringify(
+                  { mcpServers: { [SERVER_ID]: { url, headers: { Authorization: `Bearer ${keyPlaceholder}` } } } },
+                  null,
+                  2,
+                )}
+              />
+            </div>,
           ]}
         </Steps>
       );
@@ -239,15 +254,28 @@ function ConnectPanel({ setup }: { setup: McpSetup }) {
         <div className={styles.address}>
           <span className={styles.addressLabel}>Server address</span>
           <CopyRow label="Server address" value={setup.server_url} />
-          {!setup.public_address_set && (
+          {!setup.reachable_from_internet ? (
             <p className={styles.addressNote} role="note">
               <Icons.AlertTriangleIcon aria-hidden="true" />
               <span>
-                Claude, ChatGPT and the model APIs reach {PRODUCT_NAME} from the internet, so they need this
-                deployment's public address. A platform admin sets it under Control plane,
-                Configuration, App public address.
+                This address works only on this computer or its network. Claude, ChatGPT and the
+                model APIs connect from the internet, so they cannot reach it. Claude Code, Cursor
+                and VS Code run on your computer and work here. To connect the others, a platform
+                admin sets a public https address under Control plane, Configuration, App public
+                address.
               </span>
             </p>
+          ) : (
+            !setup.public_address_set && (
+              <p className={styles.addressNote} role="note">
+                <Icons.AlertTriangleIcon aria-hidden="true" />
+                <span>
+                  Claude, ChatGPT and the model APIs reach {PRODUCT_NAME} from the internet, so they need
+                  this deployment's public address. A platform admin sets it under Control plane,
+                  Configuration, App public address.
+                </span>
+              </p>
+            )
           )}
         </div>
         <Tabs

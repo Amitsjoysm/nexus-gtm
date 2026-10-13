@@ -7,7 +7,13 @@ local stack without it answers with the request's own origin, so it still works 
 """
 from __future__ import annotations
 
+import ipaddress
+from urllib.parse import urlparse
+
 from fastapi import Request
+
+# Names that resolve only on this machine or this network, never on the public internet.
+_LOCAL_SUFFIXES = (".localhost", ".local", ".test", ".internal", ".lan", ".home.arpa")
 
 
 def base_url(request: Request | None = None) -> str:
@@ -27,3 +33,20 @@ def mcp_url(request: Request | None = None) -> str:
 
 def resource_metadata_url(request: Request | None = None) -> str:
     return f"{base_url(request)}/.well-known/oauth-protected-resource"
+
+
+def internet_reachable(url: str) -> bool:
+    """Could Claude's or ChatGPT's servers open this address? They connect from the internet, so a
+    loopback, private or reserved IP, ``localhost``, a single-label container name or a local-only
+    suffix cannot work, and the AI apps page says so instead of letting the steps fail silently.
+    Decided from the address alone: no DNS lookup on a page load."""
+    host = (urlparse(url or "").hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        pass
+    if host == "localhost" or host.endswith(_LOCAL_SUFFIXES) or "." not in host:
+        return False
+    return True
