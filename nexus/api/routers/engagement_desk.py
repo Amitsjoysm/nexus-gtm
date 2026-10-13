@@ -39,6 +39,10 @@ class QueueItemOut(BaseModel):
     preview: str
     received_at: datetime | None
     responded_at: datetime | None
+    # The automatic answer, where the mailbox's SDR switched it on: pending, sent or held, and the
+    # sentence saying why a held one waits for a person (`replies/auto_reply.py`).
+    auto_reply: str | None = None
+    auto_reply_note: str | None = None
 
 
 class ScheduledOut(BaseModel):
@@ -149,6 +153,8 @@ def _row(classification, message, names: _Names) -> dict:
         "preview": " ".join(body.split())[:280],
         "received_at": getattr(message, "received_at", None),
         "responded_at": classification.responded_at,
+        "auto_reply": classification.auto_reply,
+        "auto_reply_note": classification.auto_reply_note,
     }
 
 

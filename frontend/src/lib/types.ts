@@ -2595,6 +2595,9 @@ export interface DeskQueueItem {
   preview: string;
   received_at: string | null;
   responded_at: string | null;
+  /** The automatic answer where the mailbox allows one: pending, sent, or held with the reason. */
+  auto_reply: "pending" | "sent" | "held" | null;
+  auto_reply_note: string | null;
 }
 
 export interface DeskConversationMessage {

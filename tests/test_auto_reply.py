@@ -265,6 +265,28 @@ async def test_switched_off_before_the_sweep_nothing_is_sent(mailbox_double, mon
     assert len(mailbox_double.delivered) == 1
 
 
+async def test_the_desk_says_why_the_ai_held_a_reply(client, mailbox_double, monkeypatch):
+    from nexus.core.security import create_access_token
+    from nexus.models.engagement import MailboxConnection
+
+    tid, enrollment, our_id = await _sent_first("autodesk", monkeypatch, mailbox_double)
+    await _switches(tid, allow_send=True, send=True)
+    mailbox_double.arrive(_mail(sender="jane0@acme.io", in_reply_to=our_id,
+                                body="Sounds interesting, let's talk next week."))
+    await _sync(tid, enrollment.mailbox_connection_id)
+    await _switches(tid, allow_send=True, send=False)
+    await _sweep(tid)
+    async with tenant_session(tid) as ts:
+        owner = (await ts.get(MailboxConnection, enrollment.mailbox_connection_id)).owner_user_id
+    token = create_access_token(user_id=owner, tenant_id=tid, role="rep")
+    classification_id = (await _classification(tid)).id
+    item = (await client.get(f"/api/engagement/desk/{classification_id}",
+                             headers=auth(token))).json()
+    assert item["auto_reply"] == "held" and "switched off" in item["auto_reply_note"]
+    queue = (await client.get("/api/engagement/desk", headers=auth(token))).json()
+    assert [r["auto_reply"] for r in queue] == ["held"]
+
+
 async def test_only_the_first_reply_in_a_thread_is_answered_automatically(
     mailbox_double, monkeypatch,
 ):

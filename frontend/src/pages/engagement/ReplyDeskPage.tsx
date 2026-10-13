@@ -186,7 +186,8 @@ function Queue({
                 <span className={styles.deskItemFoot}>
                   {cat && <Badge tone={cat.tone}>{cat.label}</Badge>}
                   {r.decision && <Badge tone="neutral">{decisionLabel(r.decision)}</Badge>}
-                  {r.responded_at && !r.decision && <Badge tone="neutral">Answered</Badge>}
+                  {r.auto_reply === "sent" && <Badge tone="info">AI replied</Badge>}
+                  {r.responded_at && !r.decision && r.auto_reply !== "sent" && <Badge tone="neutral">Answered</Badge>}
                 </span>
                 <span className={styles.preview}>{r.preview}</span>
               </button>
@@ -325,6 +326,19 @@ function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () => void
 
       {d.resolved_date && (
         <p className={styles.notice} role="status">They asked to hear back on {whenDay(d.resolved_date)}.</p>
+      )}
+
+      {d.auto_reply === "sent" && (
+        <p className={styles.notice} role="status">
+          The AI answered this reply by itself, because your mailbox allows it. Their next reply
+          comes to you.
+        </p>
+      )}
+      {d.auto_reply === "pending" && (
+        <p className={styles.notice} role="status">The AI is about to answer this reply by itself.</p>
+      )}
+      {d.auto_reply === "held" && d.auto_reply_note && (
+        <p className={styles.notice} role="status">The AI did not answer this one: {d.auto_reply_note}</p>
       )}
 
       <section aria-label="Conversation" className={styles.conversation}>
