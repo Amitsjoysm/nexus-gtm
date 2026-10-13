@@ -21,6 +21,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from nexus.providers.catalog import MAIL_KEY_IDS
+
 _TIMEOUT = 20.0
 
 
@@ -95,6 +97,14 @@ def _unreachable(exc: Exception) -> TestResult:
     return TestResult(False, "failed", f"could not reach the provider: {exc!r}"[:300], None)
 
 
+async def _check_mail(provider: str, key: str) -> TestResult:
+    """A mail server password: sign in with it and the saved host and username, send nothing."""
+    from nexus.integrations import platform_mail
+
+    ok, detail = await platform_mail.check(MAIL_KEY_IDS[provider], password=key)
+    return TestResult(ok, "verified" if ok else "failed", detail[:300])
+
+
 async def probe(provider: str, key: str, *, transport=None) -> TestResult:
     """Cheapest call that proves this credential authenticates."""
     from nexus.core.config import get_settings
@@ -106,6 +116,8 @@ async def probe(provider: str, key: str, *, transport=None) -> TestResult:
 
     if provider in ENGAGEMENT_KEY_IDS:
         return await check(provider, key, transport=transport)
+    if provider in MAIL_KEY_IDS:
+        return await _check_mail(provider, key)
     s = get_settings()
     try:
         if provider == "groq":
@@ -181,6 +193,9 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
         # No deeper call exists: an OAuth client is proven only when a user authorises it, and a
         # store's grants are checked by the ledger's own schema check (phase 06).
         return await check(provider, key, transport=transport)
+    if provider in MAIL_KEY_IDS:
+        # Signing in is as deep as a check goes without sending somebody an email.
+        return await _check_mail(provider, key)
     s = get_settings()
     try:
         if provider in ("groq", "openai_compat"):

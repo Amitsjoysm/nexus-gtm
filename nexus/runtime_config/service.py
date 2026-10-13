@@ -234,7 +234,58 @@ def _validate_signal_window(value) -> None:
         raise ValueError(f"the signal window must be one of {', '.join(OPTION_VALUES)}")
 
 
+def _validate_mail_host(value) -> None:
+    """A host name only, and a public one outside a local stack: Check sign-in connects to it and
+    reports how it answered, which from a form would otherwise be a port scanner. Empty is the
+    provider's own server."""
+    import re
+
+    from nexus.integrations.platform_mail import host_refusal
+
+    host = str(value or "").strip()
+    if not host:
+        return
+    if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", host):
+        raise ValueError("give the server's host name only, like smtp.zoho.com: no scheme, "
+                         "port or path")
+    refusal = host_refusal(host)
+    if refusal:
+        raise ValueError(refusal)
+
+
+def _validate_mail_username(value) -> None:
+    text = str(value or "")
+    if len(text) > 200 or any(ord(ch) < 32 for ch in text):
+        raise ValueError("the sign-in must be one line of at most 200 characters")
+
+
+def _validate_mail_address(value) -> None:
+    """One address or empty. A line break here would add a header to every email sent."""
+    import re
+
+    text = str(value or "").strip()
+    if not text:
+        return
+    if len(text) > 200 or not re.fullmatch(r"[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+", text):
+        raise ValueError("give one email address, like no-reply@example.com")
+
+
+def _validate_mail_name(value) -> None:
+    text = str(value or "")
+    if len(text) > 100 or any(ord(ch) < 32 for ch in text) or any(c in text for c in '<>"'):
+        raise ValueError("the From name must be one line of at most 100 characters, without "
+                         "< > or quotes")
+
+
 _VALIDATORS = {
+    "system_smtp_host": _validate_mail_host,
+    "alert_smtp_host": _validate_mail_host,
+    "system_smtp_username": _validate_mail_username,
+    "alert_smtp_username": _validate_mail_username,
+    "system_smtp_from": _validate_mail_address,
+    "alert_email_sender": _validate_mail_address,
+    "alert_email_to": _validate_mail_address,
+    "system_smtp_from_name": _validate_mail_name,
     "telephony_from_number": _validate_caller_id,
     "signal_window_default": _validate_signal_window,
     "admin_ip_allowlist": _validate_allowlist,

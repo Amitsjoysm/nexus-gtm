@@ -1003,6 +1003,37 @@ prevents. `status` is validated against `SUBSCRIPTION_STATUSES` — a value outs
 not a stricter setting, it is a subscription neither rating nor entitlements can reason about.
 Cancel defaults to **at period end**, because the customer paid through it.
 
+## The email the platform sends itself (`nexus/integrations/platform_mail.py`)
+
+Reported from staging, 2026-10-13: "signup OTPs are not being received". Signup said "check your
+email" and no code came. What was there: the account mailbox (signup codes, password resets, MFA
+sign-in codes) came only from `NEXUS_SYSTEM_SMTP_*`, copied into three senders; its server could only
+be one of three presets (`gmail`, `outlook`, `office365`), so any other server resolved to an empty
+host and `send_email` answered "smtp not configured" without connecting; a Gmail app password pasted
+as Google shows it (four groups with spaces) did not sign in; and `start_registration` ignored the
+answer, so whatever went wrong the visitor was told a code was sent and the only trace was a
+WARNING in the log. `tests/test_signup_email.py`.
+
+- **One mailbox per purpose, read at send time**: `account` (signup, reset, MFA codes) and `alerts`
+  (notifications, its own server: decided with the product owner, so alert volume cannot get the
+  address that sends password resets throttled). Invoices are Stripe's to email.
+- **Editable in Superadmin on the screens that already existed** (the product owner asked for an
+  enhancement, not a new screen): the servers in **Configuration > Platform email** (runtime
+  settings, validated before storing: a public host name only outside local, one email address, no
+  line break in a From name), each password in **Provider keys** (`system_smtp`, `alert_smtp`,
+  sealed, never returned), whose **Test** signs in and sends nothing. All fall back to the
+  environment, so a deployment that never opens either screen sends as before.
+- **Any SMTP server**: `system_smtp_host` / `system_smtp_port` (empty / 0 = the provider's preset).
+  465 is implicit TLS, 587 STARTTLS (`email_sender.resolve_smtp`). A server with no sign-in is a
+  relay, as alert email has always allowed.
+- **App passwords**: spaces are dropped for Gmail (Google's never contain one); any other server
+  keeps the password exactly. A refusal says what to fix (`explain`): Google's 534 5.7.9 / 535 5.7.8
+  mean an app password is needed, Microsoft's 5.7.139 means Authenticated SMTP is off for the mailbox.
+- **Registration tells the truth**: a code that could not be sent is a 503 "could not send" with
+  nothing pending, so the visitor can retry at once; a failed resend is not counted against the five.
+- Alert email (`alerts/channels.EmailChannel`) built with no server reads the alerts mailbox at
+  send time, so a change in Superadmin applies without a restart.
+
 ## MFA (`nexus/auth/`) — M13
 
 Opt-in per user; **login is unchanged for anyone who has not confirmed a factor**. That is the

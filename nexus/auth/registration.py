@@ -54,19 +54,11 @@ class StartResult:
 
 
 async def send_otp_email(to: str, code: str) -> bool:
-    """Email a verification code via the system SMTP mailbox. Module-level so tests can patch it.
-
-    Returns True on success. Never raises (the sender already swallows SMTP errors)."""
-    from nexus.integrations.email_sender import send_email
+    """Email a verification code from the account mailbox (Superadmin > Configuration > Platform email).
+    Module-level so tests can patch it. Returns True on success. Never raises."""
+    from nexus.integrations import platform_mail
 
     s = get_settings()
-    cfg = {
-        "provider": s.system_smtp_provider,
-        "username": s.system_smtp_username,
-        "password": s.system_smtp_password,
-        "from_email": s.system_smtp_from or s.system_smtp_username,
-        "from_name": s.system_smtp_from_name,
-    }
     minutes = max(1, s.otp_ttl_s // 60)
     body = (
         "Welcome to InfoJoy GTM.\n\n"
@@ -74,9 +66,8 @@ async def send_otp_email(to: str, code: str) -> bool:
         f"This code expires in {minutes} minute{'s' if minutes != 1 else ''}. "
         "If you didn't request this, you can safely ignore this email."
     )
-    result = await send_email(cfg, to=to, subject="Your InfoJoy GTM verification code", body=body)
-    if not result.ok:
-        logger.warning("OTP email to %s not sent: %s", to, result.detail)
+    result = await platform_mail.send(platform_mail.ACCOUNT, to=to,
+                                      subject="Your InfoJoy GTM verification code", body=body)
     return result.ok
 
 
@@ -143,9 +134,18 @@ async def start_registration(
         await db.rollback()
         raise RegistrationError(429, "A verification code was just sent. Check your email.")
 
-    await send_otp_email(email, code)
+    if not await send_otp_email(email, code):
+        # Nothing was sent, so nothing is pending: the visitor can try again at once rather than
+        # wait out a cooldown for a code that never left (2026-10-13). It used to say "check your
+        # email" here, which on staging read as codes vanishing.
+        await db.rollback()
+        raise RegistrationError(503, _NOT_SENT)
     await db.commit()
     return StartResult(email=email, expires_in_s=s.otp_ttl_s, resend_in_s=s.otp_resend_cooldown_s)
+
+
+_NOT_SENT = ("We could not send the verification email, so no code was sent. Please try again in "
+             "a few minutes. If it keeps happening, contact support.")
 
 
 async def resend_otp(db: AsyncSession, *, email: str) -> StartResult:
@@ -172,7 +172,11 @@ async def resend_otp(db: AsyncSession, *, email: str) -> StartResult:
     pending.resends += 1
     pending.last_sent_at = now
     await db.flush()
-    await send_otp_email(email, code)
+    if not await send_otp_email(email, code):
+        # Not counted and no cooldown: the previous code (if any) still stands, and the visitor
+        # may ask again at once once the mailbox works.
+        await db.rollback()
+        raise RegistrationError(503, _NOT_SENT)
     await db.commit()
     return StartResult(email=email, expires_in_s=s.otp_ttl_s, resend_in_s=s.otp_resend_cooldown_s)
 

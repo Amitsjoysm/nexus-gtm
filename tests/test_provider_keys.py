@@ -65,7 +65,7 @@ def test_every_catalogued_provider_names_a_real_env_fallback():
     from nexus.providers.catalog import PROVIDERS
 
     settings = get_settings()
-    assert len(PROVIDERS) == 16
+    assert len(PROVIDERS) == 18
     for spec in PROVIDERS.values():
         assert hasattr(settings, spec.env_attr), f"{spec.id}: no Settings.{spec.env_attr}"
 
@@ -80,6 +80,8 @@ def test_the_catalog_covers_exactly_the_pooled_providers():
         # connection strings and the pseudonymisation secret.
         "google_oauth", "microsoft_oauth", "ledger_archive", "ledger_training",
         "ledger_insights", "ledger_pseudonym",
+        # The two platform mail server passwords (2026-10-13), checked by signing in.
+        "system_smtp", "alert_smtp",
     }
 
 

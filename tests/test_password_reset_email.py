@@ -144,6 +144,11 @@ async def test_the_reset_flow_sends_the_html_part(monkeypatch):
         return R()
 
     monkeypatch.setattr("nexus.integrations.email_sender.send_email", fake_send)
+    # A mailbox that can send: an unconfigured one is now refused before the sender is reached.
+    from nexus.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "system_smtp_username", "no-reply@example.com")
+    monkeypatch.setattr(get_settings(), "system_smtp_password", "app-password")
     await password_reset.send_reset_email("jo@acme.com", LINK)
 
     assert seen.get("html"), "the reset email was sent without its HTML part"

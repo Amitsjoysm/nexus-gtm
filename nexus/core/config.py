@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     # A single system mailbox sends signup codes. Credentials come from env (NEXUS_SYSTEM_SMTP_*)
     # and live only in the gitignored deploy/.env — never in source. Empty = OTP email is a no-op.
     system_smtp_provider: str = "gmail"     # preset host/port (see email_sender.PROVIDER_PRESETS)
+    # Any other mail server (2026-10-13): Zoho, SendGrid, Brevo, SES, a company's own. Empty / 0
+    # means the provider's preset. Editable in Superadmin: Configuration > Platform email, the
+    # password under Provider keys.
+    system_smtp_host: str = ""
+    system_smtp_port: int = 0
     system_smtp_username: str = ""
     system_smtp_password: str = ""          # app password; env/secret only
     system_smtp_from: str = ""              # defaults to the username
@@ -180,7 +185,8 @@ class Settings(BaseSettings):
     alert_teams_webhook_url: str = ""
     alert_email_sender: str = ""
     # Email via SMTP (optional). With no host set, the email channel stays the offline stub, so
-    # default behaviour is unchanged; set host + to-address to actually send.
+    # default behaviour is unchanged; set host + to-address to actually send. Editable in
+    # Superadmin (2026-10-13): Configuration > Platform email, the password under Provider keys.
     alert_smtp_host: str = ""
     alert_smtp_port: int = 587
     alert_smtp_username: str = ""

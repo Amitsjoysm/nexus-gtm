@@ -125,25 +125,17 @@ async def send_mfa_code_email(to: str, code: str) -> bool:
     Never raises — the sender already swallows SMTP errors. A send failure must not 500 the login
     endpoint; the user simply does not receive a code and can retry.
     """
-    from nexus.integrations.email_sender import send_email
+    from nexus.integrations import platform_mail
 
     s = get_settings()
-    cfg = {
-        "provider": s.system_smtp_provider,
-        "username": s.system_smtp_username,
-        "password": s.system_smtp_password,
-        "from_email": s.system_smtp_from or s.system_smtp_username,
-        "from_name": s.system_smtp_from_name,
-    }
     minutes = max(1, s.mfa_email_code_step_s // 60)
     body = (
         f"Your InfoJoy GTM sign-in code is: {code}\n\n"
         f"It expires in about {minutes} minute{'s' if minutes != 1 else ''}. "
         "If you didn't try to sign in, change your password — someone has it."
     )
-    result = await send_email(cfg, to=to, subject="Your InfoJoy GTM sign-in code", body=body)
-    if not result.ok:
-        logger.warning("MFA code email to %s not sent: %s", to, result.detail)
+    result = await platform_mail.send(platform_mail.ACCOUNT, to=to,
+                                      subject="Your InfoJoy GTM sign-in code", body=body)
     return result.ok
 
 

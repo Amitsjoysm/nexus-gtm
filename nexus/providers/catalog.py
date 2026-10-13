@@ -75,7 +75,23 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "twilio", "Twilio (calling, platform account)", "twilio_credential",
         key_format="Account SID and Auth Token joined by a colon: AC0123...:your-auth-token",
     ),
+    # The two sending servers the platform emails from (2026-10-13), set together with their
+    # host and sender under Configuration > Platform email. Test signs in and sends nothing.
+    "system_smtp": ProviderSpec(
+        "system_smtp", "Account email password (signup codes, password resets)",
+        "system_smtp_password",
+        key_format="The mailbox password. For Gmail and Microsoft 365 with 2-step sign-in, an "
+                   "app password.",
+    ),
+    "alert_smtp": ProviderSpec(
+        "alert_smtp", "Alert email password (notifications)", "alert_smtp_password",
+        key_format="The mailbox password. For Gmail and Microsoft 365 with 2-step sign-in, an "
+                   "app password.",
+    ),
 }
+
+#: Provider-key ids that are mail server passwords, checked by `platform_mail.check`.
+MAIL_KEY_IDS: dict[str, str] = {"system_smtp": "account", "alert_smtp": "alerts"}
 
 # The providers that HAVE a model to choose. One definition, read by `testing.list_models`, by the
 # `/providers` endpoint and through it by the UI — a second hardcoded list in the frontend would

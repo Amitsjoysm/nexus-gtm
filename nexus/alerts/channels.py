@@ -243,19 +243,42 @@ class EmailChannel(AlertChannel):
         self._send_seam = send_seam
 
     async def deliver(self, alert: Alert) -> AlertDelivery:
-        if not (self._host and self._to) and self._send_seam is None:
-            # Unchanged offline behaviour: no SMTP configured -> log stub.
-            logger.info(
-                "[email-stub from %s] alert %s -> %s: %s",
-                self._sender, alert.id, alert.severity, alert.title,
-            )
-            return AlertDelivery(ok=True, channel=self.name, detail="stub-logged")
         subject = f"[{alert.severity}] {alert.title}"
         body = (alert.body or "") + _alert_action_lines(alert)
+        if not self._host and self._send_seam is None:
+            # No server given to this channel: the alert email server from Superadmin
+            # (Configuration > Platform email), read now so a change applies without a restart.
+            return await self._deliver_via_alert_mailbox(alert, subject, body)
+        if not self._to and self._send_seam is None:
+            return self._stub(alert)
         try:
             await asyncio.to_thread(self._smtp_send, subject, body)
         except Exception as exc:  # a mail-server outage must not lose the persisted alert
             logger.warning("email send for alert %s failed: %r", alert.id, exc)
+            return AlertDelivery(ok=False, channel=self.name, detail="smtp error")
+        return AlertDelivery(ok=True, channel=self.name, detail="sent")
+
+    def _stub(self, alert: Alert) -> AlertDelivery:
+        # Unchanged offline behaviour: no SMTP configured -> log stub.
+        logger.info(
+            "[email-stub from %s] alert %s -> %s: %s",
+            self._sender, alert.id, alert.severity, alert.title,
+        )
+        return AlertDelivery(ok=True, channel=self.name, detail="stub-logged")
+
+    async def _deliver_via_alert_mailbox(self, alert: Alert, subject: str,
+                                         body: str) -> AlertDelivery:
+        from nexus.core.config import get_settings
+        from nexus.integrations import platform_mail
+
+        to = self._to or str(get_settings().alert_email_to or "").strip()
+        raw = await platform_mail.mailbox(platform_mail.ALERTS)
+        if not to or (not raw.get("host") and not raw.get("provider")):
+            # Nothing configured anywhere: the offline stub, exactly as before.
+            return self._stub(alert)
+        result = await platform_mail.send(platform_mail.ALERTS, to=to, subject=subject, body=body)
+        if not result.ok:
+            logger.warning("email send for alert %s failed: %s", alert.id, result.detail)
             return AlertDelivery(ok=False, channel=self.name, detail="smtp error")
         return AlertDelivery(ok=True, channel=self.name, detail="sent")
 
@@ -339,14 +362,9 @@ def build_alert_channels_from_settings() -> AlertChannelRegistry:
             WebhookChannel(s.alert_webhook_url),
             SlackChannel(s.alert_slack_webhook_url),
             TeamsChannel(s.alert_teams_webhook_url),
-            EmailChannel(
-                s.alert_email_sender,
-                host=s.alert_smtp_host,
-                port=s.alert_smtp_port,
-                username=s.alert_smtp_username,
-                password=s.alert_smtp_password,
-                to=s.alert_email_to,
-            ),
+            # The server, sign-in and sender are read at send time from Superadmin
+            # (Configuration > Platform email), falling back to the NEXUS_ALERT_SMTP_* env.
+            EmailChannel(s.alert_email_sender, to=s.alert_email_to),
             TelegramChannel(s.alert_telegram_bot_token, s.alert_telegram_chat_id),
         ]
     )

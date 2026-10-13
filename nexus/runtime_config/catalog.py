@@ -84,12 +84,14 @@ BILLING = "Billing"
 ACCESS = "Access & security"
 RELIABILITY = "Reliability"
 ENGAGEMENT = "Mailboxes & engagement"
+PLATFORM_EMAIL = "Platform email"
 
 #: The order the panel shows groups in. Server-defined so a new group lands deliberately rather
 #: than wherever the alphabet puts it; `test_every_group_is_one_the_panel_orders_and_none_is_empty`
 #: keeps the two in step.
 GROUP_ORDER: tuple[str, ...] = (
-    EMAIL, CONTACTS, PERSONALIZATION, AI, SIGNALS, AUTOMATION, OUTREACH, ENGAGEMENT, BILLING,
+    EMAIL, CONTACTS, PERSONALIZATION, AI, SIGNALS, AUTOMATION, OUTREACH, ENGAGEMENT, PLATFORM_EMAIL,
+    BILLING,
     ACCESS, RELIABILITY,
 )
 
@@ -784,6 +786,78 @@ _SPECS: tuple[SettingSpec, ...] = (
                 "depth. It exists as a switch because an unpinned build once broke every endpoint "
                 "through the instrumentator, not because running without it is normal.",
         risk="medium", requires_restart=True,
+    ),
+
+    # ---- platform email (2026-10-13) ----------------------------------------------------------
+    # The two servers the platform sends its own email from; each password is a sealed key in
+    # Provider keys (`system_smtp`, `alert_smtp`). Invoices are Stripe's to email.
+    SettingSpec(
+        key="system_smtp_provider", label="Account email provider", group=PLATFORM_EMAIL,
+        kind="str", options=("gmail", "outlook", "office365", "smtp"),
+        option_labels=(("gmail", "Gmail / Google Workspace"), ("outlook", "Outlook.com"),
+                       ("office365", "Microsoft 365"), ("smtp", "Other SMTP server")),
+        effect="The mail service signup codes, password resets and sign-in codes are sent "
+               "through. Gmail, Outlook and Microsoft 365 know their own server; Other SMTP uses "
+               "the server and port below.",
+        warning="A wrong provider or server stops signup codes without an error anywhere a visitor "
+                "sees. After changing it, press Test on the Account email password in Provider "
+                "keys: it signs in and sends nothing.",
+        risk="medium",
+    ),
+    *(
+        SettingSpec(
+            key=f"{prefix}_host", label=f"{who} email server", group=PLATFORM_EMAIL, kind="str",
+            effect="The SMTP server's host name. Empty uses the provider's own (account email only; "
+                   "alert email needs one to send).",
+            warning="Only a public host is accepted outside a local stack: the app connects to it "
+                    "and Test in Provider keys reports how it answered.",
+            risk="medium", placeholder="smtp.zoho.com",
+        )
+        for prefix, who in (("system_smtp", "Account"), ("alert_smtp", "Alert"))
+    ),
+    *(
+        SettingSpec(
+            key=f"{prefix}_port", label=f"{who} email port", group=PLATFORM_EMAIL, kind="int",
+            minimum=0, maximum=65535,
+            effect="587 signs in with STARTTLS, 465 with TLS from the first byte. 0 uses the "
+                   "provider's own.",
+        )
+        for prefix, who in (("system_smtp", "Account"), ("alert_smtp", "Alert"))
+    ),
+    *(
+        SettingSpec(
+            key=f"{prefix}_username", label=f"{who} email sign-in", group=PLATFORM_EMAIL,
+            kind="str",
+            effect="The account the server signs in as, usually the full email address. Its "
+                   "password goes in Provider keys, sealed.",
+            placeholder="no-reply@example.com",
+        )
+        for prefix, who in (("system_smtp", "Account"), ("alert_smtp", "Alert"))
+    ),
+    SettingSpec(
+        key="system_smtp_from", label="Account email From address", group=PLATFORM_EMAIL,
+        kind="str",
+        effect="The address account emails come from. Empty uses the sign-in address.",
+        warning="Most servers refuse a From address the signed-in account may not send as.",
+        risk="medium", placeholder="no-reply@example.com",
+    ),
+    SettingSpec(
+        key="system_smtp_from_name", label="Account email From name", group=PLATFORM_EMAIL,
+        kind="str", effect="The name account emails show as their sender.",
+        placeholder="InfoJoy GTM",
+    ),
+    SettingSpec(
+        key="alert_email_sender", label="Alert email From address", group=PLATFORM_EMAIL,
+        kind="str",
+        effect="The address alert emails come from. Empty uses the sign-in address.",
+        warning="Most servers refuse a From address the signed-in account may not send as.",
+        risk="medium", placeholder="alerts@example.com",
+    ),
+    SettingSpec(
+        key="alert_email_to", label="Alert email default recipient", group=PLATFORM_EMAIL,
+        kind="str",
+        effect="Where alert emails go for a workspace that has not chosen its own address.",
+        placeholder="alerts@example.com",
     ),
 )
 

@@ -201,12 +201,8 @@ async def resolve_alert_channels(ts: TenantSession):
             TeamsChannel(bundles["teams"].get("url") or s.alert_teams_webhook_url),
             EmailChannel(
                 s.alert_email_sender,
-                host=s.alert_smtp_host,
-                port=s.alert_smtp_port,
-                username=s.alert_smtp_username,
-                password=s.alert_smtp_password,
                 # The workspace chooses WHERE its alerts land; the deployment still owns the SMTP
-                # server that sends them.
+                # server that sends them (Superadmin > Configuration > Platform email, read at send time).
                 to=bundles["email"].get("to") or s.alert_email_to,
             ),
             TelegramChannel(

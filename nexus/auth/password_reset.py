@@ -100,21 +100,13 @@ def build_reset_email(link: str) -> tuple[str, str, str]:
 
 
 async def send_reset_email(to: str, link: str) -> bool:
-    """Email the password-reset button via the system SMTP mailbox. Module-level so tests can patch it."""
-    from nexus.integrations import email_sender
+    """Email the password-reset button from the account mailbox (Superadmin > Configuration > Platform email).
+    Module-level so tests can patch it."""
+    from nexus.integrations import platform_mail
 
-    s = get_settings()
-    cfg = {
-        "provider": s.system_smtp_provider,
-        "username": s.system_smtp_username,
-        "password": s.system_smtp_password,
-        "from_email": s.system_smtp_from or s.system_smtp_username,
-        "from_name": s.system_smtp_from_name,
-    }
     subject, body, html = build_reset_email(link)
-    result = await email_sender.send_email(cfg, to=to, subject=subject, body=body, html=html)
-    if not result.ok:
-        logger.warning("password-reset email to %s not sent: %s", to, result.detail)
+    result = await platform_mail.send(platform_mail.ACCOUNT, to=to, subject=subject, body=body,
+                                      html=html)
     return result.ok
 
 
