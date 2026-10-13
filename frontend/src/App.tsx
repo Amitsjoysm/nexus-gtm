@@ -1,5 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { ThemeProvider } from "@/app/ThemeContext";
 import { SignalWindowProvider } from "@/app/SignalWindowContext";
@@ -123,13 +123,20 @@ function rememberConsent(path: string) {
   }
 }
 
-function takeConsentReturn(): string | null {
+function peekConsentReturn(): string | null {
   try {
     const path = sessionStorage.getItem(RETURN_KEY);
-    sessionStorage.removeItem(RETURN_KEY);
     return path && path.startsWith("/oauth/consent?") ? path : null;
   } catch {
     return null;
+  }
+}
+
+function clearConsentReturn() {
+  try {
+    sessionStorage.removeItem(RETURN_KEY);
+  } catch {
+    // Nothing stored, or storage blocked: nothing to clear.
   }
 }
 
@@ -142,8 +149,13 @@ function RequireAuthForConsent({ children }: { children: ReactNode }) {
 
 function RequireAnon({ children }: { children: ReactNode }) {
   const { isAuthed } = useAuth();
+  // Read during render, cleared after commit: a render can run twice (StrictMode), and clearing it
+  // in the first would send the second to the dashboard.
+  useEffect(() => {
+    if (isAuthed) clearConsentReturn();
+  }, [isAuthed]);
   if (!isAuthed) return <>{children}</>;
-  return <Navigate to={takeConsentReturn() ?? "/dashboard"} replace />;
+  return <Navigate to={peekConsentReturn() ?? "/dashboard"} replace />;
 }
 
 /** Gate a route by minimum role; redirect users who lack it back to the dashboard. */

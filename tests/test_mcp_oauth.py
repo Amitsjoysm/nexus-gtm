@@ -107,6 +107,18 @@ async def test_dynamic_registration_of_a_public_client(client):
     assert body["client_id"].startswith("dcr_") and "client_secret" not in body
 
 
+async def test_registration_has_its_own_limit_above_the_sign_in_one(client, monkeypatch):
+    """An AI app registers from a few server addresses for all its users, so registration must not
+    share the 10-a-minute sign-in limit."""
+    import nexus.api.routers.mcp as mcp_router
+
+    for _ in range(12):
+        assert (await _register(client)).status_code == 201
+    monkeypatch.setattr(mcp_router, "DCR_PER_MINUTE", 12)
+    limited = await _register(client)
+    assert limited.status_code == 429 and int(limited.headers["retry-after"]) > 0
+
+
 @pytest.mark.parametrize("uri", ["http://example.com/cb", "https://a.example.com/cb#frag",
                                  "javascript:alert(1)", "/relative"])
 async def test_unsafe_redirects_are_refused(client, uri):

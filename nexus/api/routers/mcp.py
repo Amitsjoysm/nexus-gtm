@@ -229,15 +229,27 @@ def _oauth_error_page(message: str, status: int = 400) -> Response:
     return HTMLResponse(body, status_code=status)
 
 
+#: Registrations per minute per client IP. Its own limit, NOT the sign-in one (10): an AI app
+#: registers from its own servers, so every one of its users connecting at once shares a handful of
+#: addresses, and the sign-in limit would refuse the eleventh person in a minute. A registration
+#: costs one small row, so the limit only has to stop a flood.
+DCR_PER_MINUTE = 60
+
+
 @router.post("/oauth/register")
 async def oauth_register(request: Request) -> JSONResponse:
     """Dynamic Client Registration (RFC 7591), kept for clients that do not use Client ID
-    Metadata Documents. Rate limited per IP like the sign-in endpoints."""
-    from nexus.core import metrics
-    from nexus.core.ratelimit import rate_limit
+    Metadata Documents."""
+    from nexus.core import metrics, ratelimit
     from nexus.mcp import oauth
 
-    await rate_limit("oauth_register")(request)
+    ip = request.client.host if request.client else "unknown"
+    retry = await ratelimit.hit(f"oauth_register:{ip}", window=60, limit=DCR_PER_MINUTE)
+    if retry is not None:
+        metrics.record_oauth_event("register", "limited")
+        return JSONResponse({"error": "too_many_requests",
+                             "error_description": "Too many registrations; try again shortly."},
+                            status_code=429, headers={**_NO_STORE, "Retry-After": str(retry)})
     try:
         body = await request.json()
     except Exception:
