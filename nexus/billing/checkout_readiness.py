@@ -75,7 +75,8 @@ async def checkout_readiness(provider, *, currencies: set[str] | None = None,
         return Readiness()
     wanted = sorted({(c or "").upper() for c in (currencies or set())} - {""})
     digest = hashlib.sha256(provider.secret_key.encode()).hexdigest()
-    key = f"{digest}|{','.join(wanted)}"
+    pmc = str(getattr(provider, "payment_method_configuration", "") or "")
+    key = f"{digest}|{pmc}|{','.join(wanted)}"
     cached = _cache.get(key)
     if cached and not fresh and time.monotonic() - cached[0] < TTL_S:
         return cached[1]
@@ -104,15 +105,31 @@ async def checkout_readiness(provider, *, currencies: set[str] | None = None,
                          "Checkout has no way to take a payment.")
 
     try:
-        configs = (await provider._get("/payment_method_configurations?limit=20")).get("data") or []
+        if pmc:
+            # The configuration chosen on the Payments tab is the one Checkout sends.
+            configs = [await provider._get(f"/payment_method_configurations/{pmc}")]
+        else:
+            configs = ((await provider._get("/payment_method_configurations?limit=20"))
+                       .get("data") or [])
     except PaymentError as exc:
         configs = None
-        r.warnings.append("Could not read the account's payment method settings with this key "
-                          f"(it needs Payment Method Configurations: Read): {exc}")
+        if pmc and getattr(exc, "status", 0) == 404:
+            r.blocking.append(
+                f"The payment method configuration set on the Payments tab ({pmc}) is not in "
+                "this Stripe account, so every Checkout would fail. Clear it, or set one from "
+                "this account.")
+        else:
+            r.warnings.append("Could not read the account's payment method settings with this "
+                              f"key (it needs Payment Method Configurations: Read): {exc}")
     if configs:
-        default = next((c for c in configs if c.get("is_default")), None) or configs[0]
+        default = (configs[0] if pmc else
+                   next((c for c in configs if c.get("is_default")), None) or configs[0])
         card = default.get("card") or {}
         value = (card.get("display_preference") or {}).get("value")
+        if pmc and default.get("active") is False:
+            r.blocking.append(
+                f"The payment method configuration set on the Payments tab ({pmc}) is switched "
+                "off in Stripe, so Checkout has nothing to offer.")
         if card.get("available") is False or value == "off":
             r.blocking.append(
                 "Cards are switched off in Stripe's payment method settings (Settings > Payment "

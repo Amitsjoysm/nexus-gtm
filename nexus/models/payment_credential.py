@@ -47,6 +47,11 @@ class PaymentCredential(IdMixin, TimestampMixin, Base):
     account_id: Mapped[str] = mapped_column(String(120), default="")
     account_name: Mapped[str] = mapped_column(String(200), default="")
     livemode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # The Stripe payment method configuration (`pmc_...`) Checkout sends, or "" for the account's
+    # Default Config (migration 0070). On the credential because a configuration belongs to one
+    # Stripe account: another account answers "No such payment method configuration".
+    payment_method_configuration: Mapped[str] = mapped_column(
+        String(64), default="", server_default="", nullable=False)
 
     status: Mapped[str] = mapped_column(String(20), default="registered", nullable=False)
     last_error: Mapped[str] = mapped_column(String(500), default="", nullable=False)

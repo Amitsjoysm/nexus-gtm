@@ -98,6 +98,25 @@ export function PaymentsTab() {
     }
   }
 
+  // A payment method configuration being typed, per account, before it is saved.
+  const [pmcDrafts, setPmcDrafts] = useState<Record<string, string>>({});
+
+  async function savePmc(rowItem: PaymentCredential) {
+    const value = (pmcDrafts[rowItem.id] ?? rowItem.payment_method_configuration ?? "").trim();
+    await act(rowItem.id, "Couldn't save the payment method configuration", async () => {
+      await api.setPaymentMethodConfiguration(rowItem.id, value);
+      setPmcDrafts((current) => {
+        const next = { ...current };
+        delete next[rowItem.id];
+        return next;
+      });
+      toast.success(
+        value ? "Checkout will use this configuration" : "Checkout will use Stripe's Default Config",
+        value || undefined,
+      );
+    });
+  }
+
   // What "Check checkout" found, per account: shown under it until the next check.
   const [checks, setChecks] = useState<Record<string, { blocking: string[]; warnings: string[] }>>({});
 
@@ -361,6 +380,48 @@ export function PaymentsTab() {
                     <p key={w} className={styles.note}>{w}</p>
                   ))}
                 </div>
+              )}
+
+              {r.status === "verified" && (
+                <form
+                  className={styles.pmcRow}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void savePmc(r);
+                  }}
+                >
+                  <Field
+                    label="Payment method configuration"
+                    hint={
+                      r.payment_method_configuration
+                        ? `Checkout uses ${r.payment_method_configuration}. Clear it to use the Default Config.`
+                        : "Optional. Empty uses this account's Default Config in Stripe (Settings > Payment methods)."
+                    }
+                  >
+                    <Input
+                      value={pmcDrafts[r.id] ?? r.payment_method_configuration ?? ""}
+                      onChange={(event) =>
+                        setPmcDrafts((current) => ({ ...current, [r.id]: event.target.value }))
+                      }
+                      placeholder="pmc_..."
+                      spellCheck={false}
+                      autoComplete="off"
+                    />
+                  </Field>
+                  <Button
+                    type="submit"
+                    variant="secondary"
+                    size="sm"
+                    loading={busy === r.id}
+                    disabled={
+                      busy !== null ||
+                      (pmcDrafts[r.id] ?? r.payment_method_configuration ?? "").trim() ===
+                        (r.payment_method_configuration ?? "")
+                    }
+                  >
+                    Save
+                  </Button>
+                </form>
               )}
 
               <div className={styles.actions}>

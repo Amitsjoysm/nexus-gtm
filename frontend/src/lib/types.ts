@@ -1682,6 +1682,8 @@ export interface PaymentCredential {
   status: string;
   last_error: string;
   active: boolean;
+  /** The Stripe payment method configuration Checkout sends; "" is the account's Default Config. */
+  payment_method_configuration?: string;
   /** Set only when a superadmin activates it: what syncing the plans into this account did. */
   stripe_sync?: StripeSyncRow[] | null;
   /** Set on activation by a superadmin: subscriptions moved from the previous Stripe account. */

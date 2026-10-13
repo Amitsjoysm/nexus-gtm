@@ -187,6 +187,57 @@ async def set_webhook_secret(credential_id: str, webhook_secret: str) -> Payment
         return row
 
 
+async def set_payment_method_configuration(credential_id: str,
+                                           configuration_id: str) -> PaymentCredential:
+    """Choose the Stripe payment method configuration Checkout uses for this account, or ""
+    for the account's Default Config (2026-10-13).
+
+    Read back from Stripe with THIS credential's key before it is stored: an id from another
+    account answers "No such payment method configuration" on every Checkout, an inactive one or
+    one with cards off shows a buyer "no valid payment methods". Each is refused here, with the
+    reason, instead of being found by a customer."""
+    import re
+
+    from nexus.billing.payments import PaymentError, StripePaymentProvider
+
+    value = (configuration_id or "").strip()
+    if value and not re.fullmatch(r"pmc_[A-Za-z0-9]{8,60}", value):
+        raise CredentialError("a payment method configuration id looks like pmc_1AbC2dEf3GhI: "
+                              "Stripe Dashboard > Settings > Payment methods, the configuration's "
+                              "menu")
+    async with get_platform_sessionmaker()() as s:
+        row = await s.get(PaymentCredential, credential_id)
+        if row is None:
+            raise CredentialError("no such credential")
+        if value:
+            account = row.account_name or row.account_id or "this credential's account"
+            try:
+                cfg = await StripePaymentProvider(await secret_for(row))._get(
+                    f"/payment_method_configurations/{value}")
+            except PaymentError as exc:
+                if getattr(exc, "status", 0) == 404:
+                    raise CredentialError(
+                        f"{value} is not a payment method configuration in {account}. A "
+                        "configuration belongs to one Stripe account.") from exc
+                raise CredentialError(f"Stripe would not show {value}: {exc}") from exc
+            if cfg.get("active") is False:
+                raise CredentialError(
+                    f"{value} is switched off in Stripe: turn it on under Settings > Payment "
+                    "methods > its menu > Manage configuration > Active.")
+            card = cfg.get("card") or {}
+            if card.get("available") is False or (
+                    (card.get("display_preference") or {}).get("value") == "off"):
+                raise CredentialError(
+                    f"Cards are off in {value}, so Checkout would have nothing to offer a "
+                    "subscription. Turn Cards on in that configuration first.")
+        row.payment_method_configuration = value
+        await s.commit()
+        await s.refresh(row)
+    if row.active:
+        _invalidate()
+    return row
+
+
 async def deactivate_credential(credential_id: str) -> PaymentCredential | None:
     """Stop billing with this credential. Never refused — during an incident "stop taking money
     with this account" must not be blocked by a state machine."""

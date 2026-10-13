@@ -1960,6 +1960,16 @@ export class ApiClient {
    * Would Stripe Checkout open with a way to pay on this credential's account? The answer to "There
    * are no valid payment methods available": blocking causes, warnings, and the account's facts.
    */
+  /**
+   * Which of the account's Stripe payment method configurations Checkout uses; "" for its Default
+   * Config. Checked against Stripe with this credential's own key before it is stored.
+   */
+  setPaymentMethodConfiguration(id: string, configurationId: string) {
+    return this.request<PaymentCredential>(
+      `/admin/payment-credentials/${id}/payment-method-configuration`,
+      { method: "PUT", body: { configuration_id: configurationId } },
+    );
+  }
   checkPaymentCheckout(id: string) {
     return this.request<{
       ok: boolean; blocking: string[]; warnings: string[]; account_id: string; country: string;

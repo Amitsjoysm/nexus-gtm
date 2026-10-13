@@ -246,7 +246,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0069_reply_switches`. The chain is
+Alembic under `migrations/versions/`. Head: `0070_payment_method_configuration`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -267,7 +267,8 @@ fields on `companies`, `company_countries` and `prospect_cursors`, all platform-
 `0065` (`provider_settings.base_url`) -> `0066` (`page_visibility`, platform-global) -> `0067` (`platform_admins` backfill of
 `stripe.manage`, no DDL) -> `0068` (`mcp_connections`, `oauth_clients`, `oauth_codes`,
 `oauth_tokens`, platform-global) -> `0069` (`mailbox_connections.auto_actions` and
-`.auto_send_replies`, `reply_classifications.auto_reply` and `.auto_reply_note`). Every tenant-scoped table gets RLS via
+`.auto_send_replies`, `reply_classifications.auto_reply` and `.auto_reply_note`) -> `0070`
+(`payment_credentials.payment_method_configuration`, platform-global). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -861,6 +862,22 @@ whatever they say: nothing on our side could see it.
   Platform health's `payments` row reads it (ERROR on blocking, DEGRADED on warnings) for the
   currencies on sale, and the Payments tab's **Check checkout** asks it about one credential's own
   account (`POST /admin/payment-credentials/{id}/checkout-check`, `pricing.write`) before it goes live.
+- **With a test key, an account Stripe has not activated is a warning, not a refusal** (2026-10-13):
+  test mode takes payments before activation. Every Checkout opened logs the account's country,
+  currency, card capability and charges flag, and each warning, because when Stripe's page refuses,
+  the app log otherwise says only "200".
+
+**Which payment method configuration Checkout uses is chosen per Stripe credential** (2026-10-13,
+migration `0070`, `PUT /admin/payment-credentials/{id}/payment-method-configuration`, `pricing.write`,
+`tests/test_payment_method_configuration.py`). Asked after staging's Checkout resolved ZERO payment
+methods (read from Stripe's own session data: a US account, USD, `payment_method_types: []` under
+the Default Config) and the operator made a new configuration that the app had no way to use. Empty
+(every row before) is the account's Default Config, as before. On the credential, not a setting,
+because a `pmc_` id belongs to one Stripe account. Read back from Stripe with that credential's own
+key before storing: another account's id (404), an inactive configuration, or one with cards off
+or unavailable is refused with the reason. The active credential's choice rides on
+`StripePaymentProvider.payment_method_configuration` into every Checkout, and the readiness check
+reads that configuration rather than the default (404 or inactive is blocking).
 
 **One Stripe subscription per workspace, and only one that has started** (2026-10-12,
 `tests/test_one_stripe_subscription.py`). Found auditing the payment paths: a workspace paying for

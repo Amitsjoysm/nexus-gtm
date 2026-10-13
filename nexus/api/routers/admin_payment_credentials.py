@@ -36,6 +36,8 @@ class CredentialOut(BaseModel):
     status: str
     last_error: str
     active: bool
+    # The Stripe payment method configuration Checkout sends; "" is the account's Default Config.
+    payment_method_configuration: str = ""
     # Set only on activation by a superadmin: what syncing the plans to this account did, and
     # which subscriptions were carried over from the previous account.
     stripe_sync: list[dict] | None = None
@@ -60,6 +62,7 @@ def _out(row) -> CredentialOut:
         publishable_key=row.publishable_key, account_id=row.account_id,
         account_name=row.account_name, livemode=row.livemode, status=row.status,
         last_error=row.last_error, active=row.active,
+        payment_method_configuration=row.payment_method_configuration or "",
     )
 
 
@@ -277,12 +280,47 @@ async def check_checkout(
         except CredentialError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     try:
-        ready = await checkout_readiness(StripePaymentProvider(key),
-                                         currencies=await _currencies_on_sale(), fresh=True)
+        provider = StripePaymentProvider(
+            key, payment_method_configuration=row.payment_method_configuration or "")
+        ready = await checkout_readiness(provider, currencies=await _currencies_on_sale(),
+                                         fresh=True)
     except PaymentError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY,
                             f"Stripe would not show the account: {exc}") from exc
     return ready.as_dict()
+
+
+class PaymentMethodConfigurationIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # "" returns Checkout to the account's Default Config.
+    configuration_id: str = ""
+
+
+@router.put("/{credential_id}/payment-method-configuration", response_model=CredentialOut)
+async def set_payment_method_configuration(
+    credential_id: str,
+    body: PaymentMethodConfigurationIn,
+    principal: Principal = Depends(require_platform_permission(PRICING_WRITE)),
+) -> CredentialOut:
+    """Choose which of the account's Stripe payment method configurations Checkout uses (2026-10-13).
+
+    Optional: without one Checkout uses the account's Default Config, as it always has. Checked
+    against Stripe with this credential's own key before it is stored, so an id from another
+    account, an inactive one, or one with cards off is refused here rather than by a customer's
+    Checkout page."""
+    from nexus.billing import credentials
+
+    try:
+        row = await credentials.set_payment_method_configuration(
+            credential_id, body.configuration_id[:80])
+    except credentials.CredentialError as exc:
+        missing = str(exc) == "no such credential"
+        raise HTTPException(status.HTTP_404_NOT_FOUND if missing else status.HTTP_400_BAD_REQUEST,
+                            str(exc)) from exc
+    await _audit(principal, "payment_credential.payment_method_configuration", credential_id,
+                 {"payment_method_configuration": row.payment_method_configuration})
+    return _out(row)
 
 
 @router.post("/{credential_id}/deactivate", response_model=CredentialOut)

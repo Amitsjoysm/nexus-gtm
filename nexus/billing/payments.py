@@ -588,8 +588,12 @@ class StripePaymentProvider(PaymentProvider):
         timeout_s: float = 20.0,
         max_retries: int = 3,
         retry_base_delay_s: float = 0.5,
+        payment_method_configuration: str = "",
     ) -> None:
         self.secret_key = secret_key or ""
+        # The `pmc_...` Checkout sends, chosen on the Payments tab; "" is the account's Default
+        # Config (2026-10-13).
+        self.payment_method_configuration = (payment_method_configuration or "").strip()
         self.timeout_s = timeout_s
         self.max_retries = max(1, max_retries)
         self.retry_base_delay_s = retry_base_delay_s
@@ -1004,6 +1008,8 @@ class StripePaymentProvider(PaymentProvider):
         }
         if customer_id:
             form["customer"] = customer_id
+        if self.payment_method_configuration:
+            form["payment_method_configuration"] = self.payment_method_configuration
 
         from nexus.core.config import get_settings
 
@@ -1342,7 +1348,9 @@ async def resolve_payment_provider() -> PaymentProvider:
     try:
         from nexus.billing.credentials import active_credential, resolve_stripe_secrets
 
-        panel_active = await active_credential("stripe") is not None
+        panel_row = await active_credential("stripe")
+        panel_active = panel_row is not None
+        pmc = panel_row.payment_method_configuration if panel_row is not None else ""
         if s.payment_provider == "stripe" or panel_active:
             secret, _hook, _pub = await resolve_stripe_secrets()
     except Exception:
@@ -1350,10 +1358,11 @@ async def resolve_payment_provider() -> PaymentProvider:
         # is worse than billing with the configuration we already had.
         logger.warning("could not resolve the managed payment credential", exc_info=True)
         panel_active = False
+        pmc = ""
         secret = s.stripe_secret_key if s.payment_provider == "stripe" else ""
 
     if s.payment_provider == "stripe" or panel_active:
-        _provider = StripePaymentProvider(secret)
+        _provider = StripePaymentProvider(secret, payment_method_configuration=pmc)
     elif not isinstance(_provider, NoopPaymentProvider):
         # Reuse one offline provider, as before: what it recorded is how tests (and an operator
         # reading the synthetic ids) see what WOULD have been charged.
