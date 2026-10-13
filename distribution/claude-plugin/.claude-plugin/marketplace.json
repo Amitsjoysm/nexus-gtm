@@ -1,0 +1,14 @@
+{
+  "name": "infojoy",
+  "owner": {
+    "name": "InfoJoy"
+  },
+  "description": "InfoJoy GTM's plugins for Claude.",
+  "plugins": [
+    {
+      "name": "infojoy-gtm",
+      "source": "./infojoy-gtm",
+      "description": "Work your B2B pipeline from Claude with InfoJoy GTM."
+    }
+  ]
+}

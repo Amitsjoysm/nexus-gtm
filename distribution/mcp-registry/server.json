@@ -1,0 +1,14 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.infojoy/gtm",
+  "title": "InfoJoy GTM",
+  "description": "B2B revenue intelligence: buying signals, account research, contacts, outreach drafts and target lists, acting as the signed-in user.",
+  "version": "1.0.0",
+  "websiteUrl": "https://gtm.infojoy.com",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://gtm.infojoy.com/mcp"
+    }
+  ]
+}

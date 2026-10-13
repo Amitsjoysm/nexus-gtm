@@ -1,0 +1,10 @@
+{
+  "name": "infojoy-gtm",
+  "displayName": "InfoJoy GTM",
+  "version": "1.0.0",
+  "description": "Work your B2B pipeline from Claude: triage buying signals and your inbox, research accounts, find the right contacts, draft outreach and build target lists in InfoJoy GTM. Nothing is ever sent without you.",
+  "author": { "name": "InfoJoy", "url": "https://gtm.infojoy.com" },
+  "homepage": "https://gtm.infojoy.com",
+  "license": "MIT",
+  "keywords": ["sales", "gtm", "prospecting", "buying-signals", "crm", "outreach"]
+}

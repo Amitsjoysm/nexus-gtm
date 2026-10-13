@@ -219,8 +219,8 @@ function ClientGuide({ client, url }: { client: ClientId; url: string }) {
               />
             </div>,
             <p key="c">
-              Groq and xAI offer remote MCP tools too: give them the same address and key. Keep the
-              key out of code you share; it acts as you.
+              Other model APIs that support remote MCP tools take the same address and key. Keep
+              the key out of code you share; it acts as you.
             </p>,
           ]}
         </Steps>

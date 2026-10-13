@@ -2899,6 +2899,58 @@ with a link to `/accounts?source=found` (Accounts' Source filter now groups raw 
 Found by AI / Imported / From your CRM / Added by hand), and every row can go on a list.
 The account page's **Run pipeline** is now **Refresh now**: "pipeline" read as a sales pipeline.
 
+## MCP server and OAuth (`nexus/mcp/`) — AI apps
+
+AI assistants (Claude on every surface, ChatGPT, Cursor, VS Code, the model APIs) use the product
+through MCP at `POST /mcp`, authenticated by a per-user API key (`nxk_`) or by NEXUS's own OAuth 2.1
+server (`nxo_` access, `nxr_` refresh). Spec, plan and marketplace steps:
+`docs/superpowers/{specs,plans}/2026-10-13-mcp-server*`, `docs/mcp/listing-guide.md`.
+
+- **A tool is an `/api` request, not a function call** (`gateway.py`). It runs in-process with a
+  5-minute token carrying the actor's LIVE role and token version, so RBAC, tenancy, `preflight`,
+  metering, validation and the refusal messages are the app's own. Only the (method, path) pairs in
+  `gateway._ALLOWED` are reachable, checked before sending; a new tool adds its pair there, and
+  `tests/test_mcp_tools.py` fails if a handler sends anything it did not declare.
+- **Four platform-global tables** (migration `0068`, no `tenant_id`, workspace in
+  `subject_tenant_id`): a bearer is resolved before any workspace is known, the reason `user_mfa`
+  has none. So there is NO RLS behind `/api/connections`: every query filters on
+  `subject_tenant_id` in code, and a stranger's or colleague's id is a 404. Keep the
+  cross-workspace tests when touching it.
+- **Every call re-reads the connection, the user's suspension and the membership role**
+  (`credentials.resolve`, 30 s cache, `forget()` on revoke or permission change). Demoting someone
+  shrinks their apps; removing them from the workspace stops them there.
+- **Scopes are `read` / `research` / `write`, chosen per connection.** `tools/list` shows only
+  what the connection may use; a call outside its scope is a readable tool error, not a protocol
+  fault. Never sending email, launching campaigns, deleting, billing, settings or admin.
+- **Two protocol dialects in one endpoint** (`protocol.py`): the 2025 handshake revisions
+  (`initialize`, `MCP-Protocol-Version` header, absent = `2025-03-26`) and the stateless
+  `2026-07-28` (`_meta` version, `server/discover`, `resultType`, `ttlMs`/`cacheScope`). No SDK at
+  run time; the official client checks conformance in `tests/test_mcp_conformance.py` (optional
+  `mcp-conformance` extra, skipped in CI).
+- **OAuth rules that are load-bearing** (`oauth.py`, `cimd.py`): an unknown client or an
+  unregistered redirect is an error PAGE, never a redirect; PKCE S256 required; codes 60 s,
+  single-use, and a replayed code revokes what it issued; refresh tokens rotate and reuse revokes
+  the family; loopback redirects match on any port. Client ID Metadata Documents are fetched
+  through `sources/safety._is_blocked_host` with no redirects, 5 s, 64 KB, and the document must
+  name its own URL. `/mcp`'s 401 carries `WWW-Authenticate: Bearer resource_metadata=...`, which is
+  how Claude and ChatGPT discover sign-in; the protected-resource `resource` must equal
+  `{app_base_url}/mcp` exactly, so production needs the App public address set.
+- **Verified means proven, not named**: a superadmin-registered client, a metadata document served
+  from a known host, or every redirect https on a known host (a code only reaches a registered
+  redirect). A self-registered "Claude" pointing anywhere else reads Unverified.
+- **Customer-facing name is InfoJoy GTM** (`nexus/mcp/brand.py`, `frontend/src/lib/brand.ts`):
+  tool messages, server info, consent screen, plugin and registry entries. Tool descriptions and
+  public docs name no vendor (`tests/test_mcp_tools.py`, `test_mcp_distribution.py`).
+- **Gate and switches**: `module.mcp` (on by default, on no plan) is checked with `preflight` on
+  `tools/list` and `tools/call`; a platform switch always refuses, a plan only under enforcement.
+  Revoking is never refused. Runtime settings: `mcp_rate_limit_per_minute`,
+  `mcp_allowed_origins`, `openai_apps_challenge_token` (served at
+  `/.well-known/openai-apps-challenge`).
+- Screens: AI apps (`/connected-apps`, every member, hideable page) and the consent screen
+  (`/oauth/consent`, outside the app shell; only that path survives login via `nexus.returnTo`).
+  Marketplace artifacts: `distribution/claude-plugin/` (validated with Claude Code 2.1.296; older
+  CLIs reject `displayName`) and `distribution/mcp-registry/server.json`.
+
 ## Frontend skills — USE THESE for any UI work
 
 Four design/frontend skills are installed in `~/.claude/skills/`. Invoke them via the `Skill`
