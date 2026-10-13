@@ -2326,6 +2326,13 @@ export interface ConnectedMailbox {
   effective_reply_confidence: number;
   reply_confidence_min: number;
   reply_confidence_max: number;
+  /** The SDR's half of the two reply switches, what the workspace allows, and what is in force. */
+  auto_actions: boolean;
+  auto_send_replies: boolean;
+  auto_actions_allowed: boolean;
+  auto_send_allowed: boolean;
+  acts_alone: boolean;
+  sends_alone: boolean;
   paused_until: string | null;
   last_synced_at: string | null;
   /** Sent since the owner's local midnight. */
@@ -2629,6 +2636,9 @@ export interface WorkspaceEngagementSettings {
   reply_confidence_max: number;
   reply_reminder_business_hours: number;
   ooo_default_days: number;
+  /** May replies be acted on / answered by the AI without a person? Each SDR then chooses. */
+  auto_actions_allowed: boolean;
+  auto_send_allowed: boolean;
   can_edit: boolean;
 }
 

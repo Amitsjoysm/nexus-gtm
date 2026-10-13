@@ -1,8 +1,10 @@
 """The menu pages a superadmin may hide, and which ones are hidden right now.
 
-`HIDEABLE_PAGES` is every entry of the frontend menu (`app/nav.tsx`) except the floor, and
-`tests/test_page_visibility.py` pins the two lists together, so a page added to the menu later is
-covered the day it ships and the floor can never be added by mistake.
+`HIDEABLE_PAGES` is every entry of the frontend menu (`app/nav.tsx`) and of the Settings tabs
+(`app/settingsTabs.tsx`) except the floor, and `tests/test_page_visibility.py` pins them together, so
+a page added later is covered the day it ships and the floor can never be added by mistake. Keys are
+what is stored and paths are looked up when read, so a page that moved (My mailboxes and AI apps
+became Settings tabs on 2026-10-13) keeps a hide set before it moved.
 
 The floor is never hideable: Dashboard, Accounts and Contacts are the product (and
 `test_the_floor_of_the_product_is_never_gated` keeps them ungated by plan too), Members and
@@ -40,7 +42,7 @@ class PageSpec:
 HIDEABLE_PAGES: tuple[PageSpec, ...] = (
     PageSpec("inbox", "/inbox", "Inbox", "module.signals"),
     PageSpec("calls", "/calls", "Calls", "module.calling"),
-    PageSpec("mailboxes", "/mailboxes", "My mailboxes", "module.outreach"),
+    PageSpec("mailboxes", "/settings/mailboxes", "My mailboxes", "module.outreach"),
     PageSpec("campaigns", "/engagement/campaigns", "Campaigns", "module.campaigns"),
     PageSpec("replies", "/engagement/replies", "Replies", "module.campaigns"),
     PageSpec("templates", "/engagement/templates", "Sequence templates", "module.cadences"),
@@ -53,7 +55,7 @@ HIDEABLE_PAGES: tuple[PageSpec, ...] = (
     PageSpec("approvals", "/approvals", "Approvals", "module.agents"),
     PageSpec("plays", "/plays", "Plays", "module.plays"),
     PageSpec("relevance", "/relevance", "Relevance", "module.relevance"),
-    PageSpec("ai_apps", "/connected-apps", "AI apps", "module.mcp"),
+    PageSpec("ai_apps", "/settings/ai-apps", "AI apps", "module.mcp"),
     PageSpec("integrations", "/integrations", "Integrations", "module.integrations"),
 )
 

@@ -24,6 +24,7 @@ from nexus.workers.tasks import (
     enqueue_billing_reconcile,
     enqueue_advance_engagement,
     enqueue_remind_replies,
+    enqueue_send_auto_replies,
     enqueue_sync_mailboxes,
     enqueue_log_engagement_crm,
     enqueue_alert_digests,
@@ -124,7 +125,10 @@ async def _enqueue_due(queue: TaskQueue) -> int:
                 await enqueue_sync_mailboxes(queue=queue)
                 # The reply-speed reminder: a buyer who said yes is waiting on a person.
                 await enqueue_remind_replies(queue=queue)
-                count += 3
+                # Replies the AI may answer by itself (mailboxes that switched it on); one
+                # indexed query when nothing is pending.
+                await enqueue_send_auto_replies(queue=queue)
+                count += 4
                 if settings.crm_sync_enabled:
                     # Sent emails, replies and meetings into each workspace's CRM (§19).
                     await enqueue_log_engagement_crm(queue=queue)

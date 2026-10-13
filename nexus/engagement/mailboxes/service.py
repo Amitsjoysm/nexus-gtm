@@ -67,26 +67,38 @@ async def list_mailboxes(ts: TenantSession, *, user_id: str, team: bool) -> list
 
 async def update_mailbox(
     ts: TenantSession, connection: MailboxConnection, *, timezone=_UNSET, signature=_UNSET,
-    reply_confidence=_UNSET,
+    reply_confidence=_UNSET, auto_actions=_UNSET, auto_send_replies=_UNSET,
 ) -> MailboxConnection:
-    """Edit the SDR's own settings. Raises ``ValueError`` naming the problem; writes nothing then."""
+    """Edit the SDR's own settings. Raises ``ValueError`` naming the problem; writes nothing then.
+
+    Turning a reply switch ON is refused where the workspace does not allow it, so the screen can
+    never show a choice that does nothing. Turning one OFF is never refused."""
     from nexus.engagement.settings import read_settings, validate_mailbox_confidence
     from nexus.models.identity import Tenant
 
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    settings = read_settings(getattr(tenant, "email_settings", None))
     if timezone is not _UNSET:
         if zone_or_none(timezone) is None:
             raise ValueError(f"{timezone!r} is not a timezone name like Europe/London")
     if reply_confidence is not _UNSET:
-        tenant = await ts.session.get(Tenant, ts.tenant_id)
-        reply_confidence = validate_mailbox_confidence(
-            read_settings(getattr(tenant, "email_settings", None)), reply_confidence
-        )
+        reply_confidence = validate_mailbox_confidence(settings, reply_confidence)
+    if auto_actions is True and not settings.auto_actions_allowed:
+        raise ValueError("Your workspace does not allow acting on replies automatically. A "
+                         "manager can allow it in Settings, Replies.")
+    if auto_send_replies is True and not settings.auto_send_allowed:
+        raise ValueError("Your workspace does not allow the AI to send replies by itself. A "
+                         "manager can allow it in Settings, Replies.")
     if timezone is not _UNSET:
         connection.timezone = timezone
     if signature is not _UNSET:
         connection.signature = (signature or "")[:4000]
     if reply_confidence is not _UNSET:
         connection.reply_confidence = reply_confidence
+    if auto_actions is not _UNSET:
+        connection.auto_actions = bool(auto_actions)
+    if auto_send_replies is not _UNSET:
+        connection.auto_send_replies = bool(auto_send_replies)
     await ts.flush()
     return connection
 

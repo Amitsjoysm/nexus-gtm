@@ -15,4 +15,4 @@ Help the user decide what to do next, using the InfoJoy GTM connector.
    - mark a task done (`complete_inbox_task`) only after the user confirms
 6. Never say an email was sent. InfoJoy GTM never sends from this connector; drafts are returned, or saved to the user's Drafts with `save_email_draft` when they ask.
 
-If a tool answers that the connection lacks a permission, tell the user they can change it in InfoJoy GTM > AI apps. If it answers that credits are short, show the balance with `get_credit_balance` and stop running paid tools.
+If a tool answers that the connection lacks a permission, tell the user they can change it in InfoJoy GTM > Settings > AI apps. If it answers that credits are short, show the balance with `get_credit_balance` and stop running paid tools.

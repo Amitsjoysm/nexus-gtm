@@ -15,6 +15,14 @@ dressed as a threshold.
 
 Reading never raises. A malformed stored value falls back to the default for that field, because a
 typo in a JSON blob must not stop replies being processed.
+
+**Two switches decide whether anything happens without a person at all** (2026-10-13). Each is
+ALLOWED here by a manager and CHOSEN per mailbox by its SDR (`MailboxConnection.auto_actions`,
+`.auto_send_replies`), the same split as the bar; `reply_automation` is the one place that combines
+them. `auto_actions_allowed` (default on, today's behaviour) lets a confident later/declined/
+unsubscribe act alone; off, it becomes `unclear` and a person decides. `auto_send_allowed` (default
+OFF) lets the AI email its answer to a confident interested buyer or question
+(`replies/auto_reply.py`); it reverses D22 only where both halves say so.
 """
 from __future__ import annotations
 
@@ -33,6 +41,10 @@ class EngagementSettings:
     reply_reminder_business_hours: int = 4
     # Out-of-office with no return date: resume after this many days (spec §6, flagged default).
     ooo_default_days: int = 7
+    # May a confident later/declined/unsubscribe be acted on without a person? (each SDR chooses)
+    auto_actions_allowed: bool = True
+    # May the AI email its answer to an interested buyer without a person? (each SDR chooses)
+    auto_send_allowed: bool = False
 
 
 DEFAULTS = EngagementSettings()
@@ -52,6 +64,11 @@ def _int(raw, fallback: int, low: int, high: int) -> int:
     except (TypeError, ValueError):
         return fallback
     return value if low <= value <= high else fallback
+
+
+def _bool(raw, fallback: bool) -> bool:
+    # Only a real boolean counts: the JSON string "false" is truthy in Python.
+    return raw if isinstance(raw, bool) else fallback
 
 
 def read_settings(email_settings: dict | None) -> EngagementSettings:
@@ -74,6 +91,9 @@ def read_settings(email_settings: dict | None) -> EngagementSettings:
             DEFAULTS.reply_reminder_business_hours, 1, 72,
         ),
         ooo_default_days=_int(stored.get("ooo_default_days"), DEFAULTS.ooo_default_days, 1, 60),
+        auto_actions_allowed=_bool(stored.get("auto_actions_allowed"),
+                                   DEFAULTS.auto_actions_allowed),
+        auto_send_allowed=_bool(stored.get("auto_send_allowed"), DEFAULTS.auto_send_allowed),
     )
 
 
@@ -103,6 +123,9 @@ def validate_update(current: EngagementSettings, patch: dict) -> EngagementSetti
             raise ValueError(f"{key} must be a whole number from {low} to {high}") from exc
         if not low <= merged[key] <= high:
             raise ValueError(f"{key} must be a whole number from {low} to {high}")
+    for key in ("auto_actions_allowed", "auto_send_allowed"):
+        if not isinstance(merged[key], bool):
+            raise ValueError(f"{key} must be true or false")
     return EngagementSettings(**merged)
 
 
@@ -135,3 +158,11 @@ def effective_confidence(settings: EngagementSettings, mailbox_value: float | No
         return settings.reply_confidence_default
     return min(max(float(mailbox_value), settings.reply_confidence_min),
                settings.reply_confidence_max)
+
+
+def reply_automation(settings: EngagementSettings, mailbox) -> tuple[bool, bool]:
+    """(acts alone, sends alone) for replies to this mailbox: what the workspace allows AND what
+    its SDR chose. The one place the two halves meet, so the screen and the engine agree."""
+    acts = settings.auto_actions_allowed and bool(getattr(mailbox, "auto_actions", True))
+    sends = settings.auto_send_allowed and bool(getattr(mailbox, "auto_send_replies", False))
+    return acts, sends

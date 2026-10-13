@@ -85,8 +85,9 @@ _ENGAGEMENT_RULES: dict[str, tuple[str, str]] = {
     "reply_bounced": ("info", "The address bounced and is now on do-not-contact."),
     "reply_unsubscribed": ("info", "They unsubscribed; nothing more will be sent."),
     "reply_declined": ("info", "They said no; they are on do-not-contact until lifted."),
+    "reply_auto_sent": ("info", "Read what the AI sent; their next reply comes to you."),
     "campaign_out_of_credits": ("critical", "Top up credits to resume the campaign."),
-    "mailbox_needs_reauth": ("critical", "Reconnect the mailbox from My mailboxes."),
+    "mailbox_needs_reauth": ("critical", "Reconnect it in Settings, My mailboxes."),
 }
 
 

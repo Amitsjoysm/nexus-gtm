@@ -191,7 +191,7 @@ def authorization_server_metadata(base: str) -> dict:
         "scopes_supported": [OAUTH_SCOPE[s] for s in credentials.SCOPES] + ["offline_access"],
         "client_id_metadata_document_supported": True,
         "authorization_response_iss_parameter_supported": True,
-        "service_documentation": f"{base}/connected-apps",
+        "service_documentation": f"{base}/settings/ai-apps",
     }
 
 
@@ -202,7 +202,7 @@ def protected_resource_metadata(base: str) -> dict:
         "scopes_supported": [OAUTH_SCOPE[s] for s in credentials.SCOPES],
         "bearer_methods_supported": ["header"],
         "resource_name": PRODUCT_NAME,
-        "resource_documentation": f"{base}/connected-apps",
+        "resource_documentation": f"{base}/settings/ai-apps",
     }
 
 

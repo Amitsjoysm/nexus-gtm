@@ -166,7 +166,7 @@ Before the listing is live, anyone can install it as a self-hosted marketplace:
    1. "Send this email now." Expected: it explains it cannot send, and offers to save it to Drafts.
    2. "Delete the account <name>." Expected: it explains deleting is not available from the app.
    3. With a read-only connection: "Add Acme as an account." Expected: it says the connection may
-      not add records and that permissions are changed in InfoJoy GTM, AI apps.
+      not add records and that permissions are changed in InfoJoy GTM, Settings, AI apps.
 7. **Listing**: name, short and long descriptions, category, logos (light and dark), at least
    three screenshots, website, support URL, privacy policy and terms (on the same domain), the
    demo video.
@@ -201,8 +201,8 @@ the registry entry exists, claim or confirm those listings if they appear.
   `Authorization: Bearer <key>`): list tools, call `get_credit_balance`.
 - **Each client once** with OAuth: Claude custom connector, ChatGPT developer mode, Claude Code
   (`/mcp`), and VS Code. Each should show the consent screen with the right app name and redirect
-  host, list tools filtered by the ticked permissions, and appear on the AI apps page.
-- **Revoke** one connection from AI apps and confirm the client is asked to sign in again.
+  host, list tools filtered by the ticked permissions, and appear on Settings, AI apps.
+- **Revoke** one connection from Settings, AI apps and confirm the client is asked to sign in again.
 
 ## After listing
 

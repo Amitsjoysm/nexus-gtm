@@ -42,3 +42,5 @@ export type { DataTableProps, Column } from "./DataTable";
 export { ScoreMeter } from "./ScoreMeter";
 export type { ScoreMeterProps } from "./ScoreMeter";
 export * as Icons from "./icons";
+export { Switch, SwitchRow } from "./Switch";
+export type { SwitchProps, SwitchRowProps } from "./Switch";

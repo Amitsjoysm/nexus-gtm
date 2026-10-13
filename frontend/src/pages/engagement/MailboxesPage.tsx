@@ -12,6 +12,7 @@ import {
   Modal,
   Select,
   Skeleton,
+  SwitchRow,
   Textarea,
 } from "@/components/ui";
 import type { BadgeTone } from "@/components/ui";
@@ -141,7 +142,7 @@ export function MailboxesPage() {
       />
 
       <Card padding="lg" className={styles.connect}>
-        <h3 className={styles.sectionTitle}>Connect a mailbox</h3>
+        <h4 className={styles.sectionTitle}>Connect a mailbox</h4>
         <DataState
           state={providers}
           errorTitle="Couldn't check which providers are available"
@@ -211,6 +212,7 @@ function MailboxCard({
   );
   const [busy, setBusy] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [confirmingSend, setConfirmingSend] = useState(false);
   const zones = useMemo(() => timezoneOptions(mailbox.timezone), [mailbox.timezone]);
   const status = STATUS[mailbox.status];
   const dirty = timezone !== mailbox.timezone || signature !== mailbox.signature
@@ -227,6 +229,20 @@ function MailboxCard({
     } finally {
       setBusy(null);
     }
+  }
+
+  // The reply switches apply the moment they are flipped; the server refuses turning one on where
+  // the workspace does not allow it, and never refuses turning one off.
+  function toggle(key: "auto_actions" | "auto_send_replies", next: boolean) {
+    const done: Record<typeof key, [string, string]> = {
+      auto_actions: next
+        ? ["Turned on", "Clear replies to this mailbox are acted on by themselves."]
+        : ["Turned off", "Every reply to this mailbox now waits for you."],
+      auto_send_replies: next
+        ? ["Turned on", "The AI now answers interested buyers and questions from this mailbox."]
+        : ["Turned off", "The AI drafts answers; you send them."],
+    };
+    return run(key, () => api.updateConnectedMailbox(mailbox.id, { [key]: next }), done[key]);
   }
 
   function save() {
@@ -281,11 +297,44 @@ function MailboxCard({
             </Field>
           </div>
         )}
+        {/* Save sits with the fields it saves; the switches below apply the moment they flip. */}
+        {mailbox.mine && mailbox.status !== "revoked" && (
+          <div className={styles.saveRow}>
+            <Button onClick={save} disabled={!dirty} loading={busy === "save"}>Save changes</Button>
+          </div>
+        )}
+
+        {mailbox.mine && mailbox.status !== "revoked" && (
+          <section className={styles.replies} aria-labelledby={`replies-${mailbox.id}`}>
+            <h4 id={`replies-${mailbox.id}`} className={styles.sectionTitle}>When a buyer replies</h4>
+            <SwitchRow
+              label="Act on clear replies by itself"
+              hint={'A confident "not now", "no thanks" or "unsubscribe" snoozes or stops the sequence straight away. Off: the sequence pauses and the reply waits for you.'}
+              status={!mailbox.auto_actions_allowed
+                ? "Not in force: a manager has switched this off for the workspace in Settings, Replies."
+                : undefined}
+              checked={mailbox.auto_actions}
+              disabled={busy !== null || (!mailbox.auto_actions_allowed && !mailbox.auto_actions)}
+              onChange={(next) => toggle("auto_actions", next)}
+            />
+            <SwitchRow
+              label="Let the AI send replies"
+              hint="The AI emails its answer to a buyer who is interested or asked a question, when it is confident and the draft passes every check. Off: it drafts the answer and you send it."
+              status={!mailbox.auto_send_allowed
+                ? (mailbox.auto_send_replies
+                  ? "Not in force: a manager has not allowed this in Settings, Replies."
+                  : "A manager can allow this in Settings, Replies.")
+                : mailbox.sends_alone
+                  ? "On: you get an alert for each reply the AI sends."
+                  : undefined}
+              checked={mailbox.auto_send_replies}
+              disabled={busy !== null || (!mailbox.auto_send_allowed && !mailbox.auto_send_replies)}
+              onChange={(next) => (next ? setConfirmingSend(true) : toggle("auto_send_replies", false))}
+            />
+          </section>
+        )}
 
         <div className={styles.actions}>
-          {mailbox.mine && mailbox.status !== "revoked" && (
-            <Button onClick={save} disabled={!dirty} loading={busy === "save"}>Save</Button>
-          )}
           {mailbox.mine && mailbox.status === "connected" && (
             <Button variant="secondary" loading={busy === "check"}
               onClick={() => run("check", () => api.checkConnectedMailbox(mailbox.id),
@@ -321,6 +370,32 @@ function MailboxCard({
         }
       >
         <p className={styles.meta}>You can connect it again at any time.</p>
+      </Modal>
+
+      <Modal
+        open={confirmingSend}
+        onClose={() => setConfirmingSend(false)}
+        title={`Let the AI send replies from ${mailbox.email}?`}
+        description="Emails go to real buyers in your name without you reading them first."
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmingSend(false)}>Cancel</Button>
+            <Button loading={busy === "auto_send_replies"}
+              onClick={async () => {
+                await toggle("auto_send_replies", true);
+                setConfirmingSend(false);
+              }}>
+              Turn on
+            </Button>
+          </>
+        }
+      >
+        <ul className={styles.terms}>
+          <li>It answers only a buyer who is interested or asked a question, and only when it is confident and its draft passes every check. Anything else waits for you.</li>
+          <li>It never offers meeting times, because it cannot see your calendar. It asks which days suit them.</li>
+          <li>It answers once per conversation. After that, their replies come to you.</li>
+          <li>You get an alert for each one, and can turn this off at any time.</li>
+        </ul>
       </Modal>
     </li>
   );

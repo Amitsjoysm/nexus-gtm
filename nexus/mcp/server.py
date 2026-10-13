@@ -85,7 +85,7 @@ async def call_tool(app, actor: Actor, params: dict) -> dict:
         metrics.record_mcp_tool(name, "refused")
         return _tool_result({
             "error": f"This connection is not allowed to {_SCOPE_WORDS[spec.scope]}. The user can "
-                     f"change its permissions in {PRODUCT_NAME} > AI apps.",
+                     f"change its permissions in {PRODUCT_NAME} > Settings > AI apps.",
         }, is_error=True)
     try:
         args = schema.validate(spec.input_schema, params.get("arguments"))

@@ -90,7 +90,7 @@ export function ReplyDeskPage() {
                   aria-pressed={team} onClick={() => setTeam((t) => !t)}>
                   {team ? "Show mine" : "Show team"}
                 </Button>
-                <ButtonLink to="/engagement/replies/settings" size="sm" iconLeft={<Icons.SettingsIcon />}>
+                <ButtonLink to="/settings/replies" size="sm" iconLeft={<Icons.SettingsIcon />}>
                   Reply settings
                 </ButtonLink>
               </>

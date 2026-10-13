@@ -105,7 +105,7 @@ export function AlertsPage() {
             <Button
               variant="secondary"
               iconLeft={<Icons.SettingsIcon />}
-              onClick={() => navigate("/alerts/settings")}
+              onClick={() => navigate("/settings/notifications")}
             >
               Alert settings
             </Button>

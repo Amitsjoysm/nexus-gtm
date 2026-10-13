@@ -131,14 +131,17 @@ def test_every_member_can_reach_alert_delivery():
     assert "<AlertDelivery" in page, "the alert settings page does not render alert delivery"
 
     app = (root / "App.tsx").read_text(encoding="utf-8")
-    route = re.search(r'path="/alerts/settings"(.*?)/>\s*\n', app, re.S)
-    assert route, "no /alerts/settings route"
+    # Settings > Notifications since 2026-10-13: Settings opens to every member now, and this tab
+    # carries no role, so the rep-level API has a screen every rep reaches.
+    route = re.search(r'path="/settings/notifications"(.*?)/>\s*\n', app, re.S)
+    assert route, "no /settings/notifications route"
     assert 'minRole="admin"' not in route.group(1) and 'minRole="manager"' not in route.group(1), (
         "alert delivery is behind a role a rep does not have"
     )
-
-    settings = (root / "pages" / "SettingsPage.tsx").read_text(encoding="utf-8")
-    assert "/alerts/settings" in settings, "Settings no longer points to where alert delivery went"
+    tabs = (root / "app" / "settingsTabs.tsx").read_text(encoding="utf-8")
+    tab = tabs[tabs.index('to: "/settings/notifications"'):].split("},", 1)[0]
+    assert "minRole" not in tab
+    assert '<Forward to="/settings/notifications" />' in app, "the old address no longer forwards"
 
     panel = (root / "pages" / "settings" / "AlertDelivery.tsx").read_text(encoding="utf-8")
     # Teams is why this was built now. The channel NAMES moved into a shared vocabulary module when

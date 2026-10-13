@@ -290,9 +290,12 @@ def test_the_floor_of_the_product_is_never_gated():
     gating it means a redirect loop into an empty shell.
     """
     source = _NAV.read_text(encoding="utf-8")
-    for route in ("/dashboard", "/accounts", "/contacts", "/members", "/settings/billing"):
+    # Members became a Settings tab on 2026-10-13, and Settings itself opened to every member.
+    source += (_ROOT / "frontend" / "src" / "app" / "settingsTabs.tsx").read_text(encoding="utf-8")
+    for route in ("/dashboard", "/accounts", "/contacts", "/settings", "/settings/members",
+                  "/settings/billing"):
         block = re.search(r'\{[^{}]*to:\s*"' + re.escape(route) + r'"[^{}]*\}', source, re.S)
-        assert block, f"{route} is no longer in NAV_ITEMS"
+        assert block, f"{route} is no longer in NAV_ITEMS or SETTINGS_TABS"
         assert "capability" not in block.group(0), (
             f"{route} must never be plan-gated — see the comment above NAV_ITEMS."
         )
@@ -332,7 +335,7 @@ def test_no_second_hand_maintained_list_of_page_titles():
     shell = (_ROOT / "frontend" / "src" / "components" / "layout" / "AppShell.tsx").read_text(
         encoding="utf-8"
     )
-    assert "NAV_ITEMS.map" in shell, "page titles are no longer derived from the nav"
+    assert re.search(r"NAV_ITEMS.*?\.map\(", shell, re.S), "page titles are no longer derived from the nav"
     assert "const TITLES: Record<string, string> = {" not in shell, (
         "a hand-maintained title map is back — it will drift again"
     )

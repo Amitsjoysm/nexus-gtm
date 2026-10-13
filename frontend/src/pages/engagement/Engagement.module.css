@@ -189,6 +189,13 @@
   gap: var(--space-3);
 }
 
+/* A card's title with the sentence under it. */
+.cardIntro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
 .sectionTitle {
   margin: 0;
   font-size: var(--text-md);

@@ -30,6 +30,7 @@ export const CATEGORY_LABEL: Record<string, string> = {
   reply_bounced: "Email bounced",
   reply_unsubscribed: "Unsubscribed",
   reply_declined: "Declined",
+  reply_auto_sent: "AI replied for you",
   campaign_out_of_credits: "Campaign out of credits",
   mailbox_needs_reauth: "Mailbox needs reconnecting",
 };
@@ -55,6 +56,7 @@ export const CATEGORY_BLURB: Record<string, string> = {
   reply_bounced: "An email bounced; the address is now on do-not-contact.",
   reply_unsubscribed: "Someone unsubscribed; they will never be emailed again.",
   reply_declined: "Someone said no; they are on do-not-contact until a manager lifts it.",
+  reply_auto_sent: "The AI answered an interested buyer by itself, because your mailbox allows it.",
   campaign_out_of_credits: "A campaign paused because the workspace ran out of credits.",
   mailbox_needs_reauth: "A sending mailbox lost its connection and needs reconnecting.",
 };

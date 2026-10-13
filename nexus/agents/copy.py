@@ -231,8 +231,21 @@ WARM_TOUCHES = frozenset({"response"})
 THREADED_TOUCHES = frozenset({"followup", "reengage", "response", "signal"})
 
 
+#: The ask of a reply the AI sends by itself (`engagement/replies/auto_reply.py`). Nobody reads it
+#: before it goes, and the AI cannot see the rep's calendar, so it asks rather than offers: a time
+#: it proposed would be a promise the rep never made. `auto_reply.names_a_time` holds a draft that
+#: names one anyway.
+AUTO_REPLY_CTA_RULE = (
+    "This reply is sent without the rep reading it first and you cannot see their calendar, so "
+    "never propose a specific day, date or time, and never promise anything the facts above do "
+    "not state. If they showed interest, end by asking which days suit them for a short call. "
+    "Otherwise answer their question from the facts above and end with one clear next step they "
+    "can accept or decline in a word."
+)
+
+
 def email_rules(touch: str = "first", *, first_ask: str = "interest",
-                word_cap: int | None = None) -> str:
+                word_cap: int | None = None, automatic: bool = False) -> str:
     """The rules for one email. ``touch`` is the engagement kind (`first`, `followup`, `signal`,
     `reengage`, `response`); anything else is read as a first email, which is what every caller
     outside the engagement engine (the composer, plays, the orchestrator) is writing.
@@ -242,7 +255,7 @@ def email_rules(touch: str = "first", *, first_ask: str = "interest",
     warm = touch in WARM_TOUCHES
     cap = word_cap or EMAIL_WORD_CAP
     if warm:
-        ask = REPLY_CTA_RULE
+        ask = AUTO_REPLY_CTA_RULE if automatic else REPLY_CTA_RULE
     elif first_ask == "meeting":
         ask = MEETING_CTA_RULE
     else:

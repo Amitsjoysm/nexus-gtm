@@ -17,10 +17,12 @@ from tests.conftest import auth, signup
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "frontend" / "src"
 
-#: Pages that can never be hidden. The first five are the product's floor; Billing is where a
-#: customer fixes the plan; the Superadmin console is where a hide is undone.
-NEVER_HIDDEN = {"/dashboard", "/accounts", "/contacts", "/members", "/settings",
-                "/settings/billing", "/admin/billing", "/admin/health"}
+#: Pages that can never be hidden. Dashboard, Accounts, Contacts, Settings and its Members,
+#: Workspace and Email tabs are the product's floor; Billing is where a customer fixes the plan; the
+#: Superadmin console is where a hide is undone.
+NEVER_HIDDEN = {"/dashboard", "/accounts", "/contacts", "/settings", "/settings/members",
+                "/settings/workspace", "/settings/email", "/settings/billing", "/admin/billing",
+                "/admin/health"}
 
 
 @pytest.fixture(autouse=True)
@@ -40,9 +42,18 @@ async def _superadmin(client, monkeypatch, *, slug: str, email: str) -> str:
 
 
 def _nav_paths() -> set[str]:
+    """Every menu page and every Settings tab, by the address that hides it (a tab's `page:`)."""
     nav = (SRC / "app" / "nav.tsx").read_text(encoding="utf-8")
     items = nav[nav.index("export const NAV_ITEMS"):nav.index("export function canSee")]
-    return set(re.findall(r'to: "([^"]+)"', items))
+    paths = set(re.findall(r'to: "([^"]+)"', items))
+    tabs = (SRC / "app" / "settingsTabs.tsx").read_text(encoding="utf-8")
+    listed = tabs[tabs.index("export const SETTINGS_TABS"):tabs.index("export function tabPage")]
+    for block in re.findall(r"\{(.*?)\}", listed, re.S):
+        to = re.search(r'to: "([^"]+)"', block)
+        page = re.search(r'page: "([^"]+)"', block)
+        if to:
+            paths.add(page.group(1) if page else to.group(1))
+    return paths
 
 
 # ---- the catalog ----------------------------------------------------------------------------------
@@ -152,7 +163,14 @@ def test_every_route_of_a_hideable_page_redirects_when_hidden():
                 if path == page.path or path.startswith(page.path + "/")]
         assert mine, f"no route for {page.path}"
         for path, element in mine:
+            if element.strip().startswith("<Forward"):
+                continue  # an old address forwarding to a Settings tab renders nothing itself
             assert f'<RequirePage page="{page.path}"' in element, f"{path} ignores a hidden page"
+    # A Settings tab that moved from elsewhere keeps its page's switch (Notifications: Alerts).
+    for tab, page in (("/settings/notifications", "/alerts"), ("/settings/replies",
+                                                              "/engagement/replies")):
+        element = next(e for p, e in routes if p == tab)
+        assert f'<RequirePage page="{page}"' in element, f"{tab} ignores a hidden {page}"
     guard = (SRC / "app" / "RequirePage.tsx").read_text(encoding="utf-8")
     assert '<Navigate to="/dashboard" replace />' in guard
 

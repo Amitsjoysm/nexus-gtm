@@ -216,7 +216,9 @@ class MessagingAgent(BaseAgent):
         # is never buried under them.
         # The rules for THIS touch (`copy.email_rules`): a reply offers times, an unanswered email
         # asks one interest question, a threaded one keeps the thread's subject.
-        content += f"\n{email_rules(touch, **options)}\n{OUTPUT_CONTRACT}"
+        # A reply the AI sends by itself asks for a day instead of offering times (`auto_reply`).
+        automatic = bool(ctx.inputs.get("automatic_reply"))
+        content += f"\n{email_rules(touch, automatic=automatic, **options)}\n{OUTPUT_CONTRACT}"
         user = LLMMessage(role="user", content=content)
         message = await ctx.complete(
             [ctx.system_message(), user],

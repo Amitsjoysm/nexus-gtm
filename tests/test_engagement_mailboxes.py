@@ -270,7 +270,7 @@ async def test_a_callback_with_a_bad_state_redirects_with_an_error(client, monke
     r = await client.get("/api/engagement/mailboxes/oauth/google/callback",
                          params={"code": "c", "state": "forged"})
     assert r.status_code == 302
-    assert r.headers["location"] == "https://app.example.com/mailboxes?error=bad_state"
+    assert r.headers["location"] == "https://app.example.com/settings/mailboxes?error=bad_state"
 
 
 async def test_reps_see_their_own_mailboxes_and_only_managers_the_team(client):
@@ -308,8 +308,14 @@ def test_the_mailboxes_page_is_reachable_by_every_member():
     app = (src / "App.tsx").read_text(encoding="utf-8")
     nav = (src / "app" / "nav.tsx").read_text(encoding="utf-8")
     page = (src / "pages" / "engagement" / "MailboxesPage.tsx").read_text(encoding="utf-8")
-    assert 'path="/mailboxes"' in app and 'capability="module.outreach" name="My mailboxes"' in app
-    assert '{ to: "/mailboxes", label: "My mailboxes"' in nav
+    tabs = (src / "app" / "settingsTabs.tsx").read_text(encoding="utf-8")
+    # A Settings tab since 2026-10-13, with no role and the module gate it had as a menu item.
+    assert 'path="/settings/mailboxes"' in app
+    assert 'capability="module.outreach" name="My mailboxes"' in app
+    tab = tabs[tabs.index('to: "/settings/mailboxes"'):].split("},", 1)[0]
+    assert 'capability: "module.outreach"' in tab and "minRole" not in tab
+    assert '"/mailboxes"' not in nav and '<Forward to="/settings/mailboxes" />' in app
+    assert 'minRole: "admin"' not in nav[nav.index('to: "/settings", label: "Settings"'):].split("}")[0]
     assert "api.startMailboxConnect" in page and "browserTimezone()" in page
     assert "window.location.assign(authorize_url)" in page
     for code in ("owned_by_colleague", "missing_scopes", "bad_state", "denied"):

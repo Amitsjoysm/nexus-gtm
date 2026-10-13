@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { ThemeProvider } from "@/app/ThemeContext";
@@ -91,6 +91,11 @@ const DoNotContactPage = lazyPage(
   () => import("@/pages/engagement/DoNotContactPage"), "DoNotContactPage",
 );
 const SettingsPage = lazyPage(() => import("@/pages/SettingsPage"), "SettingsPage");
+const SettingsLayout = lazyPage(() => import("@/pages/settings/SettingsLayout"), "SettingsLayout");
+const SettingsIndex = lazyPage(() => import("@/pages/settings/SettingsLayout"), "SettingsIndex");
+const EmailSettingsPage = lazyPage(
+  () => import("@/pages/settings/EmailSettings"), "EmailSettingsPage",
+);
 const BillingPage = lazyPage(() => import("@/pages/BillingPage"), "BillingPage");
 const AdminHealthPage = lazyPage(
   () => import("@/pages/AdminHealthPage"),
@@ -102,6 +107,12 @@ const AdminBillingPage = lazyPage(
 );
 
 const ROLE_RANK: Record<Role, number> = { owner: 3, admin: 2, manager: 1, rep: 0 };
+
+/** An address that moved: forward it, keeping the query string and fragment it arrived with. */
+function Forward({ to }: { to: string }) {
+  const { search, hash } = useLocation();
+  return <Navigate to={`${to}${search}${hash}`} replace />;
+}
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { isAuthed } = useAuth();
@@ -360,29 +371,6 @@ export function App() {
                     </RequirePage>
                   }
                 />
-                {/* Every member, like Alerts itself: choosing where your own alerts go is rep-level.
-                    The team-channel half of the page checks the role inside. */}
-                {/* Every member connects their own AI apps; gated like any module page. */}
-                <Route
-                  path="/connected-apps"
-                  element={
-                    <RequirePage page="/connected-apps">
-                      <RequireCapability capability="module.mcp" name="AI apps">
-                        <ConnectedAppsPage />
-                      </RequireCapability>
-                    </RequirePage>
-                  }
-                />
-                <Route
-                  path="/alerts/settings"
-                  element={
-                    <RequirePage page="/alerts">
-                      <RequireCapability capability="module.signals" name="Alert settings">
-                        <AlertSettingsPage />
-                      </RequireCapability>
-                    </RequirePage>
-                  }
-                />
                 <Route
                   path="/runs"
                   element={
@@ -423,18 +411,6 @@ export function App() {
                     addresses still arrive from bookmarks and old links, so they forward. */}
                 <Route path="/campaigns" element={<Navigate to="/engagement/campaigns" replace />} />
                 <Route path="/cadences" element={<Navigate to="/engagement/templates" replace />} />
-                {/* Every member: an SDR connects their own mailbox. Gated like the email composer,
-                    on module.outreach, so a plan without outreach hides it everywhere. */}
-                <Route
-                  path="/mailboxes"
-                  element={
-                    <RequirePage page="/mailboxes">
-                      <RequireCapability capability="module.outreach" name="My mailboxes">
-                        <MailboxesPage />
-                      </RequireCapability>
-                    </RequirePage>
-                  }
-                />
                 <Route
                   path="/do-not-contact"
                   element={
@@ -494,18 +470,6 @@ export function App() {
                   }
                 />
                 <Route
-                  path="/engagement/replies/settings"
-                  element={
-                    <RequirePage page="/engagement/replies">
-                      <RequireEngine name="Reply settings">
-                        <RequireCapability capability="module.campaigns" name="Reply settings">
-                          <EngagementSettingsPage />
-                        </RequireCapability>
-                      </RequireEngine>
-                    </RequirePage>
-                  }
-                />
-                <Route
                   path="/engagement/templates"
                   element={
                     <RequirePage page="/engagement/templates">
@@ -553,21 +517,93 @@ export function App() {
                     </RequirePage>
                   }
                 />
+                {/* Settings: one frame, a tab per route (`app/settingsTabs.tsx`). Each tab keeps the
+                    guards its page had before it moved here, and the old addresses forward, with
+                    their query string: the mailbox OAuth callback returns with ?connected=. */}
+                <Route path="/settings" element={<SettingsLayout />}>
+                  <Route index element={<SettingsIndex />} />
+                  <Route
+                    path="/settings/mailboxes"
+                    element={
+                      <RequirePage page="/settings/mailboxes">
+                        <RequireCapability capability="module.outreach" name="My mailboxes">
+                          <MailboxesPage />
+                        </RequireCapability>
+                      </RequirePage>
+                    }
+                  />
+                  <Route
+                    path="/settings/ai-apps"
+                    element={
+                      <RequirePage page="/settings/ai-apps">
+                        <RequireCapability capability="module.mcp" name="AI apps">
+                          <ConnectedAppsPage />
+                        </RequireCapability>
+                      </RequirePage>
+                    }
+                  />
+                  <Route
+                    path="/settings/notifications"
+                    element={
+                      <RequirePage page="/alerts">
+                        <RequireCapability capability="module.signals" name="Notifications">
+                          <AlertSettingsPage />
+                        </RequireCapability>
+                      </RequirePage>
+                    }
+                  />
+                  <Route
+                    path="/settings/replies"
+                    element={
+                      <RequirePage page="/engagement/replies">
+                        <RequireEngine name="Reply settings">
+                          <RequireCapability capability="module.campaigns" name="Reply settings">
+                            <EngagementSettingsPage />
+                          </RequireCapability>
+                        </RequireEngine>
+                      </RequirePage>
+                    }
+                  />
+                  <Route
+                    path="/settings/members"
+                    element={
+                      <RequireRole minRole="manager">
+                        <MembersPage />
+                      </RequireRole>
+                    }
+                  />
+                  <Route
+                    path="/settings/workspace"
+                    element={
+                      <RequireRole minRole="admin">
+                        <SettingsPage />
+                      </RequireRole>
+                    }
+                  />
+                  <Route
+                    path="/settings/email"
+                    element={
+                      <RequireRole minRole="admin">
+                        <EmailSettingsPage />
+                      </RequireRole>
+                    }
+                  />
+                  <Route
+                    path="/settings/billing"
+                    element={
+                      <RequireRole minRole="admin">
+                        <BillingPage />
+                      </RequireRole>
+                    }
+                  />
+                </Route>
+                <Route path="/mailboxes" element={<Forward to="/settings/mailboxes" />} />
+                <Route path="/connected-apps" element={<Forward to="/settings/ai-apps" />} />
+                <Route path="/members" element={<Forward to="/settings/members" />} />
+                <Route path="/alerts/settings" element={<Forward to="/settings/notifications" />} />
                 <Route
-                  path="/settings"
-                  element={
-                    <RequireRole minRole="admin">
-                      <SettingsPage />
-                    </RequireRole>
-                  }
-                />
-                <Route
-                  path="/settings/billing"
-                  element={
-                    <RequireRole minRole="admin">
-                      <BillingPage />
-                    </RequireRole>
-                  }
+                  path="/engagement/replies/settings"
+                  element={<Forward to="/settings/replies" />}
                 />
                 {/* Platform-admin only, and NOT a tenant role — guarding this on minRole="owner"
                     let any workspace owner load the console shell. The API gate
@@ -589,7 +625,6 @@ export function App() {
                     </RequirePlatformAdmin>
                   }
                 />
-                <Route path="/members" element={<MembersPage />} />
               </Route>
 
               <Route path="*" element={<Navigate to="/dashboard" replace />} />

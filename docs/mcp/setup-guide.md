@@ -12,7 +12,7 @@ This page is the public setup guide. Publish it at a stable public address (for 
 
 - You need an InfoJoy GTM account. Every member can connect their own apps, on every plan.
 - Server address: `https://gtm.infojoy.com/mcp`
-- In InfoJoy GTM, **AI apps** (in the left menu) shows the address, the steps for each app, and
+- In InfoJoy GTM, **Settings**, **AI apps** shows the address, the steps for each app, and
   every app you have connected.
 
 ## Connect an app
@@ -74,7 +74,7 @@ instead, add a `headers` entry beside `url`, the same in both files:
 
 ### Scripts and model APIs
 
-Create an API key in InfoJoy GTM under **AI apps**, **Create API key**. Give it only the
+Create an API key in InfoJoy GTM under **Settings**, **AI apps**, **Create API key**. Give it only the
 permissions the script needs and an expiry. The key is shown once: store it as a secret.
 
 Send it as a bearer token. With OpenAI's Responses API, add InfoJoy GTM as a remote MCP tool:
@@ -93,7 +93,7 @@ Other model APIs that support remote MCP tools take the same address and header.
 
 ## Permissions
 
-You choose these for each connection, and can change them later in **AI apps**:
+You choose these for each connection, and can change them later in **Settings**, **AI apps**:
 
 | Permission | What the app can do |
 |---|---|
@@ -111,7 +111,7 @@ anything, and answers "not enough credits" instead of running. Connecting an app
 
 ## Revoke access
 
-In InfoJoy GTM, open **AI apps** and choose **Revoke** next to the app or key. It stops working at
+In InfoJoy GTM, open **Settings**, **AI apps** and choose **Revoke** next to the app or key. It stops working at
 once. Admins and owners can see and revoke every connection in the workspace under **Everyone**.
 
 ## Your data
@@ -129,7 +129,7 @@ workspace's audit log. See the privacy policy at `https://gtm.infojoy.com/privac
 - **Where do I paste my API key in Claude?** You don't: Claude's connectors sign in instead. Keys
   are for Claude Code, Cursor, VS Code and scripts.
 - **The app says it isn't allowed to do something**: change the connection's permissions in
-  **AI apps**.
+  **Settings**, **AI apps**.
 - **"Not enough credits"**: add credits in **Billing**, or ask an admin.
 - **"AI apps are switched off"**: an administrator has paused AI apps for your workspace or plan.
 - **Sign-in link expired**: start connecting again from the app; links last 10 minutes.

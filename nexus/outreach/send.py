@@ -161,7 +161,7 @@ async def _smtp_mailbox(ts, tenant, user_id: str) -> dict:
             label = _PROVIDER_LABELS.get(box.provider, box.provider)
             raise MailboxNotConnected(
                 f"Your {label} mailbox {box.email} needs reconnecting before it can send. "
-                "Reconnect it under My mailboxes, then try again."
+                "Reconnect it in Settings, My mailboxes, then try again."
             ) from None
         raise
 
@@ -204,7 +204,7 @@ async def _draft_through_connection(ts, *, connection, contact, to: str, subject
     try:
         await save_draft(ts, mailbox=connection, contact=contact, subject=subject, body=body)
     except AuthExpired:
-        detail = "the mailbox needs reconnecting (My mailboxes)"
+        detail = "the mailbox needs reconnecting (Settings, My mailboxes)"
         ok = False
     except ProviderError as exc:
         detail = f"could not save: {exc}"

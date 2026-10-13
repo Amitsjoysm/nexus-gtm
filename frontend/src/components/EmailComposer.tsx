@@ -299,7 +299,7 @@ export function EmailComposer({
       />
 
       {/* The draft deliberately ends at the sign-off: the signature block is appended from the
-          sending mailbox (My mailboxes for Gmail/Outlook, Settings → Sending mailboxes for SMTP),
+          sending mailbox (Settings → My mailboxes for Gmail/Outlook, Settings → Email & signature for SMTP),
           so one rep's draft cannot go out under another's details, and regenerating never loses
           it. */}
       <p className={styles.hint}>

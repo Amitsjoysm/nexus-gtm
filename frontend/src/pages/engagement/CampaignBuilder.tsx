@@ -136,7 +136,7 @@ export function CampaignBuilder() {
           icon={<Icons.MailIcon />}
           title="Connect your mailbox first"
           description="A campaign sends from your own Gmail or Outlook mailbox, so replies come back to you."
-          action={<Link to="/mailboxes" className={styles.buttonLink}>Go to My mailboxes</Link>}
+          action={<Link to="/settings/mailboxes" className={styles.buttonLink}>Go to My mailboxes</Link>}
         />
       </div>
     );

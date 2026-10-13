@@ -542,7 +542,7 @@ function MailboxChooser({ campaignId, current, isOwner, mine, onChosen }: {
         <p className={styles.muted}>It sends from its owner's mailbox, so the owner chooses one.</p>
       ) : mine.length === 0 ? (
         <p className={styles.muted}>
-          <Link to="/mailboxes" className={styles.inlineLink}>Connect a mailbox on My mailboxes</Link>,
+          <Link to="/settings/mailboxes" className={styles.inlineLink}>Connect a mailbox on My mailboxes</Link>,
           then choose it here.
         </p>
       ) : (

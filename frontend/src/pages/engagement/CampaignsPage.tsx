@@ -114,7 +114,7 @@ export function EngagementCampaignsPage() {
       {mailboxes.data !== null && !hasMailbox && (
         <p className={styles.notice} role="status">
           Campaigns send from your own Gmail or Outlook mailbox.{" "}
-          <Link to="/mailboxes" className={styles.inlineLink}>Connect it on My mailboxes</Link>{" "}
+          <Link to="/settings/mailboxes" className={styles.inlineLink}>Connect it on My mailboxes</Link>{" "}
           to build one.
         </p>
       )}

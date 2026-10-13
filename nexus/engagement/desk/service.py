@@ -128,8 +128,9 @@ async def item(ts, classification) -> DeskItem:
         conversation=conversation, paused_colleagues=colleagues)
 
 
-async def draft_response(ts, classification, *, user_id: str) -> dict:
-    """The AI's suggested reply, stored on the classification for the SDR to edit (D22)."""
+async def draft_response(ts, classification, *, user_id: str, automatic: bool = False) -> dict:
+    """The AI's suggested reply, stored on the classification for the SDR to edit (D22).
+    ``automatic`` is the reply sweep drafting one it may send itself: its ask never offers times."""
     from nexus.engagement.drafting.drafter import REPLY_DRAFT, draft
     from nexus.engagement.ledger.emit import emit
     from nexus.models.account import Account
@@ -147,7 +148,7 @@ async def draft_response(ts, classification, *, user_id: str) -> dict:
         contact_timezone=mailbox.timezone or "UTC", current_thread_id=getattr(thread, "id", None))
     written = await draft(ts, enrollment=enrollment, contact=detail.contact, account=account,
                           mailbox=mailbox, kind="response", thread=thread, user_id=user_id,
-                          capability=REPLY_DRAFT)
+                          capability=REPLY_DRAFT, automatic=automatic)
     if not written.ok:
         raise DeskError(f"The response could not be drafted: {written.error}")
     classification.suggested_response = f"{written.subject}\n\n{written.body}".strip()

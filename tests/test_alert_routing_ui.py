@@ -39,7 +39,8 @@ def test_managers_choose_what_a_shared_channel_receives():
 
 
 def test_the_alerts_page_links_to_its_settings():
-    assert "/alerts/settings" in _read("pages/AlertsPage.tsx")
+    # Alert settings became Settings > Notifications (2026-10-13); the old address forwards.
+    assert "/settings/notifications" in _read("pages/AlertsPage.tsx")
 
 
 def test_an_account_shows_its_owner_and_who_can_change_it():

@@ -1,0 +1,113 @@
+/* The on/off control used wherever a setting takes effect the moment it is flipped. Moved here
+   from SettingsPage when three screens needed it, so they cannot drift apart. */
+.switch {
+  flex-shrink: 0;
+  position: relative;
+  width: 46px;
+  height: 26px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  cursor: pointer;
+  padding: 0;
+}
+
+/* A 26px-tall control is under the 44px touch minimum; this widens what a finger can hit
+   without changing what the eye sees. */
+.switch::before {
+  content: "";
+  position: absolute;
+  inset: -10px -4px;
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.switch:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--text-inverse);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+}
+
+.knob svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 3;
+}
+
+.on .knob {
+  left: 22px;
+  background: var(--accent-contrast);
+}
+
+/* ---- a labelled row: what the setting does on the left, the switch on the right ---- */
+.row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.hint {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: var(--leading);
+  max-width: 60ch;
+  text-wrap: pretty;
+}
+
+.status {
+  font-size: var(--text-sm);
+  color: var(--text);
+  line-height: var(--leading);
+  max-width: 60ch;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .knob {
+    transition: left var(--dur) var(--ease-out);
+  }
+  .switch {
+    transition:
+      background var(--dur) var(--ease-out),
+      border-color var(--dur) var(--ease-out);
+  }
+}
+
+@media (max-width: 480px) {
+  .row {
+    gap: var(--space-3);
+  }
+}

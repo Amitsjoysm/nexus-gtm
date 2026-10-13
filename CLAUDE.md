@@ -246,7 +246,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0067_stripe_manage`. The chain is
+Alembic under `migrations/versions/`. Head: `0069_reply_switches`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -265,7 +265,9 @@ ledger tables, `pending_registrations.training_consent`, `call_tasks.engagement_
 fields on `companies`, `company_countries` and `prospect_cursors`, all platform-global;
 `prospect_runs`, tenant-scoped) -> `0064` (`prospect_lists.kind`, `prospect_lists.archived_at`) ->
 `0065` (`provider_settings.base_url`) -> `0066` (`page_visibility`, platform-global) -> `0067` (`platform_admins` backfill of
-`stripe.manage`, no DDL). Every tenant-scoped table gets RLS via
+`stripe.manage`, no DDL) -> `0068` (`mcp_connections`, `oauth_clients`, `oauth_codes`,
+`oauth_tokens`, platform-global) -> `0069` (`mailbox_connections.auto_actions` and
+`.auto_send_replies`, `reply_classifications.auto_reply` and `.auto_reply_note`). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -2899,6 +2901,39 @@ with a link to `/accounts?source=found` (Accounts' Source filter now groups raw 
 Found by AI / Imported / From your CRM / Added by hand), and every row can go on a list.
 The account page's **Run pipeline** is now **Refresh now**: "pipeline" read as a sales pipeline.
 
+## Reply switches: acting alone, and the AI sending replies (2026-10-13)
+
+Asked: "a switch the user can enable or disable for auto reply; ensure the user can really set it".
+Decided with the product owner: **two switches, each allowed by a manager and chosen per mailbox by
+its SDR**, the confidence bar's split (D23). `engagement/settings.reply_automation` is the one place
+that combines them; the API, the screens and the engine all read it. `tests/test_auto_reply.py`.
+
+- **Act on clear replies by itself** (`auto_actions_allowed`, default on; `MailboxConnection
+  .auto_actions`, default on): today's behaviour. Off, `classify.finalize(act_alone=False)` turns a
+  later/declined/unsubscribe into `unclear` however confident, so the sequence pauses (nothing more
+  is sent, an unsubscriber included) and a person decides on the desk. Out-of-office and bounces
+  stay automatic: they only pause or stop sending.
+- **Let the AI send replies** (`auto_send_allowed`, default OFF; `.auto_send_replies`, default off).
+  It reverses D22 only where both halves say so. Ingestion only MARKS a reply
+  (`ReplyClassification.auto_reply = "pending"`): a confident `interested` or `question` from a
+  human, not a colleague, in a thread with no earlier automatic answer. The `send_auto_replies`
+  sweep (every tick, `replies/auto_reply.py`) does the work after that commit, and re-checks at
+  send time: the switch again (turned off a minute ago is obeyed), the reply still open and
+  unanswered, the draft clean under `check_draft`, and **no clock time in it**
+  (`names_a_time`), because the AI cannot see the rep's calendar. Its prompt asks which days suit
+  instead of offering times (`copy.AUTO_REPLY_CTA_RULE`, `email_rules(automatic=True)`). It sends
+  through `desk.send_response`, the SDR's own Send path (do-not-contact gate, exactly-once row,
+  `outreach.email_send` charge), raises a `reply_auto_sent` alert, and anything short of that is
+  `held` with a sentence in `auto_reply_note` and the draft left on the desk. **One automatic
+  answer per thread**, so two programs can never write to each other.
+- Stored values are strict booleans: a JSON string "false" is truthy in Python, so `read_settings`
+  falls back to the default for anything not a real bool, and both endpoints take `StrictBool`.
+  Turning a mailbox switch ON where the workspace does not allow it is a 422; turning one OFF is
+  never refused. `MailboxOut` reports the choice, what is allowed, and what is in force
+  (`acts_alone`, `sends_alone`) separately, because "chosen" and "in force" are different facts.
+- Screens: the allows on Settings > Replies (managers), each SDR's switches on their mailbox card in
+  Settings > My mailboxes, and turning on sending asks for confirmation with the four rules above.
+
 ## MCP server and OAuth (`nexus/mcp/`) — AI apps
 
 AI assistants (Claude on every surface, ChatGPT, Cursor, VS Code, the model APIs) use the product
@@ -2947,7 +2982,8 @@ server (`nxo_` access, `nxr_` refresh). Spec, plan and marketplace steps:
   Revoking is never refused. Runtime settings: `mcp_rate_limit_per_minute`,
   `mcp_allowed_origins`, `openai_apps_challenge_token` (served at
   `/.well-known/openai-apps-challenge`).
-- Screens: AI apps (`/connected-apps`, every member, hideable page) and the consent screen
+- Screens: AI apps (Settings > AI apps, `/settings/ai-apps` since 2026-10-13; `/connected-apps`
+  forwards; every member, hideable page) and the consent screen
   (`/oauth/consent`, outside the app shell; only that path survives login via `nexus.returnTo`).
   Marketplace artifacts: `distribution/claude-plugin/` (validated with Claude Code 2.1.296; older
   CLIs reject `displayName`) and `distribution/mcp-registry/server.json`.
@@ -2967,6 +3003,32 @@ tool when designing or building UI. Pick by task:
 Grounding docs for the design skills:
 - `PRODUCT.md` — what NEXUS is, who uses it, the screens.
 - `DESIGN.md` — the design system: tokens, type scale, components, accessibility rules.
+
+## Settings is tabs (`frontend/src/app/settingsTabs.tsx`, 2026-10-13)
+
+Asked: "move connected apps, members and mailboxes into Settings with well-structured tabs". My
+mailboxes, AI apps and Members were separate main-menu items beside an admin-only Settings page.
+Settings is now one frame for every member (`pages/settings/SettingsLayout.tsx`), its tabs grouped
+by whose setting it is: **You** (My mailboxes, AI apps, Notifications), **Team** (Replies, Members),
+**Workspace** (Workspace, Email & signature, Billing; admin).
+
+- **`SETTINGS_TABS` is the one list**: the tab menu, the page titles (`AppShell.titleFor`, with an
+  optional `title` where a label alone is ambiguous in the top bar) and the superadmin's page
+  switch (`features/pages.py`, pinned by `tests/test_page_visibility.py`) all read it.
+- A tab uses the main menu's own rules (`canSee`, `navState`, `isPageHidden`): `minRole`,
+  `capability`, `engine`, and `page` for the switch that hides it. A tab that moved keeps the
+  switch it had: Notifications hides with Alerts, Replies with the Replies desk. Page-visibility
+  rows are stored by KEY, so a hide set on `/mailboxes` or `/connected-apps` still applies.
+- Each tab is its own route nested under `/settings` (absolute child paths, so the route tests'
+  regex still sees them) and keeps its old guards. The old addresses forward with their query
+  string (`Forward` in `App.tsx`): the mailbox OAuth callback returns with `?connected=`, and now
+  lands on `/settings/mailboxes` directly. `/settings` opens the Workspace tab for admins and owners
+  and the first open tab for everyone else.
+- The menu is a `<nav>` of links with `aria-current`, not an ARIA tablist: every tab changes the
+  address. Below 900px it becomes one scrolling row. Inside the frame `PageHeader` renders an h3
+  and drops its back link (`NestedPageContext`), so there is one page title.
+- `components/ui/Switch.tsx` (`Switch`, `SwitchRow`) is the on/off control for settings that apply
+  the moment they flip; a Save button saves only the fields beside it.
 
 ## Frontend conventions (`frontend/`)
 

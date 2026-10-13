@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
@@ -14,6 +13,7 @@ import {
   Select,
   Skeleton,
   Spinner,
+  Switch,
   Textarea,
   useToast,
 } from "@/components/ui";
@@ -34,10 +34,14 @@ import type {
 } from "@/lib/types";
 import styles from "./SettingsPage.module.css";
 
+/**
+ * Settings > Workspace: how the workspace runs. Admin-only, like the page it was before Settings
+ * had tabs; the email cards moved to Settings > Email & signature (`EmailSettings.tsx`) and alert
+ * delivery to Settings > Notifications.
+ */
 export function SettingsPage() {
   const api = useApiClient();
   const toast = useToast();
-  const navigate = useNavigate();
   const automation = useApi<AutomationSettings>((signal) => api.getAutomation(signal), []);
   const crm = useApi<CRMSyncStatus>((signal) => api.crmSyncStatus(signal), []);
   const [saving, setSaving] = useState(false);
@@ -65,34 +69,12 @@ export function SettingsPage() {
   return (
     <div>
       <PageHeader
-        title="Settings"
-        description="Workspace automation and the health of your connected systems."
+        title="Workspace"
+        description="Automation, daily account discovery, CRM sync and the signals this workspace collects."
       />
 
       <div className={styles.stack}>
         <TrainingConsentCard />
-        {/* Alert delivery moved beside Alerts. This page is admin-only, so the one setting on it
-            that belonged to every member was out of reach for all of them. The card stays so an
-            admin who remembers it here finds where it went. */}
-        <Card padding="lg">
-          <div className={styles.control}>
-            <div className={styles.controlText}>
-              <span className={styles.controlLabel}>Alert delivery</span>
-              <span className={styles.controlHint}>
-                Where each member's alerts go, and which alert types the team's shared channels
-                receive, are now set under Alerts, where every member can reach them.
-              </span>
-            </div>
-            <Button
-              variant="secondary"
-              iconRight={<Icons.ChevronRightIcon />}
-              onClick={() => navigate("/alerts/settings")}
-            >
-              Open alert settings
-            </Button>
-          </div>
-        </Card>
-
         <Card padding="lg">
           <CardHeader
             title="Continuous automation"
@@ -168,10 +150,6 @@ export function SettingsPage() {
         </Card>
 
         <SignalCollectionCard />
-
-        <MailboxesCard />
-
-        <EmailStyleCard />
       </div>
     </div>
   );
@@ -203,7 +181,7 @@ const EMPTY_MAILBOX = {
  * structure and voice and never their facts (`nexus/agents/email_style.py`), and the hint says so,
  * because somebody pasting an email deserves to know what will be reused from it.
  */
-function EmailStyleCard() {
+export function EmailStyleCard() {
   const api = useApiClient();
   const toast = useToast();
   const state = useApi<EmailStyle>((signal) => api.emailStyle(signal), []);
@@ -329,7 +307,7 @@ function EmailStyleCard() {
   );
 }
 
-function MailboxesCard() {
+export function MailboxesCard() {
   const api = useApiClient();
   const toast = useToast();
   const accounts = useApi<EmailAccount[]>((signal) => api.listEmailAccounts(signal), []);
@@ -909,34 +887,6 @@ function DiscoveryTodayLine({ today }: { today: DiscoveryToday }) {
 
 function capitalise(text: string): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) + (/[.!?]$/.test(text) ? "" : ".") : "";
-}
-
-function Switch({
-  checked,
-  onChange,
-  disabled,
-  label,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      className={cn(styles.switch, checked && styles.switchOn)}
-      onClick={() => onChange(!checked)}
-    >
-      <span className={styles.knob} aria-hidden="true">
-        {checked && <Icons.CheckIcon />}
-      </span>
-    </button>
-  );
 }
 
 /**

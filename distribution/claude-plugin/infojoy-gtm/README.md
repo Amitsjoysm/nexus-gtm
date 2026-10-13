@@ -21,7 +21,7 @@ three skills that know how to use it.
 You need an InfoJoy GTM account. After installing the plugin, open its **Connectors** tab and
 connect InfoJoy GTM. Claude opens InfoJoy GTM, where you sign in, choose what Claude may do (Read,
 Research, Write) and approve. You can change those permissions or disconnect at any time in
-InfoJoy GTM under **AI apps**.
+InfoJoy GTM under **Settings**, **AI apps**.
 
 ## What it can and cannot do
 

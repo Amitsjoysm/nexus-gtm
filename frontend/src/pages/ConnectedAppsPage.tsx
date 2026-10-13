@@ -247,9 +247,9 @@ function ConnectPanel({ setup }: { setup: McpSetup }) {
   const [client, setClient] = useState<ClientId>("claude");
   return (
     <section className={styles.section} aria-labelledby="connect-heading">
-      <h3 id="connect-heading" className={styles.sectionTitle}>
+      <h4 id="connect-heading" className={styles.sectionTitle}>
         Connect an app
-      </h3>
+      </h4>
       <div className={styles.connect}>
         <div className={styles.address}>
           <span className={styles.addressLabel}>Server address</span>
@@ -688,9 +688,9 @@ function ConnectionsPanel({
   return (
     <section className={styles.section} aria-labelledby="connections-heading">
       <div className={styles.sectionHead}>
-        <h3 id="connections-heading" className={styles.sectionTitle}>
+        <h4 id="connections-heading" className={styles.sectionTitle}>
           Connections
-        </h3>
+        </h4>
         {isAdmin && (
           <Tabs
             variant="segmented"

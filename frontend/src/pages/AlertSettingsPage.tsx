@@ -26,7 +26,7 @@ export function AlertSettingsPage() {
             <Icons.ChevronLeftIcon /> Alerts
           </Link>
         }
-        title="Alert settings"
+        title="Notifications"
         description="Choose where alerts reach you. Managers also choose which alert types the team's shared channels receive."
       />
       <div className={styles.stack}>

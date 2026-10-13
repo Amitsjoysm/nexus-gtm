@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.core.rbac import Permission, Role, has_permission
@@ -48,6 +48,9 @@ class EngagementSettingsOut(BaseModel):
     reply_confidence_max: float
     reply_reminder_business_hours: int
     ooo_default_days: int
+    # The workspace half of the two reply switches; each SDR chooses on their mailbox.
+    auto_actions_allowed: bool
+    auto_send_allowed: bool
     can_edit: bool
 
 
@@ -66,6 +69,9 @@ class EngagementSettingsPatch(BaseModel):
     reply_confidence_max: float | None = None
     reply_reminder_business_hours: int | None = None
     ooo_default_days: int | None = None
+    # StrictBool: the panel posts JSON, and a string "false" must be refused, not read as true.
+    auto_actions_allowed: StrictBool | None = None
+    auto_send_allowed: StrictBool | None = None
 
 
 async def _consent_out(ts: TenantSession, principal: Principal) -> TrainingConsentOut:

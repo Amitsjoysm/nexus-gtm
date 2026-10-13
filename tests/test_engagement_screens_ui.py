@@ -56,8 +56,14 @@ def test_every_engagement_route_waits_for_the_engine():
         "/engagement/replies", "/engagement/replies/settings", "/engagement/templates",
     }
     for route, element in routes:
+        if element.strip().startswith("<Forward"):
+            continue  # an old address that forwards renders nothing; its destination is checked
         assert "<RequireEngine" in element, f"{route} renders without checking the engine switch"
         assert "RequireCapability" in element, f"{route} is not behind its module gate"
+    # Reply settings moved to Settings > Replies (2026-10-13) and keep both guards there.
+    replies = re.search(r'path="/settings/replies"\s+element=\{(.*?)\}\s*/>', app, re.S)
+    assert replies and "<RequireEngine" in replies.group(1)
+    assert 'capability="module.campaigns"' in replies.group(1)
 
 
 def test_an_unreadable_engine_status_reads_as_on():

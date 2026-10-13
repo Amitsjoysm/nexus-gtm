@@ -1385,7 +1385,7 @@ export class ApiClient {
   updateConnectedMailbox(
     id: string,
     body: { timezone?: string; signature?: string; reply_confidence?: number;
-      clear_reply_confidence?: boolean },
+      clear_reply_confidence?: boolean; auto_actions?: boolean; auto_send_replies?: boolean },
   ) {
     return this.request<ConnectedMailbox>(`/engagement/mailboxes/${id}`, { method: "PATCH", body });
   }

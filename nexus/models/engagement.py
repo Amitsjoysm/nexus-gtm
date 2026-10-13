@@ -103,6 +103,10 @@ class MailboxConnection(IdMixin, TimestampMixin, TenantScoped, Base):
     reply_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     # IANA zone of the SDR; captured from the browser at connect, editable.
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    # The SDR's half of the two reply switches; each takes effect only where the workspace allows
+    # it (`engagement.settings.reply_automation`). Defaults are today's behaviour.
+    auto_actions: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    auto_send_replies: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class SequenceTemplate(IdMixin, TimestampMixin, TenantScoped, Base):
@@ -314,6 +318,10 @@ class ReplyClassification(IdMixin, TimestampMixin, TenantScoped, Base):
     status: Mapped[str] = mapped_column(String(8), default="open")
     # When a meeting decided here was written to the workspace's CRM as an activity (§19).
     crm_logged_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    # The automatic answer (`replies/auto_reply.py`): NULL none was due, `pending` the sweep will
+    # draft and send it, `sent`, or `held` with the reason in `auto_reply_note` for the SDR.
+    auto_reply: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
+    auto_reply_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class DoNotContact(IdMixin, TimestampMixin, TenantScoped, Base):

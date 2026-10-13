@@ -19,21 +19,23 @@ def _words(rel: str) -> str:
     return " ".join(_read(rel).split())
 
 
-def test_the_nav_offers_ai_apps_to_every_member_behind_module_mcp():
-    nav = _read("app/nav.tsx")
-    line = next(l for l in nav.splitlines() if '"/connected-apps"' in l)
-    assert 'label: "AI apps"' in line and 'capability: "module.mcp"' in line
-    assert "minRole" not in line
+def test_settings_offers_ai_apps_to_every_member_behind_module_mcp():
+    """A Settings tab since 2026-10-13 (it was a menu item), still for every member."""
+    tabs = _read("app/settingsTabs.tsx")
+    tab = tabs[tabs.index('to: "/settings/ai-apps"'):].split("},", 1)[0]
+    assert 'label: "AI apps"' in tab and 'capability: "module.mcp"' in tab
+    assert "minRole" not in tab
 
 
 def test_the_page_is_hideable_and_its_route_is_guarded():
     from nexus.features.pages import BY_KEY
 
-    assert BY_KEY["ai_apps"].path == "/connected-apps"
+    assert BY_KEY["ai_apps"].path == "/settings/ai-apps"
     app = _read("App.tsx")
-    block = app[app.index('path="/connected-apps"'):][:400]
-    assert '<RequirePage page="/connected-apps">' in block
+    block = app[app.index('path="/settings/ai-apps"'):][:400]
+    assert '<RequirePage page="/settings/ai-apps">' in block
     assert 'capability="module.mcp"' in block
+    assert '<Forward to="/settings/ai-apps" />' in app  # the address the guides used
 
 
 def test_the_consent_route_is_outside_the_app_shell_and_survives_login():

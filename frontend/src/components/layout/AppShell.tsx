@@ -3,6 +3,7 @@ import { ConsentPrompt } from "@/components/engagement/ConsentPrompt";
 import { Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/app/AuthContext";
 import { NAV_ITEMS } from "@/app/nav";
+import { SETTINGS_TABS } from "@/app/settingsTabs";
 import { EntitlementsProvider } from "@/app/EntitlementsContext";
 import { EngagementProvider } from "@/app/EngagementContext";
 import { ImpersonationBanner } from "./ImpersonationBanner";
@@ -23,11 +24,14 @@ export const APP_NAME = "InfoJoy GTM";
  * forget to add its title.
  *
  * Sorted longest-first so `/settings/billing` matches "Billing" rather than "Settings" — a plain
- * first-segment lookup, which is what the old code did, cannot distinguish them.
+ * first-segment lookup, which is what the old code did, cannot distinguish them. Settings tabs are
+ * named from their own list for the same reason, so a tab reads "Members", not "Settings".
  */
-const TITLE_ROUTES: ReadonlyArray<readonly [string, string]> = NAV_ITEMS.map(
-  (item) => [item.to, item.label] as const,
-).sort((a, b) => b[0].length - a[0].length);
+const TITLE_ROUTES: ReadonlyArray<readonly [string, string]> = [
+  ...NAV_ITEMS.map((item) => [item.to, item.label] as const),
+  ...SETTINGS_TABS.map((tab) => [tab.to, tab.title ?? tab.label] as const),
+]
+  .sort((a, b) => b[0].length - a[0].length);
 
 export function titleFor(pathname: string): string {
   const path = pathname.replace(/\/+$/, "") || "/dashboard";

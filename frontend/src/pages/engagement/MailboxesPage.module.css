@@ -80,10 +80,45 @@
   grid-column: 1 / -1;
 }
 
+.saveRow {
+  display: flex;
+  margin-top: var(--space-3);
+}
+
+/* The two reply switches, under the mailbox's own settings. */
+.replies {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.replies .sectionTitle {
+  margin: 0;
+}
+
+.terms {
+  margin: 0;
+  padding-left: var(--space-5);
+  list-style: disc;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text);
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.actions:empty {
+  display: none;
 }
 
 .link {

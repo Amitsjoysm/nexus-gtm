@@ -232,7 +232,7 @@ export function DoNotContactPage() {
   return (
     <div>
       <PageHeader
-        eyebrow={<Link to="/mailboxes" className={styles.back}><Icons.ChevronLeftIcon /> My mailboxes</Link>}
+        eyebrow={<Link to="/settings/mailboxes" className={styles.back}><Icons.ChevronLeftIcon /> My mailboxes</Link>}
         title="Do not contact"
         description="Addresses and domains no campaign will email. Unsubscribes are permanent; a clear no, a bounce or a manual block can be lifted by a manager with a note."
       />

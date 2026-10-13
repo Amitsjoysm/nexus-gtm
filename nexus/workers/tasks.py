@@ -1199,6 +1199,34 @@ async def handle_remind_replies(payload: dict) -> dict:
     return {"tenants": len(tenant_ids), "reminded": reminded}
 
 
+async def handle_send_auto_replies(payload: dict) -> dict:
+    """Send the replies the AI may answer by itself (`engagement/replies/auto_reply.py`). Finds the
+    workspaces with one pending on the platform sessionmaker, then acts per tenant."""
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.engagement import config
+    from nexus.engagement.replies.auto_reply import send_pending
+    from nexus.models.engagement import ReplyClassification
+
+    if not config.campaigns_enabled():
+        return {"skipped": "engagement campaigns are switched off"}
+    async with get_platform_sessionmaker()() as session:
+        tenant_ids = (await session.execute(
+            select(ReplyClassification.tenant_id)
+            .where(ReplyClassification.auto_reply == "pending")
+            .distinct().limit(500))).scalars().all()
+    totals: dict[str, int] = {}
+    for tenant_id in tenant_ids:
+        try:
+            async with tenant_session(tenant_id) as ts:
+                for outcome, n in (await send_pending(ts)).items():
+                    totals[outcome] = totals.get(outcome, 0) + n
+        except Exception:  # one workspace's failure must not stop the rest
+            logger.warning("automatic replies for %s failed", tenant_id, exc_info=True)
+    return {"tenants": len(tenant_ids), **totals}
+
+
 async def handle_sync_mailbox(payload: dict) -> dict:
     """Read what arrived in one mailbox (a notification said something changed)."""
     from nexus.engagement import config
@@ -1338,6 +1366,11 @@ async def enqueue_remind_replies(*, queue: TaskQueue | None = None) -> None:
     await queue.enqueue(Job(name="remind_replies", payload={}))
 
 
+async def enqueue_send_auto_replies(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="send_auto_replies", payload={}))
+
+
 async def enqueue_ship_ledger(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="ship_ledger", payload={}))
@@ -1407,6 +1440,7 @@ HANDLERS: dict[str, Handler] = {
     "sync_mailboxes": handle_sync_mailboxes,
     "log_engagement_crm": handle_log_engagement_crm,
     "remind_replies": handle_remind_replies,
+    "send_auto_replies": handle_send_auto_replies,
     "build_ledger_datasets": handle_build_ledger_datasets,
     "ledger_delete_workspace": handle_ledger_delete_workspace,
     "ledger_erase_person": handle_ledger_erase_person,

@@ -9,9 +9,7 @@ import {
   DashboardIcon,
   FileTextIcon,
   InboxIcon,
-  LinkIcon,
   ListIcon,
-  MailIcon,
   MessageIcon,
   NetworkIcon,
   PhoneIcon,
@@ -64,16 +62,15 @@ export interface NavItem {
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
 
 // Dashboard, Accounts and Contacts carry no `capability` ON PURPOSE and must keep it that way:
-// they are the floor of the product, and a plan that hides them sells nothing. Settings, Billing
-// and Members are the same — gating Billing behind a plan locks the customer out of the one page
-// where they could change their plan.
+// they are the floor of the product, and a plan that hides them sells nothing. Settings and Billing
+// are the same (and Members, a Settings tab) — gating Billing behind a plan locks the customer out of
+// the one page where they could change their plan.
 export const NAV_ITEMS: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/inbox", label: "Inbox", icon: <InboxIcon />, capability: "module.signals" },
   { to: "/calls", label: "Calls", icon: <PhoneIcon />, capability: "module.calling" },
   { to: "/accounts", label: "Accounts", icon: <BuildingIcon /> },
   { to: "/contacts", label: "Contacts", icon: <UsersIcon /> },
-  { to: "/mailboxes", label: "My mailboxes", icon: <MailIcon />, capability: "module.outreach" },
   // The engagement engine (spec §9). An SDR builds and runs their own campaigns and works their own
   // replies, so none of these carries a `minRole`; the server scopes every read to the caller's
   // mailboxes, and a manager sees the team through a toggle on the page.
@@ -113,15 +110,14 @@ export const NAV_ITEMS: NavItem[] = [
     to: "/relevance", label: "Relevance", icon: <TargetIcon />, minRole: "manager",
     capability: "module.relevance",
   },
-  // Every member: each person connects their own AI apps, acting as themselves (MCP).
-  { to: "/connected-apps", label: "AI apps", icon: <LinkIcon />, capability: "module.mcp" },
-  { to: "/members", label: "Members", icon: <UsersIcon />, minRole: "manager" },
   {
     to: "/integrations", label: "Integrations", icon: <PlugIcon />, minRole: "admin",
     capability: "module.integrations",
   },
   { to: "/settings/billing", label: "Billing", icon: <CreditCardIcon />, minRole: "admin" },
-  { to: "/settings", label: "Settings", icon: <SettingsIcon />, minRole: "admin" },
+  // Every member: My mailboxes, AI apps, Notifications, Replies and Members are tabs of Settings
+  // now (`app/settingsTabs.tsx`), each with the role and plan rules it had as a menu item.
+  { to: "/settings", label: "Settings", icon: <SettingsIcon /> },
   // Staff-only, and last: the control plane is operator tooling, not part of the product a
   // workspace member is working in.
   {

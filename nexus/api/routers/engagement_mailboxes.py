@@ -18,7 +18,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.core.rbac import Permission, has_permission
@@ -47,6 +47,15 @@ class MailboxOut(BaseModel):
     effective_reply_confidence: float
     reply_confidence_min: float
     reply_confidence_max: float
+    # The two reply switches: the SDR's choice, what the workspace allows, and what is in force
+    # (`settings.reply_automation`). "Chosen" and "in force" are different facts, and a screen
+    # showing only the first is how someone concludes the AI is answering when it is not.
+    auto_actions: bool = True
+    auto_send_replies: bool = False
+    auto_actions_allowed: bool = True
+    auto_send_allowed: bool = False
+    acts_alone: bool = True
+    sends_alone: bool = False
     paused_until: datetime | None
     last_synced_at: datetime | None
     created_at: datetime
@@ -83,6 +92,8 @@ class MailboxPatch(BaseModel):
     reply_confidence: float | None = None
     #: Explicitly clear the SDR's own bar and fall back to the workspace default.
     clear_reply_confidence: bool = False
+    auto_actions: StrictBool | None = None
+    auto_send_replies: StrictBool | None = None
 
 
 async def _settings(ts: TenantSession):
@@ -97,9 +108,10 @@ async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal) 
     from nexus.core.db import utcnow
     from nexus.engagement.reports.health import mailbox_health
     from nexus.engagement.sending.limits import sent_today, volume_warning
-    from nexus.engagement.settings import effective_confidence
+    from nexus.engagement.settings import effective_confidence, reply_automation
 
     settings = await _settings(ts)
+    acts_alone, sends_alone = reply_automation(settings, row)
     today = await sent_today(ts, row)
     health = await mailbox_health(ts, row, now=utcnow())
     return MailboxOut(
@@ -110,6 +122,10 @@ async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal) 
         effective_reply_confidence=effective_confidence(settings, row.reply_confidence),
         reply_confidence_min=settings.reply_confidence_min,
         reply_confidence_max=settings.reply_confidence_max,
+        auto_actions=bool(row.auto_actions), auto_send_replies=bool(row.auto_send_replies),
+        auto_actions_allowed=settings.auto_actions_allowed,
+        auto_send_allowed=settings.auto_send_allowed,
+        acts_alone=acts_alone, sends_alone=sends_alone,
         paused_until=row.paused_until, last_synced_at=row.last_synced_at,
         created_at=row.created_at, sent_today=today,
         volume_warning=volume_warning(row.email, today),
@@ -198,7 +214,7 @@ async def oauth_callback(
     from nexus.models.identity import Membership, User
 
     def _to(query: str) -> RedirectResponse:
-        return RedirectResponse(f"{public_base_url()}/mailboxes?{query}", status_code=302)
+        return RedirectResponse(f"{public_base_url()}/settings/mailboxes?{query}", status_code=302)
 
     if provider not in PROVIDERS:
         return _to("error=unknown_provider")
@@ -274,6 +290,10 @@ async def update_mailbox(
         changes["reply_confidence"] = None
     elif body.reply_confidence is not None:
         changes["reply_confidence"] = body.reply_confidence
+    if body.auto_actions is not None:
+        changes["auto_actions"] = body.auto_actions
+    if body.auto_send_replies is not None:
+        changes["auto_send_replies"] = body.auto_send_replies
     try:
         await service.update_mailbox(ts, row, **changes)
     except ValueError as exc:

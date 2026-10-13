@@ -163,7 +163,7 @@ async def _classify_and_act(ts, row, found, mailbox, parsed) -> str:
     from nexus.engagement.drafting.context import conversation_block
     from nexus.engagement.ledger.emit import emit
     from nexus.engagement.replies import actions, classify
-    from nexus.engagement.settings import effective_confidence, read_settings
+    from nexus.engagement.settings import effective_confidence, read_settings, reply_automation
     from nexus.engagement.timekeeping import zone_or_none
     from nexus.models.engagement import EngagementMessage, ReplyClassification
     from nexus.models.identity import Tenant
@@ -171,6 +171,7 @@ async def _classify_and_act(ts, row, found, mailbox, parsed) -> str:
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     settings = read_settings(getattr(tenant, "email_settings", None))
     threshold = effective_confidence(settings, mailbox.reply_confidence)
+    acts_alone, sends_alone = reply_automation(settings, mailbox)
     zone_name = (found.enrollments[0].contact_timezone if found.enrollments
                  else mailbox.timezone) or "UTC"
     history = await ts.session.scalars(
@@ -188,7 +189,8 @@ async def _classify_and_act(ts, row, found, mailbox, parsed) -> str:
                                       user_id=mailbox.owner_user_id)
     verdict = classify.finalize(reading, text=parsed.text, threshold=threshold,
                                 received_at=row.received_at, zone=zone_or_none(zone_name) or UTC,
-                                ooo_default_days=settings.ooo_default_days)
+                                ooo_default_days=settings.ooo_default_days,
+                                act_alone=acts_alone)
     classification = ReplyClassification(
         message_id=row.id, mailbox_connection_id=mailbox.id,
         enrollment_id=row.enrollment_id, contact_id=row.contact_id,
@@ -200,6 +202,10 @@ async def _classify_and_act(ts, row, found, mailbox, parsed) -> str:
         else "done")
     ts.add(classification)
     await ts.flush()
+    if sends_alone and found.rule != "colleague" and row.inbound_kind == "human"             and verdict.category in AUTO_ANSWERED and verdict.confidence >= threshold             and row.contact_id and not await _answered_automatically(ts, row.thread_id):
+        # The reply sweep drafts and sends it after this transaction commits (`auto_reply.py`).
+        classification.auto_reply = "pending"
+        await ts.flush()
     if found.rule == "colleague":
         action = await actions.apply_colleague(ts, match=found, inbound=row, mailbox=mailbox,
                                                classification=classification)
@@ -219,6 +225,26 @@ async def _classify_and_act(ts, row, found, mailbox, parsed) -> str:
                         "label_source": verdict.label_source, "body": parsed.text,
                         "action": action})
     return f"classified:{verdict.category}"
+
+
+#: The only replies the AI may answer by itself, when the mailbox's SDR switched that on. A
+#: referral names a third person and an unclear reply is unclear: both wait for a person.
+AUTO_ANSWERED = ("interested", "question")
+
+
+async def _answered_automatically(ts, thread_id) -> bool:
+    """Has this conversation already had an automatic answer? One per thread: after that, a person
+    takes over, so two programs can never end up writing to each other."""
+    from nexus.models.engagement import EngagementMessage, ReplyClassification
+
+    if not thread_id:
+        return False
+    earlier = (await ts.session.scalars(
+        ts.select(ReplyClassification, ReplyClassification.auto_reply.in_(("pending", "sent")))
+        .join(EngagementMessage, EngagementMessage.id == ReplyClassification.message_id)
+        .where(EngagementMessage.thread_id == thread_id)
+        .limit(1))).first()
+    return earlier is not None
 
 
 async def _record_received(ts, row, found, mailbox, parsed) -> None:

@@ -35,7 +35,7 @@ class Draft:
 
 async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: str = "first",
                 thread=None, user_id: str | None = None, now=None,
-                capability: str = EMAIL_DRAFT) -> Draft:
+                capability: str = EMAIL_DRAFT, automatic: bool = False) -> Draft:
     """One draft. Never raises: a draft that cannot be written reports why.
 
     ``capability`` is what the draft is charged as. An outbound step is ``ai.email_draft``; a reply
@@ -58,7 +58,7 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
             result = await get_agent_runtime().run(
                 "messaging", ts, account_id=account.id, contact_id=contact.id,
                 angle=getattr(step, "angle", "") or "", context_pack=pack.text,
-                personal_facts=pack.facts, touch_kind=kind,
+                personal_facts=pack.facts, touch_kind=kind, automatic_reply=automatic,
             )
     except QuotaExceeded:
         return Draft(context_pack=pack.text, facts=pack.facts, error="out_of_credits")

@@ -75,8 +75,12 @@ def return_phrase(text: str) -> str:
 
 
 def finalize(reading: Reading, *, text: str, threshold: float, received_at: datetime, zone,
-             ooo_default_days: int = 7) -> Verdict:
-    """Apply the rules the model is not trusted with. Pure."""
+             ooo_default_days: int = 7, act_alone: bool = True) -> Verdict:
+    """Apply the rules the model is not trusted with. Pure.
+
+    ``act_alone`` is the reply switch (`settings.reply_automation`): off, a later, decline or
+    unsubscribe is ``unclear`` however confident, so the sequence pauses and a person decides.
+    Out-of-office is not a decision about the person and keeps its automatic pause either way."""
     from nexus.engagement.dates import resolve_date
     from nexus.engagement.timekeeping import next_business_day, to_local
 
@@ -97,6 +101,10 @@ def finalize(reading: Reading, *, text: str, threshold: float, received_at: date
     if category == "later" and REFUSAL.search(text or ""):
         category = "unclear"
         reasons.append("refusal together with a timeframe goes to the SDR (D8)")
+    if category in AUTONOMOUS and not act_alone:
+        reasons.append(f"{category} read, but acting on replies by itself is switched off for "
+                       "this mailbox")
+        category = "unclear"
     if category in AUTONOMOUS and confidence < threshold:
         reasons.append(f"{category} read below the {threshold:.2f} confidence bar")
         category = "unclear"
