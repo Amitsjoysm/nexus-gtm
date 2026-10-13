@@ -38,6 +38,7 @@ from nexus.api.routers import (
     imports,
     integrations,
     lists,
+    mcp,
     network,
     orchestration,
     outcomes,
@@ -99,4 +100,10 @@ all_routers = [
     unsubscribe.router,
 ]
 
-__all__ = ["all_routers"]
+# Mounted at the app ROOT, not under /api: MCP and OAuth clients find these by convention
+# (/mcp, /oauth/*, /.well-known/*). Registered before the SPA catch-all.
+root_routers = [
+    mcp.router,
+]
+
+__all__ = ["all_routers", "root_routers"]

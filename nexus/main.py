@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from nexus.api.routers import all_routers
+from nexus.api.routers import all_routers, root_routers
 from nexus.billing.errors import BillingThrottled, QuotaExceeded
 from nexus.core.config import get_settings
 from nexus.core.db import dispose_db, get_sessionmaker, init_db
@@ -375,6 +375,8 @@ def create_app() -> FastAPI:
     api = "/api"
     for router in all_routers:
         app.include_router(router, prefix=api)
+    for router in root_routers:
+        app.include_router(router)
 
     # Serve the built SPA last so it acts as the catch-all: API routes,
     # /health, /ready, /docs and /metrics are registered above and take

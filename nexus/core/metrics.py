@@ -220,6 +220,52 @@ def record_webhook_event(provider: str, outcome: str) -> None:
     )
 
 
+# ---- MCP server and its OAuth server ---------------------------------------------------------
+
+# Bounded labels only: `method` is one of a handful of JSON-RPC methods (anything else is counted
+# as "other"), `tool` is a name from the fixed catalogue, `event` a fixed OAuth step.
+_MCP_METHODS = frozenset({"initialize", "server/discover", "ping", "tools/list", "tools/call",
+                          "notifications/initialized"})
+
+
+def record_mcp_request(method: str, outcome: str) -> None:
+    _observe(
+        _counter(
+            "nexus_mcp_requests_total",
+            "MCP JSON-RPC requests by method and outcome (ok, error, unauthorized, unavailable, "
+            "limited).",
+            ("method", "outcome"),
+        ),
+        {"method": method if method in _MCP_METHODS else "other", "outcome": outcome},
+        inc=1,
+    )
+
+
+def record_mcp_tool(tool: str, outcome: str) -> None:
+    _observe(
+        _counter(
+            "nexus_mcp_tool_calls_total",
+            "MCP tool calls by tool and outcome (ok, error, refused).",
+            ("tool", "outcome"),
+        ),
+        {"tool": tool, "outcome": outcome},
+        inc=1,
+    )
+
+
+def record_oauth_event(event: str, outcome: str) -> None:
+    _observe(
+        _counter(
+            "nexus_oauth_events_total",
+            "NEXUS OAuth server steps (register, authorize, consent, token, refresh, revoke) by "
+            "outcome.",
+            ("event", "outcome"),
+        ),
+        {"event": event, "outcome": outcome},
+        inc=1,
+    )
+
+
 # ---- jobs -----------------------------------------------------------------------------------
 
 # ---- signal sources -------------------------------------------------------------------------
