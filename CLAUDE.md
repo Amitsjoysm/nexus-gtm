@@ -115,11 +115,15 @@ Superpowers analysis summarizes all major systems so you don't re-derive archite
 - `frontend/` — **the production React + TypeScript + Vite frontend** (the UI). `npm run build`
   emits the static bundle to `nexus/web/dist/`, which FastAPI serves with SPA fallback.
 - `tests/` — pytest (`asyncio_mode=auto`). Keep the suite green. **Runs parallel by default**
-  (`addopts = "-n auto --dist loadfile"` in `pyproject.toml`): ~1,350 tests where `fresh_db` drops
-  and recreates every table before each one, so the run is dominated by per-test schema work that
-  parallelises almost perfectly — serial it is ~55 min. `conftest.py` gives each worker its own
+  (`addopts = "-n auto --dist loadfile"` in `pyproject.toml`): ~4,500 tests. **`fresh_db` empties
+  every table before each test and rebuilds the schema only when SQLite's `schema_version` says
+  something changed it** (2026-10-13, `tests/test_fresh_db.py`). It used to drop and recreate all
+  ~90 tables per test: measured 3.3 s of reset per test against 80 ms to empty them, and the suite
+  crossed Azure's 45-minute job limit on its 2-vCPU agent and GitHub's 25 on slow runners. The
+  job limits are now 60 (Azure's free-grant ceiling) and 40, for slow machines only; a hung test
+  fails on its own 120 s `--timeout`. `conftest.py` gives each worker its own
   SQLite file via `PYTEST_XDIST_WORKER`, which is what makes this safe; without it one worker's
-  `drop_all` would wipe another's tables mid-test. `--dist loadfile` keeps a file on one worker,
+  reset would wipe another's tables mid-test. `--dist loadfile` keeps a file on one worker,
   because several suites share module-level state (ingestion service, agent runtime, seeded
   catalogs) and splitting a file turns that into flaky cross-talk. Use `-n0` when debugging — serial
   tracebacks are easier to read.

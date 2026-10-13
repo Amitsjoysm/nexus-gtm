@@ -177,9 +177,9 @@ stages:
   # ============================================================================
   # Stage 2 — Tests. The expensive one, and the reason the budget is tight.
   #
-  # Per CLAUDE.md the suite is ~1,350 tests where `fresh_db` drops and recreates every table
-  # per test, so the run is dominated by schema work and scales with core count. A hosted
-  # agent is 2 vCPU, so `-n auto` resolves to 2 workers. `--dist loadfile` is NOT optional:
+  # Per CLAUDE.md the suite is ~4,500 tests. `fresh_db` empties every table per test (it rebuilt
+  # them until 2026-10-13, which made the run mostly schema work), and the run scales with core
+  # count. A hosted agent is 2 vCPU, so `-n auto` resolves to 2 workers. `--dist loadfile` is NOT optional:
   # several suites share module-level state and splitting a file makes them flaky.
   #
   # Integration tests run against REAL Postgres + Redis in the same job. They are the highest
@@ -193,7 +193,11 @@ stages:
     jobs:
       - job: test
         displayName: pytest (unit + integration)
-        timeoutInMinutes: 45
+        # 60 is the most a Microsoft-hosted job may run in a private project on the free grant.
+        # The suite crossed 45 on this 2-vCPU agent twice (2026-10-12) while `fresh_db` rebuilt
+        # every table per test; it now empties them instead. A hung test fails on its own 120 s
+        # --timeout, so this limit only has to cover a slow agent.
+        timeoutInMinutes: 60
         services:
           postgres: postgres
           valkey: valkey

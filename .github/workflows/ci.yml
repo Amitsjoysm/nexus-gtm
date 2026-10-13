@@ -46,7 +46,10 @@ jobs:
   test:
     name: Tests + coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The suite takes ~12 minutes on a typical runner and ~2.5x that on a slow one: two healthy
+    # runs were cancelled at 25 (2026-10-01, 2026-10-12) with 80% passed. A hung test fails on its
+    # own 120 s --timeout, so this limit only has to cover a slow machine.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

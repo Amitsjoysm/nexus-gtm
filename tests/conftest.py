@@ -80,13 +80,38 @@ class FakeBrowser:
         return None
 
 
+#: SQLite's `schema_version` when this worker last built the tables; None before the first build.
+_BUILT_AT: dict[str, int | None] = {"version": None}
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def fresh_db():
-    """Recreate all tables before each test for isolation."""
+    """Start every test on empty tables.
+
+    This used to drop and recreate all ~90 tables before every test, so the run was almost all
+    DDL: measured 3.3 s of reset per test against 80 ms to empty the tables, and the suite crossed
+    Azure's 45-minute job limit on its 2-vCPU agent and GitHub's 25 on a slow runner (2026-10-13).
+    Emptying leaves the state the rebuild did, because no table has an auto-increment counter and
+    nothing seeds rows when a table is created.
+
+    The tables are rebuilt when they are missing (a worker's first test) or when anything has
+    changed the schema since they were built, which SQLite counts in `schema_version`: a test that
+    alters or drops a table cannot leak that into the next one.
+    """
+    from sqlalchemy import text
+
     engine = get_engine()
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+        version = (await conn.execute(text("PRAGMA schema_version"))).scalar()
+        if version != _BUILT_AT["version"]:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+            _BUILT_AT["version"] = (await conn.execute(text("PRAGMA schema_version"))).scalar()
+        else:
+            # Children first, and foreign keys checked at commit, when every table is empty.
+            await conn.execute(text("PRAGMA defer_foreign_keys = ON"))
+            for table in reversed(Base.metadata.sorted_tables):
+                await conn.execute(table.delete())
     yield
 
 
