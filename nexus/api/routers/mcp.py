@@ -185,3 +185,116 @@ async def openai_apps_challenge() -> Response:
     if not token:
         return Response(status_code=404)
     return PlainTextResponse(token)
+
+
+# ---- OAuth discovery and the authorization server --------------------------------------------
+
+_NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+
+@router.get("/.well-known/oauth-protected-resource")
+@router.get("/.well-known/oauth-protected-resource/mcp")
+async def protected_resource_metadata(request: Request) -> JSONResponse:
+    from nexus.mcp import oauth
+
+    return JSONResponse(oauth.protected_resource_metadata(urls.base_url(request)))
+
+
+@router.get("/.well-known/oauth-authorization-server")
+async def authorization_server_metadata(request: Request) -> JSONResponse:
+    from nexus.mcp import oauth
+
+    return JSONResponse(oauth.authorization_server_metadata(urls.base_url(request)))
+
+
+def _oauth_error_page(message: str, status: int = 400) -> Response:
+    """Shown in the user's browser when we cannot safely redirect back to the app."""
+    import html
+
+    from fastapi.responses import HTMLResponse
+
+    body = (
+        "<!doctype html><html lang=en><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>Cannot connect this app</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;"
+        "padding:0 1rem;line-height:1.5;color:#1d1d1f}h1{font-size:1.25rem}</style></head><body>"
+        "<h1>This app cannot connect to NEXUS</h1>"
+        f"<p>{html.escape(message)}</p>"
+        "<p>Start again from the app. If it keeps happening, tell the app's developer.</p>"
+        "</body></html>"
+    )
+    return HTMLResponse(body, status_code=status)
+
+
+@router.post("/oauth/register")
+async def oauth_register(request: Request) -> JSONResponse:
+    """Dynamic Client Registration (RFC 7591), kept for clients that do not use Client ID
+    Metadata Documents. Rate limited per IP like the sign-in endpoints."""
+    from nexus.core import metrics
+    from nexus.core.ratelimit import rate_limit
+    from nexus.mcp import oauth
+
+    await rate_limit("oauth_register")(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    try:
+        registered = await oauth.register_client(body)
+    except oauth.OAuthError as exc:
+        metrics.record_oauth_event("register", "refused")
+        return JSONResponse(exc.body(), status_code=400, headers=_NO_STORE)
+    metrics.record_oauth_event("register", "ok")
+    return JSONResponse(registered, status_code=201, headers=_NO_STORE)
+
+
+@router.get("/oauth/authorize")
+async def oauth_authorize(request: Request) -> Response:
+    from fastapi.responses import RedirectResponse
+
+    from nexus.core import metrics
+    from nexus.mcp import oauth
+
+    try:
+        result = await oauth.start_authorization(dict(request.query_params),
+                                                 urls.base_url(request))
+    except oauth.OAuthError as exc:
+        metrics.record_oauth_event("authorize", "refused")
+        return _oauth_error_page(exc.description)
+    if result.error_redirect:
+        metrics.record_oauth_event("authorize", "error_redirect")
+        return RedirectResponse(result.error_redirect, status_code=302)
+    metrics.record_oauth_event("authorize", "ok")
+    return RedirectResponse(result.consent_url, status_code=302)
+
+
+@router.post("/oauth/token")
+async def oauth_token(request: Request) -> JSONResponse:
+    from nexus.core import metrics
+    from nexus.mcp import oauth
+
+    form = dict(await request.form())
+    event = "refresh" if form.get("grant_type") == "refresh_token" else "token"
+    try:
+        tokens = await oauth.exchange(form, request.headers.get("authorization"))
+    except oauth.OAuthError as exc:
+        metrics.record_oauth_event(event, exc.error)
+        headers = dict(_NO_STORE)
+        if exc.status == 401:
+            headers["WWW-Authenticate"] = 'Basic realm="nexus"'
+        return JSONResponse(exc.body(), status_code=exc.status, headers=headers)
+    metrics.record_oauth_event(event, "ok")
+    return JSONResponse(tokens, headers=_NO_STORE)
+
+
+@router.post("/oauth/revoke")
+async def oauth_revoke(request: Request) -> Response:
+    """RFC 7009: always 200, whether or not the token existed."""
+    from nexus.core import metrics
+    from nexus.mcp import oauth
+
+    form = dict(await request.form())
+    await oauth.revoke_token(str(form.get("token") or ""))
+    metrics.record_oauth_event("revoke", "ok")
+    return Response(status_code=200, headers=_NO_STORE)

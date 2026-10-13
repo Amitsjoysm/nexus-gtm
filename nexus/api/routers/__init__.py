@@ -23,6 +23,7 @@ from nexus.api.routers import (
     billing,
     calling,
     chat,
+    connections,
     contacts,
     custom_fields,
     engagement_mailboxes,
@@ -98,6 +99,8 @@ all_routers = [
     engagement_templates.router,
     engagement_webhooks.router,
     unsubscribe.router,
+    connections.router,
+    connections.admin_router,
 ]
 
 # Mounted at the app ROOT, not under /api: MCP and OAuth clients find these by convention
