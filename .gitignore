@@ -44,6 +44,8 @@ crash.log
 .gemini/
 .opencode.json
 .mcp.json
+# ...except the Claude plugin's connector file, which IS the product (it names the public /mcp).
+!distribution/claude-plugin/infojoy-gtm/.mcp.json
 
 # Database dumps / local backups — data artifacts, never committed (deliver via volume or seed)
 backups/

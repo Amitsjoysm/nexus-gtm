@@ -87,6 +87,9 @@
 
 .copyValue,
 .copyValuePlain {
+  /* A scroller must be a containing block, or an absolutely positioned child escapes it
+     (tests/test_scroll_containers.py). */
+  position: relative;
   flex: 1;
   min-inline-size: 0;
   padding: var(--space-2) var(--space-3);
@@ -187,6 +190,7 @@
 }
 
 .snippetCode {
+  position: relative;
   margin: 0;
   padding: var(--space-3);
   color: var(--text);

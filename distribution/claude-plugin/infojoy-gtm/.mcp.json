@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "infojoy-gtm": {
+      "type": "http",
+      "url": "https://gtm.infojoy.com/mcp"
+    }
+  }
+}
