@@ -557,6 +557,13 @@ async def _refuse_if_checkout_cannot_take_payment(provider, currency: str) -> No
     except Exception:
         logger.warning("checkout readiness could not be read; continuing", exc_info=True)
         return
+    # The account's own facts, on every Checkout opened: when Stripe's page then says "no valid
+    # payment methods", the app log is where an operator looks, and it said only "200" (2026-10-13).
+    logger.info("checkout: stripe account %s country=%s currency=%s card_payments=%s "
+                "charges_enabled=%s", ready.account_id or "?", ready.country or "?", currency,
+                ready.card_payments or "?", ready.charges_enabled)
+    for warning in ready.warnings:
+        logger.warning("checkout opened with a warning: %s", warning)
     if ready.blocking:
         logger.warning("checkout refused, the Stripe account cannot take payment: %s",
                        " ".join(ready.blocking))

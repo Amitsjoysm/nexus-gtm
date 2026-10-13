@@ -88,14 +88,20 @@ async def checkout_readiness(provider, *, currencies: set[str] | None = None,
         charges_enabled=bool(account.get("charges_enabled")),
         card_payments=str((account.get("capabilities") or {}).get("card_payments") or ""),
     )
+    # Activation gates LIVE money only: Stripe's test mode takes payments before an account is
+    # activated, so with a test key these are warnings. Refusing there stopped a fresh account's
+    # test checkout for a reason that does not apply to it (2026-10-13).
+    from nexus.billing.credentials import stripe_key_mode
+
+    live_only = r.warnings if stripe_key_mode(provider.secret_key) == "test" else r.blocking
     if not r.charges_enabled:
         due = len((account.get("requirements") or {}).get("currently_due") or [])
-        r.blocking.append(
+        live_only.append(
             "Stripe has not enabled charges on this account yet: finish activating it in the "
             "Stripe Dashboard" + (f" ({_plural(due, 'item')} still due)." if due else "."))
     if r.card_payments and r.card_payments != "active":
-        r.blocking.append(f"Card payments are {r.card_payments} on this Stripe account, so "
-                          "Checkout has no way to take a payment.")
+        live_only.append(f"Card payments are {r.card_payments} on this Stripe account, so "
+                         "Checkout has no way to take a payment.")
 
     try:
         configs = (await provider._get("/payment_method_configurations?limit=20")).get("data") or []

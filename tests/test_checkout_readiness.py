@@ -32,10 +32,12 @@ CONFIGS = {"data": [{"id": "pmc_1", "is_default": True, "active": True,
 class FakeStripe(StripePaymentProvider):
     made = 0
 
-    def __init__(self, account=None, configs=None, *, config_error=None, account_error=None):
+    def __init__(self, account=None, configs=None, *, config_error=None, account_error=None,
+                 mode="live"):
         # A key of its own: the account's country and id are cached per key, as in production.
+        # Live by default: what blocks a live account is a warning in test mode.
         FakeStripe.made += 1
-        super().__init__(f"sk_test_fake{FakeStripe.made}")
+        super().__init__(f"sk_{mode}_fake{FakeStripe.made}")
         self.account, self.configs = account or HEALTHY, configs or CONFIGS
         self.config_error, self.account_error = config_error, account_error
         self.posted: list[tuple[str, dict]] = []
@@ -87,6 +89,18 @@ async def test_an_account_stripe_has_not_activated_blocks_checkout():
 async def test_an_inactive_card_capability_blocks_checkout():
     r = await _ready(FakeStripe({**HEALTHY, "capabilities": {"card_payments": "inactive"}}))
     assert not r.ok and any("inactive" in b for b in r.blocking)
+
+
+async def test_an_account_not_yet_activated_still_takes_test_payments():
+    """Stripe's test mode takes payments before an account is activated. Refusing there stopped
+    a fresh account's checkout for a reason that only applies to live money (2026-10-13)."""
+    fresh = {**HEALTHY, "charges_enabled": False, "capabilities": {}}
+    r = await _ready(FakeStripe(fresh, mode="test"))
+    assert r.ok and any("charges" in w for w in r.warnings)
+    r = await _ready(FakeStripe({**HEALTHY, "capabilities": {"card_payments": "inactive"}},
+                                mode="test"))
+    assert r.ok and any("inactive" in w for w in r.warnings)
+    assert not (await _ready(FakeStripe(fresh))).ok          # live: still refused
 
 
 async def test_cards_switched_off_in_the_payment_method_settings_block_checkout():
@@ -183,8 +197,9 @@ async def test_the_payments_tab_checks_a_credentials_own_account(client, monkeyp
                           headers=auth(boss))
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["ok"] is False and body["country"] == "IN"
-    assert any("charges" in b for b in body["blocking"])
+    # The credential's key is a test key, so an unactivated account is a warning there.
+    assert body["ok"] is True and body["country"] == "IN"
+    assert any("charges" in w for w in body["warnings"])
 
 
 def test_the_payments_tab_offers_the_check():
