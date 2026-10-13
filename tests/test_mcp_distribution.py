@@ -55,7 +55,7 @@ def test_every_skill_has_front_matter_and_names_only_real_tools():
     skills = sorted((PLUGIN / "skills").glob("*/SKILL.md"))
     assert len(skills) == 3
     for skill in skills:
-        text = skill.read_text(encoding="utf-8")
+        text = skill.read_text(encoding="utf-8").replace("\r\n", "\n")
         front = re.match(r"^---\n(.*?)\n---\n", text, flags=re.S)
         assert front, skill
         fields = dict(line.split(": ", 1) for line in front.group(1).splitlines())

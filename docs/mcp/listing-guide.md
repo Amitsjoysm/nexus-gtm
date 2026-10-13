@@ -189,10 +189,13 @@ the registry entry exists, claim or confirm those listings if they appear.
 
 ## 7. Check everything works
 
-- **Unit and integration tests**: `pytest tests/test_mcp_*.py` (184 tests, all offline).
-- **Protocol conformance**: install the optional extra and run the official client against a
-  local server: `pip install -e ".[mcp-conformance]"` then
-  `pytest tests/test_mcp_conformance.py -n0`.
+- **Unit and integration tests**: `pytest tests/test_mcp_*.py` (all offline).
+- **Protocol conformance with the official client**, in its own virtual environment (it pulls
+  packages the app does not need), against production with an API key that has Read:
+  `pip install "mcp==2.3.0"` then
+  `python scripts/mcp_conformance.py --url https://gtm.infojoy.com/mcp --key nxk_...`.
+  It lists tools, calls two read-only ones and checks a bad id is refused, in both protocol
+  dialects, and prints PASS. It spends no credits and changes nothing.
 - **MCP Inspector** against production with an API key (`npx @modelcontextprotocol/inspector`,
   transport Streamable HTTP, URL `https://gtm.infojoy.com/mcp`, header
   `Authorization: Bearer <key>`): list tools, call `get_credit_balance`.

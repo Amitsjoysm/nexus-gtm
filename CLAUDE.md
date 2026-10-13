@@ -2925,8 +2925,9 @@ server (`nxo_` access, `nxr_` refresh). Spec, plan and marketplace steps:
 - **Two protocol dialects in one endpoint** (`protocol.py`): the 2025 handshake revisions
   (`initialize`, `MCP-Protocol-Version` header, absent = `2025-03-26`) and the stateless
   `2026-07-28` (`_meta` version, `server/discover`, `resultType`, `ttlMs`/`cacheScope`). No SDK at
-  run time; the official client checks conformance in `tests/test_mcp_conformance.py` (optional
-  `mcp-conformance` extra, skipped in CI).
+  run time; `scripts/mcp_conformance.py` runs the official client (`pip install "mcp==2.3.0"`, in
+  its own environment) against any URL in both dialects. It passed against the branch on
+  2026-10-13. Note SDK 2.x models are snake_case (`is_error`, `structured_content`).
 - **OAuth rules that are load-bearing** (`oauth.py`, `cimd.py`): an unknown client or an
   unregistered redirect is an error PAGE, never a redirect; PKCE S256 required; codes 60 s,
   single-use, and a replayed code revokes what it issued; refresh tokens rotate and reuse revokes
