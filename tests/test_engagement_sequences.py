@@ -500,6 +500,12 @@ async def test_build_draft_review_and_launch_through_the_api(client, engine_on, 
     enrollments = (await client.get(f"/api/engagement/campaigns/{campaign['id']}/enrollments",
                                     headers=auth(token))).json()
     assert enrollments[0]["status"] == "active" and enrollments[0]["next_action_at"]
+    # The list counts statuses and reads steps once for every campaign shown (2026-10-14); it
+    # used to load every enrollment of every campaign. Same numbers, same step order.
+    listed = (await client.get("/api/engagement/campaigns", headers=auth(token))).json()
+    row = next(c for c in listed if c["id"] == campaign["id"])
+    assert row["counts"] == {"active": 1}
+    assert [s["step_index"] for s in row["steps"]] == [0, 1, 2]
 
 
 async def test_a_colleague_cannot_see_or_steer_another_reps_campaign(client, engine_on):

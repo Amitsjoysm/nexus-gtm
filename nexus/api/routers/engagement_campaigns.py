@@ -146,14 +146,37 @@ async def _campaign(ts: TenantSession, campaign_id: str, principal: Principal):
     return campaign
 
 
-async def _out(ts: TenantSession, campaign) -> CampaignOut:
-    from nexus.engagement.sequences.service import steps_of
+async def _status_counts(ts: TenantSession, campaign_ids: list[str]) -> dict[str, dict[str, int]]:
+    """Enrollments per status, per campaign, counted by the database (2026-10-14). The list used
+    to load every enrollment of every campaign it showed just to count them."""
+    from sqlalchemy import func, select
+
     from nexus.models.engagement import EngagementEnrollment
 
-    counts: dict[str, int] = {}
-    for enrollment in await ts.list(EngagementEnrollment,
-                                    EngagementEnrollment.campaign_id == campaign.id):
-        counts[enrollment.status] = counts.get(enrollment.status, 0) + 1
+    if not campaign_ids:
+        return {}
+    rows = (await ts.session.execute(
+        select(EngagementEnrollment.campaign_id, EngagementEnrollment.status, func.count())
+        .where(EngagementEnrollment.tenant_id == ts.tenant_id,
+               EngagementEnrollment.campaign_id.in_(campaign_ids))
+        .group_by(EngagementEnrollment.campaign_id, EngagementEnrollment.status)
+    )).all()
+    out: dict[str, dict[str, int]] = {}
+    for campaign_id, status_value, n in rows:
+        out.setdefault(campaign_id, {})[status_value] = int(n)
+    return out
+
+
+async def _out(ts: TenantSession, campaign, *, counts: dict[str, int] | None = None,
+               steps: list | None = None) -> CampaignOut:
+    """One campaign as the screens read it. A list passes `counts` and `steps` it fetched for
+    every campaign at once, rather than two queries per campaign."""
+    from nexus.engagement.sequences.service import steps_of
+
+    if counts is None:
+        counts = (await _status_counts(ts, [campaign.id])).get(campaign.id, {})
+    if steps is None:
+        steps = await steps_of(ts, campaign)
     return CampaignOut(
         id=campaign.id, name=campaign.name, owner_user_id=campaign.owner_user_id,
         mailbox_connection_id=campaign.mailbox_connection_id, status=campaign.status,
@@ -164,7 +187,7 @@ async def _out(ts: TenantSession, campaign) -> CampaignOut:
                        timing_mode=s.timing_mode, delay_business_days=s.delay_business_days,
                        send_time_local=s.send_time_local,
                        allowed_weekdays=list(s.allowed_weekdays or []))
-               for s in await steps_of(ts, campaign)],
+               for s in steps],
         counts=counts)
 
 
@@ -265,8 +288,17 @@ async def list_campaigns(
 
     where = [] if (team and _is_manager(principal)) else [
         EngagementCampaign.owner_user_id == principal.user_id]
+    from nexus.models.engagement import EngagementStep
+
     rows = await ts.list(EngagementCampaign, *where)
-    return [await _out(ts, c) for c in sorted(rows, key=lambda c: c.created_at, reverse=True)]
+    ids = [c.id for c in rows]
+    counts = await _status_counts(ts, ids)
+    steps: dict[str, list] = {}
+    for step in (await ts.list(EngagementStep, EngagementStep.campaign_id.in_(ids)) if ids else []):
+        steps.setdefault(step.campaign_id, []).append(step)
+    return [await _out(ts, c, counts=counts.get(c.id, {}),
+                       steps=sorted(steps.get(c.id, []), key=lambda s: s.step_index))
+            for c in sorted(rows, key=lambda c: c.created_at, reverse=True)]
 
 
 class LegacyCampaignOut(BaseModel):
@@ -520,14 +552,13 @@ async def get_estimate(
 ) -> dict:
     from nexus.engagement.sending.limits import sent_today, volume_warning
     from nexus.engagement.sequences.estimate import estimate
-    from nexus.models.engagement import EngagementEnrollment, MailboxConnection
+    from nexus.models.engagement import MailboxConnection
 
     campaign = await _campaign(ts, campaign_id, principal)
     result = await estimate(ts, campaign)
     mailbox = await ts.get(MailboxConnection, campaign.mailbox_connection_id)
-    ready = len(await ts.list(EngagementEnrollment,
-                              EngagementEnrollment.campaign_id == campaign.id,
-                              EngagementEnrollment.status.in_(("awaiting_review", "active"))))
+    counted = (await _status_counts(ts, [campaign.id])).get(campaign.id, {})
+    ready = counted.get("awaiting_review", 0) + counted.get("active", 0)
     today = await sent_today(ts, mailbox) if mailbox else 0
     return {**result.as_dict(),
             "volume_warning": volume_warning(getattr(mailbox, "email", ""), today, planned=ready)}
