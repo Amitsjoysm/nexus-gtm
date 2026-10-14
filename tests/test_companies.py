@@ -25,6 +25,7 @@ from tests.conftest import make_tenant, tenant_session
     ("  acme.com. ", "acme.com"),
     ("dana@acme.com", "acme.com"),          # an email passed where a domain was expected
     ("sub.acme.com", "sub.acme.com"),       # a subdomain IS a different host; do not guess
+    ("ACME.COM#about", "acme.com"),         # a fragment with no scheme or path in front of it
 ])
 def test_domains_normalise_to_one_comparable_form(raw, expected):
     assert normalise_domain(raw) == expected

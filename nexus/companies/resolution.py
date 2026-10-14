@@ -38,7 +38,7 @@ def normalise_domain(value: str | None) -> str:
     if not raw:
         return ""
     raw = _SCHEME.sub("", raw)
-    raw = raw.split("/", 1)[0].split("?", 1)[0]
+    raw = raw.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
     raw = raw.rsplit("@", 1)[-1]          # an email was passed instead of a domain
     raw = raw.split(":", 1)[0]            # port
     raw = raw.strip(". ")

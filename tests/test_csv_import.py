@@ -12,6 +12,7 @@ that bug family has shipped six times in this codebase.
 """
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import select
 
 from nexus.core.tenancy import TenantSession
@@ -75,6 +76,34 @@ async def test_the_domain_is_normalised(fresh_db):
             mapping={"company": "name", "website": "domain"},
         )
         assert (await s.scalars(select(Account))).one().domain == "acme.com"
+
+
+@pytest.mark.parametrize("raw", [
+    "acme.com", "https://www.Acme.com/pricing", "acme.com.", "WWW.ACME.COM.", "acme.com:443",
+    "http://acme.com:8080/x", "acme.com#about", " acme.com ",
+])
+def test_an_imported_domain_has_the_company_stores_shape(raw):
+    """Found 2026-10-14: the import kept a port and a trailing dot the company store strips, and
+    import dedupes on the exact stored value, so "acme.com." made a second Acme."""
+    from nexus.companies.resolution import normalise_domain as company_shape
+    from nexus.imports.csv_ingest import normalise_domain
+
+    assert normalise_domain(raw) == company_shape(raw) == "acme.com"
+
+
+async def test_a_trailing_dot_or_a_port_does_not_make_a_second_account(fresh_db):
+    from nexus.core.db import get_sessionmaker
+    from nexus.imports.csv_ingest import import_accounts_csv
+
+    async with get_sessionmaker()() as s:
+        ts = await _ts(s)
+        mapping = {"company": "name", "website": "domain"}
+        await import_accounts_csv(ts, content=b"company,website\nAcme,acme.com\n", mapping=mapping)
+        again = await import_accounts_csv(
+            ts, content=b"company,website\nAcme,acme.com.\nAcme,https://acme.com:443/\n",
+            mapping=mapping)
+        assert again["created"] == 0
+        assert len((await s.scalars(select(Account))).all()) == 1
 
 
 async def test_a_row_with_no_name_and_no_domain_is_reported(fresh_db):

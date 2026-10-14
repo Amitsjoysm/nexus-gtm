@@ -122,7 +122,11 @@ def normalise_domain(raw: str) -> str:
     if not value:
         return ""
     value = value.split("://", 1)[-1]
-    value = value.split("/", 1)[0].split("?", 1)[0].split("@")[-1].strip()
+    value = value.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].split("@")[-1]
+    # Port and trailing dot, as the company store strips them (2026-10-14): without this
+    # "acme.io." and "acme.io:443" were stored as written and the exact-match dedupe below made a
+    # second account for a company the workspace already had.
+    value = value.split(":", 1)[0].strip(". ")
     if value.startswith("www."):
         value = value[4:]
     return value if "." in value and " " not in value else ""
