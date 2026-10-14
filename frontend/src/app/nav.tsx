@@ -5,7 +5,6 @@ import {
   BellIcon,
   BoltIcon,
   BuildingIcon,
-  CreditCardIcon,
   DashboardIcon,
   FileTextIcon,
   InboxIcon,
@@ -62,9 +61,9 @@ export interface NavItem {
 const ROLE_RANK: Record<Role, number> = { rep: 0, manager: 1, admin: 2, owner: 3 };
 
 // Dashboard, Accounts and Contacts carry no `capability` ON PURPOSE and must keep it that way:
-// they are the floor of the product, and a plan that hides them sells nothing. Settings and Billing
-// are the same (and Members, a Settings tab) — gating Billing behind a plan locks the customer out of
-// the one page where they could change their plan.
+// they are the floor of the product, and a plan that hides them sells nothing. Settings is the same,
+// and so are its Members and Billing tabs (`app/settingsTabs.tsx`): gating Billing behind a plan
+// locks the customer out of the one page where they could change their plan.
 export const NAV_ITEMS: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/inbox", label: "Inbox", icon: <InboxIcon />, capability: "module.signals" },
@@ -114,9 +113,10 @@ export const NAV_ITEMS: NavItem[] = [
     to: "/integrations", label: "Integrations", icon: <PlugIcon />, minRole: "admin",
     capability: "module.integrations",
   },
-  { to: "/settings/billing", label: "Billing", icon: <CreditCardIcon />, minRole: "admin" },
-  // Every member: My mailboxes, AI apps, Notifications, Replies and Members are tabs of Settings
-  // now (`app/settingsTabs.tsx`), each with the role and plan rules it had as a menu item.
+  // Every member: My mailboxes, AI apps, Notifications, Replies, Members and Billing are tabs of
+  // Settings now (`app/settingsTabs.tsx`), each with the role and plan rules it had as a menu item.
+  // Billing was left here as well and showed twice, once in the menu and once as a tab; the tab is
+  // the one place it lives. A locked item's upsell still links straight to /settings/billing.
   { to: "/settings", label: "Settings", icon: <SettingsIcon /> },
   // Staff-only, and last: the control plane is operator tooling, not part of the product a
   // workspace member is working in.

@@ -108,6 +108,34 @@ async def test_any_smtp_server_sends_the_code(client, mailbox, smtp_wire, monkey
     assert wire["to"] == _BODY["email"] and "verification code" in wire["subject"]
 
 
+async def test_signup_and_a_password_reset_arrive_through_the_account_mailbox(
+        client, mailbox, smtp_wire, monkeypatch, no_auth_rate_limit):
+    """End to end through the real senders, stopped only at the socket: the code that reaches the
+    wire verifies the account, and the reset link that reaches the wire changes its password. The
+    other flow tests replace the sender, so they cannot see a message that never left."""
+    import re
+    from urllib.parse import parse_qs, urlparse
+
+    monkeypatch.setattr(mailbox, "app_base_url", "https://gtm.example.com")
+    assert (await client.post("/api/auth/register/start", json=_BODY)).status_code == 202
+    code = re.search(r"verification code is: (\d+)", smtp_wire[-1]["body"]).group(1)
+    r = await client.post("/api/auth/register/verify", json={"email": _BODY["email"], "code": code})
+    assert r.status_code == 201, r.text
+
+    r = await client.post("/api/auth/forgot-password", json={"email": _BODY["email"]})
+    assert r.status_code == 202, r.text
+    wire = smtp_wire[-1]
+    assert wire["to"] == _BODY["email"] and (wire["host"], wire["port"]) == ("smtp.gmail.com", 587)
+    link = re.search(r"https://gtm\.example\.com/reset-password\?\S+", wire["body"]).group(0)
+    token = parse_qs(urlparse(link).query)["token"][0]
+    r = await client.post("/api/auth/reset-password", json={
+        "email": _BODY["email"], "token": token, "new_password": "newpassword456"})
+    assert r.status_code == 200, r.text
+    r = await client.post("/api/auth/login", json={"email": _BODY["email"],
+                                                   "password": "newpassword456"})
+    assert r.status_code == 200, r.text
+
+
 async def test_gmail_still_needs_only_a_sign_in_and_password(client, mailbox, smtp_wire):
     r = await client.post("/api/auth/register/start", json=_BODY)
     assert r.status_code == 202, r.text

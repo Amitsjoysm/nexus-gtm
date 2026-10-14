@@ -301,6 +301,20 @@ def test_the_floor_of_the_product_is_never_gated():
         )
 
 
+def test_billing_is_a_settings_tab_and_not_also_a_menu_item():
+    """Billing showed twice after Settings became tabs (2026-10-13): once in the menu and once as
+    a tab. It lives in Settings only. The menu's Settings link stays active on /settings/billing
+    (no `end`), and a locked item's upsell still links straight to the tab."""
+    nav = _NAV.read_text(encoding="utf-8")
+    items = nav[nav.index("export const NAV_ITEMS"):nav.index("export function canSee")]
+    assert '"/settings/billing"' not in items, "Billing is back in the menu beside its Settings tab"
+    tabs = (_ROOT / "frontend" / "src" / "app" / "settingsTabs.tsx").read_text(encoding="utf-8")
+    assert re.search(r'to:\s*"/settings/billing",\s*label:\s*"Billing"', tabs)
+    sidebar = (_ROOT / "frontend" / "src" / "components" / "layout" / "Sidebar.tsx").read_text(
+        encoding="utf-8")
+    assert 'to="/settings/billing"' in sidebar, "a locked item no longer routes to the upsell"
+
+
 async def test_the_new_module_gates_change_nothing_for_existing_plans(client):
     """Adding module.signals/lists/plays/relevance/agents must be a strict no-op on rollout.
 
