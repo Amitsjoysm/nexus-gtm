@@ -128,8 +128,13 @@ async def test_the_supported_provider_list_is_offered(client, monkeypatch):
     token = await _superadmin(client, monkeypatch, slug="pk10", email="boss@pk10.com")
     r = await client.get("/api/admin/provider-keys/providers", headers=auth(token))
     assert r.status_code == 200, r.text
+    from nexus.providers.catalog import PROVIDERS
+
     ids = {p["id"] for p in r.json()}
-    assert "groq" in ids and "exa" in ids and "twilio" in ids and len(ids) == 16
+    # Every catalog entry, compared with the catalog rather than a count: a count went stale the
+    # day the two platform mail keys (system_smtp, alert_smtp) were added.
+    assert ids == set(PROVIDERS)
+    assert {"groq", "exa", "twilio", "system_smtp", "alert_smtp"} <= ids
 
 
 # ---- the model, and the live catalogue -----------------------------------------------------------
