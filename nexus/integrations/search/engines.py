@@ -81,6 +81,13 @@ def _exa_num_results(limit: int) -> int:
     return max(1, min(int(limit), _EXA_MAX_RESULTS))
 
 
+def _bare_domain(value: str) -> str:
+    """``https://www.Acme.com/about`` -> ``acme.com``: enough to compare a hit with a domain."""
+    raw = (value or "").strip().lower().split("://", 1)[-1]
+    raw = raw.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].split(":", 1)[0].strip(". ")
+    return raw[4:] if raw.startswith("www.") else raw
+
+
 def _strip_tags(text: str) -> str:
     """Brave highlights wrap matches in <strong> tags; drop markup for a clean snippet."""
     return _TAG.sub("", text or "").strip()
@@ -126,19 +133,28 @@ class ExaSearchProvider(SearchProvider):
     ) -> list[SearchHit]:
         """Exa search biased to company homepages (``category=company``), optionally excluding
         some domains. This is what makes 'find similar companies' return real businesses instead
-        of directory/profile/news pages."""
+        of directory/profile/news pages.
+
+        **Excluded domains are filtered here, never sent** (2026-10-14). Exa answers
+        ``category=company`` together with ``excludeDomains`` with NO results: HTTP 200, zero cost,
+        no error. Measured on the live API, the same query returned 15 companies without the
+        parameter and none with it. Sending it emptied every lookalike's web fallback, daily ICP
+        discovery's web step and the Orchestrator's web fill for any workspace holding even one
+        account. The excluded count is asked for on top, so filtering still leaves ``limit``."""
         if not self.api_keys:
             return []
+        excluded = {_bare_domain(d) for d in (exclude_domains or []) if d}
+        excluded.discard("")
         payload: dict = {
             "query": query,
-            "numResults": _exa_num_results(limit),
+            "numResults": _exa_num_results(limit + len(excluded)),
             "category": "company",
             "contents": {"text": {"maxCharacters": _SNIPPET_CAP}},
         }
-        domains = [d for d in (exclude_domains or []) if d]
-        if domains:
-            payload["excludeDomains"] = domains
-        return await self._post(self.ENDPOINT, payload, limit)
+        hits = await self._post(self.ENDPOINT, payload, limit + len(excluded))
+        if excluded:
+            hits = [h for h in hits if _bare_domain(h.url) not in excluded]
+        return hits[:limit]
 
     async def search_recent(
         self,

@@ -93,7 +93,33 @@ async def test_exa_request_clamps_numresults_on_the_wire(monkeypatch):
     await ExaSearchProvider("k").search_companies("b2b saas", limit=160, exclude_domains=["x.com"])
     assert captured["numResults"] == 100
     assert captured["category"] == "company"
-    assert captured["excludeDomains"] == ["x.com"]
+    # Never sent: Exa answers category=company + excludeDomains with no results (2026-10-14).
+    assert "excludeDomains" not in captured
+
+
+async def test_exa_company_search_filters_excluded_domains_itself(monkeypatch):
+    """Measured on the live API 2026-10-14: the same company query returned 15 results without
+    `excludeDomains` and none with it, at zero cost and with no error. That emptied lookalikes'
+    web fallback, ICP discovery's web step and the Orchestrator's web fill. The exclusion still
+    holds; it is applied to the answer, and the excluded count is asked for on top."""
+    captured: dict = {}
+    rows = [{"url": f"https://{d}/", "title": d} for d in
+            ("www.Seed.io", "held.com", "new-one.com", "new-two.com", "new-three.com")]
+
+    class _CapturingClient(_FakeClient):
+        async def post(self, *a, **k):
+            captured.update(k.get("json") or {})
+            return await super().post(*a, **k)
+
+    from nexus.integrations.search import engines
+
+    monkeypatch.setattr(engines.httpx, "AsyncClient",
+                        lambda *a, **k: _CapturingClient([_FakeResp(200, {"results": rows})]))
+    hits = await ExaSearchProvider("k").search_companies(
+        "companies like seed", limit=3, exclude_domains=["seed.io", "HELD.com"])
+    assert "excludeDomains" not in captured and captured["numResults"] == 5
+    assert [h.url for h in hits] == ["https://new-one.com/", "https://new-two.com/",
+                                     "https://new-three.com/"]
 
 
 async def test_exa_retries_on_429_then_succeeds(monkeypatch):
