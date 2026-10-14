@@ -50,6 +50,32 @@ async def test_sync_catalog_is_idempotent_and_updates_metadata():
         assert (await s.get(BillingCapability, "ai.email_draft")).unit == "action"
 
 
+async def test_the_retired_cadences_capabilities_are_off_with_their_rate_cards():
+    """Cadences were replaced by the engagement engine; nothing can charge these two (2026-10-14).
+    Kept in the seed, switched off on every deployment, never switched back on by a sync."""
+    from nexus.billing.catalog import RETIRED, sync_catalog
+    from nexus.billing.rates import sync_rates
+    from nexus.core.db import get_sessionmaker
+    from nexus.models.billing import BillingCapability, BillingRateCard
+
+    assert RETIRED == {"outreach.cadence_touch", "report.cadence"}
+    await sync_catalog()
+    await sync_rates()
+    async with get_sessionmaker()() as s:
+        for cid in RETIRED:
+            assert (await s.get(BillingCapability, cid)).active is False
+            card = await s.get(BillingRateCard, cid)
+            assert card is None or card.active is False
+        # Still there, and the module gate it hung off is not retired: it gates Sequence templates.
+        assert (await s.get(BillingCapability, "module.cadences")).active is True
+        # An established deployment where they were on: the next sync turns them off, once.
+        for cid in RETIRED:
+            (await s.get(BillingCapability, cid)).active = True
+        await s.commit()
+    assert (await sync_catalog())["updated"] == len(RETIRED)
+    assert (await sync_catalog())["updated"] == 0
+
+
 async def test_plan_seed_creates_plans_and_legacy_plan_is_unlimited():
     from nexus.billing.plans import LEGACY_PLAN_ID, PLAN_SEED, sync_plans
     from nexus.core.db import get_sessionmaker

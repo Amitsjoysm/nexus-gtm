@@ -192,10 +192,13 @@ UNPRICED_BY_DESIGN: frozenset[str] = frozenset({
 async def sync_rates() -> dict:
     """Seed rate cards + cost rates for capabilities that have none. Never overwrites an
     existing rate: once live, pricing is owned by Admin, not by a redeploy."""
+    from nexus.billing.catalog import RETIRED
+
     created_rc = created_cr = 0
     async with get_sessionmaker()() as session:
         have_rc = {r.capability_id for r in (await session.scalars(select(BillingRateCard))).all()}
         have_cr = {r.capability_id for r in (await session.scalars(select(BillingCostRate))).all()}
+
         for spec in RATE_SEED:
             cid = spec["capability_id"]
             # Guardrail runs on the seed itself, so a bad price can never reach the database.
@@ -206,7 +209,7 @@ async def sync_rates() -> dict:
             if cid not in have_rc:
                 session.add(BillingRateCard(
                     capability_id=cid, credits_per_unit=spec["credits_per_unit"],
-                    tiers=spec["tiers"],
+                    tiers=spec["tiers"], active=cid not in RETIRED,
                 ))
                 created_rc += 1
             if cid not in have_cr:
@@ -215,6 +218,10 @@ async def sync_rates() -> dict:
                     source=spec["source"],
                 ))
                 created_cr += 1
+        # A retired capability's card goes off with it (catalog.RETIRED). Never back on.
+        for card in (await session.scalars(
+                select(BillingRateCard).where(BillingRateCard.capability_id.in_(RETIRED)))).all():
+            card.active = False
         await session.commit()
     if created_rc or created_cr:
         logger.info("rate sync: %d cards, %d cost rates created", created_rc, created_cr)

@@ -261,6 +261,14 @@ CAPABILITY_SEED: list[dict] = (
 # not silently revert their edits.
 _MANAGED_FIELDS = ("category", "sub_category", "unit", "meter_kind", "depends_on")
 
+# Capabilities of features that no longer exist (decided with the product owner, 2026-10-14).
+# Cadences were replaced by the engagement engine at the cutover, and nothing can charge these
+# two any more; they only described, at a price, something the product does not do. Kept in the
+# seed so their definitions remain, and switched OFF (with their rate cards) on every deployment.
+# One way: a sync never re-activates anything. `module.cadences` is NOT here: it still gates the
+# Sequence templates menu.
+RETIRED: frozenset[str] = frozenset({"outreach.cadence_touch", "report.cadence"})
+
 
 async def sync_catalog() -> dict:
     """Upsert the declarative seed into ``billing_capabilities``. Idempotent.
@@ -277,7 +285,7 @@ async def sync_catalog() -> dict:
         for spec in CAPABILITY_SEED:
             row = existing.get(spec["id"])
             if row is None:
-                session.add(BillingCapability(**spec))
+                session.add(BillingCapability(**spec, active=spec["id"] not in RETIRED))
                 created += 1
                 continue
             changed = False
@@ -285,6 +293,9 @@ async def sync_catalog() -> dict:
                 if getattr(row, field) != spec[field]:
                     setattr(row, field, spec[field])
                     changed = True
+            if spec["id"] in RETIRED and row.active:
+                row.active = False
+                changed = True
             if changed:
                 updated += 1
         await session.commit()
