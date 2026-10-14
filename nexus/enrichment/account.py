@@ -462,7 +462,18 @@ class SearchBackedAccountEnricher:
         # 2026-09-09, `anthropic.com` spent 66.6 seconds filling NOTHING while Exa answered 200 to
         # every search, because Groq was rate-limited past ten minutes and the chain fell to the
         # stub. This actor returns already-parsed fields, so it has no reader to be down.
-        actor_filled = await self.from_b2b_actor(account)
+        #
+        # PAID, SO SPACED LIKE THE WEB PATH (2026-10-14). It ran on every call while only the web
+        # path below checked `due`, and the refresh pipeline calls this for any account missing
+        # industry OR headcount, which this actor's free providers almost never return. So every
+        # such account re-ran it on every refresh, every six hours for a hot one: 82 runs in three
+        # hours on the local stack, 95% of all Apify traffic, and an Apify month gone in a day or
+        # two. Recorded on attempt, as the web path does, so an account it cannot fill waits the
+        # interval instead of retrying forever. A person pressing Enrich (`force`) is never held.
+        actor_filled: list[str] = []
+        if due:
+            mark_attempted(account)
+            actor_filled = await self.from_b2b_actor(account)
         filled += actor_filled
 
         # THE ACTOR ANSWERED, SO THE WEB PATH DOES NOT RUN. The instruction is "prefer it, and go

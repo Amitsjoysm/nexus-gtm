@@ -207,6 +207,47 @@ def test_a_good_actor_answer_stops_the_search():
     assert "if actor_filled and account.industry:" in src
 
 
+async def test_the_actor_runs_once_per_interval_not_on_every_refresh(monkeypatch):
+    """Found 2026-10-14: the actor ran on every enrichment while only the web path honoured the
+    30-day spacing, and its answers rarely carry a headcount, so an account it could not complete
+    re-ran it on every refresh and drained Apify in a day or two."""
+    from nexus.core.config import get_settings
+    from nexus.enrichment.account import SearchBackedAccountEnricher
+    from nexus.models.account import Account
+    from tests.conftest import make_tenant, tenant_session
+
+    runs: list[str] = []
+
+    class _Client:
+        async def run_actor(self, actor, run_input, **kw):
+            runs.append(actor)
+            return [ROW]
+
+    monkeypatch.setattr(
+        "nexus.integrations.apify.get_apify_client", lambda: _Client(), raising=False
+    )
+    monkeypatch.setattr(get_settings(), "account_enrich_min_interval_days", 30)
+    from nexus.agents.llm import StubLLMProvider
+
+    # The web path is off (`web_search=False`, as the scheduled refresh runs it), so no search
+    # backend is reached; the stub model is never asked either.
+    enricher = SearchBackedAccountEnricher(None, StubLLMProvider())
+    tid = await make_tenant(slug="actor-spacing", name="Actor Spacing")
+    async with tenant_session(tid) as ts:
+        account = Account(name="Stripe", domain="stripe.com")
+        ts.add(account)
+        await ts.flush()
+        await enricher.enrich(ts, account, web_search=False)
+        assert len(runs) == 1 and account.industry == "Financial Technology"
+        assert account.employee_count is None          # what kept it "missing" forever
+
+        await enricher.enrich(ts, account, web_search=False)   # the next refresh
+        assert len(runs) == 1, "the actor ran again inside the interval"
+
+        await enricher.enrich(ts, account, web_search=False, force=True)  # a person asked
+        assert len(runs) == 2
+
+
 def test_the_actor_is_registered_with_a_consumer():
     from nexus.enrichment.b2b_actor import ACTOR
     from nexus.integrations.apify import ACTORS
