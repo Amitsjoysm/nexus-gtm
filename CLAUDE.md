@@ -298,9 +298,15 @@ old `0001_initial` did that, so it materialized whatever models existed *at run 
 than a frozen historical schema, and the chain could never be replayed. Production still runs
 `bootstrap_db.py` → `alembic upgrade head` → `apply_rls.py`.
 
-### Two traps that only bite against real Postgres
+### Three traps that only bite against real Postgres
 
-The suite runs on SQLite, which has **no RLS**. Both of these pass every test and fail in prod:
+The suite runs on SQLite, which has **no RLS** and ignores `varchar` lengths. These pass every test
+and fail in prod:
+
+- **A revision id must be 32 characters or fewer.** `alembic_version.version_num` is `varchar(32)`
+  on Postgres. `0070_payment_method_configuration` (33) passed the whole suite and stopped the app
+  starting on the first real deploy (2026-10-14); it is now `0070_payment_method_config`, and
+  `tests/test_migrations_replay.py` refuses a longer id.
 
 - **A hand-built `TenantSession` must call `apply_rls(session, tenant_id)` first**, or writes are
   rejected. `tests/test_rls_binding_guard.py` is an AST guard against this.

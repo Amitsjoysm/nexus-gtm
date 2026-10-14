@@ -6,7 +6,7 @@ event is recorded later, and after a rebuild. Platform-global (no ``tenant_id``)
 every workspace at once and its readers work across workspaces, so ``apply_rls.py`` leaves it alone.
 
 Revision ID: 0071_ledger_erasures
-Revises: 0070_payment_method_configuration
+Revises: 0070_payment_method_config
 Create Date: 2026-10-14
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0071_ledger_erasures"
-down_revision = "0070_payment_method_configuration"
+down_revision = "0070_payment_method_config"
 branch_labels = None
 depends_on = None
 

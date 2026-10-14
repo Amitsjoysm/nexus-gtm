@@ -6,7 +6,7 @@ so it lives on the credential rather than in a global setting: switching the act
 not send another account's id to Stripe. `payment_credentials` is platform-global (no tenant_id),
 so RLS does not apply.
 
-Revision ID: 0070_payment_method_configuration
+Revision ID: 0070_payment_method_config
 Revises: 0069_reply_switches
 Create Date: 2026-10-13
 """
@@ -15,7 +15,11 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0070_payment_method_configuration"
+# Was "0070_payment_method_configuration" (33 characters) until 2026-10-14. Postgres keeps the
+# revision in alembic_version.version_num, a varchar(32), so recording it failed and the app
+# would not start; SQLite does not enforce the length, so no test saw it. No database ever
+# recorded the long id (the failure rolls the whole upgrade back), so renaming is safe.
+revision = "0070_payment_method_config"
 down_revision = "0069_reply_switches"
 branch_labels = None
 depends_on = None

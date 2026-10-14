@@ -34,6 +34,20 @@ def _alembic(db_path: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def test_every_revision_id_fits_postgres_alembic_version():
+    """`alembic_version.version_num` is varchar(32) on Postgres and SQLite ignores the length, so a
+    longer id replays here and fails every real deploy. `0070_payment_method_configuration` (33)
+    did exactly that on 2026-10-14: the app container would not start."""
+    import re
+
+    too_long = {}
+    for path in (REPO / "migrations" / "versions").glob("*.py"):
+        match = re.search(r'^revision\s*=\s*"([^"]+)"', path.read_text(encoding="utf-8"), re.M)
+        if match and len(match.group(1)) > 32:
+            too_long[path.name] = match.group(1)
+    assert not too_long, f"revision ids over 32 characters break Postgres: {too_long}"
+
+
 def test_chain_has_exactly_one_head(tmp_path):
     proc = _alembic(tmp_path / "heads.db", "heads")
     assert proc.returncode == 0, proc.stderr[-2000:]
