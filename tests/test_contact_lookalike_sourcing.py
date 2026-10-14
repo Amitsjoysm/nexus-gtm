@@ -540,3 +540,17 @@ async def test_a_result_carries_the_reason_it_was_sourced(monkeypatch):
 
     out = await _source_with_icp(monkeypatch, seed, reg)
     assert out and any("ICP buyer title" in r for r in out[0].reasons), out[0].reasons
+
+
+@pytest.mark.parametrize(("raw", "shown"), [
+    ("christos sarros - VP Sales UK&I - Diligent | LinkedIn", "Christos Sarros"),
+    ("mary-jane o'neil - CRO | LinkedIn", "Mary-Jane O'neil"),
+    ("Ronan McDonald - VP Sales | LinkedIn", "Ronan McDonald"),     # own spelling, untouched
+    ("Anke van der Berg - Head of Sales | LinkedIn", "Anke van der Berg"),
+])
+def test_a_lowercased_name_is_shown_in_capitals_and_any_other_is_left_alone(raw, shown):
+    """Some results carry a lowercased page title, so "christos sarros" reached the rep (2026-10-14).
+    Only an all-lowercase name is changed; a name with any capital is the person's own spelling."""
+    from nexus.lookalike.contacts import _parse_profile
+
+    assert _parse_profile(raw)[0] == shown

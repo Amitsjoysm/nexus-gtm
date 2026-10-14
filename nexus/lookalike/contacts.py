@@ -197,6 +197,17 @@ def _current_employer(snippet: str) -> tuple[str, str]:
     return "", ""
 
 
+def _name_case(name: str) -> str:
+    """A name the search index gave all in lowercase, in ordinary capitals; any other name exactly
+    as given (2026-10-14). Some results carry a lowercased page title, so "christos sarros" reached
+    the rep's list. Only the first letter of each word or hyphenated part is raised: a name with
+    any capital in it ("McDonald", "van der Berg") is the person's own spelling and is left alone."""
+    if not name or name != name.lower():
+        return name
+    return " ".join("-".join(part[:1].upper() + part[1:] for part in word.split("-"))
+                    for word in name.split(" "))
+
+
 def _parse_profile(title: str) -> tuple[str, str, str]:
     """``(name, title, company)`` from a LinkedIn SERP title. Empty name means unusable."""
     raw = (title or "").strip()
@@ -206,7 +217,7 @@ def _parse_profile(title: str) -> tuple[str, str, str]:
     parts = [p for p in parts if p.lower() != "linkedin"]
     if not parts:
         return "", "", ""
-    name = parts[0]
+    name = _name_case(parts[0])
     # A name with no spaces and no vowels, or one that is obviously a page label, is not a person.
     if len(name) < 3 or len(name) > 80:
         return "", "", ""
