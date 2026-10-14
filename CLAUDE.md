@@ -246,7 +246,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0070_payment_method_configuration`. The chain is
+Alembic under `migrations/versions/`. Head: `0071_ledger_erasures`. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -268,7 +268,8 @@ fields on `companies`, `company_countries` and `prospect_cursors`, all platform-
 `stripe.manage`, no DDL) -> `0068` (`mcp_connections`, `oauth_clients`, `oauth_codes`,
 `oauth_tokens`, platform-global) -> `0069` (`mailbox_connections.auto_actions` and
 `.auto_send_replies`, `reply_classifications.auto_reply` and `.auto_reply_note`) -> `0070`
-(`payment_credentials.payment_method_configuration`, platform-global). Every tenant-scoped table gets RLS via
+(`payment_credentials.payment_method_configuration`, platform-global) -> `0071` (`ledger_erasures`,
+platform-global). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -2820,6 +2821,30 @@ their routers, workers and pages are gone; their tables stay as read-only histor
   `build_ledger_datasets` derives the training and insights stores from it, so both are
   rebuildable. The Gmail push URL carries no token of ours — `tests/test_credential_leaks.py`
   refuses a credential in a query string, and the Pub/Sub OIDC signature is the trust.
+- **The Ledger tab sets the stores up, and an erasure removes a person for good** (2026-10-14,
+  `ledger/erasures.py`, migration `0071`, `tests/test_ledger_erasure.py` and the Postgres half in
+  `tests_integration/test_ledger_stores_pg.py`). Reported as "everything is not configured and
+  there is no option to configure it": the connection strings and the pseudonymisation secret were
+  Provider keys and the tab never said so. `PUT /admin/ledger/setup` (`providers.manage`) stores
+  them through the provider-key service, sealed and pinned like Mailbox apps' secrets, after the
+  SSRF guard `stores.connect` uses; the secret is GENERATED once and replacing it is a 409, because
+  the archive is sealed with it and every person key is an HMAC under it. Erasure had four holes,
+  all closed:
+  - **The outbox was never cleared.** It holds raw email text until shipped and seven days after,
+    so a waiting event shipped the person straight back. `erase_person` now sweeps it, resolving
+    each row as the shipper does, and counts again afterwards.
+  - **Only the contact could be found.** Archive `person_keys` are now everyone the event names
+    (`erasures.everyone`: contact, sender, every address in its text, searched string by string),
+    and the derived stores are cleared by the deleted archive rows' event ids too, kept across
+    retries in the report: a training example keyed to the contact still carried a Cc'd colleague.
+  - **Nothing remembered it.** A `ledger_erasures` row (HMAC keys only, never the address) makes the
+    shipper DELETE any event naming the person instead of archiving it, and the builder skip one, so
+    the erasure holds for later events and rebuilds. Its key is an HMAC under `secret_key`, not the
+    ledger secret, so erasure works before the ledger is configured, which is when the outbox fills.
+  - **Nobody saw the result.** The report lands on the row; the tab lists recent erasures as
+    waiting, done (nothing left) or incomplete. A store that fails leaves it open and the job raises,
+    so it is retried and finally dead-lettered. The shared people store's erasure queues the same
+    job with the keys and lets the job write the row, because it runs inside its own transaction.
 - **The screens gate on the engine, not on a plan.** `GET /engagement/settings/status` is the one
   engagement route that answers while the engine is off; `EngagementProvider` reads it once at the
   shell. Nav items carry `engine: "on"` and leave only while the engine is CONFIRMED off; unknown or

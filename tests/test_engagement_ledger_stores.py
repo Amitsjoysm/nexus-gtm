@@ -562,23 +562,27 @@ async def test_applying_a_schema_to_an_unconfigured_store_is_a_409(client, monke
                               headers=auth(token))).status_code == 404
 
 
-async def test_erasing_a_person_queues_the_key_and_needs_the_secret(client, monkeypatch):
+async def test_erasing_a_person_queues_the_key_with_or_without_the_secret(client, monkeypatch):
+    """Without the secret there is no ledger key, but the erasure is still recorded and queued:
+    it clears the outbox and stops the person being shipped (`tests/test_ledger_erasure.py`)."""
     from nexus.providers import resolver
     from nexus.workers.queue import InMemoryTaskQueue, set_task_queue
 
     token = await _superadmin(client, monkeypatch, slug="ledgererase",
                               email="boss@ledgererase.com")
-    monkeypatch.setattr(get_settings(), "ledger_pseudonym_secret", "")
-    resolver.invalidate()
-    r = await client.post("/api/admin/ledger/erase-person",
-                          json={"email": "jane.buyer@acme.io"}, headers=auth(token))
-    assert r.status_code == 409, r.text
-
-    monkeypatch.setattr(get_settings(), "ledger_pseudonym_secret", SECRET)
-    resolver.invalidate()
     queue = InMemoryTaskQueue()
     set_task_queue(queue)
     try:
+        monkeypatch.setattr(get_settings(), "ledger_pseudonym_secret", "")
+        resolver.invalidate()
+        r = await client.post("/api/admin/ledger/erase-person",
+                              json={"email": "jane.buyer@acme.io"}, headers=auth(token))
+        assert r.status_code == 200, r.text
+        assert r.json()["person_key"] == "" and r.json()["erasure_id"]
+        assert (await queue.dequeue(timeout=0)).name == "ledger_erase_person"
+
+        monkeypatch.setattr(get_settings(), "ledger_pseudonym_secret", SECRET)
+        resolver.invalidate()
         r = await client.post("/api/admin/ledger/erase-person",
                               json={"email": "jane.buyer@acme.io"}, headers=auth(token))
         assert r.status_code == 200, r.text
@@ -587,6 +591,7 @@ async def test_erasing_a_person_queues_the_key_and_needs_the_secret(client, monk
         assert r.json()["person_key"] == person_key(SECRET, "jane.buyer@acme.io")
         job = await queue.dequeue(timeout=0)
         assert job.name == "ledger_erase_person"
+        assert "jane" not in json.dumps(job.payload).lower()
     finally:
         set_task_queue(None)
 
@@ -599,7 +604,13 @@ def test_the_ledger_tab_shows_state_and_the_two_actions_and_no_dsn():
     assert "api.applyLedgerSchema" in tab and "api.eraseLedgerPerson" in tab
     for word in ("Waiting to ship", "contributing", "Datasets last built"):
         assert word in tab
-    assert "dsn" not in tab.lower()
+    # The tab SENDS connection strings (Connection, 2026-10-14) and never shows one: the boxes are
+    # password inputs holding only what was typed, and the status it renders carries no value.
+    assert 'type="password"' in tab and "value={dsns[name]}" in tab
+    types = (SRC / "lib/types.ts").read_text(encoding="utf-8")
+    status_type = types[types.index("export interface LedgerStoreStatus"):
+                        types.index("export interface LedgerStatus")]
+    assert "dsn" not in status_type.lower()
     host = (SRC / "pages/AdminBillingPage.tsx").read_text(encoding="utf-8")
     assert '{ value: "ledger", label: "Ledger" }' in host
     assert "<LedgerTab />" in host

@@ -140,6 +140,15 @@ A standard secret key (sk_...) also works, but it can do everything in the accou
   Payment Methods               Read    GET /v1/payment_methods - when subscriptions are
                                         carried into a new account, whether the customer
                                         has a card there to charge
+  Payment Method Configurations Read    GET /v1/payment_method_configurations - "Check
+                                        checkout" and Platform health read whether cards
+                                        are on; saving a configuration id on the Payments
+                                        tab reads that configuration back first
+  Charges                       Read    GET /v1/charges/{id} - a refund, dispute or fraud
+                                        warning that names only its charge is matched to
+                                        the workspace that paid through it. Without it
+                                        those events are logged and not matched, so the
+                                        credits that payment bought are not held
 
   OPTIONAL
   Webhook Endpoints             Write   Only for the "Create webhook in Stripe" button
@@ -148,9 +157,9 @@ A standard secret key (sk_...) also works, but it can do everything in the accou
                                         scripts/stripe_status.py).
 
   NOT USED (leave as None)
-  Payment Intents, Charges and Refunds. If a later release starts off-session charges
-  or refunds, add Payment Intents: Write, Payment Methods: Write, Charges and
-  Refunds: Write.
+  Payment Intents and Refunds, and Charges beyond Read. If a later release starts
+  off-session charges or refunds, add Payment Intents: Write, Payment Methods: Write,
+  Charges and Refunds: Write.
 
   NOT NEEDED
   Promotion Codes / Coupons (Checkout reads them on Stripe's side), Tax (Stripe

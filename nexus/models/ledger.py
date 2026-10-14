@@ -48,3 +48,25 @@ class LedgerOutbox(IdMixin, TimestampMixin, TenantScoped, Base):
     shipped_archive_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class LedgerErasure(IdMixin, TimestampMixin, Base):
+    """A person erased from the ledger, kept so they are never collected again (2026-10-14).
+
+    Platform-global (no ``tenant_id``): an erasure covers every workspace's contribution at once,
+    and the shipper and the builder read it across workspaces. Holds no address. ``erasure_key``
+    is an HMAC of the address under the deployment secret, so it exists even when the ledger's own
+    pseudonymisation secret is not configured yet; ``person_key`` is the ledger's key, when there
+    was a secret to derive it with, and is what the three stores are searched by. ``report`` is
+    what the last run deleted and what it found left, which is the evidence the Ledger tab shows.
+    """
+
+    __tablename__ = "ledger_erasures"
+    __table_args__ = (Index("uq_ledger_erasure_key", "erasure_key", unique=True),)
+
+    erasure_key: Mapped[str] = mapped_column(String(64))
+    person_key: Mapped[str] = mapped_column(String(32), default="")
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(TZDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    report: Mapped[dict] = mapped_column(JSON, default=dict)

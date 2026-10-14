@@ -2401,6 +2401,23 @@ export interface LedgerStoreStatus {
   applied: string[];
   pending: string[];
   detail: string;
+  /** Where the connection string in use came from: "panel" (with its last four as `hint`), "env", or "". */
+  source?: string;
+  hint?: string;
+}
+
+/** One erasure and what its last run found. Keys only, never the address. */
+export interface LedgerErasure {
+  id: string;
+  key: string;
+  requested_at: string;
+  finished_at: string | null;
+  state: "done" | "incomplete" | "waiting";
+  deleted: Record<string, number>;
+  remaining: Record<string, number>;
+  unconfigured: string[];
+  errors: Record<string, string>;
+  note: string;
 }
 
 export interface LedgerStatus {
@@ -2417,6 +2434,7 @@ export interface LedgerStatus {
   consented_workspaces: number;
   opted_out_workspaces: number;
   undecided_workspaces: number;
+  recent_erasures: LedgerErasure[];
 }
 
 // ---- engagement: campaigns, sequences and the reply desk (phase 11) ----------------------------

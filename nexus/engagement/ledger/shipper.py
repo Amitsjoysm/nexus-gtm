@@ -17,13 +17,15 @@ Failure posture, and it is deliberately not the job-retry machinery alone:
 * The handler still RAISES when a batch fails, so `workers/durability.py` retries and finally
   dead-letters — the evidence an operator needs, once per window instead of sixty times.
 * Nothing is ever deleted before it is acknowledged: ``shipped_archive_at`` is set only after the
-  insert commits, and retention removes rows seven days after that.
+  insert commits, and retention removes rows seven days after that. The one exception is an event
+  that names a person who has been erased (``erasures.py``): it is deleted instead of shipped, so an
+  erasure holds for what was still waiting and for whatever is recorded about them later.
 """
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("nexus.engagement.ledger.shipper")
 
@@ -46,6 +48,12 @@ def retry_delay_minutes(attempts: int) -> int:
 
 
 def is_due(attempts: int, updated_at: datetime, now: datetime) -> bool:
+    # SQLite hands timestamps back without a zone (Postgres does not), and the offline stack ships
+    # too; a naive value here is UTC, which is what `utcnow` wrote.
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     return updated_at + timedelta(minutes=retry_delay_minutes(attempts)) <= now
 
 
@@ -55,14 +63,18 @@ def archive_document(envelope: dict, resolved: dict) -> dict:
 
 
 def archive_row(secret: str, envelope: dict, resolved: dict) -> tuple:
-    """One row for ``nexus_ledger.events``. Pure given the secret."""
+    """One row for ``nexus_ledger.events``. Pure given the secret.
+
+    ``person_keys`` covers everyone the event names (``erasures.everyone``), not only the contact
+    it was addressed to: these keys are what an erasure searches by, and a Cc'd colleague or an
+    address in a quoted thread is a person who can ask to be erased too."""
+    from nexus.engagement.ledger.erasures import everyone
     from nexus.engagement.ledger.pseudonym import archive_fernet, person_key
 
     document = archive_document(envelope, resolved)
     sealed = archive_fernet(secret).encrypt(
         json.dumps(document, default=str).encode("utf-8")).decode("ascii")
-    emails = [e for e in (resolved.get("person_emails") or []) if e]
-    keys = sorted({person_key(secret, email) for email in emails})
+    keys = sorted({person_key(secret, email) for email in everyone(envelope, resolved)})
     return (
         envelope["event_id"],
         envelope["event_type"],
@@ -112,6 +124,7 @@ async def ship_batch(limit: int = BATCH) -> dict:
     """Ship one batch. Returns a summary; raises ``StoreUnavailable`` when the archive refused."""
     from nexus.core.db import get_platform_sessionmaker, utcnow
     from nexus.engagement import config
+    from nexus.engagement.ledger import erasures
     from nexus.engagement.ledger import resolve as resolver
     from nexus.engagement.ledger.stores import StoreUnavailable, connect
 
@@ -120,16 +133,24 @@ async def ship_batch(limit: int = BATCH) -> dict:
         return {"shipped": 0, "skipped": "the pseudonymisation secret is not configured"}
 
     now = utcnow()
+    blocked = await erasures.blocked_keys()
     sessionmaker = get_platform_sessionmaker()
     async with sessionmaker() as session:
         rows = await _claim(session, now, limit)
         if not rows:
             return {"shipped": 0}
-        prepared = []
+        prepared, erased = [], 0
         for row in rows:
             envelope = row.payload or {}
-            resolved = await resolver.resolve(session, envelope)
-            prepared.append((row, archive_row(secret, envelope, resolved.as_dict())))
+            resolved = (await resolver.resolve(session, envelope)).as_dict()
+            if erasures.names_anyone(blocked, envelope, resolved):
+                await session.delete(row)
+                erased += 1
+                continue
+            prepared.append((row, archive_row(secret, envelope, resolved)))
+        if not prepared:
+            await session.commit()
+            return {"shipped": 0, "erased": erased}
         try:
             async with connect("archive") as conn:
                 await conn.executemany(
@@ -150,20 +171,21 @@ async def ship_batch(limit: int = BATCH) -> dict:
             row.shipped_archive_at = now
             row.last_error = None
         await session.commit()
-    return {"shipped": len(prepared)}
+    return {"shipped": len(prepared), "erased": erased}
 
 
 async def ship(max_batches: int = MAX_BATCHES) -> dict:
-    total = 0
+    total = erased = 0
     for _ in range(max_batches):
         result = await ship_batch()
         if result.get("skipped"):
             return result
         shipped = result["shipped"]
         total += shipped
-        if shipped < BATCH:
+        erased += result.get("erased", 0)
+        if shipped + result.get("erased", 0) < BATCH:
             break
-    return {"shipped": total}
+    return {"shipped": total, "erased": erased}
 
 
 async def purge_shipped() -> int:

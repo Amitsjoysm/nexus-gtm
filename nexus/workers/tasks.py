@@ -1145,18 +1145,38 @@ async def handle_ledger_delete_workspace(payload: dict) -> dict:
 
 
 async def handle_ledger_erase_person(payload: dict) -> dict:
-    """Erase one person everywhere, by key. Ships the outbox first so an event recorded seconds
-    before the request cannot land in the archive seconds after the erasure."""
-    from nexus.engagement.ledger import deletion, shipper
+    """Erase one person everywhere: the outbox and the three stores, recorded on the erasure row.
 
+    Ships the outbox first: the erasure row already exists, so the shipper DELETES this person's
+    waiting events instead of archiving them, and everyone else's are not held up. A store that
+    failed leaves the row unfinished and RAISES, so the job is retried and finally dead-lettered
+    rather than reporting an erasure that did not happen. A job queued by the previous release
+    carries only ``person_key`` and erases the stores as it always did."""
+    from nexus.engagement.ledger import deletion, erasures, shipper
+
+    erasure_id = payload.get("erasure_id") or ""
+    key = payload.get("erasure_key") or ""
     person_key = payload.get("person_key") or ""
-    if not person_key:
+    record = await erasures.get(erasure_id) if erasure_id else None
+    if record is None and key:
+        # Queued from inside another transaction (the shared people store), which could not write
+        # the row itself: it is written here, before anything ships.
+        record = await erasures.ensure(key, person_key=person_key)
+    person_key = (record.person_key if record else "") or person_key
+    if record is None and not person_key:
         return {"error": "no person key"}
     try:
         await shipper.ship()
     except Exception:
         logger.warning("could not flush the outbox before an erasure", exc_info=True)
-    return await deletion.erase_person(person_key)
+    report = await deletion.erase_person(
+        person_key, erasure_key=record.erasure_key if record else "",
+        known_event_ids=list((record.report or {}).get("event_ids") or []) if record else None)
+    if record is not None:
+        await erasures.finish(record.id, report)
+    if report.get("errors"):
+        raise RuntimeError(f"ledger erasure incomplete: {', '.join(sorted(report['errors']))}")
+    return report
 
 
 async def handle_advance_engagement(payload: dict) -> dict:
@@ -1387,10 +1407,13 @@ async def enqueue_ledger_delete_workspace(tenant_id: str, *,
     await queue.enqueue(Job(name="ledger_delete_workspace", payload={"tenant_id": tenant_id}))
 
 
-async def enqueue_ledger_erase_person(person_key: str, *,
+async def enqueue_ledger_erase_person(person_key: str, *, erasure_id: str = "",
+                                      erasure_key: str = "",
                                       queue: TaskQueue | None = None) -> None:
+    """Keys only, never the address: a dead-lettered job logs its payload."""
     queue = queue or get_task_queue()
-    await queue.enqueue(Job(name="ledger_erase_person", payload={"person_key": person_key}))
+    await queue.enqueue(Job(name="ledger_erase_person", payload={
+        "person_key": person_key, "erasure_id": erasure_id, "erasure_key": erasure_key}))
 
 
 async def enqueue_refresh_mailbox_tokens(*, queue: TaskQueue | None = None) -> None:

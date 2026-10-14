@@ -72,7 +72,10 @@ postgresql://nexus_ledger.<project-ref>:<password>@aws-0-<region>.pooler.supabas
 
 ## 4. Store the three strings and the pseudonymisation secret
 
-In the app: **Control plane → Provider keys**, and add one key for each id:
+In the app: **Control plane → Ledger → Connection**. Paste each store's connection string and
+press **Save connection strings** (a blank box keeps what is stored), then press **Generate secret**
+beside *Pseudonymisation secret* once. They are stored as these Provider keys, sealed, and can also
+be added there:
 
 | Provider key id | Value |
 |---|---|
@@ -84,7 +87,8 @@ In the app: **Control plane → Provider keys**, and add one key for each id:
 The pseudonymisation secret is what turns a person into a stable key and what seals the archive.
 **Back it up with the database.** Losing it makes the archive unreadable and breaks every join
 between stores — and, because erasure finds rows by that key, it breaks erasure too (spec §16).
-Generate it with:
+That is also why the Ledger tab creates it once and refuses to replace it. To add one by hand in
+Provider keys instead, generate it with:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(48))"
@@ -121,3 +125,16 @@ store card says which and why.
 - The app's own `ledger_outbox` keeps rows for **7 days** after they are archived, then deletes them.
 - Nothing in these stores is deleted by age. Deletion happens on request: a workspace switching
   training off, or a person erasure — both remove rows from all three stores and report what remains.
+
+## 8. Erasing a person
+
+**Control plane → Ledger → Erase a person**, by email address. It removes every row that names the
+address, wherever it appears in an event (the contact, the sender, a Cc line, a quoted thread):
+from the outbox, shipped or not, and from all three stores, including training rows and insights
+facts built from those events. The request is remembered by a key (never the address), so nothing
+naming that person is shipped or built again. It works before the stores are configured, which is
+when the outbox fills up with nowhere to go.
+
+The list under the form shows each request: *Waiting for the worker*, *Done, nothing left*, or
+*Incomplete, retrying* with the store that failed. A store that is not configured holds nothing
+and is listed as such.

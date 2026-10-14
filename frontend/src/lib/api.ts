@@ -1330,10 +1330,22 @@ export class ApiClient {
     return this.request<{ store: string; applied: string[]; status: LedgerStoreStatus }>(
       `/admin/ledger/${store}/schema`, { method: "POST" });
   }
+  /**
+   * Store the ledger's connection strings (blank keeps what is stored) and create its
+   * pseudonymisation secret once. Returns the status, which never carries a value back.
+   */
+  saveLedgerSetup(body: {
+    archive_dsn?: string;
+    training_dsn?: string;
+    insights_dsn?: string;
+    generate_pseudonym_secret?: boolean;
+  }) {
+    return this.request<LedgerStatus>("/admin/ledger/setup", { method: "PUT", body });
+  }
   eraseLedgerPerson(email: string) {
-    return this.request<{ queued: boolean; person_key: string }>("/admin/ledger/erase-person", {
-      method: "POST", body: { email },
-    });
+    return this.request<{ queued: boolean; person_key: string; erasure_id: string }>(
+      "/admin/ledger/erase-person", { method: "POST", body: { email } },
+    );
   }
   // ---- engagement: training & insights consent ----
   trainingConsent(signal?: AbortSignal) {

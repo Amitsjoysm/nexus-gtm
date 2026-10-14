@@ -10,8 +10,9 @@ removing "identity fields" would leave the person's data in the text. The row is
 about them, and the training and insights rows are rebuilt from the archive, so removing it there is
 what makes the deletion hold after any later rebuild.
 
-Ordering matters in one place: the person's still-unshipped events are shipped FIRST, so an event
-recorded a minute before the request cannot arrive in the archive a minute after the erasure ran.
+An erasure also deletes the person's rows from the OUTBOX and is remembered (``erasures.py``): the
+shipper deletes, rather than ships, any event that names them, and the builder skips one, so the
+erasure holds for events still waiting, events recorded later, and any rebuild.
 """
 from __future__ import annotations
 
@@ -71,39 +72,72 @@ async def delete_workspace(tenant_id: str) -> dict:
     return report
 
 
-async def erase_person(person_key: str) -> dict:
-    """Remove one person from every store, by their deterministic key."""
-    report = {"person_key": person_key, "deleted": {}, "remaining": {}, "unconfigured": []}
+async def erase_person(person_key: str, *, erasure_key: str = "",
+                       known_event_ids: list[str] | None = None) -> dict:
+    """Remove one person from the outbox and every store.
+
+    * **Outbox** (when ``erasure_key`` is given): every row naming them, shipped or not. A shipped
+      row is kept seven days with the email text in it; an unshipped one would carry them back into
+      the archive.
+    * **Archive**: every row whose ``person_keys`` holds theirs. Its event ids are collected, and
+      kept in ``event_ids`` across retries, because the derived stores are cleared by them.
+    * **Training and insights**: rows keyed to them, AND every row built from an archive row just
+      deleted. A training example keyed to the contact still carries the body that named a Cc'd
+      colleague, and a rebuild from the archive would no longer produce it, so it goes too.
+
+    ``remaining`` counts by the same conditions afterwards; the expected answer is zero."""
+    event_ids = sorted(set(known_event_ids or []))
+    report = {"person_key": person_key, "deleted": {}, "remaining": {}, "unconfigured": [],
+              "event_ids": event_ids}
+    if erasure_key:
+        await _outbox_erase(erasure_key, report)
+    if not person_key:
+        # No pseudonymisation secret when it was asked, so nothing was ever shipped under a key we
+        # could search by: shipping needs that secret, and from now on this person is never shipped.
+        report["stores_skipped"] = "no pseudonymisation secret, so nothing was shipped under a key"
+        return report
     for store in STORES:
         try:
             async with connect(store) as conn:
-                if store in ("archive", "training"):
-                    deleted = await conn.execute(
-                        "DELETE FROM nexus_ledger.events WHERE person_keys @> ARRAY[$1]::text[]",
-                        person_key)
+                if store == "archive":
+                    rows = await conn.fetch(
+                        "DELETE FROM nexus_ledger.events WHERE person_keys @> ARRAY[$1]::text[] "
+                        "RETURNING event_id", person_key)
+                    event_ids = sorted(set(event_ids) | {r["event_id"] for r in rows})
+                    report["event_ids"] = event_ids
+                    deleted = f"DELETE {len(rows)}"
                     remaining = await conn.fetchval(
                         "SELECT count(*) FROM nexus_ledger.events "
                         "WHERE person_keys @> ARRAY[$1]::text[]", person_key)
-                    if store == "training":
-                        deleted += " " + await conn.execute(
-                            "DELETE FROM nexus_ledger.examples "
-                            "WHERE person_keys @> ARRAY[$1]::text[]", person_key)
-                        remaining += await conn.fetchval(
-                            "SELECT count(*) FROM nexus_ledger.examples "
-                            "WHERE person_keys @> ARRAY[$1]::text[]", person_key)
-                else:
-                    _people, domains = await _insights_scope(conn, "person_key = $1", person_key)
+                elif store == "training":
                     deleted = await conn.execute(
-                        "DELETE FROM nexus_ledger.facts WHERE person_key = $1", person_key)
-                    await conn.execute(
+                        "DELETE FROM nexus_ledger.events WHERE person_keys @> ARRAY[$1]::text[] "
+                        "OR event_id = ANY($2::text[])", person_key, event_ids)
+                    deleted += " " + await conn.execute(
+                        "DELETE FROM nexus_ledger.examples WHERE person_keys @> ARRAY[$1]::text[] "
+                        "OR source_event_ids && $2::text[]", person_key, event_ids)
+                    remaining = await conn.fetchval(
+                        "SELECT (SELECT count(*) FROM nexus_ledger.events "
+                        "        WHERE person_keys @> ARRAY[$1]::text[] "
+                        "        OR event_id = ANY($2::text[])) "
+                        "+ (SELECT count(*) FROM nexus_ledger.examples "
+                        "   WHERE person_keys @> ARRAY[$1]::text[] "
+                        "   OR source_event_ids && $2::text[])", person_key, event_ids)
+                else:
+                    where = "person_key = $1 OR event_id = ANY($2::text[])"
+                    people, domains = await _insights_scope(conn, where, person_key, event_ids)
+                    deleted = await conn.execute(
+                        f"DELETE FROM nexus_ledger.facts WHERE {where}", person_key, event_ids)
+                    deleted += " " + await conn.execute(
                         "DELETE FROM nexus_ledger.person_profiles WHERE person_key = $1",
                         person_key)
-                    # The company they worked at still has a profile; it must stop counting them.
-                    await _reprofile(conn, [], domains)
+                    # Everyone else whose facts went, and the companies they worked at, are
+                    # recomputed from what is left, so no profile keeps counting what is gone.
+                    await _reprofile(conn, people, domains)
                     remaining = await conn.fetchval(
-                        "SELECT (SELECT count(*) FROM nexus_ledger.facts WHERE person_key = $1) "
+                        f"SELECT (SELECT count(*) FROM nexus_ledger.facts WHERE {where}) "
                         "+ (SELECT count(*) FROM nexus_ledger.person_profiles "
-                        "   WHERE person_key = $1)", person_key)
+                        "   WHERE person_key = $1)", person_key, event_ids)
                 report["deleted"][store] = _rows(deleted)
                 report["remaining"][store] = int(remaining or 0)
         except StoreNotConfigured:
@@ -115,10 +149,52 @@ async def erase_person(person_key: str) -> dict:
     return report
 
 
-async def _insights_scope(conn, where: str, value: str) -> tuple[list[str], list[str]]:
+async def _outbox_erase(erasure_key: str, report: dict) -> None:
+    """Delete every outbox row naming this person, then look again and count what is left.
+
+    Rows are resolved exactly as the shipper resolves them, so "names this person" means the same
+    thing here as at shipping. The second pass is the evidence; a row recorded between the two is
+    counted rather than missed (and the shipper drops it anyway)."""
+    from sqlalchemy import select
+
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.engagement.ledger import erasures
+    from nexus.engagement.ledger import resolve as resolver
+    from nexus.models.ledger import LedgerOutbox
+
+    blocked = {erasure_key}
+
+    async def sweep(delete: bool) -> int:
+        found, last_id = 0, ""
+        async with get_platform_sessionmaker()() as session:
+            while True:
+                rows = (await session.execute(
+                    select(LedgerOutbox).where(LedgerOutbox.id > last_id)
+                    .order_by(LedgerOutbox.id).limit(500)
+                )).scalars().all()
+                if not rows:
+                    break
+                for row in rows:
+                    envelope = row.payload or {}
+                    resolved = (await resolver.resolve(session, envelope)).as_dict()
+                    if erasures.names_anyone(blocked, envelope, resolved):
+                        found += 1
+                        if delete:
+                            await session.delete(row)
+                last_id = rows[-1].id
+                if delete:
+                    await session.commit()
+        return found
+
+    report["deleted"]["outbox"] = await sweep(delete=True)
+    report["remaining"]["outbox"] = await sweep(delete=False)
+
+
+async def _insights_scope(conn, where: str, *values) -> tuple[list[str], list[str]]:
     """Whose profiles this delete will invalidate, read BEFORE the rows go."""
     rows = await conn.fetch(
-        f"SELECT DISTINCT person_email, company_domain FROM nexus_ledger.facts WHERE {where}", value)
+        f"SELECT DISTINCT person_email, company_domain FROM nexus_ledger.facts WHERE {where}",
+        *values)
     return ([r["person_email"] for r in rows if r["person_email"]],
             [r["company_domain"] for r in rows if r["company_domain"]])
 

@@ -290,6 +290,64 @@ async def test_erasing_a_person_takes_their_rows_and_leaves_the_company_profile_
             "SELECT sends FROM nexus_ledger.company_profiles WHERE company_domain = 'acme.io'") == 1
 
 
+async def test_erasing_a_cc_d_colleague_takes_every_row_built_from_events_that_name_them(stores):
+    """2026-10-14: an archive row is keyed by everyone it names, and erasure deletes what was built
+    from it too. Priya was never a contact, only Cc'd in the text of an email to Jane; before, she
+    could not be found at all, and Jane's training example kept the body that named her."""
+    from nexus.engagement.ledger import builder, deletion, shipper
+    from nexus.engagement.ledger.pseudonym import person_key
+
+    await _apply_all()
+    await _seed_records()
+    await _outbox("message.sent", {"subject": "Hi", "body": "Hi Jane, looping in priya@acme.io",
+                                   "step_index": 0},
+                  {"message_id": "m-1", "contact_id": "c-1"}, "ev-cc")
+    await _outbox("message.sent", {"subject": "Hi", "body": "Hi Jane", "step_index": 1},
+                  {"message_id": "m-2", "contact_id": "c-1"}, "ev-plain")
+    assert (await shipper.ship())["shipped"] == 2
+    assert (await builder.build())["built"] == 2
+    assert await _count("training",
+                        "SELECT count(*) FROM nexus_ledger.examples "
+                        "WHERE 'ev-cc' = ANY(source_event_ids)") >= 1
+
+    report = await deletion.erase_person(person_key(SECRET, "priya@acme.io"))
+    assert report["event_ids"] == ["ev-cc"], report
+    assert report["remaining"] == {"archive": 0, "training": 0, "insights": 0}, report
+    assert await _count("archive", "SELECT count(*) FROM nexus_ledger.events") == 1
+    assert await _count("training", "SELECT count(*) FROM nexus_ledger.events "
+                                    "WHERE event_id = 'ev-cc'") == 0
+    assert await _count("training", "SELECT count(*) FROM nexus_ledger.examples "
+                                    "WHERE 'ev-cc' = ANY(source_event_ids)") == 0
+    assert await _count("insights", "SELECT count(*) FROM nexus_ledger.facts "
+                                    "WHERE event_id = 'ev-cc'") == 0
+    # Jane's profile is recomputed from what is left: one send, not two.
+    assert await _count("insights", "SELECT sends FROM nexus_ledger.person_profiles "
+                                    "WHERE person_email = 'jane.buyer@acme.io'") == 1
+
+
+async def test_an_erased_person_is_neither_shipped_nor_built_again(stores):
+    from nexus.engagement.ledger import builder, erasures, shipper
+
+    await _apply_all()
+    await _seed_records()
+    await _outbox("message.sent", {"subject": "Hi", "body": "Hi Jane"},
+                  {"message_id": "m-1", "contact_id": "c-1"}, "ev-before")
+    assert (await shipper.ship())["shipped"] == 1
+    await erasures.record_request("jane.buyer@acme.io", person_key="", user_id=None)
+
+    # Built after the request, from a row archived before it (the erasure job has not run yet):
+    # skipped, so the race cannot write her back into training.
+    assert (await builder.build())["erased"] == 1
+    assert await _count("training", "SELECT count(*) FROM nexus_ledger.events") == 0
+
+    # Recorded after the request: deleted from the outbox, never archived.
+    await _outbox("message.sent", {"subject": "Hi", "body": "Hi again"},
+                  {"message_id": "m-2", "contact_id": "c-1"}, "ev-after")
+    assert await shipper.ship() == {"shipped": 0, "erased": 1}
+    assert await _count("archive", "SELECT count(*) FROM nexus_ledger.events "
+                                   "WHERE event_id = 'ev-after'") == 0
+
+
 async def test_a_store_that_refuses_leaves_the_rows_to_retry_with_backoff(stores):
     from nexus.core.config import get_settings
     from nexus.core.db import get_platform_sessionmaker

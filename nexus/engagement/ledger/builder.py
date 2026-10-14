@@ -13,6 +13,10 @@ example looks exactly like a workspace that did not send that day.
 Profiles are RECOMPUTED from the facts that remain for each person touched, never incremented. An
 erasure or a workspace deletion removes facts, and a counter would keep describing data we no longer
 hold.
+
+An archive row that names an erased person is skipped (``erasures.py``). The erasure deletes those
+rows, but a batch read a moment before it ran would otherwise write them back into training and
+insights a moment after.
 """
 from __future__ import annotations
 
@@ -57,9 +61,12 @@ async def build_once(limit: int = BATCH) -> dict:
     if not rows:
         return {"built": 0}
 
+    from nexus.engagement.ledger import erasures
     from nexus.engagement.ledger.shipper import open_document
 
+    blocked = await erasures.blocked_keys()
     events, examples, patches, facts, categories = [], [], [], [], []
+    erased = 0
     for row in rows:
         try:
             document = open_document(secret, row["sealed"])
@@ -67,6 +74,10 @@ async def build_once(limit: int = BATCH) -> dict:
             # An unreadable row is almost always a rotated secret. Skipping keeps the rest of the
             # batch moving; the watermark still advances, and the archive row is the evidence.
             logger.warning("ledger archive row %s could not be opened", row["event_id"])
+            continue
+        if erasures.names_anyone(blocked, document.get("envelope") or {},
+                                 document.get("resolved") or {}):
+            erased += 1
             continue
         built = datasets.build(document, secret)
         if built.event:
@@ -80,11 +91,11 @@ async def build_once(limit: int = BATCH) -> dict:
     touched = await _write_insights(facts, categories)
     await _advance(rows[-1]["archived_at"], rows[-1]["event_id"])
     return {"built": len(rows), "examples": len(examples), "patches": len(patches),
-            "facts": len(facts), "profiles": touched}
+            "facts": len(facts), "profiles": touched, "erased": erased}
 
 
 async def build(max_batches: int = MAX_BATCHES) -> dict:
-    total = {"built": 0, "examples": 0, "facts": 0, "profiles": 0}
+    total = {"built": 0, "examples": 0, "facts": 0, "profiles": 0, "erased": 0}
     for _ in range(max_batches):
         result = await build_once()
         if result.get("skipped"):

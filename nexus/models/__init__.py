@@ -51,7 +51,7 @@ from nexus.models.engagement import (
     ReplyClassification,
     SequenceTemplate,
 )
-from nexus.models.ledger import LedgerOutbox, TrainingConsent
+from nexus.models.ledger import LedgerErasure, LedgerOutbox, TrainingConsent
 from nexus.models.network import (
     NetworkEdge,
     NetworkIdentity,
@@ -132,6 +132,7 @@ __all__ = [
     "DoNotContact",
     "TrainingConsent",
     "LedgerOutbox",
+    "LedgerErasure",
     "NetworkSourceAccount",
     "NetworkPerson",
     "NetworkIdentity",

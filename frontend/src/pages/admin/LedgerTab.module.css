@@ -79,3 +79,29 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* The three connection strings, one per line, no wider than a readable form. */
+.connection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 40rem;
+}
+.erasures {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.erasure {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}

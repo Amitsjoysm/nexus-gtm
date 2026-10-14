@@ -292,16 +292,19 @@ async def _erase_from_ledger(email: str) -> None:
     """The same request reaches the ledger stores (spec §18.6). Never raises: the person's
     record here is already gone, and failing the erasure would leave it.
 
-    The job carries the person KEY, never the address: a dead-lettered job logs its payload."""
+    The job carries the person's KEYS, never the address: a dead-lettered job logs its payload.
+    Queued even without the ledger's pseudonymisation secret: the erasure key needs only the
+    deployment secret, and it is what clears the outbox and stops the person being shipped later."""
     if not email:
         return
     try:
         from nexus.engagement import config
+        from nexus.engagement.ledger.erasures import erasure_key
         from nexus.engagement.ledger.pseudonym import person_key
         from nexus.workers.tasks import enqueue_ledger_erase_person
 
         secret = await config.pseudonym_secret()
-        if secret:
-            await enqueue_ledger_erase_person(person_key(secret, email))
+        await enqueue_ledger_erase_person(person_key(secret, email) if secret else "",
+                                          erasure_key=erasure_key(email))
     except Exception:
         logger.warning("could not queue the ledger erasure", exc_info=True)
