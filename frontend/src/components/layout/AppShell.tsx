@@ -59,6 +59,12 @@ export function AppShell() {
     document.title = title === APP_NAME ? APP_NAME : `${title} · ${APP_NAME}`;
   }, [location.pathname, title]);
 
+  // Leaving the app (signing out) must not leave the last page's name on the login screen's tab:
+  // it read "Billing · InfoJoy GTM" on /login.
+  useEffect(() => () => {
+    document.title = APP_NAME;
+  }, []);
+
   function toggleCollapse() {
     setCollapsed((c) => {
       const next = !c;

@@ -14,6 +14,7 @@ import ssl
 from dataclasses import dataclass
 from email import policy
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 
 logger = logging.getLogger("nexus.integrations.email_sender")
 
@@ -147,6 +148,14 @@ def _build_message(
     msg["From"] = f'{cfg["from_name"]} <{from_addr}>' if cfg["from_name"] else from_addr
     msg["To"] = to
     msg["Subject"] = subject
+    # RFC 5322 requires Date, and a message with no Date or Message-ID is scored as spam. Found
+    # 2026-10-14 by capturing a signup code on the wire: it carried neither. Gmail's submission
+    # server adds both; Zoho, SES and a plain relay need not, so the codes and reset links sent
+    # through them were the ones landing in spam. The id is on the SENDER's domain, as the
+    # engagement sender does it (`engagement/sending/mime.py`), never this container's host name.
+    msg["Date"] = formatdate(localtime=True)
+    domain = from_addr.rsplit("@", 1)[-1].strip() if "@" in (from_addr or "") else ""
+    msg["Message-ID"] = make_msgid(domain=domain or None)
     msg.set_content(body or "")
     if html:
         msg.add_alternative(html, subtype="html")

@@ -136,6 +136,20 @@ async def test_signup_and_a_password_reset_arrive_through_the_account_mailbox(
     assert r.status_code == 200, r.text
 
 
+def test_account_mail_carries_a_date_and_a_message_id_on_the_senders_domain():
+    """Captured on the wire 2026-10-14: a signup code went out with neither header. RFC 5322
+    requires Date and spam filters score both missing; only Gmail's server filled them in."""
+    from email.utils import parsedate_to_datetime
+
+    from nexus.integrations.email_sender import _build_message, resolve_smtp
+
+    cfg = resolve_smtp({"provider": "smtp", "host": "smtp.zoho.com", "port": 465,
+                        "from_email": "no-reply@mail-co.com", "from_name": "InfoJoy GTM"})
+    msg = _build_message(cfg, "ada@mail-co.com", "Your code", "123456")
+    assert parsedate_to_datetime(msg["Date"]).tzinfo is not None
+    assert msg["Message-ID"].startswith("<") and msg["Message-ID"].endswith("@mail-co.com>")
+
+
 async def test_gmail_still_needs_only_a_sign_in_and_password(client, mailbox, smtp_wire):
     r = await client.post("/api/auth/register/start", json=_BODY)
     assert r.status_code == 202, r.text
