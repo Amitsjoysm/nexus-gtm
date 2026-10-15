@@ -248,7 +248,12 @@ async def _probe_search() -> tuple[str, str]:
     # staging/prod). One line used to report `signal or global`, which after 2026-09-10 would have
     # claimed signals ran on Exa.
     discovery = "exa (strict)" if settings.env in ("staging", "prod") else settings.search_provider
-    return OK, f"signals={signal_search_choice()} discovery={discovery}"
+    # What the searches DID, from the crawl history (2026-10-15). This used to stop at the line
+    # above and return OK, so eight days of Firecrawl answering 402 read as healthy.
+    from nexus.ingestion.health import search_health
+
+    status, evidence = await search_health()
+    return status, f"signals={signal_search_choice()} discovery={discovery}; {evidence}"
 
 
 async def _probe_enforcement() -> tuple[str, str]:
