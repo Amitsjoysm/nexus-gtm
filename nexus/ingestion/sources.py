@@ -281,6 +281,21 @@ class RawSignal:
         return SIGNAL_LIBRARY.get(self.kind, {}).get("default_strength", 0.5)
 
 
+class SourceUnavailable(Exception):
+    """The backend a source searches with failed, and the source found nothing (2026-10-15).
+
+    Raised rather than returning ``[]``: an empty list is also what a quiet account returns, and
+    the crawl history recorded every Firecrawl outage as ``empty`` for days. The run recorder turns
+    this into an ``error`` run, carrying the source's ``provenance`` for that call, because the
+    source's own ``last_provenance`` is shared by every account the concurrent worker has in flight.
+    A source that found something before its backend failed returns what it found instead.
+    """
+
+    def __init__(self, reason: str, *, provenance: dict | None = None) -> None:
+        super().__init__(reason)
+        self.provenance = dict(provenance or {})
+
+
 class SignalSource(abc.ABC):
     name: str
 
@@ -574,8 +589,12 @@ class WebNewsSource(SignalSource):
         query = f'{name} {industry} (funding OR hiring OR launches OR partnership OR acquisition)'
         try:
             hits = await self.browser.search(query.strip(), limit=6) or []
-        except Exception:  # a flaky search must not break ingestion
-            hits = []
+            failure = str(getattr(self.browser, "last_failure", "") or "")
+        except Exception as exc:  # a flaky search must not break ingestion
+            hits, failure = [], f"search raised {type(exc).__name__}: {exc}"[:300]
+        if not hits and failure:
+            # Not an empty run (2026-10-15): DuckDuckGo answering 403 read as "no news" for days.
+            raise SourceUnavailable(failure, provenance={"provider_failure": failure})
 
         out: list[RawSignal] = []
         seen: set[str] = set()
@@ -705,9 +724,6 @@ class DorkedSearchSource(SignalSource):
         # `timeout_s` below computes it from the cap in force, so a changed cap moves the budget.
         # Read by IngestionService after each fetch and stored on the crawl-history row.
         self.last_provenance: dict = {}
-        #: Whether the last `_run` was served from `web_cache` rather than bought, for provenance
-        #: and so a stale provider failure is not mistaken for this query's outcome.
-        self._last_run_cached = False
 
     @property
     def _max_queries(self) -> int:
@@ -764,8 +780,13 @@ class DorkedSearchSource(SignalSource):
         return self._search
 
     async def _run(self, query: str, include: tuple, exclude: tuple,
-                   *, kind: str = "") -> list[dict] | None:
-        """Hits for one dork, or None if the provider itself failed.
+                   *, kind: str = "") -> tuple[list[dict] | None, bool, str]:
+        """``(hits, cached, failure)`` for one dork; hits is None if the provider itself raised.
+
+        All three describe THIS call (2026-10-15). They were attributes on the source and its
+        provider, both shared by every account the concurrent worker has in flight, so one account
+        could be recorded with another's cached flag or provider failure. ``failure`` is read
+        straight after the provider's own await, before anything else can run.
 
         None is not the same as no results, and the caller treats it differently: the keyless
         DuckDuckGo backend starts returning 403 after roughly ten rapid queries, and continuing to
@@ -788,9 +809,7 @@ class DorkedSearchSource(SignalSource):
         engine = getattr(provider, "name", "unknown")
         cached = await cache.get("search", query, engine=engine, limit=self._per_query)
         if cached is not None:
-            self._last_run_cached = True
-            return list(cached)
-        self._last_run_cached = False
+            return list(cached), True, ""
         try:
             hits = await provider.search_recent(
                 query,
@@ -799,6 +818,7 @@ class DorkedSearchSource(SignalSource):
                 include_domains=include,
                 exclude_domains=exclude,
             )
+            failure = str(getattr(provider, "last_failure", "") or "")
         except TypeError:
             # An injected double or an older provider without the structured-domain kwargs. The
             # keyword dialect already carries the domains inline, so this loses nothing there.
@@ -806,22 +826,23 @@ class DorkedSearchSource(SignalSource):
                 hits = await provider.search_recent(
                     query, limit=self._per_query, days=self._recency_days
                 )
-            except Exception:
+                failure = str(getattr(provider, "last_failure", "") or "")
+            except Exception as exc:
                 logger.warning("dork search failed: %s", query, exc_info=True)
-                return None
-        except Exception:
+                return None, False, f"search raised {type(exc).__name__}: {exc}"[:300]
+        except Exception as exc:
             logger.warning("dork search failed: %s", query, exc_info=True)
-            return None
+            return None, False, f"search raised {type(exc).__name__}: {exc}"[:300]
         out = []
         for h in hits or []:
             # SearchHit dataclass or a plain dict, depending on the seam an injected double uses.
             out.append(h.as_dict() if hasattr(h, "as_dict") else dict(h))
-        if not getattr(provider, "last_failure", ""):
+        if not failure:
             await cache.put(
                 "search", query, engine=engine, limit=self._per_query,
                 payload=out, ttl_s=ttl_for_signal_kind(kind),
             )
-        return out
+        return out, False, failure
 
     async def fetch(self, account: Account) -> list[RawSignal]:
         from nexus.ingestion.dorks import select_dorks
@@ -840,11 +861,12 @@ class DorkedSearchSource(SignalSource):
         # Provenance for the crawl-history row. Without the rendered queries, "why did this find
         # nothing?" is unanswerable after the fact — the query depends on the account, the date and
         # the provider's dialect, none of which are recoverable from the result.
-        self.last_provenance = {
+        prov: dict = {
             "provider": getattr(provider, "name", "unknown"),
             "dialect": dialect,
             "queries": [],
         }
+        self.last_provenance = prov
         out: list[RawSignal] = []
         seen: set[str] = set()
         for index, dork in enumerate(select_dorks(has_domain=bool(domain), limit=self._max_queries)):
@@ -857,34 +879,25 @@ class DorkedSearchSource(SignalSource):
                 dialect=dialect,
             )
             include, exclude = dork.domains(domain=domain, dialect=dialect)
-            self.last_provenance["queries"].append({"dork": dork.slug, "query": query})
-            hits = await self._run(query, include, exclude, kind=dork.kind)
-            entry = self.last_provenance["queries"][-1]
-            entry["cached"] = self._last_run_cached
+            entry = {"dork": dork.slug, "query": query}
+            prov["queries"].append(entry)
+            hits, cached, failure = await self._run(query, include, exclude, kind=dork.kind)
+            entry["cached"] = cached
             # Who answered, per query, so promoting the self-hosted fetcher is decided on evidence
             # (scripts/fetch_shadow_report.py) rather than on how it felt.
-            entry["answered_by"] = "cache" if self._last_run_cached else (
+            entry["answered_by"] = "cache" if cached else (
                 getattr(provider, "answered_by", "") or getattr(provider, "name", "")
             )
-            if getattr(provider, "shadow", False) and not self._last_run_cached:
+            if getattr(provider, "shadow", False) and not cached:
                 entry["shadow"] = dict(getattr(provider, "shadow_report", {}) or {})
-            if hits is None:
-                self.last_provenance["queries"][-1]["failed"] = True
-                # The provider failed, not the query. Stop: the rest of the batch would fail too,
-                # and on a rate-limited backend each extra request extends the block.
-                break
-            # A CONDEMNED KEY POOL RETURNS `[]`, NOT `None`, so the check above never fired for it
-            # and the run was recorded as `empty` — the same thing an account with no news records.
-            # Observed live: three Firecrawl keys at 402, every dork run "empty" for days, the
-            # reason only in a log line. Recorded here because the crawl-history row is the
-            # operator's surface for this, and stop for the same reason as above: the remaining
-            # queries are billed calls against a pool already known to be dead.
-            # A cached answer never reached the provider, so a failure it recorded on an EARLIER
-            # call says nothing about this one; reading it would abort a crawl that bought nothing.
-            failure = "" if self._last_run_cached else str(getattr(provider, "last_failure", "") or "")
-            if failure:
-                self.last_provenance["provider_failure"] = failure
-                self.last_provenance["queries"][-1]["failed"] = True
+            # A provider that raised (None) or stated a failure ([] with `last_failure`, e.g. a
+            # condemned or rate-limited pool) failed, not the query. Stop: the rest of the batch
+            # would fail too, each extra request is a billed call or extends a block, and the
+            # crawl-history row is the operator's surface for it. A cached answer never reached the
+            # provider, so `_run` reports no failure for it.
+            if hits is None or failure:
+                prov["provider_failure"] = failure or "the search raised"
+                entry["failed"] = True
                 break
             for hit in hits:
                 signal = self._to_signal(dork, hit, account=account, anchor=anchor, now=now,
@@ -893,6 +906,8 @@ class DorkedSearchSource(SignalSource):
                     out.append(signal)
                     if len(out) >= self._max_signals:
                         return out
+        if not out and prov.get("provider_failure"):
+            raise SourceUnavailable(prov["provider_failure"], provenance=prov)
         return out
 
     def _to_signal(self, dork, hit: dict, *, account: Account, anchor: str,

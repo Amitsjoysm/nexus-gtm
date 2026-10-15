@@ -68,10 +68,16 @@ async def crawl_company(company, *, sources=None) -> dict:
         stand_in = _as_account(company)
         timeout = get_settings().source_timeout_s
         collected = []
+        from nexus.ingestion.sources import SourceUnavailable
+
         for src in sources:
             try:
                 budget = getattr(src, "timeout_s", None) or timeout
                 collected.extend(await asyncio.wait_for(src.fetch(stand_in), timeout=budget))
+            except SourceUnavailable as exc:
+                # A dead or rate-limited backend, not a bug: one line, as the per-tenant path logs it.
+                logger.warning("shared crawl source %s unavailable for %s: %s",
+                               getattr(src, "name", src), company.domain, exc)
             except Exception:
                 # Per-source isolation, same as the per-tenant service: one dead provider must not
                 # cost the signals the others found.

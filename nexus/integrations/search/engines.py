@@ -81,6 +81,11 @@ def _exa_num_results(limit: int) -> int:
     return max(1, min(int(limit), _EXA_MAX_RESULTS))
 
 
+def _stated_failure(text: str) -> str:
+    """A failure as `last_failure` carries it: one line, short enough for a crawl-history row."""
+    return " ".join(str(text).split())[:300]
+
+
 def _bare_domain(value: str) -> str:
     """``https://www.Acme.com/about`` -> ``acme.com``: enough to compare a hit with a domain."""
     raw = (value or "").strip().lower().split("://", 1)[-1]
@@ -296,7 +301,12 @@ class ExaSearchProvider(SearchProvider):
                     backoff_used += 1
                     continue
                 resp.raise_for_status()
-                return self._parse(resp.json(), limit)
+                hits = self._parse(resp.json(), limit)
+                # Re-stated on the way out, not only cleared at the top: one provider serves every
+                # account the concurrent worker has in flight, so the flag a caller reads straight
+                # after its own await must describe ITS call (_stated_failure below).
+                self.last_failure = ""
+                return hits
             except Exception as exc:  # network / anti-bot / HTTP — retry, then degrade gracefully
                 if backoff_used < len(_RETRY_BACKOFFS):
                     await asyncio.sleep(_RETRY_BACKOFFS[backoff_used])
@@ -304,8 +314,11 @@ class ExaSearchProvider(SearchProvider):
                     continue
                 logger.warning("Exa request to %s failed after %d attempts: %r",
                                endpoint, attempt + 1, exc)
+                self.last_failure = _stated_failure(f"request failed after {attempt + 1} "
+                                                    f"attempts: {exc!r}")
                 return []
         logger.warning("Exa %s: %d-key pool + retries all rate-limited", endpoint, len(keys))
+        self.last_failure = f"{len(keys)}-key pool rate-limited after retries"
         return []
 
     def _parse(self, data: dict, limit: int) -> list[SearchHit]:
@@ -602,15 +615,22 @@ class FirecrawlSearchProvider(SearchProvider):
                     backoff_used += 1
                     continue
                 resp.raise_for_status()
-                return self._parse(resp.json(), limit)
+                hits = self._parse(resp.json(), limit)
+                self.last_failure = ""      # this call's outcome; see ExaSearchProvider._post
+                return hits
             except Exception as exc:
                 if backoff_used < len(_RETRY_BACKOFFS):
                     await asyncio.sleep(_RETRY_BACKOFFS[backoff_used])
                     backoff_used += 1
                     continue
                 logger.warning("Firecrawl search failed after %d attempts: %r", attempt + 1, exc)
+                self.last_failure = _stated_failure(f"request failed after {attempt + 1} "
+                                                    f"attempts: {exc!r}")
                 return []
         logger.warning("Firecrawl: %d-key pool + retries all rate-limited", len(keys))
+        # STATED, like a condemned pool (2026-10-15). Returned bare, this was cached as "no
+        # results" for the whole TTL: measured, 1,016 cached Firecrawl answers, every one empty.
+        self.last_failure = f"{len(keys)}-key pool rate-limited after retries"
         return []
 
     def _parse(self, data: dict, limit: int) -> list[SearchHit]:

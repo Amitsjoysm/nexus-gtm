@@ -136,14 +136,20 @@ async def test_an_account_with_no_name_yields_nothing():
 
 
 async def test_a_dead_search_provider_yields_no_signals():
-    """Never raises across the boundary: a broken provider costs signals, not ingestion."""
+    """A broken provider costs signals, not ingestion. The source says so (2026-10-15: an empty
+    list read as a quiet market), and the run recorder, which is the boundary, never raises."""
+    from nexus.ingestion.service import IngestionService
+    from nexus.ingestion.sources import SourceUnavailable
 
     class Broken:
         async def search_recent(self, query, *, limit=5, days=90):
             raise RuntimeError("provider down")
 
     src = DorkedSearchSource(search=Broken(), max_queries=3)
-    assert await src.fetch(_account()) == []
+    with pytest.raises(SourceUnavailable, match="provider down"):
+        await src.fetch(_account())
+    items, run = await IngestionService([src])._run_one(_account(), src, 8.0)
+    assert items == [] and run["outcome"] == "error"
 
 
 # ---- precision ------------------------------------------------------------------------------
@@ -540,14 +546,17 @@ async def test_a_condemned_key_pool_is_recorded_not_reported_as_empty():
                                 exclude_domains=None):
             return []
 
-    src = DorkedSearchSource(search=_DeadPool(), max_queries=4)
-    out = await src.fetch(Account(name="Vanta", domain="vanta.com"))
+    from nexus.ingestion.sources import SourceUnavailable
 
-    assert out == []
-    assert "402" in str(src.last_provenance.get("provider_failure", "")), (
-        f"the dead pool is invisible in the crawl history: {src.last_provenance}"
+    src = DorkedSearchSource(search=_DeadPool(), max_queries=4)
+    with pytest.raises(SourceUnavailable) as raised:
+        await src.fetch(Account(name="Vanta", domain="vanta.com"))
+
+    prov = raised.value.provenance
+    assert "402" in str(prov.get("provider_failure", "")), (
+        f"the dead pool is invisible in the crawl history: {prov}"
     )
-    assert len(src.last_provenance["queries"]) == 1, (
+    assert len(prov["queries"]) == 1, (
         "kept spending billed queries against a pool it already knew was condemned"
     )
 

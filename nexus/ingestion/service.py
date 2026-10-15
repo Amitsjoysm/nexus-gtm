@@ -11,7 +11,7 @@ from nexus.core.config import get_settings
 from nexus.core.db import utcnow
 from nexus.core.events import Event, get_event_bus
 from nexus.core.tenancy import TenantSession
-from nexus.ingestion.sources import RawSignal, SignalSource
+from nexus.ingestion.sources import RawSignal, SignalSource, SourceUnavailable
 from nexus.models.account import Account
 from nexus.models.signal import SIGNAL_KINDS, SignalEvent
 
@@ -212,6 +212,7 @@ class IngestionService:
         clock = time.perf_counter()
         outcome, error, found = "ok", "", 0
         items: list = []
+        provenance: dict | None = None
         try:
             items = await asyncio.wait_for(src.fetch(account), timeout=timeout)
             found = len(items)
@@ -221,6 +222,13 @@ class IngestionService:
         except asyncio.TimeoutError:
             outcome, error = "timeout", f"timed out after {timeout:.1f}s"
             logger.warning("signal source %s timed out after %.1fs", name, timeout)
+        except SourceUnavailable as exc:
+            # Its backend failed (a dead or rate-limited key pool, a refused search): an `error`,
+            # never the `empty` of a quiet market (2026-10-15). One line, no traceback: this is an
+            # outage report, not a bug, and it repeats for every account until the keys are fixed.
+            outcome, error = "error", f"provider unavailable: {exc}"[:2000]
+            provenance = exc.provenance or provenance
+            logger.warning("signal source %s: provider unavailable: %s", name, exc)
         except Exception as exc:  # a broken source must not stop ingestion
             outcome, error = "error", f"{type(exc).__name__}: {exc}"[:2000]
             logger.warning("signal source %s failed", name, exc_info=True)
@@ -230,7 +238,7 @@ class IngestionService:
             "items_found": found,
             "error": error,
             "duration_ms": round((time.perf_counter() - clock) * 1000, 2),
-            "provenance": dict(getattr(src, "last_provenance", {}) or {}),
+            "provenance": dict(provenance or getattr(src, "last_provenance", {}) or {}),
             "started_at": started,
             "finished_at": utcnow(),
         }

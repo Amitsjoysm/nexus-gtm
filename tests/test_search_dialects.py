@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from nexus.ingestion.dorks import DORKS, DORKS_BY_SLUG
 from nexus.ingestion.sources import DorkedSearchSource
 from nexus.models.account import Account
@@ -117,7 +119,10 @@ async def test_it_stops_the_batch_when_the_provider_itself_fails():
             calls.append(query)
             raise RuntimeError("403 Forbidden")
 
-    await DorkedSearchSource(search=Refusing(), max_queries=4).fetch(_account())
+    from nexus.ingestion.sources import SourceUnavailable
+
+    with pytest.raises(SourceUnavailable):
+        await DorkedSearchSource(search=Refusing(), max_queries=4).fetch(_account())
     assert len(calls) == 1, "the batch must stop after the first provider failure"
 
 

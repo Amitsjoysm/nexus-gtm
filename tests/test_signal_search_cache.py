@@ -6,6 +6,8 @@ the whole TTL, and the account would report "no signals" long after the key was 
 """
 from __future__ import annotations
 
+import pytest
+
 from nexus.ingestion.sources import DorkedSearchSource
 from nexus.integrations.search.provider import SearchHit
 from nexus.models.account import Account
@@ -66,11 +68,14 @@ async def test_a_failed_search_is_not_cached():
             self.queries.append(query)
             return []
 
+    from nexus.ingestion.sources import SourceUnavailable
+
     provider = FailingProvider()
     source = DorkedSearchSource(search=provider, max_queries=1)
 
-    await source.fetch(_account())
-    await source.fetch(_account())
+    for _ in range(2):
+        with pytest.raises(SourceUnavailable):
+            await source.fetch(_account())
 
     assert len(provider.queries) == 2, "an outage was cached and replayed as 'no results'"
 

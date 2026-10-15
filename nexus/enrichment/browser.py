@@ -44,6 +44,10 @@ def _resolve_ddg_url(href: str) -> str:
 
 
 class BrowserProvider(abc.ABC):
+    #: Why the LAST search returned nothing, or "" when it answered (2026-10-15). An empty list is
+    #: also what a quiet query returns, so without this a refused search reads as no news.
+    last_failure: str = ""
+
     @abc.abstractmethod
     async def search(self, query: str, *, limit: int = 5) -> list[dict]: ...
 
@@ -67,7 +71,11 @@ class DuckDuckGoSearch(BrowserProvider):
                 body = resp.text
         except Exception as exc:  # network/anti-bot — degrade gracefully
             logger.warning("DuckDuckGo search failed: %r", exc)
+            # Set on the way out, as the search engines do: one browser serves every account in
+            # flight, and the caller reads this straight after its own await.
+            self.last_failure = " ".join(f"DuckDuckGo search failed: {exc!r}".split())[:300]
             return []
+        self.last_failure = ""
 
         results: list[dict] = []
         snippets = _SNIPPET.findall(body)
