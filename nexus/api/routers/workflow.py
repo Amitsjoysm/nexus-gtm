@@ -154,11 +154,12 @@ async def ingest_account(
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> dict:
-    """Scan one account's signal sources now, charged as one ``signal.news_scan`` (2026-10-15).
+    """Scan one account's signal sources now, RECORDED as one ``signal.news_scan`` (2026-10-15).
 
-    The scheduled refresh is the platform's own work and stays uncharged; this is a person asking
-    for the same searches on demand, which ran free. Asked before the searches are bought, charged
-    after, once per scan whatever it found: the searches were bought either way."""
+    Recorded, not charged (decided with the product owner): ``signal.news_scan`` is observe-only in
+    the catalog, so the usage row says what a manual scan costs us and burns no credits. People scan
+    through Refresh now, which is charged as an orchestration run; this endpoint has no screen.
+    ``preflight`` still runs first, so a switched-off capability is refused before any search."""
     from nexus.billing.entitlements import preflight
     from nexus.billing.meter import metered
 
@@ -177,7 +178,7 @@ async def ingest_account(
     return {"account_id": account_id, "new_signals": [s.id for s in signals]}
 
 
-#: What a scan a person asks for is charged as.
+#: What a scan a person asks for is recorded as (observe-only: no credits).
 MANUAL_SCAN_CAPABILITY = "signal.news_scan"
 
 

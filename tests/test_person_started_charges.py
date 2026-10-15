@@ -1,13 +1,15 @@
-"""A search a person starts is charged, once, and asked about before it is bought (2026-10-15).
+"""Searches a person starts are metered once and asked about before they are bought (2026-10-15).
 
 Decided with the product owner: charge the web searches and signal scans a person triggers when no
 other priced action already covers them, and leave the platform's own scheduled work uncharged.
-Two endpoints ran paid searches for a person and charged nothing:
+Two endpoints ran paid searches for a person and metered nothing:
 
 - ``POST /relevance/analyze-website``, priced all along as ``ai.icp_from_website`` and charged only
   by the chat path's ICP save. Charged once per draft that found something; an empty draft is our
   failure and costs nothing.
-- ``POST /ingest/{account_id}``, the on-demand signal scan, charged as one ``signal.news_scan``.
+- ``POST /ingest/{account_id}``, the on-demand signal scan, RECORDED as one ``signal.news_scan``.
+  That capability is observe-only in the catalog, so the row burns no credits (decided with the
+  product owner: people scan through Refresh now, which is charged; this endpoint has no screen).
 
 Both ask ``preflight`` first, so a capability that is switched off is refused before any search.
 """
@@ -100,7 +102,7 @@ async def test_a_switched_off_analysis_is_refused_before_any_search(client, monk
     assert await _charges(token, "ai.icp_from_website") == []
 
 
-async def test_a_scan_a_person_asks_for_is_one_news_scan(client):
+async def test_a_scan_a_person_asks_for_is_recorded_as_one_news_scan(client):
     token = await signup(client, slug="pc4", email="o@pc4.com", company="PC4")
     h = auth(token)
     acc = (await client.post("/api/accounts", headers=h, json={

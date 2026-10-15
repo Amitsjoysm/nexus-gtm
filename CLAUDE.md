@@ -1384,10 +1384,12 @@ inert: the production image never installed it. Spec and plan:
 - **Website watch uses both** (`webwatch._get`): cache, then the fetcher, then plain httpx, so a
   deployment without the VM behaves exactly as before. Pages over 1M characters are used, never
   cached.
-- **The scheduled refresh is not metered; a scan a person asks for is** (decided with the product
-  owner 2026-10-14). `signal.news_scan` has no `metered()` call site in `nexus/ingestion/`, so this
-  saving is pure COGS. `POST /ingest/{account_id}` charges one `signal.news_scan`, asked with
-  `preflight` before the searches are bought; `POST /relevance/analyze-website` charges
+- **Signal scans charge no credits** (decided with the product owner 2026-10-15).
+  `signal.news_scan` is observe-only in the catalog (`OBSERVE_ONLY` in
+  `tests/test_rate_card_conformance.py`) and has no `metered()` call site in `nexus/ingestion/`, so
+  this saving is pure COGS. A person scans through Refresh now, charged as
+  `workflow.orchestration_run`; `POST /ingest/{account_id}` (no screen) RECORDS one
+  `signal.news_scan` after a `preflight`. `POST /relevance/analyze-website` charges
   `ai.icp_from_website`, its own price, once per draft that found something
   (`tests/test_person_started_charges.py`).
 
