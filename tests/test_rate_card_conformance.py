@@ -28,9 +28,10 @@ def _priced_actions() -> list[tuple[str, float]]:
 
     Gauges are excluded on purpose: `seat.member` and `platform.storage` resolve to a live count
     rather than to something somebody did, so there is no request to price. They keep a plan limit
-    and are never charged in credits.
+    and are never charged in credits. So are retired capabilities (`catalog.RETIRED`): their
+    cards are switched off with them, and `test_a_retired_capability_charges_nothing` pins that.
     """
-    from nexus.billing.catalog import CAPABILITY_SEED
+    from nexus.billing.catalog import CAPABILITY_SEED, RETIRED
     from nexus.billing.rates import RATE_SEED
 
     kinds = {c["id"]: c.get("meter_kind", "counter") for c in CAPABILITY_SEED}
@@ -39,7 +40,7 @@ def _priced_actions() -> list[tuple[str, float]]:
     for row in RATE_SEED:
         cid = row["capability_id"]
         price = float(row.get("credits_per_unit") or 0)
-        if cid.startswith("module.") or price <= 0:
+        if cid.startswith("module.") or price <= 0 or cid in RETIRED:
             continue
         if kinds.get(cid) == "gauge":
             continue
@@ -60,7 +61,8 @@ def _priced_actions() -> list[tuple[str, float]]:
 # pinned rather than trusted.
 OBSERVE_ONLY = {
     "search.web": "inside the capability that issued the search",
-    "signal.news_scan": "inside the account refresh that ran it",
+    "signal.news_scan": "inside the account refresh that ran it; a scan asked for through "
+                        "POST /ingest is recorded, not charged (decided 2026-10-15)",
     "signal.rss_scan": "inside the account refresh that ran it",
     "signal.stored": "carried by module.signals; storing a signal is not a request",
     "inbox.task": "carried by module.signals; created by ingestion, not requested",
@@ -149,6 +151,22 @@ async def test_every_priced_action_burns_exactly_its_rate_card(enforcing):
             elif abs(spent - price) > 1e-6:
                 wrong.append(f"{cid}: card says {price}, burned {spent}")
     assert not wrong, "rate card not honoured:\n  " + "\n  ".join(wrong)
+
+
+async def test_a_retired_capability_charges_nothing(enforcing):
+    """A retired capability keeps its price in the seed and charges nothing: the feature it priced
+    is gone, and its card is switched off with it (2026-10-14)."""
+    from nexus.billing.catalog import RETIRED
+    from nexus.billing.credits import balance
+    from nexus.billing.entitlements import check_and_meter
+
+    assert RETIRED, "nothing is retired; this test has nothing to check"
+    tid = await _tenant_with_credits()
+    async with tenant_session(tid) as ts:
+        for cid in sorted(RETIRED):
+            before = await balance(ts)
+            await check_and_meter(ts, capability_id=cid, quantity=3, idempotency_key=f"ret:{cid}")
+            assert before - await balance(ts) == 0, f"{cid} is retired and still charged"
 
 
 async def test_the_price_is_linear_in_quantity(enforcing):
