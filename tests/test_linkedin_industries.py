@@ -63,6 +63,50 @@ def test_a_parent_code_covers_its_children_for_database_matching():
     assert 4 not in below
 
 
+# ---- "Technology" is tech companies, not publishers (2026-10-15) ---------------------------------
+#
+# Measured on the local deploy: daily discovery delivered CNN, The Washington Post, The Economist,
+# TIME and Deadline to a workspace whose ICP says "Technology". The term matched LinkedIn's parent
+# "Technology, Information and Media", whose children include newspapers and broadcasters.
+
+#: Newspapers, periodicals, broadcasters, online video, internet news and blogs.
+MEDIA = {81, 82, 36, 113, 3124, 3125}
+
+
+def test_technology_means_tech_companies_not_publishers():
+    ids = match_term("Technology")
+    assert 1594 not in ids, "mapped to the parent that includes publishing and broadcasting"
+    assert {4, 96} <= set(ids)
+    assert not descendants(ids) & MEDIA
+
+
+@pytest.mark.parametrize("term", ["tech", "Information Technology", "Technology Services"])
+def test_other_technology_wordings_stay_out_of_media(term):
+    ids = match_term(term)
+    assert ids, f"{term!r} maps to nothing, so the LLM would guess"
+    assert not descendants(ids) & MEDIA
+
+
+def test_b2b_services_maps_to_professional_services():
+    assert match_term("B2B Services") == [1810]
+
+
+def test_a_parent_whose_label_has_an_ampersand_still_covers_its_children():
+    """The vendored label is "Media & Telecommunications" and its children's paths say "Media and
+    Telecommunications", so the parent covered nothing: an ICP naming it matched no company."""
+    assert {81, 82, 36, 8} <= descendants([3133])
+
+
+async def test_the_measured_icp_maps_without_any_media_code():
+    async def no_llm(term, shortlist):
+        raise AssertionError(f"{term!r} should map without the LLM")
+
+    ids = await map_industries(
+        ["Manufacturing", "SaaS / Software", "Healthcare", "Financial Services", "Technology",
+         "Professional Services", "Energy", "B2B Services"], llm=no_llm)
+    assert not descendants(ids) & MEDIA
+
+
 async def test_the_llm_is_asked_only_for_misses_and_only_from_a_shortlist():
     asked: list[str] = []
 

@@ -59,6 +59,18 @@ SYNONYMS: dict[str, tuple[int, ...]] = {
     "recruitment": (104,),
     "martech": (4,),
     "edtech": (1999,),
+    # "Technology" is tech companies: software, IT services, data (2026-10-15). By whole words it
+    # matched the PARENT "Technology, Information and Media", whose children include newspapers
+    # and broadcasters, and daily discovery delivered CNN and The Washington Post. Not 6
+    # ("Technology, Information and Internet") either: that holds Internet News, Blogs and Online
+    # Audio and Video Media.
+    "technology": (4, 96, 2458),
+    "tech": (4, 96, 2458),
+    "information technology": (96, 4),
+    "technology services": (96,),
+    # Services sold to businesses, which LinkedIn files under Professional Services. Matched no
+    # label, so it went to the LLM and came back different from one save to the next.
+    "b2b services": (1810,),
 }
 
 _WORD = re.compile(r"[a-z0-9]+")
@@ -115,11 +127,13 @@ def descendants(ids) -> set[int]:
 
 @lru_cache(maxsize=256)
 def _descendants(ids: tuple[int, ...]) -> frozenset[int]:
-    wanted = {all_industries()[i].label for i in ids if i in all_industries()}
+    # Compared NORMALISED (2026-10-15): the vendored label is "Media & Telecommunications" while
+    # every child's path says "Media and Telecommunications", so the parent covered nothing.
+    wanted = {_norm(all_industries()[i].label) for i in ids if i in all_industries()}
     out = set(ids)
     for industry in all_industries().values():
-        path = [p.strip() for p in industry.hierarchy.split(">")]
-        if wanted.intersection(path):
+        path = {_norm(p) for p in industry.hierarchy.split(">")}
+        if wanted & path:
             out.add(industry.id)
     return frozenset(out)
 
