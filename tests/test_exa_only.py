@@ -93,6 +93,27 @@ async def test_a_pool_whose_every_key_was_rejected_is_an_error_not_an_empty_answ
         await StrictExaSearch(_Exhausted()).search("x")
 
 
+async def test_a_rate_limited_pool_says_try_again_not_check_the_keys():
+    """Stated since 2026-10-15 (a rate-limited pool returned a bare []), and worded as what it is:
+    Find similar used to answer "no similar companies" while Exa was only busy."""
+    from nexus.integrations.search.provider import SearchUnavailable, StrictExaSearch
+
+    class _Busy:
+        api_keys = ["k1"]
+        last_failure = ""
+
+        async def _refresh_keys(self):
+            pass
+
+        async def search(self, query, *, limit=5):
+            self.last_failure = "1-key pool rate-limited after retries"
+            return []
+
+    with pytest.raises(SearchUnavailable, match="try again") as raised:
+        await StrictExaSearch(_Busy()).search("x")
+    assert "Provider keys" not in str(raised.value)
+
+
 async def test_a_quiet_market_is_still_just_empty():
     """Strict about the BACKEND, not about results: no hits with healthy keys is a real answer."""
     from nexus.integrations.search.provider import StrictExaSearch

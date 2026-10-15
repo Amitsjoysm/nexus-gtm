@@ -350,6 +350,10 @@ class SourceUnavailable(Exception):
 
 class SignalSource(abc.ABC):
     name: str
+    #: Whether a run buys something (a billed search). The daily crawl budget stops only these
+    #: (2026-10-15). True by default, as for enrichment providers, so a new source that spends money
+    #: and forgets to say so stays budgeted rather than becoming unlimited.
+    costs_money: bool = True
 
     @abc.abstractmethod
     async def fetch(self, account: Account) -> list[RawSignal]: ...
@@ -372,6 +376,7 @@ class DemoSignalSource(SignalSource):
     """
 
     name = "demo"
+    costs_money = False   # keyless: the daily crawl budget never stops it
 
     async def fetch(self, account: Account) -> list[RawSignal]:
         out: list[RawSignal] = []
@@ -503,6 +508,7 @@ class RssSignalSource(SignalSource):
     """
 
     name = "rss"
+    costs_money = False   # keyless: the daily crawl budget never stops it
 
     def __init__(self, fetch=None, *, max_items: int = 5) -> None:
         self._fetch = fetch  # async (url) -> str | None ; None = real httpx
@@ -634,6 +640,7 @@ class WebNewsSource(SignalSource):
     """Live source: searches the web for recent news about the account."""
 
     name = "web_news"
+    costs_money = False   # the browser provider is keyless (DuckDuckGo, Scrapling or Cloak)
 
     def __init__(self, browser):
         self.browser = browser
@@ -1068,6 +1075,7 @@ class AtsSignalSource(SignalSource):
     """
 
     name = "ats"
+    costs_money = False   # keyless: the daily crawl budget never stops it
 
     # Discovery costs several requests; a board fetch is one. Both are slow relative to the shared
     # 8s budget, and a source killed mid-run reports nothing.
@@ -1205,6 +1213,7 @@ class PublicApiSignalSource(SignalSource):
     """
 
     name = "public_api"
+    costs_money = False   # keyless: the daily crawl budget never stops it
     timeout_s = 30.0
 
     def __init__(self, *, fetch=None, github_token: str = "") -> None:
@@ -1310,6 +1319,7 @@ class WebsiteWatchSignalSource(SignalSource):
     """
 
     name = "website"
+    costs_money = False   # keyless: the daily crawl budget never stops it
     # Up to four pages, each possibly trying two or three paths.
     timeout_s = 30.0
 

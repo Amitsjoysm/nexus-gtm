@@ -137,16 +137,22 @@ class IngestionService:
         """
         settings = get_settings()
         default_timeout = settings.source_timeout_s
+        sources = list(self.sources)
         if await self._over_daily_budget(ts, settings.tenant_daily_source_runs):
-            # Refuse the crawl, not the request. Returning [] leaves existing signals intact and
-            # the next UTC day resumes automatically; raising would turn a spend guard into an
-            # outage on the account page.
+            # The budget guards SPEND, so past it only the sources that buy something stop
+            # (2026-10-15, decided with the product owner). It used to refuse the whole crawl:
+            # measured, about 82-92 of ~220 accounts per workspace got any signals a day, though
+            # RSS, job boards, the public APIs and keyless web news cost nothing. The count still
+            # includes every run, so paid spend and paid coverage are exactly what they were.
+            # Refuse, never raise: a spend guard must not become an outage on the account page.
+            sources = [s for s in sources if not getattr(s, "costs_money", True)]
             logger.warning(
-                "tenant %s hit the daily crawl budget of %s source runs; skipping",
+                "tenant %s hit the daily crawl budget of %s source runs; running only free sources",
                 ts.tenant_id, settings.tenant_daily_source_runs,
             )
             metrics.record_source_run("budget", "throttled", 0)
-            return []
+            if not sources:
+                return []
         collected: list[RawSignal] = []
         runs: list[dict] = []
 
@@ -160,9 +166,9 @@ class IngestionService:
         # AsyncSession is NOT safe for concurrent use — two coroutines awaiting on one session
         # interleave on a single DB connection and raise, or worse, return each other's rows. So
         # they run sequentially, after the network-only ones.
-        if settings.signal_sources_concurrent and len(self.sources) > 1:
-            network_only = [s for s in self.sources if not hasattr(s, "bind_session")]
-            session_bound = [s for s in self.sources if hasattr(s, "bind_session")]
+        if settings.signal_sources_concurrent and len(sources) > 1:
+            network_only = [s for s in sources if not hasattr(s, "bind_session")]
+            session_bound = [s for s in sources if hasattr(s, "bind_session")]
             if len(network_only) > 1:
                 gathered = await asyncio.gather(
                     *(self._run_one(account, src, default_timeout) for src in network_only)
@@ -173,9 +179,9 @@ class IngestionService:
                     metrics.record_source_run(run["source"], run["outcome"], run["items_found"])
                 ordered = session_bound
             else:
-                ordered = self.sources
+                ordered = sources
         else:
-            ordered = self.sources
+            ordered = sources
 
         for src in ordered:
             # Most sources are a pure function of the account. A change detector is not: it needs

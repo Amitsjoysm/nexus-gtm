@@ -216,6 +216,12 @@ class StrictExaSearch(SearchProvider):
 
     def _checked(self, hits: list[SearchHit]) -> list[SearchHit]:
         failure = getattr(self.inner, "last_failure", "")
+        if not hits and failure and "rate-limited" in failure:
+            # Stated since 2026-10-15 (it returned a bare []). Busy, not broken: the keys are fine.
+            raise SearchUnavailable(
+                "Exa is limiting how fast it answers right now; try again in a minute. The keys "
+                "are fine."
+            )
         if not hits and failure:
             raise SearchUnavailable(
                 f"Exa search is unavailable: {failure}. Check the Exa keys under Control plane -> "
