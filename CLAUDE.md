@@ -1554,10 +1554,13 @@ two coroutines awaiting on one session interleave on a single connection and rai
 other's rows. They run sequentially, after the network-only ones. `_run_one` is shared by both
 paths so a source's recorded outcome, timing and provenance cannot drift with the schedule.
 
-**`run_worker` is still strictly serial** (measured effective concurrency 0.99) and there is one
-replica. That is the remaining gap: ~15.65s per account is 0.064/s against 5.11/s demand at a 15%
-hot ratio. Bounded in-flight concurrency is the obvious next lever — `process_account` is ~99%
-await-on-network — but it must be capped by the DB pool, since each in-flight job holds a session.
+**`run_worker` runs N jobs at once** (`resolve_worker_concurrency`: the DB pool less a reserve,
+or `NEXUS_WORKER_MAX_CONCURRENCY`); it was strictly serial when the numbers above were measured. So any
+sweep that selects work must CLAIM it before acting (account refresh stamps `next_refresh_at`; the
+shared crawl compare-and-sets `last_crawled_at`, 2026-10-15), any per-call state must not live on a
+shared source or provider instance (the dork source's cached flag and failure are per call), and a
+heartbeat driver stays claimed until it FINISHES (`scheduler.job_finished`), so the next tick
+cannot start a second copy beside a slow one.
 
 ## External source databases (`nexus/sources/`) — platform-wide, superadmin only
 

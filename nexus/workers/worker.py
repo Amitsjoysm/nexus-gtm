@@ -14,7 +14,7 @@ from nexus.core.db import dispose_db, init_db
 from nexus.workers.durability import flush_pending_retries, record_job_failure
 from nexus.workers.metrics import increment_job_counter
 from nexus.workers.queue import TaskQueue, get_task_queue
-from nexus.workers.scheduler import picked_up, run_scheduler
+from nexus.workers.scheduler import job_finished, run_scheduler
 from nexus.workers.tasks import dispatch, is_job_failure
 
 logger = logging.getLogger("nexus.workers.worker")
@@ -131,14 +131,18 @@ async def _consume_forever(
         backoff = 1.0
         if job is None:
             continue
-        await picked_up(queue, job.name)
-        result = await dispatch(job)
-        if is_job_failure(result):
-            outcome = await record_job_failure(queue, job, str(result.get("error") or ""))
-            logger.info("job %s -> %s", job.name, outcome)
-        else:
-            increment_job_counter("succeeded", job=job.name)
-            logger.info("job %s -> %s", job.name, result.get("error") or "ok")
+        try:
+            result = await dispatch(job)
+            if is_job_failure(result):
+                outcome = await record_job_failure(queue, job, str(result.get("error") or ""))
+                logger.info("job %s -> %s", job.name, outcome)
+            else:
+                increment_job_counter("succeeded", job=job.name)
+                logger.info("job %s -> %s", job.name, result.get("error") or "ok")
+        finally:
+            # After the run, never before: a heartbeat driver stays claimed while it runs, so the
+            # next tick cannot start a second copy beside it (scheduler.DRIVER_CLAIM_TTL_S).
+            await job_finished(queue, job.name)
 
 
 async def run_worker(

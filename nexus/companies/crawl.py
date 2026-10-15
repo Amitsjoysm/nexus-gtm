@@ -134,28 +134,45 @@ async def crawl_due_companies(*, limit: int = 20, max_age_hours: int = 6) -> dic
     """
     from datetime import timedelta
 
-    from sqlalchemy import or_, select
+    from sqlalchemy import or_, select, update
 
     from nexus.core.db import get_platform_sessionmaker, utcnow
     from nexus.models.company import Company
 
     report = {"scanned": 0, "crawled": 0, "signals": 0}
     try:
-        cutoff = utcnow() - timedelta(hours=max_age_hours)
+        now = utcnow()
+        cutoff = now - timedelta(hours=max_age_hours)
+        due = or_(Company.last_crawled_at.is_(None), Company.last_crawled_at <= cutoff)
         async with get_platform_sessionmaker()() as session:
             companies = (
                 await session.scalars(
                     select(Company)
-                    .where(or_(Company.last_crawled_at.is_(None),
-                               Company.last_crawled_at <= cutoff))
+                    .where(due)
                     .order_by(Company.last_crawled_at.asc().nulls_first())
                     .limit(limit)
                 )
             ).all()
+            # CLAIMED before crawling, by compare-and-set (2026-10-15). The worker runs jobs
+            # concurrently, so overlapping sweeps selected the same stalest companies: measured,
+            # one company crawled seven times at once, every paid search bought seven times. Only a
+            # row this sweep moved off "due" is its to crawl; on Postgres and SQLite alike, the
+            # second writer's UPDATE matches nothing. The stamp is the conservative claim the
+            # account refresh also takes: a crawl that then fails comes back after `max_age_hours`.
+            claimed = []
+            for c in companies:
+                moved = await session.execute(
+                    update(Company).where(Company.id == c.id, due)
+                    .values(last_crawled_at=now)
+                    .execution_options(synchronize_session=False)
+                )
+                if moved.rowcount == 1:
+                    claimed.append(c)
+            await session.commit()
             # Detach: crawl_company opens its own session, and holding this one across the network
             # calls would pin a connection for the whole batch.
             targets = [(c.id, c.domain, c.name, c.industry, c.employee_count,
-                        list(c.tech_stack or [])) for c in companies]
+                        list(c.tech_stack or [])) for c in claimed]
         report["scanned"] = len(targets)
 
         from nexus.models.company import Company as C

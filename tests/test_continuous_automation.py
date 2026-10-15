@@ -364,12 +364,12 @@ async def test_automation_toggle_forbidden_for_rep(client):
 
 
 async def _take_like_the_worker(q) -> list[str]:
-    """Take every waiting job the way the worker does: picking one up releases its driver."""
-    from nexus.workers.scheduler import picked_up
+    """Take and run every waiting job the way the worker does: a finished job frees its driver."""
+    from nexus.workers.scheduler import job_finished
 
     names = []
     while (job := await q.dequeue(timeout=0)) is not None:
-        await picked_up(q, job.name)
+        await job_finished(q, job.name)
         names.append(job.name)
     return names
 
@@ -378,7 +378,7 @@ async def _take_like_the_worker(q) -> list[str]:
 async def test_a_driver_already_waiting_is_not_queued_again(monkeypatch):
     """2026-10-14: every tick queued every driver whatever was waiting, so a worker that fell
     behind watched the queue grow by a full set of duplicates each minute."""
-    from nexus.workers.scheduler import picked_up
+    from nexus.workers.scheduler import job_finished
 
     monkeypatch.setattr(get_settings(), "automation_enabled", True)
     monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
@@ -387,10 +387,63 @@ async def test_a_driver_already_waiting_is_not_queued_again(monkeypatch):
     waiting = await q.depth()
     assert await _enqueue_due(q) == 0                  # one copy of each is already waiting
     assert await q.depth() == waiting
-    job = await q.dequeue(timeout=0)                   # the worker takes one
-    await picked_up(q, job.name)
-    assert await _enqueue_due(q) == 1                  # that one may be queued again
+    job = await q.dequeue(timeout=0)                   # the worker takes one and runs it
+    # 2026-10-15: still running is still held. Released on pickup, a slow driver overlapped the
+    # next tick's copy, and two shared crawls picked the same companies.
+    assert await _enqueue_due(q) == 0
+    await job_finished(q, job.name)
+    assert await _enqueue_due(q) == 1                  # finished: it may be queued again
     assert await q.depth() == waiting
+
+
+@pytest.mark.asyncio
+async def test_the_worker_frees_a_driver_only_once_it_has_run(monkeypatch):
+    import asyncio
+
+    from nexus.workers import worker
+    from nexus.workers.queue import Job
+    from nexus.workers.scheduler import driver_key
+
+    q = InMemoryTaskQueue()
+    stop = asyncio.Event()
+    held_while_running: list[bool] = []
+
+    async def run(job):
+        held_while_running.append(not await q.claim(driver_key(job.name), 60))
+        stop.set()
+        return {"ok": True}
+
+    monkeypatch.setattr(worker, "dispatch", run)
+    assert await q.claim(driver_key("crawl_companies"), 60)   # what the heartbeat holds
+    await q.enqueue(Job("crawl_companies", {}))
+    await worker._consume_forever(q, stop, 0.01, slot=0)
+    assert held_while_running == [True]
+    assert await q.claim(driver_key("crawl_companies"), 60), "never freed after it ran"
+
+
+@pytest.mark.asyncio
+async def test_a_driver_that_raised_is_freed_too(monkeypatch):
+    import asyncio
+
+    from nexus.workers import worker
+    from nexus.workers.queue import Job
+    from nexus.workers.scheduler import driver_key
+
+    q = InMemoryTaskQueue()
+    stop = asyncio.Event()
+
+    async def run(job):
+        stop.set()
+        raise RuntimeError("handler bug")
+
+    monkeypatch.setattr(worker, "dispatch", run)
+    assert await q.claim(driver_key("crawl_companies"), 60)
+    await q.enqueue(Job("crawl_companies", {}))
+    try:
+        await worker._consume_forever(q, stop, 0.01, slot=0)
+    except RuntimeError:
+        pass
+    assert await q.claim(driver_key("crawl_companies"), 60), "a failed run kept its driver held"
 
 
 @pytest.mark.asyncio

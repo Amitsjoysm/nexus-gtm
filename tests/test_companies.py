@@ -360,6 +360,42 @@ async def test_the_sweep_is_bounded_and_never_raises(monkeypatch):
     assert "error" in await crawl_due_companies()
 
 
+async def test_two_sweeps_at_once_never_crawl_the_same_company():
+    """The worker runs jobs concurrently, and a `crawl_companies` driver arrives every minute
+    beside the ones still running. Each selected the stalest companies without claiming them, so
+    measured on the local deploy one company was crawled seven times at once: every paid search
+    bought seven times, and the parallel inserts broke `ix_company_signal_dedupe` (2026-10-15)."""
+    import asyncio
+
+    from nexus.companies.crawl import crawl_due_companies
+    from nexus.ingestion.service import (
+        IngestionService,
+        get_ingestion_service,
+        set_ingestion_service,
+    )
+
+    crawled: list[str] = []
+
+    class _Slow:
+        name = "probe"
+
+        async def fetch(self, account):
+            crawled.append(account.domain)
+            await asyncio.sleep(0.05)
+            return []
+
+    for i in range(3):
+        await _company(f"claim{i}.com")
+    previous = get_ingestion_service()
+    set_ingestion_service(IngestionService([_Slow()]))
+    try:
+        reports = await asyncio.gather(*(crawl_due_companies(limit=5) for _ in range(3)))
+    finally:
+        set_ingestion_service(previous)
+    assert sorted(crawled) == ["claim0.com", "claim1.com", "claim2.com"], crawled
+    assert sum(r["crawled"] for r in reports) == 3
+
+
 # ---- diff harness (step 4) -----------------------------------------------------------------------
 
 async def test_a_shared_crawl_missing_a_tenant_signal_is_a_disagreement():

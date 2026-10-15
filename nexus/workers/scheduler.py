@@ -50,13 +50,15 @@ logger = logging.getLogger("nexus.workers.scheduler")
 # enqueue them, N-fold multiplying digest sends and (before the atomic claim below) LLM spend.
 _SCHEDULER_LOCK_KEY = 0x4E455853  # "NEXS"
 
-# AT MOST ONE COPY OF EACH DRIVER WAITING (decided with the product owner, 2026-10-14). The heartbeat
-# queued every driver on every tick whatever was already waiting, so a worker that fell behind (one
-# slow sweep, a big refresh batch) saw the queue grow by ~22 duplicates a minute and then ran them
-# back to back. A driver now claims `driver:<name>` before it is queued and the worker releases it
-# when it picks the job up, so one copy can wait while another runs. The TTL only matters if the
-# job is lost before pickup (a flushed queue): then the driver resumes 15 minutes later.
-DRIVER_PENDING_TTL_S = 900
+# AT MOST ONE COPY OF EACH DRIVER, WAITING OR RUNNING (decided with the product owner, 2026-10-14
+# and 2026-10-15). The heartbeat queued every driver on every tick whatever was already waiting, so
+# a worker that fell behind saw the queue grow by ~22 duplicates a minute and then ran them back to
+# back. A driver now claims `driver:<name>` before it is queued, and the worker frees it when the
+# job has FINISHED (`job_finished`). Freeing it on pickup, as the first version did, still let a
+# slow driver overlap the next tick's copy on the concurrent worker: two shared crawls then picked
+# the same companies. The TTL is what frees a driver whose worker died mid-job, or one that runs
+# longer than it: the driver resumes up to 15 minutes later instead of on the next tick.
+DRIVER_CLAIM_TTL_S = 900
 # Billing reconciliation asks Stripe about every paying subscription, and ran on every tick
 # (decided 2026-10-14: once per `billing_reconcile_interval_hours`, default 24).
 _RECONCILE_KEY = "nexus:periodic:billing_reconcile"
@@ -71,22 +73,24 @@ async def _claim(queue, key: str, ttl_s: int) -> bool:
     return True if claim is None else bool(await claim(key, ttl_s))
 
 
-async def picked_up(queue, job_name: str) -> None:
-    """Called by the worker as it takes a job: another copy of that driver may now be queued."""
+async def job_finished(queue, job_name: str) -> None:
+    """Called by the worker once a job has run, however it ended: that driver may be queued
+    again. A no-op for a job no driver claim was taken for."""
     release = getattr(queue, "release", None)
     if release is not None:
         await release(driver_key(job_name))
 
 
 class _OnePending:
-    """The queue the heartbeat enqueues through: skips a driver one copy of which is waiting."""
+    """The queue the heartbeat enqueues through: skips a driver a copy of which is waiting or
+    running."""
 
     def __init__(self, inner) -> None:
         self.inner = inner
         self.skipped = 0
 
     async def enqueue(self, job) -> None:
-        if await _claim(self.inner, driver_key(job.name), DRIVER_PENDING_TTL_S):
+        if await _claim(self.inner, driver_key(job.name), DRIVER_CLAIM_TTL_S):
             await self.inner.enqueue(job)
         else:
             self.skipped += 1
