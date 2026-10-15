@@ -287,6 +287,14 @@ async def resolve_stripe_secrets() -> tuple[str, str, str]:
     behaves exactly as it did before the table existed. Any failure to read the managed credential
     also falls back rather than raising — losing the ability to bill because a lookup hiccuped is
     worse than billing with the previous configuration.
+
+    **The webhook signing secret is never borrowed from the environment once a credential is
+    active** (decided with the product owner, 2026-10-14). The secret belongs to a webhook endpoint
+    in ONE Stripe account; the environment's may be another account's, left from before a switch.
+    Borrowing it field by field would refuse the active account's events and accept the old one's,
+    writing that account's customer ids onto workspaces. An active credential without a secret
+    verifies nothing, and the webhook route logs why: Create webhook in Stripe on the Payments tab
+    stores the right one.
     """
     from nexus.core.config import get_settings
 
@@ -302,7 +310,11 @@ async def resolve_stripe_secrets() -> tuple[str, str, str]:
             return env
         secret = unseal_text(row.secret_key_encrypted) if row.secret_key_encrypted else ""
         hook = unseal_text(row.webhook_secret_encrypted) if row.webhook_secret_encrypted else ""
-        return (secret or env[0], hook or env[1], row.publishable_key or env[2])
+        if not hook:
+            logger.warning("the active Stripe credential has no webhook signing secret; events "
+                           "cannot be verified until one is stored (Payments tab, Create webhook "
+                           "in Stripe)")
+        return (secret or env[0], hook, row.publishable_key or env[2])
     except Exception:
         logger.warning("could not read the managed Stripe credential; using the environment",
                        exc_info=True)

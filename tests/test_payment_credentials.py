@@ -243,6 +243,35 @@ async def test_an_active_credential_overrides_the_environment(fresh_db, monkeypa
     assert hook == "whsec_managed"
 
 
+async def test_an_active_credential_never_borrows_the_environments_signing_secret(
+        fresh_db, monkeypatch):
+    """Decided 2026-10-14. The environment's secret may belong to another Stripe account's
+    endpoint; borrowing it field by field refuses the active account's events and accepts the old
+    account's. With no secret of its own, the active credential verifies nothing, loudly."""
+    from nexus.billing.credentials import (
+        activate_credential,
+        add_credential,
+        resolve_stripe_secrets,
+        verify_credential,
+    )
+    from nexus.billing.payments import StripePaymentProvider
+    from nexus.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "stripe_webhook_secret", "whsec_old_account")
+
+    async def fake_get(self, path):
+        return {"id": "acct_NEW", "charges_enabled": True}
+
+    monkeypatch.setattr(StripePaymentProvider, "_get", fake_get)
+    row = await add_credential(label="new account", secret_key="sk_test_new_1234")
+    await verify_credential(row.id)
+    await activate_credential(row.id)
+
+    secret, hook, _pub = await resolve_stripe_secrets()
+    assert secret == "sk_test_new_1234"
+    assert hook == ""
+
+
 async def test_an_empty_secret_key_is_refused(fresh_db):
     """A blank credential would produce a row that looks configured and bills nothing — exactly
     the silent state this whole surface exists to make impossible."""
