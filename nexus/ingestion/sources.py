@@ -136,7 +136,7 @@ def _classify_news(text: str) -> tuple[str, float]:
             start = low.find(needle)
             while start != -1:
                 end = start + len(needle)
-                if _whole_word_at(low, needle, start):
+                if _whole_word_at(low, needle, start) and _has_context(low, needle, end):
                     for c_start, c_end in bounds:
                         if c_start <= start < c_end:
                             # Extend to cover the needle itself when it straddles a boundary, so
@@ -146,6 +146,41 @@ def _classify_news(text: str) -> tuple[str, float]:
                             break
                 start = low.find(needle, start + 1)
     return "news", 0.4
+
+
+# Funding needles that are ordinary English on their own (2026-10-15). Measured on the local deploy,
+# each of these was a 0.85 funding signal: "raises outlook", "raised its 2026 guidance", "raises
+# one-year Bitcoin forecast", "raises questions", "a strategic venture", "IPO valuation target".
+# "raises"/"raised" count only with an amount or a round word within the next three words;
+# "valuation"/"venture" only with a round word in the same headline. A headline that names neither
+# ("Acme raises from Sequoia") lands as news: the accepted cost of not inventing rounds.
+_ROUND_WORDS = frozenset({"round", "series", "seed", "pre-seed", "preseed", "funding", "financing",
+                          "capital", "investment"})
+_MONEY_UNITS = frozenset({"k", "m", "mn", "million", "millions", "b", "bn", "billion", "billions",
+                          "trillion", "crore", "crores", "lakh", "lakhs"})
+_CURRENCY = frozenset("$€£₹¥")
+_AMOUNT = re.compile(r"\d[\d.,]*(k|m|mn|b|bn)?")
+_ROUND_IN_TEXT = re.compile(r"\b(?:round|series [a-z]|seed|pre-seed|funding|financing)\b")
+_NEEDS_AMOUNT_OR_ROUND = frozenset({"raises", "raised"})
+_NEEDS_ROUND = frozenset({"valuation", "venture"})
+
+
+def _has_context(low: str, needle: str, end: int) -> bool:
+    """Whether a needle that is ordinary English here is about a round (see `_ROUND_WORDS`)."""
+    if needle in _NEEDS_ROUND:
+        return bool(_ROUND_IN_TEXT.search(low))
+    if needle not in _NEEDS_AMOUNT_OR_ROUND:
+        return True
+    words = [w.strip(",.;:()[]'\"") for w in low[end:].split()[:4]]
+    for i, word in enumerate(words[:3]):
+        if not word:
+            continue
+        if word[0] in _CURRENCY or word in _ROUND_WORDS:
+            return True
+        amount = _AMOUNT.fullmatch(word)
+        if amount and (amount.group(1) or (i + 1 < len(words) and words[i + 1] in _MONEY_UNITS)):
+            return True
+    return False
 
 
 def _whole_word_at(low: str, needle: str, start: int) -> bool:

@@ -94,6 +94,45 @@ def test_a_whole_word_needle_still_matches_beside_punctuation():
     assert _classify_news("Acme raises $40M") == ("funding", 0.85)
 
 
+# ---- "raises" needs money or a round; "valuation" and "venture" need a round (2026-10-15) -------
+#
+# Every one of these was stored as a 0.85 funding signal in the last 30 days on the local deploy.
+
+NOT_ROUNDS = [
+    "Waystar posts strong Q2 2026 results, raises outlook",
+    "General Motors raised its 2026 guidance after significantly beating estimates",
+    "Citigroup raises one-year Bitcoin forecast to $113,000",
+    "Cornell Sex Assault Case Raises Questions About Title IX Accountability",
+    "US raises Graphite One loan to $2.1B",
+    "Why You Should Do Toe Raises, Not Just Calf Raises",
+    "Meta Announces New Strategic Venture with BlackRock to Develop Data Centers",
+    "Our Team of Venture Capital Professionals | 500 Global",
+    "SpaceX Lowers IPO Valuation Target",
+    "Browserstack's Financials, Revenue, Profit, Valuation & Shareholding",
+]
+
+STILL_ROUNDS = [
+    "Celebal Technologies raises ₹ 50.00 Crore in Latest funding round",
+    "Turing raises 15.3 billion yen in its Series A first close",
+    "How a former DeepMind researcher raised at a $300M pre-seed",
+    "Mercor Raises $30M Series A at a $250M Valuation to Create Jobs with AI",
+    "Acme raises new funding from Index Ventures",
+    "Acme closes $50M round at a $1B valuation",
+    "Acme raised a Series B led by Sequoia",
+    "Anthropic raises $30bn in latest round",
+]
+
+
+@pytest.mark.parametrize("text", NOT_ROUNDS)
+def test_raises_without_money_or_a_round_is_not_a_round(text):
+    assert _classify_news(text)[0] != "funding", f"{text!r} was scored as a round"
+
+
+@pytest.mark.parametrize("text", STILL_ROUNDS)
+def test_a_round_with_money_or_a_round_word_is_still_funding(text):
+    assert _classify_news(text) == ("funding", 0.85), text
+
+
 def test_negation_far_from_the_needle_does_not_suppress_the_event():
     """The guard is a window around the match, not a search of the whole string. A headline can
     contain "no" for unrelated reasons and still report a real round."""
