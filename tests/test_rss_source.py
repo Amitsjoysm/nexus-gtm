@@ -39,6 +39,30 @@ def test_parse_garbage_is_empty():
     assert _parse_feed("") == []
 
 
+async def test_an_item_is_classified_by_its_title_not_its_summary():
+    """2026-10-15: RSS classified title AND summary, unlike web news and the dork source, so a post
+    whose summary mentions another company's round, or says a workflow "raises" a question, became a
+    0.85 funding signal (measured: none of the 20 newest funding signals was a round)."""
+    feed = """<?xml version="1.0"?><rss version="2.0"><channel>
+      <item><title>To Switch, or Not to Switch the AI Model</title>
+            <link>https://acme.com/switch</link>
+            <description>Every production workflow raises a revalidation question.</description></item>
+      <item><title>Autonomous drones get a bigger budget</title>
+            <link>https://acme.com/drones</link>
+            <description>Buntar Aerospace has raised $16 million in new funding.</description></item>
+    </channel></rss>"""
+
+    async def fake_fetch(url):
+        return feed if url.endswith("/feed") else None
+
+    sigs = await RssSignalSource(fetch=fake_fetch).fetch(Account(name="Acme", domain="acme.com"))
+    assert {s.title: s.kind for s in sigs} == {
+        "To Switch, or Not to Switch the AI Model": "news",
+        "Autonomous drones get a bigger budget": "news",
+    }
+    assert all(s.body for s in sigs), "the summary is still kept as the body"
+
+
 async def test_source_emits_classified_signals():
     async def fake_fetch(url):
         return RSS if url.endswith("/feed") else None

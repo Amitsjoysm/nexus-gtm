@@ -136,15 +136,32 @@ def _classify_news(text: str) -> tuple[str, float]:
             start = low.find(needle)
             while start != -1:
                 end = start + len(needle)
-                for c_start, c_end in bounds:
-                    if c_start <= start < c_end:
-                        # Extend to cover the needle itself when it straddles a boundary, so the
-                        # words inside a matched phrase are always part of what is examined.
-                        if not _is_negated(low[c_start:max(c_end, end)]):
-                            return kind, strength
-                        break
+                if _whole_word_at(low, needle, start):
+                    for c_start, c_end in bounds:
+                        if c_start <= start < c_end:
+                            # Extend to cover the needle itself when it straddles a boundary, so
+                            # the words inside a matched phrase are always part of what is examined.
+                            if not _is_negated(low[c_start:max(c_end, end)]):
+                                return kind, strength
+                            break
                 start = low.find(needle, start + 1)
     return "news", 0.4
+
+
+def _whole_word_at(low: str, needle: str, start: int) -> bool:
+    """Whether the needle at ``start`` is whole words, not part of a longer word (2026-10-15).
+
+    Measured: "series c" matched "series creator", "venture" matched "adventure", "valuation"
+    matched "evaluation", and none of the 20 newest funding signals was a round. An edge is checked
+    only where the needle's own edge is a letter or digit, so "secures $" still matches "secures
+    $12M" and "series a" matches "Series A." or "(Series A)".
+    """
+    end = start + len(needle)
+    if needle[:1].isalnum() and start > 0 and low[start - 1].isalnum():
+        return False
+    if needle[-1:].isalnum() and end < len(low) and low[end].isalnum():
+        return False
+    return True
 
 
 def names_account(text: str, account: Account) -> bool:
@@ -501,7 +518,10 @@ class RssSignalSource(SignalSource):
                     continue
                 link = (it.get("link") or "").strip()
                 summary = (it.get("summary") or "").strip()
-                kind, strength = _classify_news(f"{title} {summary}")
+                # The title alone, as web news and the dork source classify (2026-10-15). A post's
+                # summary mentions everything, including other companies' rounds, and classifying
+                # it made blog posts 0.85 funding signals. The summary is still kept as the body.
+                kind, strength = _classify_news(title)
                 out.append(
                     RawSignal(
                         kind=kind,
@@ -549,6 +569,11 @@ _PROFILE_HOSTS: tuple[str, ...] = (
 _PROFILE_PATHS: tuple[str, ...] = (
     "crunchbase.com/organization", "bloomberg.com/profile", "linkedin.com/company",
     "wikipedia.org/wiki",
+    # Measured 2026-10-15, each stored as `funding`: a revenue profile, a pre-IPO price page, a
+    # private-company quote page, and a person's own profile. Paths, not hosts: Yahoo and LinkedIn
+    # publish news too.
+    "getlatka.com/companies", "defillama.com/pre-ipo", "finance.yahoo.com/quote",
+    "linkedin.com/in/",
 )
 
 
@@ -562,7 +587,9 @@ def is_profile_page(url: str) -> bool:
     try:
         from urllib.parse import urlparse
 
-        host = (urlparse(low).netloc or "").split(":")[0].lstrip("www.")
+        # removeprefix, not lstrip("www."): lstrip strips any leading "w" and ".", which turned
+        # wellfound.com into "ellfound.com" and let every Wellfound profile through.
+        host = (urlparse(low).netloc or "").split(":")[0].removeprefix("www.")
     except Exception:
         return False
     return any(host == h or host.endswith("." + h) for h in _PROFILE_HOSTS)

@@ -101,6 +101,15 @@ async def test_a_headline_that_does_name_the_account_is_kept():
     "https://www.zoominfo.com/c/catalis/123456",
     "https://www.owler.com/company/catalis",
     "https://tracxn.com/d/companies/catalis",
+    # Measured 2026-10-15, each stored as `funding`: a revenue profile, a pre-IPO price page, a
+    # private-company quote page, and a PERSON's profile ("Managing Director, Venture Capital").
+    "https://getlatka.com/companies/catalis.com",
+    "https://defillama.com/pre-ipo/catalis",
+    "https://finance.yahoo.com/quote/CATL.PVT/",
+    "https://ca.linkedin.com/in/someone-at-catalis",
+    # Listed all along and never matched: the host was cut with lstrip("www."), which strips any
+    # leading "w" and ".", so wellfound.com became "ellfound.com".
+    "https://wellfound.com/company/catalis",
 ])
 async def test_a_company_profile_page_is_never_a_signal(url):
     """A PitchBook profile exists for every company, always, and reports no event. It was being

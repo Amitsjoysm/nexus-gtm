@@ -67,6 +67,33 @@ def test_a_real_round_still_classifies_as_funding(text):
     assert _classify_news(text) == ("funding", 0.85)
 
 
+# ---- needles are whole words (2026-10-15) ------------------------------------------------------
+#
+# Measured on the local deploy: of the 20 newest `funding` signals, none was a round for its
+# account, and these were the needles that fired. Each was matched as a bare substring.
+
+WORD_PARTS = [
+    "The series creator noted the premiere date",                  # "series c"
+    "Your Model's MSE Is Lying to You III: Time Series Diffusion",  # "series d"
+    "Aaron Cohen on the Saban docuseries airs tonight",            # "series a"
+    "Odoo evaluation guide for manufacturers",                      # "valuation"
+    "Leading a new team is a challenging adventure",                # "venture"
+    "Critics praised the redesign",                                 # "raised"
+]
+
+
+@pytest.mark.parametrize("text", WORD_PARTS)
+def test_a_needle_inside_another_word_is_not_an_event(text):
+    assert _classify_news(text)[0] != "funding", f"{text!r} was scored as a round"
+
+
+def test_a_whole_word_needle_still_matches_beside_punctuation():
+    assert _classify_news("Acme closes its Series A.") == ("funding", 0.85)
+    assert _classify_news("Acme (Series B) announced today") == ("funding", 0.85)
+    assert _classify_news("Acme secures $12M from Index") == ("funding", 0.85)
+    assert _classify_news("Acme raises $40M") == ("funding", 0.85)
+
+
 def test_negation_far_from_the_needle_does_not_suppress_the_event():
     """The guard is a window around the match, not a search of the whole string. A headline can
     contain "no" for unrelated reasons and still report a real round."""
