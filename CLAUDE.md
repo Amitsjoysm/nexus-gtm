@@ -399,6 +399,8 @@ touching application code**. Designed in `docs/billing/` (19 docs); milestone pl
   `psp_subscription_id` (enterprise deals never had a provider object) and ignores unmapped
   statuses, so real findings are not buried in noise. Which side is right depends on what the
   customer agreed to — an automated writer would resolve that wrongly and destroy the evidence.
+  It runs once per `billing_reconcile_interval_hours` (24; decided 2026-10-14): it asks Stripe
+  about every paying subscription, and it used to do that on every heartbeat tick.
 - **Gauges are not counters.** `seat.member` resolves to live membership count; summing events
   would only ever climb, so a customer could never get back under a seat limit.
 - Platform-global tables carry no `tenant_id` and no RLS policy: `billing_capabilities`,
@@ -493,6 +495,12 @@ Safe to add because of two existing properties of the seed: `sync_catalog` **nev
 `_MANAGED_FIELDS` re-asserts `category`/`unit`/`depends_on` only for ids the seed names. An
 admin-created capability is invisible to it, so no later deploy can revert or clobber one. Pinned by
 `test_a_redeploy_does_not_disturb_an_admin_created_capability`.
+
+**A retired capability is switched off, never deleted** (`catalog.RETIRED`, 2026-10-14).
+`outreach.cadence_touch` and `report.cadence` priced the Cadences screens the engagement engine
+replaced, and nothing has metered them since. `sync_catalog` and `sync_rates` set them and their
+rate cards inactive, one way: no deploy turns them back on, and the rows stay for the usage history
+that names them.
 
 - **Pricing is offered in the same call, and its absence is warned about.** A capability with no rate
   card is metered and then *rated at nothing*: usage accumulates, quotas count down, no revenue line
@@ -735,6 +743,11 @@ not:
 - **Exactly one active credential.** No rotation pool — you cannot ride out a bad Stripe key by
   trying the next one, and two accounts both collecting money with no rule about which is worse than
   an outage, because it is an outage you cannot see.
+- **The webhook signing secret is the active credential's own, never the environment's**
+  (decided 2026-10-14, `resolve_stripe_secrets`). A secret belongs to one account's endpoint, and the
+  environment's may be the account before a switch: borrowing it refused the active account's
+  events and accepted the old one's. With no secret of its own the credential verifies nothing and
+  says so in the log; Create webhook in Stripe stores the right one.
 - **A failed re-verification also deactivates.** Leaving a now-broken credential live because it
   passed last month is how a silent billing outage lasts a month.
 - The active credential **refuses deletion**; deactivation is **never** refused, because during an
@@ -1106,6 +1119,12 @@ sends, orchestration runs — were silently lost.
 - `NEXUS_JOB_RETRY_ENABLED=false` disables the retry only; the job is still dead-lettered, so the
   kill switch degrades to "fail fast, keep the evidence" — never back to losing work.
 - **Handlers stay ignorant of all of it.** No `handle_*` signature and no `HANDLERS` entry changes.
+- **At most one copy of each heartbeat driver waits in the queue** (decided 2026-10-14,
+  `scheduler._OnePending`). The heartbeat queued every driver on every tick whatever was already
+  waiting, so a worker that fell behind gained about 22 duplicates a minute and then ran them back
+  to back. A driver claims `nexus:driver:<name>` (`TaskQueue.claim`: Redis `SET NX EX`, failing
+  open) before it is queued, and the worker releases it on pickup (`picked_up`), so one copy can
+  wait while another runs. The 15-minute TTL only matters for a job lost before pickup.
 
 ## Observability (`nexus/core/metrics.py`, `nexus/workers/state_metrics.py`) — M15
 
@@ -1365,10 +1384,12 @@ inert: the production image never installed it. Spec and plan:
 - **Website watch uses both** (`webwatch._get`): cache, then the fetcher, then plain httpx, so a
   deployment without the VM behaves exactly as before. Pages over 1M characters are used, never
   cached.
-- **Signal scans are still metered nowhere.** `signal.news_scan` and its siblings are priced in
-  `rates.py` with no `metered()` call site in `nexus/ingestion/`, so this saving is pure COGS.
-  Adding metering would start charging customers for something they have never paid for — a pricing
-  decision, not a side effect of this work.
+- **The scheduled refresh is not metered; a scan a person asks for is** (decided with the product
+  owner 2026-10-14). `signal.news_scan` has no `metered()` call site in `nexus/ingestion/`, so this
+  saving is pure COGS. `POST /ingest/{account_id}` charges one `signal.news_scan`, asked with
+  `preflight` before the searches are bought; `POST /relevance/analyze-website` charges
+  `ai.icp_from_website`, its own price, once per draft that found something
+  (`tests/test_person_started_charges.py`).
 
 ## Shared company records (`nexus/companies/`)
 
@@ -1631,6 +1652,10 @@ five call sites remembering to agree.
   request, so it is not billed — the rule that also keeps an unconfigured phone lookup off the bill.
 - On today's default `NEXUS_BILLING_ENFORCEMENT=shadow` this records and never blocks, so the
   `would_block` counter is what says what flipping enforcement on would cost each tenant.
+- **The B2B actor is spaced like the paid web path** (2026-10-14, `_enrich`). It ran on every
+  enrichment, ignoring the 30-day `due` check, and the pipeline enriches any account still missing
+  industry OR headcount, which the actor rarely supplies: 82 runs in three hours locally, and the
+  Apify credits gone within two days. It now runs only when the account is due.
 
 ## Email verification through the registry (`DataSourceRegistry.verify_email`)
 
@@ -1815,6 +1840,11 @@ unproven page does to a contact list.
    construction and skip the threshold (`deliver.py`, shared by both callers). **Changed
    2026-09-30:** it used to run only when LinkedIn delivered NOTHING, so a partial LinkedIn day was
    never topped up; it now fills any shortfall, which costs one extra web search on a short day.
+   **Exa is never sent `excludeDomains` with `category=company`** (2026-10-14,
+   `ExaSearchProvider.search_companies`): measured, that pair answers 200 with zero results and
+   zero cost, which emptied this step, Find similar's web fallback and the Orchestrator's web fill
+   for any workspace holding an account. Held domains are filtered from the hits instead, and the
+   excluded count is asked for on top.
 
 **The daily sweep reaches the workspace's number, or says why not** (`handle_discover_icp_accounts`,
 2026-09-30). Reported as "new ICP accounts are not updating daily to the number set in Settings";
@@ -2379,6 +2409,8 @@ Registered actors and their state:
 |---|---|---|
 | `phone_finder` | `code_crafter/mobile-finder` | `people/enrich.py` — live, verified end-to-end |
 | `linkedin_profile` | `dev_fusion/Linkedin-Profile-Scraper` | `personalization/apify_provider.py` |
+| `linkedin_posts` | `A3cAPGpwBEG8RJwse` | `personalization/apify_provider.py` |
+| `b2b_enrichment` | `teodor_banea/b2b-lead-enrichment-free` | `enrichment/b2b_actor.py`, at most once per 30 days per account |
 | `linkedin_company_search` | `harvestapi/linkedin-company-search` | `prospecting/linkedin.py` — run once, 2026-09-24 |
 | `linkedin_company` | `harvestapi/linkedin-company` | `prospecting/linkedin.py` — run once, 2026-09-24 |
 | `linkedin_company_employees` | `harvestapi/linkedin-company-employees` | `prospecting/linkedin.py` — run once, 2026-09-24 |
