@@ -1119,12 +1119,13 @@ sends, orchestration runs — were silently lost.
 - `NEXUS_JOB_RETRY_ENABLED=false` disables the retry only; the job is still dead-lettered, so the
   kill switch degrades to "fail fast, keep the evidence" — never back to losing work.
 - **Handlers stay ignorant of all of it.** No `handle_*` signature and no `HANDLERS` entry changes.
-- **At most one copy of each heartbeat driver waits in the queue** (decided 2026-10-14,
-  `scheduler._OnePending`). The heartbeat queued every driver on every tick whatever was already
-  waiting, so a worker that fell behind gained about 22 duplicates a minute and then ran them back
-  to back. A driver claims `nexus:driver:<name>` (`TaskQueue.claim`: Redis `SET NX EX`, failing
-  open) before it is queued, and the worker releases it on pickup (`picked_up`), so one copy can
-  wait while another runs. The 15-minute TTL only matters for a job lost before pickup.
+- **At most one copy of each heartbeat driver, waiting or running** (decided 2026-10-14 and
+  2026-10-15, `scheduler._OnePending`). The heartbeat queued every driver on every tick whatever was
+  already waiting, so a worker that fell behind gained about 22 duplicates a minute and then ran them
+  back to back. A driver claims `nexus:driver:<name>` (`TaskQueue.claim`: Valkey/Redis `SET NX EX`,
+  failing open) before it is queued, and the worker frees it when the job FINISHES
+  (`job_finished`). Freeing it on pickup still let a slow driver overlap the next tick's copy. The
+  15-minute TTL frees a driver whose worker died, or one that runs longer than that.
 
 ## Observability (`nexus/core/metrics.py`, `nexus/workers/state_metrics.py`) — M15
 
