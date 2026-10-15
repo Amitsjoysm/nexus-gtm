@@ -547,6 +547,9 @@ class Settings(BaseSettings):
     # ticks while automation_enabled) and is idempotent per interval, so the scheduler can
     # enqueue it every tick without double-sending.
     digest_interval_hours: int = 24
+    # Billing reconciliation asks Stripe about every paying subscription; it ran every tick
+    # (decided 2026-10-14: once a day by default; workers/scheduler.py).
+    billing_reconcile_interval_hours: int = 24
 
     # Prometheus /metrics. ON by default since M15: a deployment that cannot see queue lag,
     # 402 rates, dunning depth or webhook failures is not operable, and "observability is opt-in"

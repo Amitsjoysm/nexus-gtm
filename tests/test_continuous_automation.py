@@ -361,3 +361,48 @@ async def test_automation_toggle_forbidden_for_rep(client):
         json={"automation_enabled": True},
     )
     assert r.status_code == 403, r.text
+
+
+async def _take_like_the_worker(q) -> list[str]:
+    """Take every waiting job the way the worker does: picking one up releases its driver."""
+    from nexus.workers.scheduler import picked_up
+
+    names = []
+    while (job := await q.dequeue(timeout=0)) is not None:
+        await picked_up(q, job.name)
+        names.append(job.name)
+    return names
+
+
+@pytest.mark.asyncio
+async def test_a_driver_already_waiting_is_not_queued_again(monkeypatch):
+    """2026-10-14: every tick queued every driver whatever was waiting, so a worker that fell
+    behind watched the queue grow by a full set of duplicates each minute."""
+    from nexus.workers.scheduler import picked_up
+
+    monkeypatch.setattr(get_settings(), "automation_enabled", True)
+    monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
+    q = InMemoryTaskQueue()
+    assert await _enqueue_due(q) == 16
+    waiting = await q.depth()
+    assert await _enqueue_due(q) == 0                  # one copy of each is already waiting
+    assert await q.depth() == waiting
+    job = await q.dequeue(timeout=0)                   # the worker takes one
+    await picked_up(q, job.name)
+    assert await _enqueue_due(q) == 1                  # that one may be queued again
+    assert await q.depth() == waiting
+
+
+@pytest.mark.asyncio
+async def test_billing_reconciliation_is_queued_once_per_interval_not_every_tick(monkeypatch):
+    """It asks Stripe about every paying subscription and ran every minute (decided 2026-10-14:
+    once per `billing_reconcile_interval_hours`, default 24). The other drivers keep their tick."""
+    monkeypatch.setattr(get_settings(), "automation_enabled", True)
+    monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
+    assert get_settings().billing_reconcile_interval_hours == 24
+    q = InMemoryTaskQueue()
+    await _enqueue_due(q)
+    assert "billing_reconcile" in await _take_like_the_worker(q)
+    await _enqueue_due(q)
+    again = await _take_like_the_worker(q)
+    assert "billing_reconcile" not in again and "rollup_usage" in again

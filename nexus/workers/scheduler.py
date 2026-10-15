@@ -50,6 +50,47 @@ logger = logging.getLogger("nexus.workers.scheduler")
 # enqueue them, N-fold multiplying digest sends and (before the atomic claim below) LLM spend.
 _SCHEDULER_LOCK_KEY = 0x4E455853  # "NEXS"
 
+# AT MOST ONE COPY OF EACH DRIVER WAITING (decided with the product owner, 2026-10-14). The heartbeat
+# queued every driver on every tick whatever was already waiting, so a worker that fell behind (one
+# slow sweep, a big refresh batch) saw the queue grow by ~22 duplicates a minute and then ran them
+# back to back. A driver now claims `driver:<name>` before it is queued and the worker releases it
+# when it picks the job up, so one copy can wait while another runs. The TTL only matters if the
+# job is lost before pickup (a flushed queue): then the driver resumes 15 minutes later.
+DRIVER_PENDING_TTL_S = 900
+# Billing reconciliation asks Stripe about every paying subscription, and ran on every tick
+# (decided 2026-10-14: once per `billing_reconcile_interval_hours`, default 24).
+_RECONCILE_KEY = "nexus:periodic:billing_reconcile"
+
+
+def driver_key(name: str) -> str:
+    return f"nexus:driver:{name}"
+
+
+async def _claim(queue, key: str, ttl_s: int) -> bool:
+    claim = getattr(queue, "claim", None)
+    return True if claim is None else bool(await claim(key, ttl_s))
+
+
+async def picked_up(queue, job_name: str) -> None:
+    """Called by the worker as it takes a job: another copy of that driver may now be queued."""
+    release = getattr(queue, "release", None)
+    if release is not None:
+        await release(driver_key(job_name))
+
+
+class _OnePending:
+    """The queue the heartbeat enqueues through: skips a driver one copy of which is waiting."""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.skipped = 0
+
+    async def enqueue(self, job) -> None:
+        if await _claim(self.inner, driver_key(job.name), DRIVER_PENDING_TTL_S):
+            await self.inner.enqueue(job)
+        else:
+            self.skipped += 1
+
 
 async def _enqueue_due(queue: TaskQueue) -> int:
     """Enqueue the recurring drivers for whichever switches are on. Returns the count enqueued.
@@ -69,6 +110,7 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             return 0  # another worker holds the scheduler lock this tick
         try:
             count = 0
+            queue = _OnePending(queue)
             # Usage rollups must run for every workspace, not just automation opt-ins — placed
             # outside the automation_enabled/crm_sync_enabled gates below on purpose.
             await enqueue_rollup_usage(queue=queue)
@@ -82,9 +124,11 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             await enqueue_dunning_sweep(queue=queue)
             count += 1
             # Drift detection is not an automation opt-in either: a missed webhook is exactly
-            # the case where nobody has switched anything on.
-            await enqueue_billing_reconcile(queue=queue)
-            count += 1
+            # the case where nobody has switched anything on. Once per interval, not per tick.
+            if await _claim(queue.inner, _RECONCILE_KEY,
+                            int(settings.billing_reconcile_interval_hours) * 3600):
+                await enqueue_billing_reconcile(queue=queue)
+                count += 1
             # A trial ends on a date, not when somebody opts into automation. Leaving this behind
             # the automation gate is how a trial runs forever in a workspace that never enabled it.
             await enqueue_expire_trials(queue=queue)
@@ -148,7 +192,8 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             if settings.crm_sync_enabled:
                 await enqueue_sync_crm_due_accounts(queue=queue)
                 count += 1
-            return count
+            # What was actually queued: a driver skipped because a copy is waiting is not.
+            return count - queue.skipped
         finally:
             await _release_scheduler_lock(session)
 

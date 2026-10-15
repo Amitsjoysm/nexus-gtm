@@ -64,3 +64,22 @@ async def test_factory_selects_redis_when_queue_backend_is_redis(monkeypatch):
         assert isinstance(store, RedisIdempotencyStore)
     finally:
         idem.set_idempotency_store(None)
+
+
+async def test_the_job_queue_claim_is_one_holder_until_released_or_expired():
+    """The heartbeat's driver guard and the once-a-day reconciliation on real Redis (2026-10-14):
+    `SET NX EX` is held by one caller across concurrent workers, and release frees it at once."""
+    from nexus.workers.queue import RedisTaskQueue
+
+    queue = RedisTaskQueue(REDIS_URL, key=f"nexus:jobs:test:{uuid.uuid4().hex}")
+    key = f"nexus:driver:test:{uuid.uuid4().hex}"
+    try:
+        results = await asyncio.gather(*[queue.claim(key, 60) for _ in range(20)])
+        assert sum(1 for r in results if r) == 1, results
+        await queue.release(key)
+        assert await queue.claim(key, 1) is True
+        await asyncio.sleep(1.5)                     # an expired claim can be taken again
+        assert await queue.claim(key, 60) is True
+    finally:
+        await queue.release(key)
+        await queue.aclose()

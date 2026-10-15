@@ -85,10 +85,35 @@ class TaskQueue(abc.ABC):
         """
         return None
 
+    async def claim(self, key: str, ttl_s: int) -> bool:
+        """Hold ``key`` for ``ttl_s`` seconds; False if it is already held (2026-10-14).
+
+        What the heartbeat uses to keep one copy of a driver waiting and to run a job at most once
+        per interval. Concrete, and True by default, so a queue without it behaves exactly as
+        before: every claim succeeds, which is the old "enqueue every tick"."""
+        return True
+
+    async def release(self, key: str) -> None:
+        """Give ``key`` up early. A no-op where :meth:`claim` holds nothing."""
+        return None
+
 
 class InMemoryTaskQueue(TaskQueue):
     def __init__(self) -> None:
         self._q: asyncio.Queue[Job] = asyncio.Queue()
+        self._claims: dict[str, float] = {}
+
+    async def claim(self, key: str, ttl_s: int) -> bool:
+        import time
+
+        now = time.monotonic()
+        if self._claims.get(key, 0.0) > now:
+            return False
+        self._claims[key] = now + max(1, int(ttl_s))
+        return True
+
+    async def release(self, key: str) -> None:
+        self._claims.pop(key, None)
 
     async def enqueue(self, job: Job) -> None:
         increment_job_counter("enqueued", job=job.name)
@@ -139,6 +164,20 @@ class RedisTaskQueue(TaskQueue):
             return int(await self._redis.llen(self._key))
         except Exception:
             return None
+
+    async def claim(self, key: str, ttl_s: int) -> bool:
+        """``SET key NX EX``, shared by every worker. Fails OPEN: an unreachable Redis returns
+        True, because a duplicate driver costs one idempotent run and a missing one costs a tick."""
+        try:
+            return bool(await self._redis.set(key, "1", nx=True, ex=max(1, int(ttl_s))))
+        except Exception:
+            return True
+
+    async def release(self, key: str) -> None:
+        try:
+            await self._redis.delete(key)
+        except Exception:
+            pass
 
     async def aclose(self) -> None:
         await self._redis.aclose()
