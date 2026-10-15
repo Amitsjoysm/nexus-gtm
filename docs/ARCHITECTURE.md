@@ -15,7 +15,7 @@
    system runs end-to-end with **zero external services** (SQLite + in-memory queue + stub LLM).
 3. **Everything swappable** — `LLMProvider`, `BrowserProvider`, `EnrichmentProvider`,
    `SignalSource`, `CRMConnector`, `SEPConnector`, `TaskQueue` are all interfaces. Adapters
-   (Scrapling, DuckDuckGo, Cloak CDP, Hermes, Salesforce, HubSpot, Redis) are leaf modules.
+   (Scrapling, DuckDuckGo, Cloak CDP, Salesforce, HubSpot, Redis) are leaf modules.
 4. **Async-first** — all I/O is async; agent/enrichment/ingestion work runs on a task queue.
 
 ## 2. Subsystems
@@ -65,7 +65,7 @@ policies provide a second, database-enforced guarantee.
 
 ```
 AgentRuntime
-  ├─ LLMProvider            (StubLLMProvider | OpenAICompatProvider | HermesAdapter)
+  ├─ LLMProvider            (Stub | Groq | Anthropic | OpenAI-compatible, in a Fallback chain)
   ├─ RelevanceEngine        (context injection)
   └─ agents/
        ResearchAgent        account + person research (uses BrowserProvider + DDG)
