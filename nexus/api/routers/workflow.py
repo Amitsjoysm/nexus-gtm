@@ -3,6 +3,8 @@
 Lists moved to `routers/lists.py` when they became editable."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -23,6 +25,7 @@ from nexus.models.account import Account
 from nexus.models.workflow import Play
 
 router = APIRouter(tags=["workflow"])
+logger = logging.getLogger("nexus.api.workflow")
 
 
 # ---- inbox ----
@@ -149,13 +152,33 @@ async def create_play(
 async def ingest_account(
     account_id: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> dict:
+    """Scan one account's signal sources now, charged as one ``signal.news_scan`` (2026-10-15).
+
+    The scheduled refresh is the platform's own work and stays uncharged; this is a person asking
+    for the same searches on demand, which ran free. Asked before the searches are bought, charged
+    after, once per scan whatever it found: the searches were bought either way."""
+    from nexus.billing.entitlements import preflight
+    from nexus.billing.meter import metered
+
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    (await preflight(ts, MANUAL_SCAN_CAPABILITY)).raise_if_blocked()
     signals = await get_ingestion_service().run_sources(ts, account)
+    try:
+        async with metered(ts, MANUAL_SCAN_CAPABILITY, user_id=principal.user_id,
+                           attrs={"account_id": account_id}):
+            pass
+    except Exception:
+        # The scan is done and its signals are stored; billing must not be why it fails to return.
+        logger.warning("metering failed for %s", MANUAL_SCAN_CAPABILITY, exc_info=True)
     return {"account_id": account_id, "new_signals": [s.id for s in signals]}
+
+
+#: What a scan a person asks for is charged as.
+MANUAL_SCAN_CAPABILITY = "signal.news_scan"
 
 
 # ---- analytics ----

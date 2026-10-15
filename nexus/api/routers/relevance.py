@@ -170,20 +170,38 @@ async def suggest_buyer_titles(
 async def analyze_website(
     body: AnalyzeWebsiteIn,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_relevance)),
+    principal: Principal = Depends(require(Permission.manage_relevance)),
 ) -> RelevanceProfileIn:
     """AI-draft an ICP from a company's website: web research + LLM inference of who they sell to.
     Returns an editable draft (icp / value_props / product_context) — it does NOT save. The user
     reviews and edits it, then saves via ``PUT /relevance/profile``. Empty draft when offline or
-    the site can't be analyzed."""
+    the site can't be analyzed.
+
+    **Charged as ``ai.icp_from_website``, once, only for a draft that found something**
+    (2026-10-15). The capability was priced for exactly this (two web searches and a completion)
+    and charged only by the chat path's ICP save, so the Relevance page ran it free. Asked first,
+    because the searches are bought before anything can be charged; an empty draft is our failure
+    and costs nothing, the rule the lookalikes follow."""
     from nexus.agents.llm import get_llm_provider
+    from nexus.billing.entitlements import preflight
+    from nexus.billing.meter import metered
     from nexus.integrations.registry import get_registry
     from nexus.relevance.website_icp import analyze_website_to_icp
 
+    (await preflight(ts, WEBSITE_ANALYSIS_CAPABILITY)).raise_if_blocked()
     draft = await analyze_website_to_icp(
         body.url, search=get_registry().search, llm=get_llm_provider()
     )
     result = RelevanceProfileIn(**draft)
+    if _found_something(result):
+        try:
+            async with metered(ts, WEBSITE_ANALYSIS_CAPABILITY, user_id=principal.user_id,
+                               attrs={"url": body.url}):
+                pass
+        except Exception:
+            # The analysis is done and the customer is holding it; billing must not be why it
+            # fails to return.
+            logger.warning("metering failed for %s", WEBSITE_ANALYSIS_CAPABILITY, exc_info=True)
     # Remembered, so leaving the page before "Save" no longer throws a paid analysis away and
     # re-running it no longer buys it twice. Recorded as an `AgentRun` — the table that already
     # holds one row per AI execution — so it needs no migration. Only an analysis that FOUND
@@ -202,6 +220,8 @@ async def analyze_website(
 
 #: The `AgentRun.agent` value a website analysis is recorded under.
 WEBSITE_ANALYSIS_AGENT = "website_icp"
+#: What a website analysis is charged as.
+WEBSITE_ANALYSIS_CAPABILITY = "ai.icp_from_website"
 
 
 def _found_something(draft: RelevanceProfileIn) -> bool:
