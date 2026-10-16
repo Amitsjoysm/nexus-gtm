@@ -782,6 +782,15 @@ _SPECS: tuple[SettingSpec, ...] = (
                 "the customer, so this is the ceiling on that cost per workspace.",
         risk="medium",
     ),
+    SettingSpec(
+        key="prospector_net_new_scan_rows", label="Prospector Net new scan per click",
+        group=ACCESS, kind="int", minimum=100, maximum=2000,
+        effect="How many rows one Net new click may scan, skipping records the workspace already "
+               "holds, before it stops and offers to keep scanning.",
+        warning="Every scanned row is paid to the data provider, including the ones hidden "
+                "because the workspace already holds them.",
+        risk="medium",
+    ),
 
     # ---- reliability ----------------------------------------------------------------------------
     SettingSpec(
