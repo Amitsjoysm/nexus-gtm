@@ -153,6 +153,16 @@ async def probe(provider: str, key: str, *, transport=None) -> TestResult:
             resp = await _call("GET", "https://api.apify.com/v2/users/me",
                                headers={"Authorization": f"Bearer {key}"},
                                transport=transport)
+        elif provider == "infojoy_search":
+            # A one-row contacts search: the real call Prospector makes, at the smallest size, so
+            # the probe costs one record. The token is a header, never a query parameter.
+            resp = await _call(
+                "POST", f"{s.infojoy_search_base_url.rstrip('/')}/api/search/contacts",
+                headers={"X-Api-Token": key},
+                json_body={"PageNumber": 1, "PageSize": 1, "IncludeTotalCount": False,
+                           "Filters": {"Titles": ["manager"]}},
+                transport=transport,
+            )
         elif provider == "twilio":
             from nexus.calling.twilio import parse_credential
 

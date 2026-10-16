@@ -43,6 +43,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "serper": ProviderSpec("serper", "Serper (search)", "serper_api_key"),
     "apify": ProviderSpec("apify", "Apify (actors)", "apify_api_key_list"),
     "github": ProviderSpec("github", "GitHub (public API signals)", "github_token"),
+    # Prospector's B2B database (nexus/prospector/). Billed per record returned, sent as the
+    # `X-Api-Token` header. Tested with a one-row search, which is the real call the product makes.
+    "infojoy_search": ProviderSpec(
+        "infojoy_search", "InfoJoy Search (prospect database)", "infojoy_search_api_key_list",
+    ),
     # Engagement engine (spec §12, §18). One secret each, not rotation pools: the resolver's
     # first key is the one in use. Tested by nexus/engagement/credential_checks.py.
     "google_oauth": ProviderSpec(

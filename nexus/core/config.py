@@ -688,6 +688,23 @@ class Settings(BaseSettings):
     # more than a search call and free-tier credit is consumed quickly, so a pool matters more here.
     apify_api_keys: str = ""
 
+    # Prospector (nexus/prospector/): the InfoJoy Search API, a B2B database of contacts and
+    # companies billed per record returned. Inert until keyed: with no key the feature answers a
+    # clear 400 ("not set up"), never a fake result. Keys are managed in Provider keys
+    # (`infojoy_search`); these are the environment fallback, same pool semantics as Exa.
+    infojoy_search_api_key: str = ""
+    infojoy_search_api_keys: str = ""
+    # Fixed by configuration, never by a request: the client only ever calls this host.
+    infojoy_search_base_url: str = (
+        "https://infojoysearchapi-d5e7g0cydphvcme7.centralus-01.azurewebsites.net"
+    )
+    # Runtime settings (Access & security). Searches one person may run per minute; rows one
+    # workspace may browse per day unless its plan's `prospector.daily_rows` entitlement says
+    # otherwise; rows one Net new click may scan before it stops and asks.
+    prospector_rate_limit_per_minute: int = 30
+    prospector_daily_rows_default: int = 2500
+    prospector_net_new_scan_rows: int = 500
+
     # Optional GitHub token. Unauthenticated GitHub allows 60 requests/hour — a handful of accounts
     # before the budget is gone (measured: 50 remaining after three calls). A token raises it to
     # 5,000. The source degrades to `throttled` rather than failing without one.
@@ -799,6 +816,10 @@ class Settings(BaseSettings):
     @property
     def apify_api_key_list(self) -> list[str]:
         return self._key_pool(self.apify_api_key, self.apify_api_keys)
+
+    @property
+    def infojoy_search_api_key_list(self) -> list[str]:
+        return self._key_pool(self.infojoy_search_api_key, self.infojoy_search_api_keys)
 
     @model_validator(mode="after")
     def _reject_insecure_prod(self) -> "Settings":
