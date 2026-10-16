@@ -762,6 +762,26 @@ _SPECS: tuple[SettingSpec, ...] = (
                "shows.",
         placeholder="token from the ChatGPT submission form",
     ),
+    # Prospector's cost guards (decided 2026-10-16, D21). Browsing is free to the customer and paid
+    # per row returned by us, so these bound what one person or one workspace can run up.
+    SettingSpec(
+        key="prospector_rate_limit_per_minute", label="Prospector searches per minute",
+        group=ACCESS, kind="int", minimum=1, maximum=600,
+        effect="How many Prospector searches one person may run per minute. Searches over it are "
+               "refused with Retry-After.",
+        warning="Too low and filters that apply as you type stall; too high and one script can buy "
+                "many provider rows a minute.",
+        risk="medium",
+    ),
+    SettingSpec(
+        key="prospector_daily_rows_default", label="Prospector rows per workspace per day",
+        group=ACCESS, kind="int", minimum=100, maximum=1_000_000,
+        effect="How many result rows one workspace may browse in Prospector per UTC day, unless its "
+               "plan sets a quota on prospector.daily_rows (raise it for one customer there).",
+        warning="Every row browsed is paid to the data provider even though browsing is free to "
+                "the customer, so this is the ceiling on that cost per workspace.",
+        risk="medium",
+    ),
 
     # ---- reliability ----------------------------------------------------------------------------
     SettingSpec(
