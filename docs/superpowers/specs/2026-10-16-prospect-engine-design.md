@@ -442,9 +442,10 @@ Invoke `impeccable` and `ui-ux-pro-max` before writing it; follow `DESIGN.md`.
   - Contacts view: Save contacts, Add to contact list, Add their companies to an account list,
     Export CSV, Verify (Saved).
   - Companies view: Save accounts, Add to account list, Export CSV.
-- **`ConfirmDeliveryDialog`** (`Modal`): the quote, the Include direct phones toggle, and a list
-  picker (the lists `AddToListModal` already loads, reused in a pick-only mode). `WorkingIndicator`
-  runs while delivering.
+- **`ConfirmDeliveryDialog`** (`Modal`): the quote, the Include direct phones toggle, and a
+  `ListPicker` that reads the same lists endpoint `AddToListModal` uses (existing list of the right
+  kind, or a new one), leaving that shared modal unchanged. `WorkingIndicator` runs while
+  delivering.
 - **`Pager`**: Prev / Next, page number, size 25/50/100, "Show total". Net new shows "Keep scanning".
 - States: skeletons, empty, error, not configured, budget reached, rate limited (a toast). An
   `aria-live` region announces "25 results, page 2". Fully keyboard operable; contrast ≥ 4.5:1 from
