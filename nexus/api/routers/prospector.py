@@ -16,7 +16,7 @@ from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.prospector.errors import ProspectorError
-from nexus.prospector.schemas import FieldCatalogOut, SearchIn, SearchOut
+from nexus.prospector.schemas import FieldCatalogOut, SavedIn, SavedOut, SearchIn, SearchOut
 
 logger = logging.getLogger("nexus.api.routers.prospector")
 
@@ -58,5 +58,21 @@ async def search(
 
     try:
         return await service.search(ts, user_id=principal.user_id, body=body)
+    except ProspectorError as exc:
+        raise _http(exc) from None
+
+
+@router.post("/saved", response_model=SavedOut)
+async def saved(
+    body: SavedIn,
+    ts: TenantSession = Depends(module_gate),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> SavedOut:
+    from nexus.prospector.saved import saved_page
+
+    try:
+        return await saved_page(ts, view=body.view, filters=body.filters,
+                                workspace=body.workspace, page=body.page,
+                                page_size=body.page_size)
     except ProspectorError as exc:
         raise _http(exc) from None
