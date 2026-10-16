@@ -97,6 +97,10 @@ _MODULES = [
     # priced or switched off from Admin without a deploy. On no plan, so this is a strict no-op.
     _cap("module.mcp", "module", "AI apps (MCP)", default_mode="enabled",
          description="Connect AI assistants such as Claude and ChatGPT to NEXUS."),
+    # Prospector (decided 2026-10-16, D18): on every plan by default and on no plan, like the gates
+    # above, so adding it changes nothing until an operator switches it off for a plan.
+    _cap("module.prospector", "module", "Prospector", default_mode="enabled",
+         description="Search a B2B database of contacts and companies and add them."),
 ]
 
 # A module gate that only hides a menu item is a discount with no cost saving: the pages disappear
@@ -194,6 +198,12 @@ _DISCOVERY = [
     _cap("signal.rss_scan", "signal", "RSS signal scan", unit="job",
          depends_on=["module.signals"]),
     _cap("signal.stored", "signal", "Signal stored", depends_on=["module.signals"]),
+    # Prospector (nexus/prospector/). Not metered. Its plan entitlement's `quota` is the
+    # workspace's daily browse budget (D22), set per plan or per customer in the plan editor; no
+    # number means the Runtime-setting default.
+    _cap("prospector.daily_rows", "prospector", "Prospect rows per day", unit="row",
+         default_mode="enabled", depends_on=["module.prospector"],
+         description="Rows a workspace may browse in Prospector per UTC day (the quota)."),
 ]
 
 # ---- outreach & workflow --------------------------------------------------------------------

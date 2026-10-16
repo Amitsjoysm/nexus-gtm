@@ -70,6 +70,7 @@ from nexus.models.provider_setting import ProviderSetting
 from nexus.models.source_db import SourceDatabase
 from nexus.models.source_run import SignalSourceRun
 from nexus.models.prospecting import ProspectCursor, ProspectRun
+from nexus.models.prospector import ProspectorDailyRows, ProspectorPage, ProspectorPurchase
 from nexus.models.web_cache import WebCache
 from nexus.models.workflow import InboxTask, ListItem, Play, PlayRun, ProspectList
 
@@ -164,5 +165,8 @@ __all__ = [
     "OAuthToken",
     "ProspectCursor",
     "ProspectRun",
+    "ProspectorPage",
+    "ProspectorPurchase",
+    "ProspectorDailyRows",
     "WebCache",
 ]

@@ -186,6 +186,9 @@ UNPRICED_BY_DESIGN: frozenset[str] = frozenset({
     "platform.workspace",
     "platform.custom_fields",
     "job.queue_execution",
+    # A structural limit: its plan quota is the daily Prospector browse budget, and a quota needs
+    # no price.
+    "prospector.daily_rows",
 })
 
 

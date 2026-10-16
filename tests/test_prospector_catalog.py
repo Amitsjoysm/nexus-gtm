@@ -63,6 +63,39 @@ async def test_probe_reports_a_rejected_token():
     assert not result.ok and result.status == "failed" and result.http_status == 401
 
 
+# ---- billing --------------------------------------------------------------------------------------
+
+def test_the_module_gate_is_enabled_and_the_daily_limit_hangs_off_it():
+    from nexus.billing.catalog import CAPABILITY_SEED
+    from nexus.billing.rates import UNPRICED_BY_DESIGN
+
+    caps = {c["id"]: c for c in CAPABILITY_SEED}
+    assert caps["module.prospector"]["default_mode"] == "enabled"
+    daily = caps["prospector.daily_rows"]
+    assert daily["depends_on"] == ["module.prospector"] and daily["unit"] == "row"
+    # A limit holder: its plan quota is the budget (D22), and a quota needs no price.
+    assert "prospector.daily_rows" in UNPRICED_BY_DESIGN
+
+
+def test_the_module_gate_changes_nothing_for_existing_plans():
+    from nexus.billing.plans import PLAN_SEED
+
+    for plan in PLAN_SEED:
+        listed = {e[0] for e in plan.get("entitlements", [])}
+        assert not any(c.startswith("prospector.") or c == "module.prospector" for c in listed), \
+            plan["id"]
+
+
+# ---- tables ---------------------------------------------------------------------------------------
+
+def test_the_tables_are_split_between_platform_and_tenant():
+    from nexus.models.prospector import ProspectorDailyRows, ProspectorPage, ProspectorPurchase
+
+    assert "tenant_id" not in ProspectorPage.__table__.columns     # shared vendor cache
+    assert "tenant_id" in ProspectorPurchase.__table__.columns     # RLS-enrolled
+    assert "tenant_id" in ProspectorDailyRows.__table__.columns    # RLS-enrolled
+
+
 async def test_verify_upgrades_a_working_search_to_verified():
     from nexus.providers.testing import verify
 

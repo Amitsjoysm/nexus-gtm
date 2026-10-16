@@ -39,6 +39,9 @@ from nexus.core.tenancy import TenantScoped
 CAPABILITY_UNITS = (
     "action", "token", "search", "check", "message", "seat", "gb", "minute",
     "request", "job", "run",
+    # Prospector (2026-10-16): a field of a record delivered from the prospect database, and a
+    # result row browsed.
+    "record", "row",
 )
 METER_KINDS = ("counter", "gauge", "passthrough")
 # shadow = record only; enabled = allowed, unmetered; metered = allowed + counted against quota;
