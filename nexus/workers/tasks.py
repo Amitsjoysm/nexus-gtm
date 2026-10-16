@@ -668,6 +668,17 @@ async def handle_prune_web_cache(payload: dict) -> dict:
     return {"pruned": await cache.prune()}
 
 
+async def handle_prune_prospector_pages(payload: dict) -> dict:
+    """Delete expired Prospector pages: sealed provider PII kept 24 hours at most (decision D10).
+
+    Idempotent, served by the index on `expires_at`, enqueued every tick beside the web cache prune.
+    Never raises, for the same reason.
+    """
+    from nexus.prospector import cache
+
+    return {"pruned": await cache.prune()}
+
+
 async def handle_rollup_usage(payload: dict) -> dict:
     """Periodic driver: fold each tenant's usage events into rollups.
 
@@ -1447,6 +1458,7 @@ HANDLERS: dict[str, Handler] = {
     "sync_network_account": handle_sync_network_account,
     "rollup_usage": handle_rollup_usage,
     "prune_web_cache": handle_prune_web_cache,
+    "prune_prospector_pages": handle_prune_prospector_pages,
     "roll_billing_periods": handle_roll_billing_periods,
     "dunning_sweep": handle_dunning_sweep,
     "billing_reconcile": handle_billing_reconcile,
@@ -1554,6 +1566,11 @@ async def enqueue_rollup_usage(*, queue: TaskQueue | None = None) -> None:
 async def enqueue_prune_web_cache(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="prune_web_cache", payload={}))
+
+
+async def enqueue_prune_prospector_pages(*, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="prune_prospector_pages", payload={}))
 
 
 async def enqueue_roll_billing_periods(*, queue: TaskQueue | None = None) -> None:

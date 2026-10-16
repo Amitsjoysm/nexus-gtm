@@ -198,7 +198,12 @@ _DISCOVERY = [
     _cap("signal.rss_scan", "signal", "RSS signal scan", unit="job",
          depends_on=["module.signals"]),
     _cap("signal.stored", "signal", "Signal stored", depends_on=["module.signals"]),
-    # Prospector (nexus/prospector/). Not metered. Its plan entitlement's `quota` is the
+    # Prospector (nexus/prospector/). Recorded, never charged: rows bought from the provider while
+    # browsing (cache hits cost us nothing and are not recorded), so browsing COGS is visible in the
+    # usage stream. Browsing is free to the customer (D3).
+    _cap("prospector.search_rows", "prospector", "Prospect rows browsed", unit="row",
+         depends_on=["module.prospector"]),
+    # Not metered. Its plan entitlement's `quota` is the
     # workspace's daily browse budget (D22), set per plan or per customer in the plan editor; no
     # number means the Runtime-setting default.
     _cap("prospector.daily_rows", "prospector", "Prospect rows per day", unit="row",

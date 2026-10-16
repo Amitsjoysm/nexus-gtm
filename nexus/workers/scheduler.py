@@ -31,6 +31,7 @@ from nexus.workers.tasks import (
     enqueue_expire_trials,
     enqueue_charge_unlogged_calls,
     enqueue_prune_web_cache,
+    enqueue_prune_prospector_pages,
     enqueue_dunning_sweep,
     enqueue_refresh_due_accounts,
     enqueue_build_ledger_datasets,
@@ -184,7 +185,9 @@ async def _enqueue_due(queue: TaskQueue) -> int:
             # The shared web cache is platform-global and fills from manual refreshes too, so a
             # deployment with automation off would otherwise never empty it.
             await enqueue_prune_web_cache(queue=queue)
-            count += 1
+            # Prospector's page cache holds sealed provider PII for 24 hours at most (D10).
+            await enqueue_prune_prospector_pages(queue=queue)
+            count += 2
             if settings.automation_enabled:
                 await enqueue_refresh_due_accounts(queue=queue)
                 # Digest rides the automation switch; its handler is idempotent per interval.

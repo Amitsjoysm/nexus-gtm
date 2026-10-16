@@ -372,6 +372,7 @@ async def test_scheduler_enqueues_crm_sweep_when_crm_sync_enabled(monkeypatch):
         "ship_ledger",
         "build_ledger_datasets",
         "prune_web_cache",
+        "prune_prospector_pages",
     }
 
 
@@ -396,6 +397,7 @@ async def test_scheduler_omits_crm_sweep_when_disabled(monkeypatch):
         "ship_ledger",
         "build_ledger_datasets",
         "prune_web_cache",
+        "prune_prospector_pages",
     }
 
 

@@ -72,6 +72,8 @@ OBSERVE_ONLY = {
     "workflow.orchestration_step": "inside workflow.orchestration_run",
     "automation.account_refresh": "the sweep bills the capabilities it invokes",
     "api.request": "no public API surface ships yet",
+    "prospector.search_rows": "browsing Prospector is free (D3); the per-field delivery charges "
+                              "pay for the rows bought while browsing",
 }
 
 

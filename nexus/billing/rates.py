@@ -169,6 +169,10 @@ RATE_SEED: list[dict] = [
     _r("workflow.orchestration_step", 1, 0.0010, "one tool step"),
     _r("integration.crm_connection", 1, 0.0020, "oauth + verify"),
     _r("automation.account_refresh", 0.5, 0.0012, "crawl, amortized"),
+    # Prospector (2026-10-16): InfoJoy bills per record returned, quoted at $0.001-$0.005; $0.003 is
+    # a placeholder to correct in Control plane > Costs. Observe-only (catalogued shadow): priced so
+    # browsing COGS has a margin to read against, never charged because browsing is free (D3).
+    _r("prospector.search_rows", 1, 0.003, "infojoy search, per row bought while browsing"),
 ]
 
 # Deliberately unpriced, and it is not an oversight — a rate card here would be wrong:

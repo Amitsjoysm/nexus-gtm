@@ -196,8 +196,9 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
     # concerns rather than per-workspace opt-ins. +1 for refresh_mailbox_tokens, which keeps SDR
     # mailbox status honest whether or not automation is on; +1 for charge_unlogged_calls,
     # which charges platform calls nobody logged; +1 for prune_web_cache, which empties the
-    # shared web cache whether or not automation is on.
-    assert count == 16
+    # shared web cache whether or not automation is on; +1 for prune_prospector_pages, which keeps
+    # Prospector's sealed provider pages to 24 hours.
+    assert count == 17
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "refresh_due_accounts", "send_daily_digests",
@@ -209,6 +210,7 @@ async def test_enqueue_due_enqueues_both_drivers_when_enabled(monkeypatch):
         "ship_ledger",
         "build_ledger_datasets",
         "prune_web_cache",
+        "prune_prospector_pages",
     }
 
 
@@ -223,7 +225,7 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     q = InMemoryTaskQueue()
     count = await _enqueue_due(q)
-    assert count == 13
+    assert count == 14
     jobs = await _drain(q)
     assert {j.name for j in jobs} == {
         "rollup_usage", "roll_billing_periods", "dunning_sweep", "billing_reconcile",
@@ -234,6 +236,7 @@ async def test_enqueue_due_noop_when_disabled(monkeypatch):
         "ship_ledger",
         "build_ledger_datasets",
         "prune_web_cache",
+        "prune_prospector_pages",
     }
 
 
@@ -383,7 +386,7 @@ async def test_a_driver_already_waiting_is_not_queued_again(monkeypatch):
     monkeypatch.setattr(get_settings(), "automation_enabled", True)
     monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     q = InMemoryTaskQueue()
-    assert await _enqueue_due(q) == 16
+    assert await _enqueue_due(q) == 17
     waiting = await q.depth()
     assert await _enqueue_due(q) == 0                  # one copy of each is already waiting
     assert await q.depth() == waiting
