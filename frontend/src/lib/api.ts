@@ -1261,6 +1261,15 @@ export class ApiClient {
       signal,
     });
   }
+
+  /** Strict fit on or off. Turning it on is refused (422) when the plan does not include it. */
+  setIcpStrictFit(enabled: boolean, signal?: AbortSignal) {
+    return this.request<AutomationSettings>("/workspace/automation", {
+      method: "PATCH",
+      body: { icp_strict_fit: enabled },
+      signal,
+    });
+  }
   getEmailSettings(signal?: AbortSignal) {
     return this.request<EmailSettings>("/workspace/email", { signal });
   }

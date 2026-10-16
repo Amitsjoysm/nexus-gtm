@@ -158,6 +158,13 @@ async def set_automation(
             if service is None or service.archived_at is not None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Service not found")
             service.daily_target = body.icp_daily_count
+    if body.icp_strict_fit is not None:
+        from nexus.prospecting import strict_fit
+
+        # Turning it ON needs the plan; turning it off is never refused (the reply switches' rule).
+        if body.icp_strict_fit and not await strict_fit.available(ts):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, strict_fit.NOT_INCLUDED)
+        tenant.icp_strict_fit = body.icp_strict_fit
     await ts.flush()
     return await _automation_out(ts, tenant)
 
@@ -167,6 +174,7 @@ async def _automation_out(ts: TenantSession, tenant: Tenant) -> AutomationSettin
     explains itself on the screen where the number was set."""
     from nexus.core.config import get_settings
     from nexus.discovery.auto import today_summary
+    from nexus.prospecting import strict_fit
     from nexus.relevance.services import active_services, default_profile, display_name
 
     default = get_settings().icp_discovery_daily_count
@@ -194,6 +202,9 @@ async def _automation_out(ts: TenantSession, tenant: Tenant) -> AutomationSettin
         automation_enabled=bool(tenant.automation_enabled),
         icp_daily_count=tenant.icp_daily_count,
         icp_daily_default=default,
+        icp_strict_fit=bool(tenant.icp_strict_fit),
+        icp_strict_fit_available=await strict_fit.available(ts),
+        icp_min_fit=int(get_settings().icp_discovery_min_fit),
         today=today,
         services=services,
     )

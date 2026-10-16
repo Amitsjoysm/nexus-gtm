@@ -186,6 +186,12 @@ _DISCOVERY = [
          default_mode="metered", depends_on=["module.discovery"]),
     _cap("discovery.account_added", "discovery", "Net-new ICP account", default_mode="metered",
          depends_on=["module.discovery"]),
+    # A premium choice, not a metered action (2026-10-15): LinkedIn and stored candidates must
+    # clear the workspace's fit threshold too. Measured, that keeps 15-27% of what discovery
+    # delivers, so it is off unless a plan includes it (Admin > Plans > What's included).
+    _cap("discovery.strict_fit", "discovery", "Strict ICP fit for discovered accounts",
+         default_mode="enterprise", depends_on=["module.discovery"],
+         description="Every discovered account must clear the fit threshold, not only web finds."),
     _cap("discovery.lookalike_company", "discovery", "Company look-alikes", unit="run",
          default_mode="metered", depends_on=["module.discovery"]),
     _cap("discovery.lookalike_contact", "discovery", "Contact look-alikes", unit="run",

@@ -43,6 +43,10 @@ class Tenant(IdMixin, TimestampMixin, Base):
     # Per-workspace target for net-new strict-ICP accounts per day (SDR-selectable in Settings).
     # NULL → the platform default (NEXUS_ICP_DISCOVERY_DAILY_COUNT, 20).
     icp_daily_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Strict fit (2026-10-15): this workspace asked that LinkedIn and stored candidates clear the fit
+    # threshold too. Applied only while its plan includes `discovery.strict_fit`
+    # (`prospecting/strict_fit.py`); a plan that loses it keeps the choice and stops applying it.
+    icp_strict_fit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # The caller ID this workspace's calls show on the PLATFORM Twilio, assigned by a superadmin.
     # NULL uses the platform default. A workspace on its own Twilio uses its own number instead.
     platform_caller_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

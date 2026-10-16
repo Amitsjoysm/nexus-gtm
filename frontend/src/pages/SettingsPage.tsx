@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
@@ -14,6 +15,7 @@ import {
   Skeleton,
   Spinner,
   Switch,
+  SwitchRow,
   Textarea,
   useToast,
 } from "@/components/ui";
@@ -87,7 +89,7 @@ export function SettingsPage() {
             skeleton={<Skeleton width="100%" height={64} />}
           >
             {(data) => (
-              <>
+              <div className={styles.controls}>
                 <div className={styles.control}>
                   <div className={styles.controlText}>
                     <span className={styles.controlLabel}>
@@ -109,7 +111,11 @@ export function SettingsPage() {
                   settings={data}
                   onSaved={(res) => automation.setData(res)}
                 />
-              </>
+                <StrictFitControl
+                  settings={data}
+                  onSaved={(res) => automation.setData(res)}
+                />
+              </div>
             )}
           </DataState>
         </Card>
@@ -949,6 +955,69 @@ function IcpDailyCountControl({
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Strict fit, a premium choice (2026-10-15). LinkedIn and stored candidates are added without the
+ * fit score, as matches to the ICP's industry, size and country; this holds them to it as well.
+ * Measured, that keeps 15-27% of what discovery adds, so it is off unless the plan includes it.
+ * Mirrors the reply switches: a choice the plan does not cover says so, and one already on can
+ * always be turned off.
+ */
+function StrictFitControl({
+  settings,
+  onSaved,
+}: {
+  settings: AutomationSettings;
+  onSaved: (s: AutomationSettings) => void;
+}) {
+  const api = useApiClient();
+  const toast = useToast();
+  const [saving, setSaving] = useState(false);
+  if (settings.icp_strict_fit === undefined) return null; // an older server: nothing to show
+  const on = Boolean(settings.icp_strict_fit);
+  const available = Boolean(settings.icp_strict_fit_available);
+  const bar = settings.icp_min_fit ?? 70;
+
+  async function toggle(next: boolean) {
+    setSaving(true);
+    try {
+      onSaved(await api.setIcpStrictFit(next));
+      toast.success(
+        next ? "Strict fit is on" : "Strict fit is off",
+        next
+          ? `Discovery adds only accounts that score ${bar} or more.`
+          : "Discovery adds every account that matches your ICP again.",
+      );
+    } catch (err) {
+      toast.error("Couldn't change strict fit", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SwitchRow
+      label={`Only add accounts that score ${bar} or more`}
+      hint={
+        "Holds every account daily discovery, Populate and the Orchestrator add to your fit score, " +
+        "including companies LinkedIn already matched to your ICP's industry, size and country. " +
+        "Fewer accounts a day, each a closer fit."
+      }
+      status={
+        available ? undefined : on ? (
+          "Not in force: this workspace's plan no longer includes strict fit."
+        ) : (
+          <>
+            Comes with Enterprise plans. <Link to="/settings/billing">See your plan</Link>
+          </>
+        )
+      }
+      checked={on}
+      disabled={saving || (!available && !on)}
+      onChange={toggle}
+    />
   );
 }
 

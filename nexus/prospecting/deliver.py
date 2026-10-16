@@ -17,6 +17,12 @@
 * **``require_buyer`` makes discovery contact-first** (D2): a company that passed everything else is
   added only once the shared pool or InfoJoy has someone in the ICP's buyer titles there
   (`infojoy_contacts.buyers_at`), checked a batch at a time until ``limit`` are confirmed.
+* **Strict fit** (2026-10-15, a premium choice, `strict_fit.py`): when the workspace asked for it
+  and its plan includes it, LinkedIn and database candidates must clear ``min_fit`` as well. Their
+  size and country gates stay off: LinkedIn already filtered on both, and its location filter
+  matches any office, so an HQ-country check would refuse real matches. ``strict`` short-circuits
+  the whole condition, so with it on an ``_unchecked`` Parallel candidate faces the threshold too,
+  while with it off the condition is exactly what it was before this existed.
 * **The workspace check runs again at insert** (``find_existing_account``), the backstop for account
   domains stored before domains were normalised, which the chain's SQL anti-join compares exactly.
 
@@ -179,12 +185,14 @@ async def deliver(
     from nexus.discovery.auto import _enrich_candidates, _within_geo, _within_size_band
     from nexus.models.account import Account
     from nexus.models.intelligence import AccountScore
+    from nexus.prospecting import strict_fit
     from nexus.relevance import get_relevance_engine
     from nexus.relevance.gate import icp_gate, mandatory_fields
 
     icp = profile.icp or {}
     relevance = get_relevance_engine()
     settings = get_settings()
+    strict = await strict_fit.in_effect(ts)
 
     built: list[tuple[Candidate, Account]] = [
         (cand, _account_for(ts.tenant_id, cand, source=source, owner_user_id=owner_user_id))
@@ -258,7 +266,7 @@ async def deliver(
             continue
         fit = relevance.score_icp_fit(profile, account)
         screened += 1
-        if cand.source in SCREENED_SOURCES and fit.score < min_fit:
+        if (strict or cand.source in SCREENED_SOURCES) and fit.score < min_fit:
             discarded["low_fit"] += 1
             continue
         if await find_existing_account(ts, domain=account.domain) is not None:

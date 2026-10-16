@@ -246,7 +246,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0079_mailbox_style` on branch `fix/sdr-data-accuracy`
+Alembic under `migrations/versions/`. Head: `0081_icp_strict_fit`
 (`0073_field_provenance`, `0074_draft_facts`, `0075_call_scripts`, `0076_run_soft_delete`,
 `0077_icp_services`, `0078_user_call_scripts`, `0079_mailbox_style`; all on the local deploy and
 on staging since v1.13.0, 2026-11-06; none on production); `0072_prospector` before them. `0076`
@@ -280,7 +280,9 @@ platform-global) -> `0072` (`prospector_pages` platform-global; `prospector_purc
 companies; `companies.labels_quarantined_at`) -> `0074` (`engagement_messages.draft_facts`) ->
 `0075` (`engagement_campaigns.call_script`, `.call_script_meta`) -> `0076`
 (`orchestration_runs.deleted_at`; `discovery_suppressions` tenant-scoped; `company_reports`
-platform-global, `subject_tenant_id`). Every tenant-scoped table gets
+platform-global, `subject_tenant_id`) -> `0077`-`0079` (above) -> `0080`
+(`engagement_messages.mailbox_connection_id` nullable, so an app-password send is recorded) ->
+`0081` (`tenants.icp_strict_fit`). Every tenant-scoped table gets
 RLS via `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -2107,6 +2109,23 @@ store kept chevron.com as "Hess Corporation", 4,337 staff, for every workspace.
    zero cost, which emptied this step, Find similar's web fallback and the Orchestrator's web fill
    for any workspace holding an account. Held domains are filtered from the hits instead, and the
    excluded count is asked for on top.
+
+**Strict fit is a premium choice that holds every candidate to the threshold** (2026-10-15,
+`prospecting/strict_fit.py`, migration `0072`, `tests/test_strict_fit.py`). Measured: only 15-27% of
+what discovery delivered scored 70 or more (median 54-55), so the default stays as above and a
+workspace opts in. Decided with the product owner:
+- **`discovery.strict_fit`**, enterprise mode, a gate with no price (`UNPRICED_BY_DESIGN`). Off on
+  every plan until Admin > Plans > What's included grants it; a fresh install's Enterprise plan
+  includes it. Always plan-gated whatever the enforcement mode, except `off`; plan classes that
+  include everything (`legacy-unlimited`, internal, partner) include it.
+- `tenants.icp_strict_fit` is the workspace's choice, set by `PATCH /workspace/automation`
+  (`StrictBool`): turning it ON without the plan is a 422, OFF is never refused. `deliver` applies
+  it only while chosen AND included, so a plan that loses it keeps the choice and stops applying it.
+  LinkedIn and database candidates then clear `icp_discovery_min_fit` too; their size and country
+  gates stay off (LinkedIn matches any office).
+- Settings > Workspace, beside the daily target: "Only add accounts that score N or more", N being
+  the server's `icp_min_fit`; not included reads "Comes with Enterprise plans" with a link to
+  Billing, mirroring the reply switches (`tests/test_strict_fit_ui.py`).
 
 **The daily sweep reaches the workspace's number, or says why not** (`handle_discover_icp_accounts`,
 2026-09-30). Reported as "new ICP accounts are not updating daily to the number set in Settings";

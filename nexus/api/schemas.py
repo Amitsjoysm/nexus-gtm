@@ -808,6 +808,8 @@ class AutomationSettingsIn(BaseModel):
     icp_daily_count: int | None = Field(default=None, ge=0, le=100)
     # Which service ``icp_daily_count`` is for (W8). None or "default" is the main service.
     service_id: str | None = None
+    # Strict fit (premium). StrictBool: a JSON "false" is truthy in Python and would switch it ON.
+    icp_strict_fit: StrictBool | None = None
 
 
 class DiscoveryTodayOut(BaseModel):
@@ -839,6 +841,13 @@ class AutomationSettingsOut(BaseModel):
     # None -> the platform default applies (shown via icp_daily_default).
     icp_daily_count: int | None = None
     icp_daily_default: int = 20
+    # Strict fit: what the workspace chose, and whether its plan includes it. "Chosen" and "in
+    # effect" are different facts; in effect is both.
+    icp_strict_fit: bool = False
+    icp_strict_fit_available: bool = False
+    # The fit score strict fit holds every candidate to (Runtime settings: icp_discovery_min_fit),
+    # so the screen names the actual bar rather than "the threshold".
+    icp_min_fit: int = 70
     # None until the first pass of an interval has run.
     today: DiscoveryTodayOut | None = None
     # Every service the workspace sells, the main one first. The fields above stay the main

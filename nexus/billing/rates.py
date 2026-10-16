@@ -191,6 +191,8 @@ RATE_SEED: list[dict] = [
 #   limits enforced by quota, and a quota needs no price.
 # * `job.queue_execution` is internal plumbing. Billing a customer for our own retry is indefensible.
 # * `module.*` gates are on/off entitlements, not units of anything.
+# * `discovery.strict_fit` is the same kind of gate (a plan includes it or not); what it changes is
+#   which discovered accounts are kept, and those are charged as `discovery.account_added` already.
 #
 # Pinned by `test_every_capability_is_priced_or_explicitly_exempt`, so a NEW capability cannot
 # quietly join this list by being forgotten.
@@ -202,6 +204,7 @@ UNPRICED_BY_DESIGN: frozenset[str] = frozenset({
     # A structural limit: its plan quota is the daily Prospector browse budget, and a quota needs
     # no price.
     "prospector.daily_rows",
+    "discovery.strict_fit",
 })
 
 

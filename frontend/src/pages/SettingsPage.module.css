@@ -5,6 +5,13 @@
 }
 
 /* ---- automation toggle row ---- */
+/* The rows of one settings card, spaced as separate settings rather than stacked flush. */
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
 .control {
   display: flex;
   align-items: center;

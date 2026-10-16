@@ -247,7 +247,7 @@ PLAN_SEED: list[dict] = [
         "base_price_cents": 0, "seat_price_cents": 0, "included_credits": 0,
         "max_seats": None, "sort_order": 60,
         "description": "Custom contract; entitlements come from the contract.",
-        "entitlements": [],
+        "entitlements": [("discovery.strict_fit", "enabled", None, None)],
     },
     {
         "id": "internal", "name": "Internal", "plan_class": "internal", "status": "active",

@@ -1291,6 +1291,12 @@ export interface AutomationSettings {
   /** Per-workspace daily target for net-new ICP accounts. null = platform default. */
   icp_daily_count: number | null;
   icp_daily_default: number;
+  /** Strict fit: every discovered account must clear the fit score. What the workspace chose, and
+   *  whether its plan includes it (`discovery.strict_fit`). Absent from an older server. */
+  icp_strict_fit?: boolean;
+  icp_strict_fit_available?: boolean;
+  /** The fit score strict fit holds candidates to. */
+  icp_min_fit?: number;
   /** What the current discovery interval delivered. Absent before the first pass, or from an older server. */
   today?: DiscoveryToday | null;
   /** Every service's daily number and today, the main service first. */
