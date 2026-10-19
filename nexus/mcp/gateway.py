@@ -178,8 +178,12 @@ class Gateway:
         if status >= 500:
             logger.warning("tool request %s %s answered %s (request %s)", method, path, status,
                            request_id)
-            return ToolOutcome(False, body, f"{PRODUCT_NAME} could not finish this. Reference: "
-                               f"{request_id}.", status)
+            # A 502/503/504 is the app saying a provider it depends on failed, in a sentence it
+            # wrote ("The data provider failed... Try again shortly"), which tells the assistant
+            # what to say. A 500 is a crash whose body nothing here wrote: never pass it on.
+            said = _detail(body).strip() if status in (502, 503, 504) else ""
+            lead = said if said else f"{PRODUCT_NAME} could not finish this."
+            return ToolOutcome(False, body, f"{lead} Reference: {request_id}.", status)
         message = _detail(body) or {
             400: "The request was not valid.", 403: "You do not have permission to do this.",
             404: "Not found.", 409: "This conflicts with the current state.",

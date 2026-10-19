@@ -283,3 +283,31 @@ async def test_prospector_save_needs_rows_or_a_limit(client, prospect_db):
     token = await signup(client, slug="tl9", email="o@tl9.com")
     out = await _call(client, token, "prospector_save", view="contacts")
     assert not out.ok and "rows" in out.message
+
+
+async def test_a_provider_outage_reaches_the_model_in_the_apps_own_words(client, prospect_db):
+    """2026-10-19, found on the local deploy: InfoJoy answering 500 became "could not finish
+    this", so the assistant could not tell the user to retry later. A 503 the app wrote itself
+    carries its sentence; the reference is kept for support."""
+    prospect_db.status = 500
+    token = await signup(client, slug="tl10", email="o@tl10.com")
+    out = await _call(client, token, "prospector_search", view="contacts",
+                      filters={"titles": ["VP Sales"]})
+    assert not out.ok and out.status == 503
+    assert "data provider failed" in out.message and "Reference:" in out.message
+
+
+async def test_an_unexpected_crash_still_says_nothing_internal():
+    """A real 500 keeps the generic sentence: its body is whatever the framework produced."""
+    async def boom(scope, receive, send):
+        await send({"type": "http.response.start", "status": 500,
+                    "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body",
+                    "body": b'{"detail": "Traceback (most recent call last): secret"}'})
+
+    gw = Gateway(boom, credentials.Actor(
+        user_id="u", tenant_id="t", role="rep", token_version=0, connection_id="c",
+        kind="api_key", scopes=frozenset(credentials.SCOPES), name="n"))
+    out = await gw.get("/api/billing/credits")
+    assert not out.ok and out.status == 500
+    assert "could not finish" in out.message and "Traceback" not in out.message
