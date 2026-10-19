@@ -55,6 +55,24 @@ def csv_cell(value: object) -> object:
     return value
 
 
+#: A cell starting with one of these is evaluated as a formula by Excel, Sheets and LibreOffice.
+_FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def safe_cell(value: object) -> object:
+    """``csv_cell``, then neutralise a text cell a spreadsheet would run as a formula.
+
+    For files whose text comes from somewhere we do not control (Prospector's provider): a value
+    like ``=HYPERLINK(...)`` or ``+cmd|...`` becomes ``'=HYPERLINK(...)``, which a spreadsheet shows
+    as text. Numbers are left as numbers. Used by Prospector's export only; the other exports are
+    unchanged.
+    """
+    value = csv_cell(value)
+    if isinstance(value, str) and value.startswith(_FORMULA_LEADS):
+        return "'" + value
+    return value
+
+
 def csv_response(
     filename: str,
     header: Sequence[str],

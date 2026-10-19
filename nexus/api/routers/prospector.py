@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.core.rbac import Permission
@@ -19,6 +19,7 @@ from nexus.prospector.errors import ProspectorError
 from nexus.prospector.schemas import (
     DeliverIn,
     DeliverOut,
+    ExportIn,
     FieldCatalogOut,
     QuoteIn,
     QuoteOut,
@@ -136,3 +137,25 @@ async def deliver(
             request_id=body.request_id, client=client())
     except ProspectorError as exc:
         raise _http(exc) from None
+
+
+@router.post("/export")
+async def export(
+    body: ExportIn,
+    ts: TenantSession = Depends(module_gate),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> Response:
+    """The selected rows as CSV, charged like a delivery. The charge is committed before the file
+    is returned, so a download that fails is retried (with a new request id) for free."""
+    from nexus.api.csv_export import csv_response
+    from nexus.prospector.export import export_rows
+    from nexus.prospector.search import client
+
+    try:
+        filename, header, rows = await export_rows(
+            ts, user_id=principal.user_id, selection=body.selection,
+            include_phones=body.include_phones, request_id=body.request_id, client=client())
+    except ProspectorError as exc:
+        raise _http(exc) from None
+    await ts.commit()
+    return csv_response(filename, header, rows)
