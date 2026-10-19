@@ -1,0 +1,348 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Rail beside results on a wide screen; stacked below the large breakpoint. */
+.layout {
+  display: grid;
+  grid-template-columns: 256px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.railSlot {
+  min-width: 0;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.toolbarEnd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.onlySmall {
+  display: none;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* ---- the selection bar: the Contacts page's accent-quiet strip, kept in reach while scrolling. */
+.bulkBar {
+  position: sticky;
+  bottom: var(--space-4);
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  /* Opaque under the tint: the bar floats over table rows. */
+  background: linear-gradient(var(--accent-quiet), var(--accent-quiet)), var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.bulkCount {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.bulkActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.textButton {
+  padding: var(--space-1) var(--space-1);
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.textButton:hover {
+  color: var(--accent-hover);
+}
+
+.textButton:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ---- cells ---------------------------------------------------------------------------------- */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.primary {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.primaryLink {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.primaryLink:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.secondary {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Location after the website on the company's second line, separated by a middle dot. */
+.place::before {
+  content: "·";
+  margin: 0 var(--space-1);
+  color: var(--text-subtle);
+}
+
+.secondary .place:first-child::before {
+  content: none;
+  margin: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A masked value reads as withheld, not missing: a lock and the partial mask, never greyed out to
+   the point of looking like an empty cell. */
+.masked {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.masked .mono {
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.lock {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.missing {
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.savedLink {
+  text-decoration: none;
+  border-radius: var(--radius-full);
+}
+
+.savedLink:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* ---- paging --------------------------------------------------------------------------------- */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding-top: var(--space-2);
+}
+
+.pageSize {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.position {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pagerButtons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ---- the confirm dialog --------------------------------------------------------------------- */
+.quote {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.lines {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.line,
+.totalLine {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.line:last-child,
+.totalLine:last-child {
+  border-bottom: 0;
+}
+
+.line dt {
+  color: var(--text-muted);
+}
+
+.line dd,
+.totalLine dd {
+  margin: 0;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.totalLine {
+  background: var(--surface-2);
+  font-weight: var(--weight-semibold);
+}
+
+.warn {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--warning-quiet);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.listPicker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.choices {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.choice input {
+  accent-color: var(--accent);
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .railClosed {
+    display: none;
+  }
+  .onlySmall {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 640px) {
+  .bulkBar {
+    bottom: var(--space-2);
+  }
+  .bulkActions {
+    width: 100%;
+  }
+}

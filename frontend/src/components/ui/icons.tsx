@@ -192,6 +192,26 @@ export const TargetIcon = (props: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+/** Prospector: finding people and companies you do not have yet. */
+export const CompassIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="m15.5 8.5-2 5-5 2 2-5 5-2Z" />
+  </Svg>
+);
+
+export const MinusIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <path d="M5 12h14" />
+  </Svg>
+);
+
+export const ChevronDownIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <path d="m6 9 6 6 6-6" />
+  </Svg>
+);
+
 export const TrendUpIcon = (props: SVGProps<SVGSVGElement>) => (
   <Svg {...props}>
     <path d="M3 17l6-6 4 4 8-8M21 7v5h-5" />

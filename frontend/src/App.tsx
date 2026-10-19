@@ -47,6 +47,9 @@ const InboxPage = lazyPage(() => import("@/pages/InboxPage"), "InboxPage");
 const AccountsPage = lazyPage(() => import("@/pages/AccountsPage"), "AccountsPage");
 const AccountDetailPage = lazyPage(() => import("@/pages/AccountDetailPage"), "AccountDetailPage");
 const ContactsPage = lazyPage(() => import("@/pages/ContactsPage"), "ContactsPage");
+const ProspectorPage = lazyPage(
+  () => import("@/pages/prospector/ProspectorPage"), "ProspectorPage",
+);
 const NetworkPage = lazyPage(() => import("@/pages/NetworkPage"), "NetworkPage");
 const CallsPage = lazyPage(() => import("@/pages/CallsPage"), "CallsPage");
 const SignalsPage = lazyPage(() => import("@/pages/SignalsPage"), "SignalsPage");
@@ -287,6 +290,16 @@ export function App() {
                 <Route path="/accounts" element={<AccountsPage />} />
                 <Route path="/accounts/:id" element={<AccountDetailPage />} />
                 <Route path="/contacts" element={<ContactsPage />} />
+                <Route
+                  path="/prospector"
+                  element={
+                    <RequirePage page="/prospector">
+                      <RequireCapability capability="module.prospector" name="Prospector">
+                        <ProspectorPage />
+                      </RequireCapability>
+                    </RequirePage>
+                  }
+                />
                 <Route
                   path="/network"
                   element={

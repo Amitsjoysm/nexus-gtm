@@ -5,6 +5,7 @@ import {
   BellIcon,
   BoltIcon,
   BuildingIcon,
+  CompassIcon,
   DashboardIcon,
   FileTextIcon,
   InboxIcon,
@@ -70,6 +71,12 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/calls", label: "Calls", icon: <PhoneIcon />, capability: "module.calling" },
   { to: "/accounts", label: "Accounts", icon: <BuildingIcon /> },
   { to: "/contacts", label: "Contacts", icon: <UsersIcon /> },
+  // Search a B2B database for people and companies the workspace does not have yet (spec
+  // 2026-10-16). Every rep: browsing is free and masked, taking records is charged per field.
+  {
+    to: "/prospector", label: "Prospector", icon: <CompassIcon />,
+    capability: "module.prospector",
+  },
   // The engagement engine (spec §9). An SDR builds and runs their own campaigns and works their own
   // replies, so none of these carries a `minRole`; the server scopes every read to the caller's
   // mailboxes, and a manager sees the team through a toggle on the page.

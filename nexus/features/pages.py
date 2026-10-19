@@ -46,6 +46,7 @@ HIDEABLE_PAGES: tuple[PageSpec, ...] = (
     PageSpec("campaigns", "/engagement/campaigns", "Campaigns", "module.campaigns"),
     PageSpec("replies", "/engagement/replies", "Replies", "module.campaigns"),
     PageSpec("templates", "/engagement/templates", "Sequence templates", "module.cadences"),
+    PageSpec("prospector", "/prospector", "Prospector", "module.prospector"),
     PageSpec("network", "/network", "Network", "module.network"),
     PageSpec("lists", "/lists", "Lists", "module.lists"),
     PageSpec("signals", "/signals", "Signals", "module.signals"),
