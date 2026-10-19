@@ -246,7 +246,8 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0071_ledger_erasures`. The chain is
+Alembic under `migrations/versions/`. Head: `0072_prospector` (branch `feat/prospect-engine`; on
+master the head is still `0071_ledger_erasures`). The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -269,7 +270,8 @@ fields on `companies`, `company_countries` and `prospect_cursors`, all platform-
 `oauth_tokens`, platform-global) -> `0069` (`mailbox_connections.auto_actions` and
 `.auto_send_replies`, `reply_classifications.auto_reply` and `.auto_reply_note`) -> `0070`
 (`payment_credentials.payment_method_configuration`, platform-global) -> `0071` (`ledger_erasures`,
-platform-global). Every tenant-scoped table gets RLS via
+platform-global) -> `0072` (`prospector_pages` platform-global; `prospector_purchases`,
+`prospector_daily_rows` tenant-scoped). Every tenant-scoped table gets RLS via
 `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -3104,6 +3106,52 @@ server (`nxo_` access, `nxr_` refresh). Spec, plan and marketplace steps:
   (`/oauth/consent`, outside the app shell; only that path survives login via `nexus.returnTo`).
   Marketplace artifacts: `distribution/claude-plugin/` (validated with Claude Code 2.1.296; older
   CLIs reject `displayName`) and `distribution/mcp-registry/server.json`.
+
+## Prospector (`nexus/prospector/`, `/prospector`) — cold prospect search
+
+Reps search the InfoJoy Search API (a B2B database of contacts and companies, billed to us per
+record returned), browse partially masked results for free, and pay per field delivered to save,
+list or export. Spec, 25 owner decisions (D1-D25), plan and the first real calls:
+`docs/superpowers/{specs,plans}/2026-10-16-prospect*`, `.../2026-10-16-prospector-observed-api.md`.
+
+- **Masking is structural.** `ProspectRowOut` (and the frontend `ProspectRow`) declares no raw email,
+  phone, domain or LinkedIn field; `presenter.py` is the one builder. A held row carries the
+  workspace's OWN values in `record`. `test_no_unmasked_value_appears_in_any_search_response` (and the
+  MCP twin) prove no fixture value reaches the browser or the model. Row keys are tenant-bound HMACs,
+  never `sha256(email)`.
+- **Pay per field, once** (D4-D6): `prospector.email` and `prospector.company` 1 credit each,
+  `prospector.phone` 1 credit only when "Include direct phones" is ticked; companies taken through
+  the Contacts view are free; `prospector_purchases` (the ledger) makes re-adding, re-exporting and
+  retries free; held rows are linked, never rewritten. `quote` -> `preflight_all` (402 before work)
+  -> one savepoint {records, list items, ledger, `metered(..., idempotency_key=prospector:<req>:<cap>)`}.
+  Browsing is recorded as `prospector.search_rows` (observe-only, COGS) and never charged.
+- **Cost guards** (D11, D21, D22): `prospector_rate_limit_per_minute` (30/person), a daily row budget
+  per workspace counted in `prospector_daily_rows` (enforced whatever billing enforcement says): the
+  plan's quota on `prospector.daily_rows` (raise it per plan or per customer in the plan editor), else
+  `prospector_daily_rows_default` (2,500). Net new is a capped scan (`prospector_net_new_scan_rows`,
+  500) with a signed, tenant-bound cursor. Total and Net new do not search until a filter is set.
+- **The shared cache** (`prospector_pages`, D10) is platform-global, Fernet-sealed, 24 h, pruned every
+  tick; a failed call is never cached. Cache writes finish before any tenant write in a request.
+- **The Saved tab reads workspace data**, never the provider (D13); the NEXUS-only filters (email
+  status, lists, signals, funding, job postings) work only there (D14). Email Opened does not exist:
+  NEXUS does not track opens.
+- **Vendor emails are kept unverified and held out of campaigns** (D19): contacts are saved
+  `enrichment_source="sourcing:prospector"`; `engagement/sequences.enroll` skips them
+  (`unverified_prospector_email`) until `email_status` is valid, catch_all or risky. `POST
+  /prospector/verify` releases them, free for Prospector-delivered addresses (D20), `verify.email`
+  for any other contact; >25 go to the `prospector_verify_contacts` job.
+- **Exports are formula-safe** (`csv_export.safe_cell`, Prospector only) and charged like delivery,
+  committed before the file is returned.
+- **The provider was failing when this was built** (2026-10-19): a valid token answers HTTP 500 with
+  an empty body on every search (401 for a bad token; the documented 400 for PageSize > 500). The
+  success shape, vocabularies and the two location field sets (D15) are still provisional: rerun
+  `scripts/infojoy_probe.py` in the app container once InfoJoy answers, then update `records.py`
+  aliases and `fields.py` names/options. Read timeout is 30 s (16 s cold start observed).
+- MCP: `prospector_search` (read, masked) and `prospector_save` (write, charged), both through
+  `gateway._ALLOWED`.
+- UI: `frontend/src/pages/prospector/` (filter state lives in the URL `f=` param; the rail, table,
+  selection bar and confirm dialog are separate files). The nav item, the route and
+  `features/pages.py` all carry `module.prospector`.
 
 ## Frontend skills — USE THESE for any UI work
 
