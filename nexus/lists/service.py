@@ -53,6 +53,17 @@ def _clean(ids) -> list[str]:
     return list(seen)
 
 
+def can_edit(plist: ProspectList, *, user_id: str, role: str) -> bool:
+    """Changes belong to the list's maker or a manager: a rep tidying up must not be able to empty
+    a colleague's list the day before their campaign starts. The one rule, read by the lists router
+    and by Prospector's add-to-list."""
+    from nexus.core.rbac import Permission, has_permission
+
+    if plist.owner_user_id and plist.owner_user_id == user_id:
+        return True
+    return has_permission(role, Permission.manage_campaigns)  # manager+
+
+
 async def get_live(ts: TenantSession, list_id: str) -> ProspectList | None:
     """The list if it exists in this workspace and has not been archived."""
     plist = await ts.get(ProspectList, list_id)

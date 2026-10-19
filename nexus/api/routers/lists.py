@@ -20,7 +20,7 @@ from nexus.api.schemas import (
     ProspectListOut,
 )
 from nexus.core.db import ensure_aware
-from nexus.core.rbac import Permission, has_permission
+from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.lists import service
 from nexus.lists.builder import get_list_builder
@@ -30,9 +30,7 @@ router = APIRouter(tags=["lists"])
 
 
 def _can_edit(principal: Principal, plist: ProspectList) -> bool:
-    if plist.owner_user_id and plist.owner_user_id == principal.user_id:
-        return True
-    return has_permission(principal.role, Permission.manage_campaigns)  # manager+
+    return service.can_edit(plist, user_id=principal.user_id, role=principal.role)
 
 
 async def _owner_names(ts: TenantSession, lists: list[ProspectList]) -> dict[str, str]:

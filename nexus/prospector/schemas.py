@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from nexus.prospector.filters import SearchFilters, WorkspaceFilters
+from nexus.prospector.selection import Selection
 
 View = Literal["contacts", "companies"]
 
@@ -118,6 +119,63 @@ class SavedOut(BaseModel):
 class FieldCatalogOut(BaseModel):
     view: View
     sections: list[dict]
+
+
+RequestId = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
+IdOrNone = Field(None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
+class QuoteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selection: Selection
+    action: Literal["save", "list", "reveal", "company_list", "export"] = "save"
+    include_phones: StrictBool = False
+
+
+class QuoteOut(BaseModel):
+    """What the confirm dialog shows. Quantities per capability, priced at today's rate cards."""
+
+    records: int
+    charges: dict[str, int]
+    credits: dict[str, float]
+    total_credits: float
+    already_paid: int
+    held: int
+    unavailable: int
+    balance: float | None = None
+    enough: bool = True
+
+
+class DeliverIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selection: Selection
+    action: Literal["save", "list", "reveal", "company_list"] = "save"
+    list_id: str | None = IdOrNone
+    include_phones: StrictBool = False
+    request_id: str = RequestId
+
+
+class ExportIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selection: Selection
+    include_phones: StrictBool = False
+    request_id: str = RequestId
+
+
+class DeliverOut(BaseModel):
+    created: int = 0
+    reused: int = 0
+    listed: int = 0
+    held: int = 0
+    unavailable: int = 0
+    already_paid: int = 0
+    dropped_linkedin: int = 0
+    charged: dict[str, int] = Field(default_factory=dict)
+    record_ids: list[str] = Field(default_factory=list)
+    list_id: str | None = None
 
 
 __all__ = [

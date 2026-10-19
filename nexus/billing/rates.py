@@ -173,6 +173,11 @@ RATE_SEED: list[dict] = [
     # a placeholder to correct in Control plane > Costs. Observe-only (catalogued shadow): priced so
     # browsing COGS has a margin to read against, never charged because browsing is free (D3).
     _r("prospector.search_rows", 1, 0.003, "infojoy search, per row bought while browsing"),
+    # 1 credit per field delivered (D23). A contact bought with both fields costs us one record and
+    # earns 2 credits, so the per-field cost is deliberately conservative.
+    _r("prospector.email", 1, 0.003, "infojoy search, per record (placeholder in quoted range)"),
+    _r("prospector.phone", 1, 0.003, "infojoy search, per record (placeholder in quoted range)"),
+    _r("prospector.company", 1, 0.003, "infojoy search, per record (placeholder in quoted range)"),
 ]
 
 # Deliberately unpriced, and it is not an oversight — a rate card here would be wrong:

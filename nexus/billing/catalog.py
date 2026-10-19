@@ -198,7 +198,19 @@ _DISCOVERY = [
     _cap("signal.rss_scan", "signal", "RSS signal scan", unit="job",
          depends_on=["module.signals"]),
     _cap("signal.stored", "signal", "Signal stored", depends_on=["module.signals"]),
-    # Prospector (nexus/prospector/). Recorded, never charged: rows bought from the provider while
+    # Prospector (nexus/prospector/). A workspace pays per FIELD delivered (D4, D5): an email, a
+    # direct phone (only when asked for), a company from the Companies view. Each is charged once
+    # per workspace per record (D6, the purchase ledger); browsing is free (D3).
+    _cap("prospector.email", "prospector", "Prospect email", unit="record",
+         default_mode="metered", depends_on=["module.prospector"],
+         description="An email address delivered from the prospect database."),
+    _cap("prospector.phone", "prospector", "Prospect direct phone", unit="record",
+         default_mode="metered", depends_on=["module.prospector"],
+         description="A direct phone number delivered from the prospect database."),
+    _cap("prospector.company", "prospector", "Prospect company", unit="record",
+         default_mode="metered", depends_on=["module.prospector"],
+         description="A company delivered from the prospect database's Companies view."),
+    # Recorded, never charged: rows bought from the provider while
     # browsing (cache hits cost us nothing and are not recorded), so browsing COGS is visible in the
     # usage stream. Browsing is free to the customer (D3).
     _cap("prospector.search_rows", "prospector", "Prospect rows browsed", unit="row",

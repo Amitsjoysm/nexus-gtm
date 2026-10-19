@@ -16,7 +16,17 @@ from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
 from nexus.prospector.errors import ProspectorError
-from nexus.prospector.schemas import FieldCatalogOut, SavedIn, SavedOut, SearchIn, SearchOut
+from nexus.prospector.schemas import (
+    DeliverIn,
+    DeliverOut,
+    FieldCatalogOut,
+    QuoteIn,
+    QuoteOut,
+    SavedIn,
+    SavedOut,
+    SearchIn,
+    SearchOut,
+)
 
 logger = logging.getLogger("nexus.api.routers.prospector")
 
@@ -74,5 +84,55 @@ async def saved(
         return await saved_page(ts, view=body.view, filters=body.filters,
                                 workspace=body.workspace, page=body.page,
                                 page_size=body.page_size)
+    except ProspectorError as exc:
+        raise _http(exc) from None
+
+
+@router.post("/quote", response_model=QuoteOut)
+async def quote(
+    body: QuoteIn,
+    ts: TenantSession = Depends(module_gate),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> QuoteOut:
+    """What a delivery would cost, field by field, against the balance. Spends nothing."""
+    from nexus.billing.credits import balance
+    from nexus.prospector import charges
+    from nexus.prospector.deliver import prepare
+    from nexus.prospector.search import client
+
+    try:
+        q, _bought = await prepare(ts, selection=body.selection, action=body.action,
+                                   include_phones=body.include_phones, client=client())
+    except ProspectorError as exc:
+        raise _http(exc) from None
+    rates = await charges.rate_cards(ts)
+    credits = {cap: qty * rates.get(cap, 0.0) for cap, qty in q.charges.items()}
+    total = round(sum(credits.values()), 4)
+    try:
+        held_balance = float(await balance(ts))
+    except Exception:
+        held_balance = None
+    return QuoteOut(
+        records=len(q.lines), charges=q.charges, credits=credits, total_credits=total,
+        already_paid=q.already_paid, held=q.held, unavailable=q.unavailable,
+        balance=held_balance, enough=held_balance is None or held_balance >= total,
+    )
+
+
+@router.post("/deliver", response_model=DeliverOut)
+async def deliver(
+    body: DeliverIn,
+    ts: TenantSession = Depends(module_gate),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> DeliverOut:
+    """Save, list, reveal or list-their-companies, charged once per field (D4-D6)."""
+    from nexus.prospector import deliver as service
+    from nexus.prospector.search import client
+
+    try:
+        return await service.deliver(
+            ts, user_id=principal.user_id, role=principal.role, selection=body.selection,
+            action=body.action, list_id=body.list_id, include_phones=body.include_phones,
+            request_id=body.request_id, client=client())
     except ProspectorError as exc:
         raise _http(exc) from None

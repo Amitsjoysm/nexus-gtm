@@ -86,6 +86,31 @@ def test_the_module_gate_changes_nothing_for_existing_plans():
             plan["id"]
 
 
+PRICED = ("prospector.email", "prospector.phone", "prospector.company")
+
+
+def test_each_field_is_one_credit_and_clears_the_floor():
+    from nexus.billing.catalog import CAPABILITY_SEED
+    from nexus.billing.rates import RATE_SEED, validate_rate
+
+    caps = {c["id"]: c for c in CAPABILITY_SEED}
+    cards = {r["capability_id"]: r for r in RATE_SEED}
+    for cid in PRICED:
+        assert caps[cid]["default_mode"] == "metered" and caps[cid]["unit"] == "record", cid
+        assert caps[cid]["depends_on"] == ["module.prospector"], cid
+        assert cards[cid]["credits_per_unit"] == 1 and cards[cid]["unit_cost_usd"] == 0.003, cid
+        assert validate_rate(cid, credits_per_unit=1, unit_cost_usd=0.003) >= 0.5
+    # Browsing is free (D3): recorded for COGS, never charged.
+    assert caps["prospector.search_rows"]["default_mode"] == "shadow"
+
+
+def test_the_charged_set_is_the_pricing_set():
+    from nexus.prospector.charges import CHARGED
+    from nexus.prospector.pricing import CAPABILITY
+
+    assert set(CHARGED) == set(CAPABILITY.values()) == set(PRICED)
+
+
 # ---- tables ---------------------------------------------------------------------------------------
 
 def test_the_tables_are_split_between_platform_and_tenant():
