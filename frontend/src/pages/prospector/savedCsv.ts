@@ -8,10 +8,14 @@
 import type { ProspectView, SavedRow } from "@/lib/prospectorTypes";
 
 const FORMULA_LEADS = ["=", "+", "-", "@", "\t", "\r"];
+/** Digits and phone punctuation only: a phone or a number, which cannot call anything. */
+const PLAIN_NUMBER = /^[+-]?[\d\s().-]*\d[\d\s().-]*$/;
 
 function cell(value: unknown): string {
   let text = value === null || value === undefined ? "" : String(value);
-  if (FORMULA_LEADS.some((lead) => text.startsWith(lead))) text = `'${text}`;
+  if (FORMULA_LEADS.some((lead) => text.startsWith(lead)) && !PLAIN_NUMBER.test(text)) {
+    text = `'${text}`;
+  }
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 

@@ -3140,8 +3140,11 @@ list or export. Spec, 25 owner decisions (D1-D25), plan and the first real calls
   (`unverified_prospector_email`) until `email_status` is valid, catch_all or risky. `POST
   /prospector/verify` releases them, free for Prospector-delivered addresses (D20), `verify.email`
   for any other contact; >25 go to the `prospector_verify_contacts` job.
-- **Exports are formula-safe** (`csv_export.safe_cell`, Prospector only) and charged like delivery,
-  committed before the file is returned.
+- **Exports are formula-safe** (`csv_export.safe_cell`) and charged like delivery, committed before
+  the file is returned. A value made only of digits and phone punctuation is written as it is, so
+  phones never gain an apostrophe (owner, 2026-10-19); `savedCsv.ts` applies the same rule in the
+  browser. The Accounts and Contacts exports adopt the same `safe_cell` on branch
+  `fix-csv-formula-injection`, whose copy of it is byte-identical, so the two merge cleanly.
 - **The provider was failing when this was built** (2026-10-19): a valid token answers HTTP 500 with
   an empty body on every search (401 for a bad token; the documented 400 for PageSize > 500). The
   success shape, vocabularies and the two location field sets (D15) are still provisional: rerun

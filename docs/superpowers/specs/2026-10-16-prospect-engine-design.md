@@ -354,6 +354,11 @@ retried with the same `request_id` and costs nothing. Columns:
 Every text cell is formula-neutralised (a leading `= + - @ \t \r` is prefixed with `'`) by a new
 `csv_export.safe_cell`, used by Prospector only. The existing exports are unchanged.
 
+*Amended 2026-10-19 (owner's decision):* a value made only of digits and phone punctuation
+(`+1 (415) 555-7890`, `-42`) is written as it is, in this export and the browser's Saved-tab CSV:
+it can run nothing, and an apostrophe on every phone would break a CRM re-import. The Accounts and
+Contacts exports adopt the same `safe_cell` separately, on branch `fix-csv-formula-injection`.
+
 ### 9.5 Verify (`verify.py`, D19, D20)
 - `contact_ids` (≤ 1,000), workspace contacts with an email.
 - **Free** for a contact whose `enrichment_source == "sourcing:prospector"`. Any other contact

@@ -84,8 +84,9 @@ async def test_phones_are_a_column_only_when_bought(client, vendor):
     h, _ = await _workspace(client, "pe2")
     rows = _read(await _export(client, h, phones=True))
     assert "direct_phone" in rows[0]
-    # A leading "+" would start a formula in a spreadsheet: neutralised.
-    assert rows[0]["direct_phone"] == "'+1 (415) 555-7890"
+    # Digits and phone punctuation cannot run as a formula, so the number is written as it is
+    # (owner's decision 2026-10-19: an apostrophe would break a CRM re-import).
+    assert rows[0]["direct_phone"] == "+1 (415) 555-7890"
 
 
 async def test_a_formula_in_provider_text_is_neutralised(client, vendor):
@@ -157,4 +158,7 @@ def test_safe_cell_leaves_ordinary_values_alone():
     assert safe_cell("Acme") == "Acme" and safe_cell(42) == 42 and safe_cell(None) == ""
     assert safe_cell(["a", "b"]) == "a; b"
     for lead in ("=", "+", "-", "@", "\t", "\r"):
-        assert safe_cell(f"{lead}1") == f"'{lead}1"
+        assert safe_cell(f"{lead}SUM(A1)") == f"'{lead}SUM(A1)"
+    # A number or a phone is not a formula anything can call.
+    for plain in ("+14155552671", "+1 (415) 555-7890", "-42"):
+        assert safe_cell(plain) == plain

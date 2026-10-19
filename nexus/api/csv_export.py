@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import datetime
 from typing import Iterable, Sequence
 
@@ -58,17 +59,23 @@ def csv_cell(value: object) -> object:
 #: A cell starting with one of these is evaluated as a formula by Excel, Sheets and LibreOffice.
 _FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r")
 
+#: Digits and phone punctuation only, with at least one digit: `+14155552671`, `+1 (415) 555-2671`,
+#: `-42`. With no letter, `|`, `!` or quote it can call no function, follow no link and reach no
+#: DDE server, so it is left exactly as it is.
+_PLAIN_NUMBER = re.compile(r"[+-]?[\d\s().-]*\d[\d\s().-]*")
+
 
 def safe_cell(value: object) -> object:
     """``csv_cell``, then neutralise a text cell a spreadsheet would run as a formula.
 
-    For files whose text comes from somewhere we do not control (Prospector's provider): a value
-    like ``=HYPERLINK(...)`` or ``+cmd|...`` becomes ``'=HYPERLINK(...)``, which a spreadsheet shows
-    as text. Numbers are left as numbers. Used by Prospector's export only; the other exports are
-    unchanged.
+    A value like ``=HYPERLINK(...)`` or ``+cmd|...`` becomes ``'=HYPERLINK(...)``, which a
+    spreadsheet shows as text. Numbers are left as numbers, and so is a phone number: contacts store
+    E.164, so every phone starts with ``+``, and an apostrophe on each would break the file's
+    re-import into a CRM.
     """
     value = csv_cell(value)
-    if isinstance(value, str) and value.startswith(_FORMULA_LEADS):
+    if (isinstance(value, str) and value.startswith(_FORMULA_LEADS)
+            and not _PLAIN_NUMBER.fullmatch(value)):
         return "'" + value
     return value
 

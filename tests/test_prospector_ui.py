@@ -59,6 +59,9 @@ def test_masked_cells_tell_a_screen_reader_what_is_withheld():
 def test_the_client_side_export_neutralises_formulas():
     source = _read("pages/prospector/savedCsv.ts")
     assert 'FORMULA_LEADS = ["=", "+", "-", "@", "\\t", "\\r"]' in source
+    # The same exemption as the server's `csv_export._PLAIN_NUMBER`: phones are written as they are.
+    assert r"PLAIN_NUMBER = /^[+-]?[\d\s().-]*\d[\d\s().-]*$/" in source
+    assert "!PLAIN_NUMBER.test(text)" in source
 
 
 def test_every_data_view_has_its_states():
