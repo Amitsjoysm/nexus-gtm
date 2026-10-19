@@ -20,6 +20,24 @@ So the token authenticates (a bad one is refused with a 401) and request validat
 search itself fails server-side for every query. **This is a provider-side fault**, reported to the
 owner; the search is not usable until InfoJoy fixes it.
 
+### Second diagnosis, 2026-10-19 about 08:04 UTC
+
+Asked by the owner after "I add keys and no data appears". Run in the local deploy's app container
+with the one stored key (38 characters, no whitespace, no quotes, no `Bearer` prefix):
+
+| Call | Result |
+|---|---|
+| Both of the PDF's sample requests, sent byte for byte | **500, empty body** |
+| The same with `Content-Type: application/json; charset=utf-8` + `Accept: application/json`, and with curl's headers | **500, empty body** |
+| The smallest searches: `Filters: {}` and `{"Countries": ["United States"]}`, PageSize 1, both endpoints | **500, empty body** |
+| `GET /swagger/v1/swagger.json`, `/swagger/index.html`, `/openapi/v1.json`, `/api`, `/` | 404 (no published schema) |
+| Latency | the first two searches **15.5 s and 15.3 s** before failing; every later one 0.2-0.3 s |
+
+15 s is the default connect timeout of Microsoft's SQL client, and failing instantly afterwards is
+its connection-pool blocking period after a failed connect. The likeliest cause is the API being
+unable to reach its own database. Our request matches the document (path, header, the four body
+fields), so nothing on our side can make a search succeed.
+
 ## Consequences in the code
 
 - **Errors are as handled.** A 401/403 records the rejection and rotates keys; `{"Errors": [...]}`
