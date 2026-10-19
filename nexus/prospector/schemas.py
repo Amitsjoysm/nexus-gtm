@@ -8,9 +8,9 @@ the workspace's own Contact/Account row, never from the provider's payload.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
 from nexus.prospector.filters import SearchFilters, WorkspaceFilters
 from nexus.prospector.selection import Selection
@@ -163,6 +163,26 @@ class ExportIn(BaseModel):
     selection: Selection
     include_phones: StrictBool = False
     request_id: str = RequestId
+
+
+class VerifyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contact_ids: list[Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,64}$")]] = \
+        Field(min_length=1, max_length=1000)
+
+
+class VerifyResultOut(BaseModel):
+    contact_id: str
+    status: str
+    email_kept: bool
+
+
+class VerifyOut(BaseModel):
+    mode: Literal["inline", "queued"]
+    count: int
+    charged: int
+    results: list[VerifyResultOut] = Field(default_factory=list)
 
 
 class DeliverOut(BaseModel):

@@ -668,6 +668,29 @@ async def handle_prune_web_cache(payload: dict) -> dict:
     return {"pruned": await cache.prune()}
 
 
+async def handle_prospector_verify_contacts(payload: dict) -> dict:
+    """Verify a large Prospector selection in the background (more than 25 contacts, D19/D20).
+
+    Free for addresses Prospector delivered; others are charged `verify.email` for what was
+    actually checked. Batched so each transaction stays short and a failure part way keeps what
+    was already written.
+    """
+    from nexus.prospector import verify
+
+    tenant_id = payload.get("tenant_id") or ""
+    ids = [str(i) for i in (payload.get("contact_ids") or [])][:1000]
+    user_id = payload.get("user_id")
+    checked = charged = 0
+    for start in range(0, len(ids), 100):
+        async with tenant_session(tenant_id) as ts:
+            contacts = await verify.load_contacts(ts, ids[start:start + 100])
+            if contacts:
+                out = await verify.check(ts, contacts, user_id=user_id)
+                checked += out["checked"]
+                charged += out["charged"]
+    return {"checked": checked, "charged": charged}
+
+
 async def handle_prune_prospector_pages(payload: dict) -> dict:
     """Delete expired Prospector pages: sealed provider PII kept 24 hours at most (decision D10).
 
@@ -1459,6 +1482,7 @@ HANDLERS: dict[str, Handler] = {
     "rollup_usage": handle_rollup_usage,
     "prune_web_cache": handle_prune_web_cache,
     "prune_prospector_pages": handle_prune_prospector_pages,
+    "prospector_verify_contacts": handle_prospector_verify_contacts,
     "roll_billing_periods": handle_roll_billing_periods,
     "dunning_sweep": handle_dunning_sweep,
     "billing_reconcile": handle_billing_reconcile,
@@ -1571,6 +1595,13 @@ async def enqueue_prune_web_cache(*, queue: TaskQueue | None = None) -> None:
 async def enqueue_prune_prospector_pages(*, queue: TaskQueue | None = None) -> None:
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="prune_prospector_pages", payload={}))
+
+
+async def enqueue_prospector_verify(tenant_id: str, user_id: str | None, contact_ids: list[str],
+                                    *, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="prospector_verify_contacts", payload={
+        "tenant_id": tenant_id, "user_id": user_id, "contact_ids": list(contact_ids)}))
 
 
 async def enqueue_roll_billing_periods(*, queue: TaskQueue | None = None) -> None:

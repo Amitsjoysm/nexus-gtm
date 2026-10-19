@@ -27,6 +27,8 @@ from nexus.prospector.schemas import (
     SavedOut,
     SearchIn,
     SearchOut,
+    VerifyIn,
+    VerifyOut,
 )
 
 logger = logging.getLogger("nexus.api.routers.prospector")
@@ -159,3 +161,17 @@ async def export(
         raise _http(exc) from None
     await ts.commit()
     return csv_response(filename, header, rows)
+
+
+@router.post("/verify", response_model=VerifyOut)
+async def verify(
+    body: VerifyIn,
+    ts: TenantSession = Depends(module_gate),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> VerifyOut:
+    """Verify selected contacts' addresses: free for Prospector-delivered ones (D20), up to 25
+    inline and the rest in the background."""
+    from nexus.prospector.verify import verify_contacts
+
+    return VerifyOut(**await verify_contacts(ts, user_id=principal.user_id,
+                                             contact_ids=body.contact_ids))
