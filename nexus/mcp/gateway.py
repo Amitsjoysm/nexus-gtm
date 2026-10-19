@@ -55,6 +55,9 @@ _ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("GET", "/api/billing/credits"),
         ("POST", "/api/agents/research/run"),
         ("POST", "/api/agents/messaging/run"),
+        # Prospector: search masked (read), save charged per field (write).
+        ("POST", "/api/prospector/search"),
+        ("POST", "/api/prospector/deliver"),
     )
 )
 

@@ -134,6 +134,61 @@ async def _credit_balance(gw: Gateway, args: dict) -> ToolOutcome:
     return _ok({"balance": data.get("balance"), "recent": (data.get("entries") or [])[:10]})
 
 
+_PROSPECT_FILTERS = {
+    "type": "object",
+    "description": "Filters, all optional, AND across keys: first_name, last_name, titles, "
+                   "departments, seniorities, company_names, company_domains, person_countries, "
+                   "person_states, person_cities, person_zips, company_countries, company_states, "
+                   "company_cities, company_zips, employee_sizes, revenue_ranges, industries, "
+                   "exclude_industries, sub_industries, exclude_sub_industries, sic_codes, "
+                   "keywords, exclude_keywords, technologies (each a list of up to 50 strings), "
+                   "has_direct_phone (contacts) and has_linkedin (companies) as booleans.",
+}
+_PROSPECT_VIEW = {"type": "string", "enum": ["contacts", "companies"], "default": "contacts"}
+_PROSPECT_SCOPE = {"type": "string", "enum": ["total", "net_new"], "default": "total",
+                   "description": "net_new skips people and companies already in the workspace."}
+
+
+async def _prospector_search(gw: Gateway, args: dict) -> ToolOutcome:
+    body = {"view": args["view"], "scope": args["scope"], "filters": args.get("filters") or {},
+            "page": args["page"], "page_size": args["page_size"]}
+    if args.get("cursor"):
+        body["cursor"] = args["cursor"]
+    out = await gw.post("/api/prospector/search", json=body)
+    if not out.ok:
+        return _fail(out)
+    data = dict(out.data or {})
+    data["note"] = ("Emails, phones, domains and LinkedIn pages are masked until saved. Saving "
+                    "with prospector_save costs credits per email, phone or company delivered. "
+                    "Pass a row's api_page, api_page_size and row_key to save it.")
+    return _ok(data)
+
+
+async def _prospector_save(gw: Gateway, args: dict) -> ToolOutcome:
+    import uuid
+
+    rows, limit = args.get("rows") or [], args.get("all_matching_limit")
+    if not rows and not limit:
+        return ToolOutcome(False, None, "Give rows from prospector_search, or "
+                                        "all_matching_limit.", 422)
+    selection = {"view": args["view"], "scope": args["scope"],
+                 "filters": args.get("filters") or {}}
+    if rows:
+        selection["rows"] = rows
+    else:
+        selection["all_matching"] = {"limit": limit}
+    request_id = args.get("request_id") or uuid.uuid4().hex
+    body = {"selection": selection, "action": args["action"], "list_id": args.get("list_id"),
+            "include_phones": args["include_phones"], "request_id": request_id}
+    out = await gw.post("/api/prospector/deliver", json=body, idempotency_key=request_id)
+    if not out.ok:
+        return _fail(out)
+    data = dict(out.data or {})
+    data["note"] = (f"Saved in {PRODUCT_NAME}. Read a record with fetch ('contact:<id>' or "
+                    "'account:<id>'); its email is held out of campaigns until verified.")
+    return _ok(data)
+
+
 # ---- research --------------------------------------------------------------------------------
 
 async def _find_contacts(gw: Gateway, args: dict) -> ToolOutcome:
@@ -324,6 +379,22 @@ TOOLS: tuple[ToolSpec, ...] = (
                     "spend credits.",
         input_schema=_obj({}), handler=_credit_balance, calls=(("GET", "/api/billing/credits"),),
     ),
+    ToolSpec(
+        name="prospector_search", title="Search the prospect database", scope="read",
+        description="Search a B2B database of people and companies who are NOT necessarily in "
+                    "the workspace, by title, seniority, company, location, size, revenue, "
+                    "industry, keywords or technology. Free: emails, phones, domains and "
+                    "LinkedIn pages come back masked. Rows already in the workspace are marked "
+                    "saved.",
+        input_schema=_obj({
+            "view": _PROSPECT_VIEW, "scope": _PROSPECT_SCOPE, "filters": _PROSPECT_FILTERS,
+            "page": {"type": "integer", "minimum": 1, "maximum": 400, "default": 1},
+            "page_size": {"type": "integer", "enum": [25, 50, 100], "default": 25},
+            "cursor": {"type": "string", "maxLength": 600,
+                       "description": "next_cursor from a net_new search, to keep scanning."},
+        }),
+        handler=_prospector_search, calls=(("POST", "/api/prospector/search"),),
+    ),
     # ---- research ----
     ToolSpec(
         name="find_contacts", title="Find contacts at an account", scope="research",
@@ -439,6 +510,30 @@ TOOLS: tuple[ToolSpec, ...] = (
             "body": {"type": "string", "minLength": 1, "maxLength": 20000},
         }, ("contact_id", "body")),
         handler=_save_draft, calls=(("POST", "/api/contacts/{id}/save-draft"),),
+    ),
+    ToolSpec(
+        name="prospector_save", title="Save prospects to the workspace", scope="write",
+        description="Save rows from prospector_search into the workspace (or onto a list), or "
+                    "add the people's companies to an account list. Costs credits per email, "
+                    "direct phone (only with include_phones) or company delivered, each charged "
+                    "once; the balance is checked first. Pass the same view, scope and filters "
+                    "as the search.",
+        input_schema=_obj({
+            "view": _PROSPECT_VIEW, "scope": _PROSPECT_SCOPE, "filters": _PROSPECT_FILTERS,
+            "rows": {"type": "array", "maxItems": 1000,
+                     "items": {"type": "object",
+                               "description": "{api_page, api_page_size, row_key} of a row."}},
+            "all_matching_limit": {"type": "integer", "minimum": 1, "maximum": 1000,
+                                   "description": "Instead of rows: everything matching, up "
+                                                  "to this many."},
+            "action": {"type": "string", "enum": ["save", "list", "company_list"],
+                       "default": "save"},
+            "list_id": {**_ID, "description": "For list and company_list."},
+            "include_phones": {"type": "boolean", "default": False},
+            "request_id": REQUEST_ID,
+        }),
+        handler=_prospector_save, idempotent=True,
+        calls=(("POST", "/api/prospector/deliver"),),
     ),
 )
 

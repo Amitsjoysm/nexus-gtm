@@ -30,7 +30,7 @@ def test_every_tool_has_a_title_and_the_hints_the_directories_require():
 
 def test_names_are_unique_short_and_snake_case():
     names = [t.name for t in TOOLS]
-    assert len(names) == len(set(names)) == 18
+    assert len(names) == len(set(names)) == 20
     for n in names:
         assert len(n) <= 64 and re.fullmatch(r"[a-z][a-z_]*", n), n
 
@@ -41,10 +41,11 @@ def test_the_order_is_read_then_research_then_write():
     assert set(order) == {"read", "research", "write"}
 
 
-def test_read_tools_are_the_seven_free_ones():
+def test_read_tools_are_the_eight_free_ones():
+    # prospector_search browses the prospect database masked, which is free (decision D3).
     assert [t.name for t in TOOLS if t.scope == "read"] == [
         "search", "fetch", "list_signals", "list_inbox", "list_lists", "list_campaigns",
-        "get_credit_balance"]
+        "get_credit_balance", "prospector_search"]
 
 
 def test_descriptions_name_no_vendor():
@@ -229,3 +230,56 @@ async def test_get_contact_endpoint_is_tenant_scoped(client):
     assert (await client.get(f"/api/contacts/{cid}", headers=auth(b))).status_code == 404
     # The export route is still the export, not a contact called "export".
     assert (await client.get("/api/contacts/export", headers=auth(a))).status_code == 200
+
+
+# ---- Prospector (decision D3: browsing masked is free; saving is charged per field) ---------------
+
+@pytest.fixture
+def prospect_db():
+    from nexus.prospector import search
+    from nexus.prospector.client import InfoJoyClient
+    from tests.prospector_fixtures import FakeVendor
+
+    fake = FakeVendor()
+    search.set_client(InfoJoyClient(keys=["k"], transport=fake.transport(), backoff_s=0))
+    yield fake
+    search.set_client(None)
+
+
+async def test_prospector_search_returns_masked_rows_only(client, prospect_db):
+    from tests.prospector_fixtures import SECRETS
+
+    token = await signup(client, slug="tl7", email="o@tl7.com")
+    out = await _call(client, token, "prospector_search", view="contacts",
+                      filters={"titles": ["VP Sales"]})
+    assert out.ok, out.message
+    rows = out.data["rows"]
+    assert rows and rows[0]["email_masked"] == "j•••@a•••.com"
+    text = str(out.data).lower()
+    assert not [s for s in SECRETS if s.lower() in text], "unmasked values reached the model"
+
+
+async def test_prospector_save_delivers_charged_records_and_returns_ids(client, prospect_db):
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.rates import sync_rates
+
+    await sync_catalog()
+    await sync_rates()
+    token = await signup(client, slug="tl8", email="o@tl8.com")
+    found = await _call(client, token, "prospector_search", view="contacts")
+    rows = [{k: r[k] for k in ("api_page", "api_page_size", "row_key")}
+            for r in found.data["rows"][:2]]
+    saved = await _call(client, token, "prospector_save", view="contacts", rows=rows,
+                        request_id="mcp-save-0001")
+    assert saved.ok, saved.message
+    assert saved.data["created"] == 2 and len(saved.data["record_ids"]) == 2
+    assert saved.data["charged"] == {"prospector.email": 2}
+    again = await _call(client, token, "prospector_save", view="contacts", rows=rows,
+                        request_id="mcp-save-0001")
+    assert again.ok and again.data["charged"] == {}
+
+
+async def test_prospector_save_needs_rows_or_a_limit(client, prospect_db):
+    token = await signup(client, slug="tl9", email="o@tl9.com")
+    out = await _call(client, token, "prospector_save", view="contacts")
+    assert not out.ok and "rows" in out.message
