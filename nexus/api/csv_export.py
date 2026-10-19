@@ -12,8 +12,13 @@ still wrong when a human double-clicks it:
 * **Raw ISO timestamps with microseconds.** `2026-08-05T10:35:59.957670+00:00` is not a date to a
   spreadsheet; it lands as text, so it cannot be sorted or filtered. `2026-08-05 10:35` is
   recognised, sorts correctly as a string *and* as a date, and is what a person wanted anyway.
+* **Cells a spreadsheet runs as formulas** (2026-10-19). A value starting with `=`, `+`, `-` or
+  `@` (or, for Excel, a tab or carriage return) is evaluated when the file is opened. Account
+  names, titles and industries arrive from imports, CRM pulls and web enrichment, so
+  `=HYPERLINK(...)` or `+cmd|...` in one of them is somebody else's formula running on the
+  reader's machine. `safe_cell` writes such a value as text.
 
-Neither is a formatting nicety. An export exists to be opened by someone who is not going to
+None of these is a formatting nicety. An export exists to be opened by someone who is not going to
 debug it.
 """
 from __future__ import annotations
@@ -98,7 +103,7 @@ def csv_response(
     writer.writerow(list(header))
     count = 0
     for row in rows:
-        writer.writerow([csv_cell(cell) for cell in row])
+        writer.writerow([safe_cell(cell) for cell in row])
         count += 1
     return Response(
         content=buf.getvalue(),

