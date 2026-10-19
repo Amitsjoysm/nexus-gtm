@@ -8,6 +8,20 @@
  * - `onUnauthorized` lets the auth layer react to 401s (e.g. log the user out).
  */
 import type {
+  DeliverAction,
+  FilterCatalog,
+  FilterValues,
+  ProspectDeliverResult,
+  ProspectQuote,
+  ProspectScope,
+  ProspectSearchResult,
+  ProspectSelection,
+  ProspectVerifyResult,
+  ProspectView,
+  QuoteAction,
+  SavedResult,
+} from "./prospectorTypes";
+import type {
   Account,
   AccountInput,
   ActivityItem,
@@ -354,12 +368,19 @@ export class ApiClient {
     path: string,
     filename: string,
     query?: RequestOptions["query"],
+    /** A JSON body makes it a POST: Prospector's export names its rows in the body. */
+    body?: unknown,
   ): Promise<{ rows: number | null }> {
     const headers: Record<string, string> = {};
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    // A raw fetch, not `request()`: the payload is serialized here exactly once.
+    const payload = body === undefined ? undefined : JSON.stringify(body);
     let res: Response;
     try {
-      res = await fetch(this.buildUrl(path, query), { headers });
+      res = await fetch(this.buildUrl(path, query), payload === undefined ? { headers } : {
+        method: "POST", headers, body: payload,
+      });
     } catch {
       throw new ApiError(0, "Network error — couldn't reach the server.");
     }
@@ -823,6 +844,54 @@ export class ApiClient {
     return this.request<ListAddResult>(`/lists/${id}/members`, {
       method: "POST",
       body: { account_ids: ids.accountIds ?? [], contact_ids: ids.contactIds ?? [] },
+    });
+  }
+  // ---- Prospector (nexus/prospector/, spec 2026-10-16) ----
+  prospectorFilters(view: ProspectView, signal?: AbortSignal) {
+    return this.request<FilterCatalog>("/prospector/filters", { query: { view }, signal });
+  }
+  prospectorSearch(
+    body: {
+      view: ProspectView; scope: ProspectScope; filters: FilterValues; page: number;
+      page_size: number; cursor?: string | null; include_count?: boolean;
+    },
+    signal?: AbortSignal,
+  ) {
+    return this.request<ProspectSearchResult>("/prospector/search", {
+      method: "POST", body, signal,
+    });
+  }
+  prospectorSaved(
+    body: {
+      view: ProspectView; filters: FilterValues; workspace: FilterValues; page: number;
+      page_size: number;
+    },
+    signal?: AbortSignal,
+  ) {
+    return this.request<SavedResult>("/prospector/saved", { method: "POST", body, signal });
+  }
+  prospectorQuote(
+    body: { selection: ProspectSelection; action: QuoteAction; include_phones: boolean },
+    signal?: AbortSignal,
+  ) {
+    return this.request<ProspectQuote>("/prospector/quote", { method: "POST", body, signal });
+  }
+  prospectorDeliver(body: {
+    selection: ProspectSelection; action: DeliverAction; include_phones: boolean;
+    list_id?: string | null; request_id: string;
+  }) {
+    return this.request<ProspectDeliverResult>("/prospector/deliver", { method: "POST", body });
+  }
+  /** Charged like a delivery; the file is the paid result. */
+  prospectorExport(body: {
+    selection: ProspectSelection; include_phones: boolean; request_id: string;
+  }) {
+    return this.download("/prospector/export", `prospector-${body.selection.view}.csv`,
+      undefined, body);
+  }
+  prospectorVerify(contactIds: string[]) {
+    return this.request<ProspectVerifyResult>("/prospector/verify", {
+      method: "POST", body: { contact_ids: contactIds },
     });
   }
   removeListMembers(id: string, ids: { accountIds?: string[]; contactIds?: string[] }) {
