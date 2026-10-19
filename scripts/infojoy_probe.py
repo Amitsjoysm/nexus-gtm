@@ -63,10 +63,29 @@ def _types(obj: dict) -> dict:
     return {k: type(v).__name__ for k, v in obj.items()}
 
 
+#: Seconds each call took, by label: the client's timeouts are set from these, not guessed.
+LATENCY: dict[str, float] = {}
+
+
 async def _post(client, base: str, path: str, key: str, filters: dict, *, size: int = 5,
-                count: bool = False):
+                count: bool = False, label: str = ""):
+    """``(status, body)``. A timeout or transport error is reported, never raised, so one slow
+    query does not hide what the others would have shown."""
+    import time
+
+    import httpx
+
     body = {"PageNumber": 1, "PageSize": size, "IncludeTotalCount": count, "Filters": filters}
-    resp = await client.post(f"{base}{path}", headers={"X-Api-Token": key}, json=body)
+    started = time.monotonic()
+    try:
+        resp = await client.post(f"{base}{path}", headers={"X-Api-Token": key}, json=body)
+    except httpx.TimeoutException:
+        LATENCY[label or path] = round(time.monotonic() - started, 1)
+        return "timeout", {}
+    except httpx.HTTPError as exc:
+        LATENCY[label or path] = round(time.monotonic() - started, 1)
+        return f"transport:{type(exc).__name__}", {}
+    LATENCY[label or path] = round(time.monotonic() - started, 1)
     try:
         data = resp.json()
     except ValueError:
@@ -107,9 +126,18 @@ async def main() -> int:
     contacts, companies = "/api/search/contacts", "/api/search/companies"
     report: dict = {"base_url_host": httpx.URL(base).host}
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+        # Smallest, narrowest first: the documented sample request, so a slow broad query cannot
+        # stop us learning the shape.
         status, data = await _post(client, base, contacts, key,
-                                   {"Countries": ["United States"]}, size=50)
+                                   {"Titles": ["manager"], "SeniorityLevels": ["Manager"],
+                                    "Countries": ["United States"]}, size=10, label="sample")
+        report["documented_sample"] = {"status": status,
+                                       "item_keys": _types(_items(data)[0]) if _items(data) else {},
+                                       "sample_redacted": [_redact(i) for i in _items(data)[:2]]}
+        status, data = await _post(client, base, contacts, key,
+                                   {"Countries": ["United States"]}, size=50,
+                                   label="contacts_50")
         items = _items(data)
         report["contacts"] = {
             "status": status,
@@ -119,12 +147,14 @@ async def main() -> int:
             "distinct": _distinct(items),
         }
         status, data = await _post(client, base, contacts, key,
-                                   {"Countries": ["United States"]}, size=1, count=True)
+                                   {"Countries": ["United States"]}, size=1, count=True,
+                                   label="contacts_count")
         report["contacts_with_count"] = {"status": status, "top_level": _types(data)
                                          if isinstance(data, dict) else type(data).__name__}
 
         status, data = await _post(client, base, companies, key,
-                                   {"Countries": ["United States"]}, size=50)
+                                   {"Countries": ["United States"]}, size=50,
+                                   label="companies_50")
         items = _items(data)
         report["companies"] = {
             "status": status,
@@ -134,13 +164,15 @@ async def main() -> int:
             "distinct": _distinct(items),
         }
         status, data = await _post(client, base, companies, key,
-                                   {"Countries": ["United States"]}, size=1, count=True)
+                                   {"Countries": ["United States"]}, size=1, count=True,
+                                   label="companies_count")
         report["companies_with_count"] = {"status": status, "top_level": _types(data)
                                           if isinstance(data, dict) else type(data).__name__}
 
         honoured = {}
         for name in _LOCATION_CANDIDATES:
-            status, data = await _post(client, base, contacts, key, {name: [_IMPOSSIBLE]}, size=3)
+            status, data = await _post(client, base, contacts, key, {name: [_IMPOSSIBLE]}, size=3,
+                                       label=f"location:{name}")
             rows = len(_items(data))
             honoured[name] = {"status": status, "rows_for_impossible_value": rows,
                               "honoured": status == 200 and rows == 0}
@@ -150,16 +182,22 @@ async def main() -> int:
         for flag in (True, False):
             status, data = await _post(client, base, contacts, key,
                                        {"Countries": ["United States"], "HasDirectPhone": flag},
-                                       size=20)
+                                       size=20, label=f"phone:{flag}")
             items = _items(data)
             with_phone = sum(1 for i in items
                              for k, v in i.items() if _norm(k) == "directphone" and v)
             phone[str(flag)] = {"status": status, "rows": len(items), "with_phone": with_phone}
         report["has_direct_phone"] = phone
 
-        status, data = await _post(client, base, contacts, key, {"Titles": ["manager"]}, size=501)
+        status, data = await _post(client, base, contacts, key, {"Titles": ["manager"]}, size=501,
+                                   label="page_size_501")
         report["page_size_501"] = {"status": status, "body": data}
+        # What the panel's probe sent, which answered 500.
+        status, data = await _post(client, base, contacts, key, {"Titles": ["manager"]}, size=1,
+                                   label="panel_probe")
+        report["panel_probe"] = {"status": status, "rows": len(_items(data))}
 
+    report["latency_s"] = LATENCY
     print(json.dumps(report, indent=2, default=str))
     return 0
 

@@ -11,8 +11,9 @@
   internal address.
 * **"Not configured" is not "nothing matched".** No key is ``not_configured`` and nothing is sent; an
   unreadable 200 is ``bad_response``, never an empty page.
-* **Bounded**: 5 s to connect, 20 s to read, at most 500 rows a page (the provider's own limit,
-  refused here before sending).
+* **Bounded**: 5 s to connect, 30 s to read (the first call after the provider idles was measured at
+  16 s, docs/superpowers/specs/2026-10-16-prospector-observed-api.md), at most 500 rows a page (the
+  provider's own limit, refused here before sending).
 
 State is per call, never on the instance, so one client may serve concurrent requests.
 """
@@ -32,7 +33,7 @@ logger = logging.getLogger("nexus.prospector.client")
 
 PROVIDER = "infojoy_search"
 MAX_PAGE_SIZE = 500
-DEFAULT_TIMEOUT = httpx.Timeout(20.0, connect=5.0)
+DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 ENDPOINTS = {"contacts": "/api/search/contacts", "companies": "/api/search/companies"}
 
 Status = Literal["ok", "not_configured", "invalid", "rejected", "busy", "unavailable",
