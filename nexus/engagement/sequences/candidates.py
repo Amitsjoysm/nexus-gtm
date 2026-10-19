@@ -35,6 +35,8 @@ class Candidate:
     account_id: str
     account_name: str
     blocked: bool
+    #: A Prospector email nobody has verified yet: shown, and refused by `enroll` (D19).
+    held: bool = False
 
 
 def _terms(raw: str | None) -> list[str]:
@@ -90,6 +92,8 @@ async def candidates(ts, *, list_id: str | None = None, q: str | None = None,
     if not rows:
         return []
 
+    from nexus.prospector.hold import held_until_verified
+
     # Through the suppression service, not a query of its own, so a blocked DOMAIN counts too.
     blocked = set(await active_reasons(ts, [c.email or "" for c, _a in rows]))
     return [Candidate(
@@ -97,6 +101,7 @@ async def candidates(ts, *, list_id: str | None = None, q: str | None = None,
         seniority=c.seniority or "", email=c.email or "", email_status=c.email_status or "",
         account_id=a.id, account_name=a.name or "",
         blocked=(c.email or "").strip().lower() in blocked,
+        held=held_until_verified(c),
     ) for c, a in rows]
 
 

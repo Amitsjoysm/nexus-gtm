@@ -2501,11 +2501,16 @@ export interface EngagementCandidate {
   account_name: string;
   /** On the do-not-contact list: shown so the SDR knows why, refused if added. */
   blocked: boolean;
+  /** A Prospector email nobody has verified yet: shown, refused if added until verified. */
+  held?: boolean;
 }
 
 export interface EnrollResult {
   added: string[];
-  /** reason: not_found | already_enrolled | no_email | do_not_contact:<why> */
+  /**
+   * reason: not_found | already_enrolled | no_email | unverified_prospector_email |
+   * do_not_contact:<why>
+   */
   skipped: { contact_id: string; reason: string }[];
   /** The person is already in a colleague's (or another) live campaign. Added anyway. */
   warnings: { contact_id: string; campaign_id: string; campaign_name: string; owner: string }[];

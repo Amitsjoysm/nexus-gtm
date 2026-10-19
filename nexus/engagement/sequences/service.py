@@ -151,6 +151,7 @@ async def steps_of(ts, campaign) -> list:
 async def enroll(ts, campaign, contact_ids: list[str]) -> EnrollResult:
     """Add contacts. Skips what cannot be emailed; warns about what someone else is emailing."""
     from nexus.engagement.suppression.service import active_block
+    from nexus.prospector.hold import HOLD_REASON, held_until_verified
     from nexus.engagement.timekeeping import resolve_zone
     from nexus.models.account import Account, Contact
     from nexus.models.engagement import (
@@ -176,6 +177,11 @@ async def enroll(ts, campaign, contact_ids: list[str]) -> EnrollResult:
             continue
         if not (contact.email or "").strip():
             result.skipped.append({"contact_id": contact_id, "reason": "no_email"})
+            continue
+        if held_until_verified(contact):
+            # A Prospector email is the provider's, unverified: held out of bulk sending until a
+            # verifier calls it deliverable (D19). A one-off email is not held.
+            result.skipped.append({"contact_id": contact_id, "reason": HOLD_REASON})
             continue
         block = await active_block(ts, contact.email)
         if block is not None:

@@ -226,6 +226,7 @@ class CandidateOut(BaseModel):
     account_id: str
     account_name: str
     blocked: bool
+    held: bool = False
 
 
 class TimelineEntryOut(BaseModel):

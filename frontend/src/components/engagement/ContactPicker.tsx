@@ -71,7 +71,7 @@ export function ContactPicker({ enrolledIds, onAdd }: ContactPickerProps) {
   // The likelihood badge for the first hundred shown: one request, not one per row.
   const insights = useContactInsights(rows.slice(0, 100).map((r) => r.contact_id));
   const selectable = useMemo(
-    () => rows.filter((r) => !r.blocked && !enrolledIds.has(r.contact_id)),
+    () => rows.filter((r) => !r.blocked && !r.held && !enrolledIds.has(r.contact_id)),
     [rows, enrolledIds],
   );
   const allPicked = selectable.length > 0 && selectable.every((r) => picked.has(r.contact_id));
@@ -121,7 +121,7 @@ export function ContactPicker({ enrolledIds, onAdd }: ContactPickerProps) {
             type="checkbox" className={styles.check}
             aria-label={`Select ${r.full_name}`}
             checked={added || picked.has(r.contact_id)}
-            disabled={r.blocked || added}
+            disabled={r.blocked || r.held || added}
             onChange={() => toggle(r.contact_id)}
           />
         );
@@ -148,6 +148,8 @@ export function ContactPicker({ enrolledIds, onAdd }: ContactPickerProps) {
           <span className={styles.sub}>{r.email}</span>
           {r.blocked ? (
             <Badge tone="danger">Do not contact</Badge>
+          ) : r.held ? (
+            <Badge tone="warning">Verify email first</Badge>
           ) : enrolledIds.has(r.contact_id) ? (
             <Badge tone="accent">Added</Badge>
           ) : r.email_status === "invalid" ? (

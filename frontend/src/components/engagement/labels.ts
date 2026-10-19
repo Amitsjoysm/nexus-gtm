@@ -41,6 +41,7 @@ const REASONS: Record<string, string> = {
   declined: "they declined",
   out_of_credits: "the workspace ran out of credits",
   mailbox_disconnected: "the sending mailbox was disconnected",
+  unverified_prospector_email: "its Prospector email is not verified yet",
 };
 
 export function reasonText(reason: string | null | undefined): string {
