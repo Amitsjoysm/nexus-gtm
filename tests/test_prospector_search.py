@@ -110,7 +110,7 @@ async def test_a_held_row_is_saved_with_the_workspaces_own_values(client, vendor
     assert john["saved"] is True
     assert john["record"] == {"kind": "contact", "id": john_id, "account_id": john["record"]["account_id"],
                               "email": "john.smith@acme-example.com", "phone": "+1 415 555 7890",
-                              "domain": None}
+                              "domain": "acme-example.com"}
     assert all(r["saved"] is False for r in rows[1:])
 
 

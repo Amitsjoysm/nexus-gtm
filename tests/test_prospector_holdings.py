@@ -77,6 +77,22 @@ async def test_contacts_are_held_by_email_whatever_its_case_and_by_name_at_the_d
     assert set(held) <= set(by_ident)
 
 
+async def test_a_held_contact_carries_its_accounts_own_website():
+    """The Saved row shows the workspace's website for the person's company, never the mask."""
+    from nexus.prospector.holdings import held_contacts
+    from nexus.prospector.identity import contact_identity
+    from nexus.prospector.records import parse_contact
+
+    tid = await make_tenant("hold1d")
+    await _book(tid)
+    records = [parse_contact(c) for c in CONTACTS]
+    async with tenant_session(tid) as ts:
+        held = await held_contacts(ts, records)
+
+    assert held[contact_identity(records[0])].domain == "acme-example.com"      # by email
+    assert held[contact_identity(records[2])].domain == "initech-example.co.uk"  # by name
+
+
 async def test_another_workspaces_contacts_are_never_seen():
     from nexus.prospector.holdings import held_contacts
     from nexus.prospector.records import parse_contact

@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from nexus.accounts.dedupe import normalise_name
 from nexus.companies.resolution import normalise_domain
@@ -61,11 +61,13 @@ async def held_contacts(ts, records: list[VendorContact]) -> dict[str, Held]:
     emails = sorted({e[2:] for e, _ in wanted.values() if e})
     if emails:
         rows = (await ts.session.execute(
-            select(Contact).where(Contact.tenant_id == ts.tenant_id,
-                                  Contact.deleted_at.is_(None),
-                                  func.lower(Contact.email).in_(emails)))).scalars().all()
-        for c in rows:
-            by_email[f"e:{(c.email or '').strip().lower()}"] = _contact_held(c)
+            select(Contact, Account.domain)
+            .outerjoin(Account, and_(Account.id == Contact.account_id,
+                                     Account.tenant_id == ts.tenant_id))
+            .where(Contact.tenant_id == ts.tenant_id, Contact.deleted_at.is_(None),
+                   func.lower(Contact.email).in_(emails)))).all()
+        for c, domain in rows:
+            by_email[f"e:{(c.email or '').strip().lower()}"] = _contact_held(c, domain)
 
     by_name: dict[str, Held] = {}
     names = sorted({n[2:].split("|", 1)[0] for _, n in wanted.values() if n})
@@ -78,7 +80,7 @@ async def held_contacts(ts, records: list[VendorContact]) -> dict[str, Held]:
         for c, a in rows:
             key = _name_key(c.full_name, normalise_domain(a.domain))
             if key:
-                by_name.setdefault(key, _contact_held(c))
+                by_name.setdefault(key, _contact_held(c, a.domain))
 
     out: dict[str, Held] = {}
     for ident, (email_key, name_key) in wanted.items():
@@ -88,9 +90,10 @@ async def held_contacts(ts, records: list[VendorContact]) -> dict[str, Held]:
     return out
 
 
-def _contact_held(c: Contact) -> Held:
+def _contact_held(c: Contact, domain: str | None) -> Held:
+    """``domain`` is the contact's account's own website, so a Saved row never shows the mask."""
     return Held(kind="contact", record_id=c.id, account_id=c.account_id, email=c.email,
-                phone=c.phone, name=c.full_name or "")
+                phone=c.phone, name=c.full_name or "", domain=domain)
 
 
 async def held_companies(ts, records: list[VendorCompany]) -> dict[str, Held]:
