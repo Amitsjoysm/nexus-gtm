@@ -105,9 +105,8 @@ export function ListDetailPage() {
 
   function startCampaign() {
     if (!plist) return;
-    navigate("/engagement/campaigns/new", {
-      state: { listId: plist.id, listName: plist.name, listKind: plist.kind, listMembers: plist.members },
-    });
+    // New campaign shows the list chosen and who it adds, so the id is all it needs.
+    navigate("/engagement/campaigns/new", { state: { listId: plist.id } });
   }
 
   const columns: Column<ListMember>[] = useMemo(() => {

@@ -208,8 +208,10 @@ def test_discovery_hands_its_selection_to_the_campaign_builder():
     builder = _read(PAGES / "CampaignBuilder.tsx")
     assert "useLocation().state" in builder
     # Added once the campaign exists; drafting and sending still wait for review. A list arrives as
-    # itself, so the server expands it and records the campaign's source list.
-    assert "campaign.id, handedContacts, handedAccounts, handedList || undefined," in builder
+    # itself, so the server expands it and records the campaign's source list. Since 2026-10-19 it
+    # is the list chosen under "Who it goes to", which a list's handover pre-selects.
+    assert "campaign.id, handedContacts, handedAccounts, listId || undefined," in builder
+    assert 'useState(handover.listId ?? "")' in builder
 
 
 def test_a_campaign_without_a_mailbox_offers_its_owner_one():

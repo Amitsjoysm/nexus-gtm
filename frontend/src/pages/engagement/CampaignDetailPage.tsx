@@ -9,6 +9,7 @@ import type { Column } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import { BestTimeHint } from "@/components/engagement/BestTimeHint";
 import { ContactPicker } from "@/components/engagement/ContactPicker";
+import { ListChooser } from "@/components/engagement/ListChooser";
 import { useContactInsights } from "@/components/engagement/InsightBadge";
 import { zonedClockToLocalInput } from "@/components/engagement/zonedTime";
 import { StepsEditor, stepsProblem } from "@/components/engagement/StepsEditor";
@@ -65,6 +66,8 @@ export function CampaignDetailPage() {
   });
   const [acting, setActing] = useState<string | null>(null);
   const [lastAdd, setLastAdd] = useState<EnrollResult | null>(null);
+  const [wholeList, setWholeList] = useState("");
+  const [addingList, setAddingList] = useState(false);
 
   const c = campaign.data;
   const people = enrollments.data ?? [];
@@ -108,6 +111,24 @@ export function CampaignDetailPage() {
       refresh();
     } catch (err) {
       toast.error("Couldn't add them", err instanceof ApiError ? err.detail : "Please try again.");
+    }
+  }
+
+  /** The whole list, expanded by the server and recorded as a source of the campaign. */
+  async function addList() {
+    if (!wholeList) return;
+    setAddingList(true);
+    try {
+      const result = await api.addCampaignContacts(campaignId, [], [], wholeList);
+      setLastAdd(result);
+      toast.success(`${result.added.length} added from the list`,
+        result.skipped.length ? `${result.skipped.length} could not be added.` : "Next, write and review their opening emails.");
+      setWholeList("");
+      refresh();
+    } catch (err) {
+      toast.error("Couldn't add the list", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setAddingList(false);
     }
   }
 
@@ -186,6 +207,20 @@ export function CampaignDetailPage() {
           {c.status !== "completed" && (
             <Card padding="lg" className={styles.section}>
               <h2 className={styles.sectionTitle}>Add people</h2>
+              <div className={styles.listAdd}>
+                <ListChooser
+                  value={wholeList}
+                  onChange={setWholeList}
+                  label="Add a whole list"
+                  emptyLabel="Choose a list"
+                  hint="Everyone on it with an email address, in one step."
+                />
+                <Button variant="secondary" onClick={addList} disabled={!wholeList}
+                  loading={addingList} iconLeft={<Icons.ListIcon />}>
+                  Add everyone on it
+                </Button>
+              </div>
+              <h3 className={styles.subTitle}>Or choose people</h3>
               <ContactPicker enrolledIds={enrolledIds} onAdd={addPeople} />
               {lastAdd && <AddResult result={lastAdd} people={people} />}
             </Card>

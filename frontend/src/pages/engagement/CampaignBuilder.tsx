@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button, Card, EmptyState, Field, Icons, Input, Select, Skeleton } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
+import { ListChooser } from "@/components/engagement/ListChooser";
 import { StepsEditor, blankStep, stepsProblem } from "@/components/engagement/StepsEditor";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
@@ -11,14 +12,14 @@ import type { ConnectedMailbox, EngagementStep, SequenceTemplate } from "@/lib/t
 import styles from "./Engagement.module.css";
 
 /**
- * Start a campaign: its name, the mailbox it sends from, and its steps (spec §9, step 2).
+ * Start a campaign: its name, the mailbox it sends from, who it goes to, and its steps (spec §9).
  *
- * Creating it sends nothing. The campaign page that follows is where people are added, first
- * emails drafted and read, and the campaign launched, in that order. Arriving from a selection
- * elsewhere (discovery's "Add to a campaign") carries that selection in router state, and those
- * people are added the moment the campaign exists: still nothing is drafted or sent. A list's
- * "Start a campaign" hands over the list itself, which the server expands and records as the
- * campaign's source.
+ * Creating it sends nothing. The campaign page that follows is where more people are added, first
+ * emails drafted and read, and the campaign launched, in that order. "Who it goes to" takes a saved
+ * list, which the server expands and records as the campaign's source (2026-10-19: until then a
+ * list could only become a campaign from the list page's own button). Arriving from a selection
+ * elsewhere (discovery's "Add to a campaign") carries it in router state, and those people are added
+ * the moment the campaign exists, with the list if one is chosen: still nothing is drafted or sent.
  */
 
 /** People handed over from another screen: by id, companies meaning everyone there, or a list. */
@@ -26,9 +27,6 @@ interface Handover {
   contactIds?: string[];
   accountIds?: string[];
   listId?: string;
-  listName?: string;
-  listKind?: "account" | "contact";
-  listMembers?: number;
 }
 
 const CUSTOM = "";
@@ -45,7 +43,6 @@ export function CampaignBuilder() {
   const handover = (useLocation().state ?? {}) as Handover;
   const handedContacts = handover.contactIds ?? [];
   const handedAccounts = handover.accountIds ?? [];
-  const handedList = handover.listId ?? "";
   const mailboxes = useApi<ConnectedMailbox[]>((s) => api.listConnectedMailboxes(false, s), []);
   const templates = useApi<SequenceTemplate[]>((s) => api.listSequenceTemplates(s), []);
 
@@ -54,6 +51,7 @@ export function CampaignBuilder() {
     [mailboxes.data],
   );
   const [name, setName] = useState("");
+  const [listId, setListId] = useState(handover.listId ?? "");
   const [mailboxId, setMailboxId] = useState("");
   const [templateId, setTemplateId] = useState(CUSTOM);
   const [steps, setSteps] = useState<EngagementStep[]>([blankStep(true), blankStep()]);
@@ -103,10 +101,10 @@ export function CampaignBuilder() {
         first_send_at: firstSend === "scheduled" ? new Date(firstSendAt).toISOString() : null,
         timezone_mode: timezoneMode,
       });
-      if (handedContacts.length || handedAccounts.length || handedList) {
+      if (handedContacts.length || handedAccounts.length || listId) {
         try {
           const added = await api.addCampaignContacts(
-            campaign.id, handedContacts, handedAccounts, handedList || undefined,
+            campaign.id, handedContacts, handedAccounts, listId || undefined,
           );
           toast.success("Campaign created",
             `${added.added.length} ${added.added.length === 1 ? "person" : "people"} added. Draft their first emails next.`);
@@ -151,19 +149,10 @@ export function CampaignBuilder() {
     <div className={styles.page}>
       <PageHeader
         title="New campaign"
-        description="Name it, choose where it sends from, and set its steps. People are added next, and nothing sends until you approve it."
+        description="Name it, choose where it sends from and who it goes to, and set its steps. Nothing sends until you approve it."
       />
 
-      {handedList && (
-        <p className={styles.notice} role="status">
-          {handover.listKind === "contact"
-            ? `The ${handover.listMembers ?? ""} ${handover.listMembers === 1 ? "person" : "people"} on “${handover.listName ?? "your list"}” who have an email address`
-            : `Everyone with an email address at the ${handover.listMembers ?? ""} ${handover.listMembers === 1 ? "company" : "companies"} on “${handover.listName ?? "your list"}”`}{" "}
-          will be added when you create it.
-        </p>
-      )}
-
-      {!handedList && (handedContacts.length > 0 || handedAccounts.length > 0) && (
+      {(handedContacts.length > 0 || handedAccounts.length > 0) && (
         <p className={styles.notice} role="status">
           From your selection,{" "}
           {[
@@ -197,6 +186,17 @@ export function CampaignBuilder() {
               />
             </Field>
           </div>
+        </Card>
+
+        <Card padding="lg" className={styles.section}>
+          <h2 className={styles.sectionTitle}>Who it goes to</h2>
+          <ListChooser
+            value={listId}
+            onChange={setListId}
+            label="A saved list"
+            emptyLabel="No list: I'll choose people next"
+            hint="Optional. You can add people, or more lists, on the campaign page too."
+          />
         </Card>
 
         <Card padding="lg" className={styles.section}>
@@ -253,7 +253,7 @@ export function CampaignBuilder() {
         <div className={styles.formActions}>
           <Button type="button" variant="ghost" onClick={() => navigate("/engagement/campaigns")}>Cancel</Button>
           <Button type="submit" loading={saving} iconRight={<Icons.ChevronRightIcon />}>
-            Create and add people
+            {listId ? "Create campaign" : "Create and add people"}
           </Button>
         </div>
       </form>

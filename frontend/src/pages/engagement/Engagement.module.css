@@ -203,6 +203,34 @@
   color: var(--text);
 }
 
+/* "Add a whole list": the chooser and its button on one line, the button level with the select
+   (the field above it carries a label and a hint). Wraps below on a narrow pane. */
+.listAdd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.listAdd > :first-child {
+  flex: 1 1 min(22rem, 100%);
+  min-width: 0;
+}
+
+.listAdd > button {
+  margin-top: calc(var(--text-sm) * var(--leading) + var(--space-1));
+}
+
+/* A second heading inside a card, one step below its title. */
+.subTitle {
+  margin: var(--space-2) 0 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
 .fields {
   display: grid;
   /* min(): a column never asks for more than the space there is, so a narrow pane stacks the

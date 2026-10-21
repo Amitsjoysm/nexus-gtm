@@ -26,7 +26,8 @@ def test_the_list_page_starts_a_campaign_from_the_list_itself():
     detail = _read("pages/ListDetailPage.tsx")
     assert 'navigate("/engagement/campaigns/new"' in detail and "listId: plist.id" in detail
     builder = _read("pages/engagement/CampaignBuilder.tsx")
-    assert "handedList || undefined" in builder
+    # The handed list pre-selects "Who it goes to", and the chosen list's id is what is sent.
+    assert 'useState(handover.listId ?? "")' in builder and "listId || undefined" in builder
     api = _read("lib/api.ts")
     assert "list_id: listId" in api
 
