@@ -72,6 +72,24 @@ instead, add a `headers` entry beside `url`, the same in both files:
   "headers": { "Authorization": "Bearer YOUR_API_KEY" } } } }
 ```
 
+### Microsoft Copilot Studio
+
+In an agent, open **Tools**, **Add a tool**, **Model Context Protocol**, paste the server address
+and choose **OAuth 2.0**. Copilot Studio shows a redirect URL; ask your InfoJoy GTM administrator
+for a client id and secret registered with that exact URL, and paste them in.
+
+### Gemini Enterprise, Perplexity, Grok and Mistral Vibe
+
+Each adds InfoJoy GTM as a custom connector by its server address and signs in with InfoJoy GTM:
+
+- **Gemini Enterprise** (an administrator): Data stores, Create data store, **Custom MCP Server**,
+  OAuth 2.0; then on the data store's Actions tab choose **Reload custom actions** and turn on the
+  tools you want.
+- **Perplexity** (paid plans): Settings, **Connectors**, **+ Custom connector**.
+- **Grok**: grok.com, **Connectors**, New connector, **Custom**.
+- **Mistral Vibe** (an administrator): Work, **Connectors**, add a custom connector.
+- **Gemini CLI**: `gemini mcp add --transport http infojoy-gtm https://gtm.infojoy.com/mcp`.
+
 ### Scripts and model APIs
 
 Create an API key in InfoJoy GTM under **Settings**, **AI apps**, **Create API key**. Give it only the
@@ -97,12 +115,13 @@ You choose these for each connection, and can change them later in **Settings**,
 
 | Permission | What the app can do |
 |---|---|
-| Read | See accounts, contacts, signals, lists, campaigns, your inbox and the credit balance |
-| Research | Find contacts, find similar companies, enrich contacts, research accounts, draft emails. Spends your workspace's credits at the same prices as the app |
-| Write | Add accounts, create and fill lists, add people to campaigns, complete inbox tasks, save emails to your own Drafts folder |
+| Read | See your dashboard and today's priorities, accounts, contacts, signals and alerts, lists, campaigns and their results, replies waiting on the reply desk, your call list and pre-call briefs, who your team knows, the prospect database (masked), and the credit balance |
+| Research | Find contacts and similar companies or people, enrich accounts and contacts, verify emails, find phone numbers, refresh an account's signals, research accounts, draft emails and replies, add companies matching your ideal customer profile, and create campaign drafts with their opening emails written. Spends your workspace's credits at the same prices as the app |
+| Write | Add accounts, create, fill and trim lists, add people to campaigns, complete inbox tasks, acknowledge alerts, save emails and replies to your own Drafts folder, queue calls and log how they went, and save prospects |
 
-A connection can never do more than your own role allows, and it never sends an email, launches a
-campaign, deletes anything, or changes billing, members or settings.
+A connection can never do more than your own role allows, and it never sends an email, approves
+or launches a campaign, places a call, deletes anything, or changes owners, billing, members or
+settings. Campaign drafts wait for you to review and launch them in InfoJoy GTM.
 
 ## Credits
 

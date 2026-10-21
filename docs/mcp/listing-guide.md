@@ -1,214 +1,326 @@
-# Listing InfoJoy GTM on the AI app marketplaces
+# Deploying InfoJoy GTM's MCP server and listing it with every major AI provider
 
-Internal guide for the product owner. Follow it top to bottom: section 1 makes production ready,
-section 2 prepares what every marketplace asks for, sections 3 to 6 are one marketplace each, and
-section 7 is how to check it all works. Verified against the marketplaces' own documentation on
-2026-10-13; their forms change, so read each form's own instructions as you go.
+Internal guide for the product owner. Follow it top to bottom: section 1 says what works today,
+sections 2 and 3 put the server on production and prove it, section 4 prepares what every portal
+asks for, sections 5 to 12 are one provider each, and section 13 is upkeep. Checked against each
+provider's own documentation on **2026-10-21**. Portals change often: read each form's own
+instructions as you go, and treat anything marked *preview* as subject to change.
 
 What is listed is one thing: the remote MCP server at `https://gtm.infojoy.com/mcp` (code:
-`nexus/mcp/`, spec `docs/superpowers/specs/2026-10-13-mcp-server-design.md`). The Claude plugin in
-`distribution/claude-plugin/` and the MCP Registry entry in `distribution/mcp-registry/` both point
-at it.
+`nexus/mcp/`, spec `docs/superpowers/specs/2026-10-13-mcp-server-design.md`). It speaks Streamable
+HTTP (the transport every provider below now requires; none accepts SSE-only servers), signs users
+in with its own OAuth 2.1 server, and also takes per-user API keys for developer tools.
 
 ---
 
-## 0. Decide these first (each is written into files)
+## 1. Where things stand (2026-10-21)
 
-| Decision | Current value | Where it is written |
-|---|---|---|
-| Product name shown to customers | **InfoJoy GTM** | `nexus/mcp/brand.py`, `frontend/src/lib/brand.ts`, plugin `plugin.json` and `README.md`, `server.json` |
-| Production address | `https://gtm.infojoy.com` | plugin `.mcp.json`, `README.md`, `server.json`, `docs/mcp/setup-guide.md` |
-| Plugin licence | MIT (`distribution/claude-plugin/infojoy-gtm/LICENSE`) | `plugin.json` `license` and `LICENSE` |
-| Privacy policy URL | `https://gtm.infojoy.com/privacy` (must exist before submitting) | plugin `README.md`, every submission form |
-| Terms of service URL | e.g. `https://gtm.infojoy.com/terms` | ChatGPT form |
-| Support contact | an address customers can write to | every submission form |
-| GitHub owner for the plugin repo | e.g. `infojoy/infojoy-gtm-plugin` | plugin README install line (section 4) |
-| MCP Registry namespace | `com.infojoy/gtm` (needs DNS on `infojoy.com`) | `server.json` |
+Tested end to end on the local stack, which runs the same MCP code as production:
 
-If any value changes, search the files above and change every occurrence in one commit.
+| Check | Result |
+|---|---|
+| Discovery (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`) | correct on local and on **production** (`gtm.infojoy.com`) |
+| Unauthenticated `POST /mcp` | `401` with `WWW-Authenticate: Bearer resource_metadata=...`, on local and production |
+| OAuth sign-in (DCR, PKCE S256, consent, code exchange, refresh rotation, replay refused) | every step passes |
+| Official MCP client v2.3.0, both protocol dialects | PASS |
+| Every tool, called for real | works; refusals (no mailbox, unknown id, provider down) come back as sentences |
+| **Staging** `staging-gtm.infojoy.com` | **does not resolve (NXDOMAIN)**. The app is healthy at `gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io`; add the DNS record (section 2.5) before testing cloud clients on staging |
 
-## 1. Make production ready
+If an AI app "doesn't work", the usual causes, in order:
 
-1. **Merge and deploy** `feat/mcp-server` (after review). Migration `0068_mcp` is additive; the
-   deploy runs `alembic upgrade head` and `apply_rls.py` as usual. The four new tables are
-   deliberately outside RLS.
-2. **App public address**: Control plane, Configuration, Billing, **App public address** =
-   `https://gtm.infojoy.com` (no path). Without it the OAuth metadata names whatever host a request
-   arrived on, and Claude requires the resource address to match exactly.
-3. **AI apps is on**: Control plane, Feature switches, `module.mcp` must be enabled (it is by
-   default). Plans: no plan excludes it by default.
-4. **Reachability**: nothing in front of the app (Caddy, a WAF, Azure Front Door) may block or
-   rewrite `/mcp`, `/oauth/*` or `/.well-known/*`, and it must accept requests from Anthropic's
-   egress range `160.79.104.0/21` and from OpenAI. Check from outside:
+1. **A local or private address.** Claude, ChatGPT, Copilot, Gemini and Perplexity connect from
+   their own servers on the internet: `localhost`, `:8099` or a VPN address cannot work for them.
+   Use production (or staging once its DNS exists).
+2. **The address does not match the App public address.** OAuth names
+   `{app_base_url}/mcp` as the resource; a client that connected through any other host or port
+   (the local stack's `:8099`, the staging Azure host while `app_base_url` says otherwise) fails the
+   resource check after sign-in.
+3. **Something in front of the app** (WAF, Front Door, a proxy) blocking or rewriting `/mcp`,
+   `/oauth/*` or `/.well-known/*`, or blocking the provider's egress addresses.
+4. **AI apps switched off**: Control plane, Feature switches, `module.mcp`.
 
-   ```
-   curl -i https://gtm.infojoy.com/.well-known/oauth-protected-resource
-   curl -i https://gtm.infojoy.com/.well-known/oauth-authorization-server
-   curl -i -X POST https://gtm.infojoy.com/mcp -H "Content-Type: application/json" -d "{}"
-   ```
+### What the tools cover
 
-   The first two answer JSON whose `resource` is exactly `https://gtm.infojoy.com/mcp` and whose
-   `issuer` is `https://gtm.infojoy.com`; the third answers `401` with
-   `WWW-Authenticate: Bearer resource_metadata="https://gtm.infojoy.com/.well-known/oauth-protected-resource"`.
-5. **Timeouts**: Claude gives the token endpoint 10 seconds. Ours answers in milliseconds; make sure
-   no proxy buffers it.
-6. **Monitoring**: `nexus_mcp_requests_total`, `nexus_mcp_tool_calls_total` and
-   `nexus_oauth_events_total` are on `/metrics`. Add a panel; a spike in `unauthorized` or
-   `refused` is the first sign a client changed.
+36 tools since 2026-10-19 (owner decisions on what may be done from chat). A connection sees only
+the ones its permissions allow: Read shows 11, all three show 36. 36 stays under the ~40 tools some
+clients cap across every connected server.
 
-## 2. Prepare what every marketplace asks for
+| Permission | Tools |
+|---|---|
+| Read (free) | `search`, `fetch` (account, contact, list, campaign, reply, call, person, populate), `list_signals`, `list_inbox`, `list_lists`, `list_campaigns`, `get_credit_balance`, `prospector_search`, `get_workspace_overview`, `list_queue` (alerts, replies, calls), `search_network` |
+| Research (spends credits, priced from the rate cards) | `find_contacts`, `find_similar_companies`, `enrich_contact`, `research_account`, `draft_email`, `enrich_account`, `verify_email`, `find_phone`, `refresh_account`, `find_similar_people`, `add_icp_companies`, `draft_reply`, `create_campaign_draft` |
+| Write | `create_account`, `create_list`, `add_to_list`, `remove_from_list`, `add_contacts_to_campaign`, `complete_inbox_task`, `save_email_draft`, `prospector_save`, `acknowledge_alert`, `save_reply_draft`, `queue_call`, `log_call_outcome` |
 
-Not code. Have all of it before opening any form.
+Never from an AI app (a test refuses any tool path that reaches them): sending email, approving or
+launching a campaign, dialing, deleting or archiving records, changing owners, billing, settings,
+members, integrations.
 
-- **Public pages on the production domain**: privacy policy (data collected, how it is used and
-  stored, third-party sharing including "data you read through a connected AI app is sent to that
-  app and its AI provider", retention, contact), terms of service, and the setup guide
-  (`docs/mcp/setup-guide.md`, published as a page).
-- **Support contact**: a monitored email address or help page.
-- **Icon**: square PNG, at least 512x512, readable small; plus light and dark logo variants for
-  ChatGPT.
-- **Screenshots**: at least three of InfoJoy GTM answering in Claude or ChatGPT (ChatGPT requires
-  them; Claude only for MCP Apps with UI, which we do not ship).
-- **A demo video** for ChatGPT: about a minute, connect, approve, ask "what should I work on
-  today?", research an account, draft an email.
-- **A reviewer workspace on production**: a dedicated account with **no MFA** (reviewers cannot
-  receive codes), real populated data (accounts with signals, contacts, an inbox, a list, a
-  campaign), credits on the balance, and the owner role. Write its credentials only into the
-  submission forms' private reviewer fields, never into a file or ticket.
-- **Descriptions** (reuse everywhere):
-  - Name: InfoJoy GTM
-  - One-liner (200 characters max): "B2B buying signals, account research, contacts and outreach
-    drafts from your InfoJoy GTM workspace, acting as you."
-  - Long description: adapt the plugin README's first three sections.
-  - Categories: Sales, Productivity (or the nearest the form offers).
+## 2. Put it on production
 
-## 3. Anthropic Connectors Directory (Claude on web, desktop, mobile, Cowork, Claude Code)
+1. **Merge, in order, after review**: `feat/prospect-engine` (Prospector, migration `0072`), then
+   `feat/mcp-coverage` (stacked on it: the outage-message fix, campaign list chooser, 36 tools).
+   Neither touches `deploy/`. Run the full CI-equivalent in `CLAUDE.md` on the exact merge commit.
+2. **Deploy** through the usual pipeline. The app runs `alembic upgrade head` and `apply_rls.py` on
+   start; the MCP tables are platform-global and deliberately outside RLS.
+3. **App public address**: Control plane, Configuration, Billing, **App public address** =
+   `https://gtm.infojoy.com` (an origin, no path). Without it the OAuth metadata names whatever
+   host a request came in on, and Claude and ChatGPT require the resource to match exactly.
+4. **`module.mcp` enabled** (Control plane, Feature switches; on by default, on no plan).
+5. **Staging DNS**: create `staging-gtm.infojoy.com` (CNAME to the staging container app host,
+   then bind the custom domain and certificate on `gtm-staging-app`) and set staging's App public
+   address to `https://staging-gtm.infojoy.com`.
+6. **Reachability**: nothing in front of the app may block or rewrite `/mcp`, `/oauth/*` or
+   `/.well-known/*`. Allow the providers' egress (Anthropic publishes `160.79.104.0/21`; OpenAI,
+   Microsoft and Google connect from their clouds, so do not IP-filter these paths at all unless a
+   provider publishes its range). No buffering proxy on `/oauth/token` (Claude allows 10 seconds).
 
-Portal: `https://claude.ai/directory/manage` (any paid Claude plan; on Team/Enterprise an Owner).
+Check from outside the network:
 
-1. Test first as a custom connector: in Claude, Settings, Connectors, Add custom connector, paste
-   `https://gtm.infojoy.com/mcp`, Connect, approve on the consent screen, then call every tool
-   once from a chat (a prompt per tool is fine). The portal asks you to confirm this.
-2. **Submit new**, choose **MCP connector**, and fill the steps:
-   - **Connection**: Universal URL, `https://gtm.infojoy.com/mcp`.
-   - **Tools**: synced from the server. All 18 have a title and `readOnlyHint`/`destructiveHint`;
-     7 show as read-only and 11 as write. Nothing should be flagged.
-   - **Listing**: name, one-liner, description, categories, documentation URL (the setup guide),
-     privacy policy URL, support contact, icon, URL slug (permanent).
-   - **Use cases**: triage signals and inbox; research an account and draft outreach; build target
-     lists. Requirement: an InfoJoy GTM account. Reads and writes data.
-   - **Company**: InfoJoy, website, primary contact.
-   - **Authentication**: **OAuth with client ID metadata documents**. Our server advertises both
-     values Claude checks (`client_id_metadata_document_supported: true` and `none` among token
-     auth methods), and Dynamic Client Registration is also available as a fallback. No
-     Anthropic-held credentials are needed. Claude's callback
-     `https://claude.ai/api/mcp/auth_callback` and Claude Code's loopback redirects already work.
-   - **Data handling**: the API is our own; no health data; no sponsored content.
-   - **Test & launch**: reviewer workspace credentials and steps: "Connect, sign in with the
-     reviewer account, Allow access with all three permissions, then ask: What should I work on
-     today? / Research <a seeded account> / Find contacts at <account> / Draft an email to
-     <contact> / Find 5 companies like <account> and put them on a list."
-   - **Compliance**: seven acknowledgements. Relevant facts: no financial transactions through
-     tools (credits are spent only on research we already sell in-app), no media generation, tool
-     results mark third-party text as data (prompt-injection), no conversation data collection.
-3. Track status in the portal. Escalations: `mcp-review@anthropic.com`.
+```
+curl -i https://gtm.infojoy.com/.well-known/oauth-protected-resource
+curl -i https://gtm.infojoy.com/.well-known/oauth-authorization-server
+curl -i -X POST https://gtm.infojoy.com/mcp -H "Content-Type: application/json" -d "{}"
+```
 
-## 4. Anthropic plugin directory (adds the three skills on claude.ai, Cowork and Claude Code)
+The first two answer JSON whose `resource` is exactly `https://gtm.infojoy.com/mcp` and whose
+`issuer` is `https://gtm.infojoy.com`; the third answers `401` with
+`WWW-Authenticate: Bearer resource_metadata="https://gtm.infojoy.com/.well-known/oauth-protected-resource"`.
 
-1. Create a **public GitHub repository** (e.g. `infojoy/infojoy-gtm-plugin`) and copy into it the
-   contents of `distribution/claude-plugin/`: the root `.claude-plugin/marketplace.json` and the
-   `infojoy-gtm/` folder. It can stay private while validating.
-2. Add the install line the validator asks for to `infojoy-gtm/README.md` under Setup:
-   `/plugin install infojoy-gtm --marketplace infojoy/infojoy-gtm-plugin` (your owner/repo).
-3. Validate locally with a current Claude Code (2.1.275 or later; older releases reject
-   `displayName`):
-   `npx @anthropic-ai/claude-code@latest plugin validate ./infojoy-gtm` and `... validate .`.
-   Both pass today on 2.1.296.
-4. In the portal, **Submit new**, **Plugin bundle**: repository `infojoy/infojoy-gtm-plugin`,
-   plugin path `infojoy-gtm`, then **Validate**, connect GitHub when asked, answer data handling
-   (reads personal data of business contacts; sends data only to its declared connector; keeps
-   nothing; not for under-18s), four acknowledgements, choose the GitHub push webhook, **Submit for
-   review**.
-5. Submit the connector (section 3) too: Anthropic pairs the plugin with the connector listing.
-6. Raise `version` in `plugin.json` on every change.
+## 3. Prove it works on production
 
-Before the listing is live, anyone can install it as a self-hosted marketplace:
-`/plugin marketplace add infojoy/infojoy-gtm-plugin` then `/plugin install infojoy-gtm`.
+- **Official client, both dialects** (own virtual environment; spends nothing, changes nothing):
+  create a Read-only API key in Settings, AI apps, then
+  `pip install "mcp==2.3.0"` and
+  `python scripts/mcp_conformance.py --url https://gtm.infojoy.com/mcp --key nxk_...`. Expect PASS.
+- **MCP Inspector**: `npx @modelcontextprotocol/inspector`, transport Streamable HTTP, URL
+  `https://gtm.infojoy.com/mcp`, header `Authorization: Bearer <key>`; list tools, call
+  `get_workspace_overview`.
+- **One OAuth client**: Claude, Settings, Connectors, Add custom connector, paste the URL, Connect,
+  approve. The consent screen must show the right app name and redirect host, and the connection
+  must appear in InfoJoy GTM, Settings, AI apps. Revoke it there and confirm Claude asks to sign in
+  again.
 
-## 5. ChatGPT app directory
+## 4. Prepare what every portal asks for
 
-1. **Verify the organisation** on the OpenAI platform (a hard gate for submitting).
+Have all of it before opening any form.
+
+- **Public pages on `gtm.infojoy.com`** (every portal checks them, several require the same
+  domain as the server): privacy policy (data collected, how it is used and stored, third-party
+  sharing including "data you read through a connected AI app is sent to that app and its AI
+  provider", retention, contact), terms of service, a support page or monitored address, and the
+  setup guide (`docs/mcp/setup-guide.md`) published as a page.
+- **Icons**: a square PNG at 512x512 or larger (Anthropic, Google, Mistral); ChatGPT accepts
+  PNG/JPEG/WebP/SVG, square, at least 48x48, a `logo` and a `composerIcon`, optional dark variants;
+  Microsoft wants the Teams pair (color 192x192, outline 32x32 white on transparent).
+- **Names and descriptions**: InfoJoy GTM. Short (30 characters, ChatGPT's limit): "B2B signals,
+  research, outreach". One-liner (200, Anthropic): "B2B buying signals, account research,
+  contacts and outreach drafts from your InfoJoy GTM workspace, acting as you." Long: adapt the
+  plugin README's first three sections. Categories: Sales, Productivity.
+- **A reviewer workspace on production**: a dedicated account with **no MFA** (no reviewer can
+  receive a code), the owner role, real populated data (accounts with signals, contacts with
+  emails, an inbox, a list, a campaign, a connected mailbox for campaign drafts), and credits.
+  Credentials go only into each portal's private reviewer field, never into a file or ticket.
+- **A demo video** (required by ChatGPT): about a minute; connect, approve, "What should I work on
+  today?", research an account, draft an email, create a campaign draft.
+- **Screenshots**: at least three of InfoJoy GTM answering in Claude or ChatGPT.
+- **Test cases** (ChatGPT asks for exactly five positive and three negative; reuse elsewhere):
+  - Positive: (1) "What should I work on today?" -> `get_workspace_overview`, a short prioritized
+    list with reasons. (2) "Research <seeded account>." -> `research_account`, a brief, mentions
+    credits. (3) "Find contacts at <seeded account> and verify their emails." -> `find_contacts`,
+    `verify_email`. (4) "Draft an email to <seeded contact> and save it to my drafts." ->
+    `draft_email`, `save_email_draft`, stated as not sent. (5) "Make a campaign for my list
+    <seeded list>." -> `create_campaign_draft`, a draft with opening emails written, launch left to
+    the app.
+  - Negative: (1) "Send this email now." -> explains it cannot send; offers Drafts. (2) "Launch the
+    campaign." -> explains launching happens in the app after review. (3) With a Read-only
+    connection, "Add Acme as an account." -> says the connection may not add records and where
+    permissions change.
+
+## 5. Anthropic: Claude Connectors Directory (claude.ai, desktop, mobile, Cowork, Claude Code)
+
+Portal: `https://claude.ai/directory/manage`. **Anyone on a paid Claude plan** can submit
+(requirements are in "Who can submit" on Anthropic's directory docs).
+
+1. Test first as a custom connector (section 3) and call every tool once; the portal asks you to
+   confirm this.
+2. **Submit new**, choose **MCP connector**, then the ten steps:
+   1. **Connection**: `https://gtm.infojoy.com/mcp`, one URL for all users.
+   2. **Tools**: synced from the server, grouped read-only (11) and write (25). Every tool has a
+      `title` and `readOnlyHint`/`destructiveHint`, so nothing should be flagged.
+   3. **Listing**: name (100), one-liner (200), description (2,000), 1 to 5 categories,
+      documentation URL, privacy policy URL, support contact, icon, URL slug (**permanent**).
+   4. **Use cases**: triage signals and the inbox; research and draft outreach; build lists and
+      campaign drafts; requires an InfoJoy GTM account; reads and writes.
+   5. **Company**: InfoJoy, website, primary contact.
+   6. **Authentication**: **OAuth with client ID metadata documents**. The server advertises
+      `client_id_metadata_document_supported: true` and `none` among token auth methods; Dynamic
+      Client Registration is also available as a fallback. Claude's callback
+      `https://claude.ai/api/mcp/auth_callback` and Claude Code's loopback redirects already work.
+      No Anthropic-held credentials are needed.
+   7. **Data handling**: the API is our own; no personal health data; no sponsored content.
+   8. **Test & launch**: the reviewer account and exact steps (connect, sign in, Allow with all
+      three permissions, then the five positive prompts).
+   9. **Compliance**: seven acknowledgements. Facts: credits are spent only on research already
+      sold in-app (no financial transactions through tools); no AI media generation; tool results
+      mark third-party text as data (prompt injection); no conversation data collection; public
+      documentation exists.
+   10. **Review and submit**.
+3. Anthropic scans the submission automatically and lists it as a **Community** connector; some
+   get a person's review. Status and feedback appear in the portal. Escalations:
+   `mcp-review@anthropic.com`. Verified status is a later step (Anthropic's "Connector
+   verification" docs).
+
+**Plugin directory** (adds the three skills on claude.ai, Cowork and Claude Code): a public
+GitHub repository holding `distribution/claude-plugin/` (the root `.claude-plugin/marketplace.json`
+and `infojoy-gtm/`), validated with a current Claude Code
+(`npx @anthropic-ai/claude-code@latest plugin validate ./infojoy-gtm` and `... validate .`), then
+**Submit new**, **Plugin bundle** in the same portal. Submit the connector too: the two are paired.
+MCPB packages and desktop extensions are no longer accepted. Raise `version` in `plugin.json` on
+every change.
+
+## 6. OpenAI: ChatGPT (and Codex) plugin directory
+
+The old app form is replaced by **plugins**: a ZIP whose `mcp.json` names the server.
+
+1. **Eligibility**: an organization owner, or a member with **Apps Management Write**; individual
+   or business **verification** done in organization settings.
 2. **Test in Developer mode**: ChatGPT, Settings, Apps & Connectors, Advanced settings, Developer
-   mode on, Create, URL `https://gtm.infojoy.com/mcp`, authentication OAuth, then connect and try
-   every tool.
-3. Open the app submission form (OpenAI platform dashboard; "Submitting apps to the ChatGPT app
-   directory" in the Apps SDK docs). It saves drafts.
-4. **Domain verification**: the form shows a token and the path it checks
-   (`/.well-known/openai-apps-challenge` today). Paste the token into Control plane, Configuration,
-   Access & security, **ChatGPT domain check token**. Check with
-   `curl https://gtm.infojoy.com/.well-known/openai-apps-challenge`, then continue in the form. If
-   the form names a different path, tell engineering: it is one route in `nexus/api/routers/mcp.py`.
-   No mTLS in front of that path.
-5. **OAuth login inside the form**: sign in with the reviewer account (no MFA) and Allow access with
-   all three permissions, so OpenAI captures working tokens.
-6. **Test cases** (paste these):
+   mode on, Create, URL `https://gtm.infojoy.com/mcp`, OAuth; try every tool.
+3. **Build the ZIP**: a manifest with the listing (`displayName` and `shortDescription` at most 30
+   characters each, `longDescription` up to 4,000; HTTPS `websiteURL`, `supportURL`,
+   `privacyPolicyURL`, `termsOfServiceURL`; `logo` and `composerIcon`; up to three starter
+   prompts of 128 characters) and `mcp.json` with the one server. No server headers (public
+   submissions reject them), no secrets, no `test_credentials`.
+4. Platform, **Plugins**, **Upload new or existing plugin**, choose the verified identity, upload,
+   choose **With MCP**.
+5. **Domain verification**: the portal shows a token. Paste it into Control plane, Configuration,
+   Access & security, **ChatGPT domain check token**; it is served as plain text at
+   `https://gtm.infojoy.com/.well-known/openai-apps-challenge`. Check with
+   `curl https://gtm.infojoy.com/.well-known/openai-apps-challenge`, then continue.
+6. **Authentication**: OAuth with **Dynamic Client Registration** or **CIMD** (both supported);
+   register OpenAI's callback if you choose a registered client instead (section 7 shows how to
+   create one; its secret goes in the portal, never in `mcp.json`).
+7. **Review details**: the reviewer account (no MFA, no magic links, no private network), the five
+   positive and three negative cases (section 4), and the video URL.
+8. Submit. One review per plugin at a time; appeal by replying to the rejection email. After
+   approval you choose when to publish. Server-side tool changes are rescanned daily and go live
+   after checks (or press **Rescan**); new tools stay unavailable until approved. Changing the
+   server URL needs OpenAI support.
 
-   Positive:
-   1. "What should I work on today?" Expected: a short list of accounts from the inbox and recent
-      signals, each with a reason and a next step.
-   2. "Research <seeded account>." Expected: a research brief; mentions that it used credits.
-   3. "Find contacts at <seeded account>." Expected: new contacts with titles, saved to the account.
-   4. "Draft an email to <seeded contact>." Expected: a subject and body, stated as not sent.
-   5. "Find 5 companies like <seeded account> and put them on a list called Q4 targets." Expected:
-      candidates, then a new list holding the chosen companies.
+## 7. Microsoft: Copilot Studio, Microsoft 365 Copilot, Copilot chat, Azure Foundry, Cowork
 
-   Negative:
-   1. "Send this email now." Expected: it explains it cannot send, and offers to save it to Drafts.
-   2. "Delete the account <name>." Expected: it explains deleting is not available from the app.
-   3. With a read-only connection: "Add Acme as an account." Expected: it says the connection may
-      not add records and that permissions are changed in InfoJoy GTM, Settings, AI apps.
-7. **Listing**: name, short and long descriptions, category, logos (light and dark), at least
-   three screenshots, website, support URL, privacy policy and terms (on the same domain), the
-   demo video.
-8. Submit. Review is manual; only one version per organisation can be in review at a time.
+Two separate things:
 
-## 6. Official MCP Registry (VS Code, GitHub Copilot and registry-driven directories)
+- **Any customer can add the server themselves, no certification**: Copilot Studio, an agent,
+  Tools, Add a tool, Model Context Protocol, server URL `https://gtm.infojoy.com/mcp`,
+  authentication OAuth 2.0. Copilot Studio shows a per-connector callback
+  (`https://global.consent.azure-apim.net/redirect/<connector-name>`): register exactly that URL on
+  an InfoJoy GTM client (below) and paste its client id and secret back.
+- **Certification** (listed for every tenant, *preview*): Partner Center offer type **Apps and
+  Agents for M365 and Copilot**. The legacy Power Platform connector route stays open until
+  **2026-10-31**.
 
-1. Install the publisher CLI (`brew install modelcontextprotocol/tap/mcp-publisher`, or a release
+Microsoft does **not** support Dynamic Client Registration, so it needs a confidential client:
+
+1. Create it (superadmin with `providers.manage`; there is no screen yet):
+   ```
+   POST https://gtm.infojoy.com/api/admin/oauth-clients
+   Authorization: Bearer <superadmin session token>
+   {"name": "Microsoft Copilot", "redirect_uris": ["https://global.consent.azure-apim.net/redirect/<connector-name>"]}
+   ```
+   The response shows `client_id` (`nxc_...`) and `client_secret` (`nxs_...`) **once**. The token
+   endpoint accepts `client_secret_basic` and `client_secret_post`.
+2. **Partner Center**: a seller account with business verification, enrolled in the Microsoft 365
+   and Copilot program (verified publisher; you must own the endpoint, which we do).
+3. **Azure Key Vault** in our tenant with case-sensitive secrets `ClientId`, `ClientSecret`,
+   `AuthorizationUrl` (`https://gtm.infojoy.com/oauth/authorize`), `TokenUrl`
+   (`https://gtm.infojoy.com/oauth/token`), `RefreshUrl` (the token URL) and `Scopes`
+   (`nexus.read nexus.research nexus.write offline_access`). Grant the Microsoft application
+   service principal `8e91e74f-afe9-41cd-8c3f-17a9562a74ea` **Key Vault Secrets User**.
+4. **Package**: a Teams-schema manifest (v1.30) whose `agentConnectors[].toolSource.remoteMcpServer`
+   names `mcpServerUrl` and `authorization: {"type": "AzureKeyVault", "referenceId":
+   "https://<vault>.vault.azure.net/"}`, an `mcptools.json` tool file, `intro.md` (with a "Known
+   issues and limitations" section), color and outline icons, and the support, privacy and terms
+   links. ASCII only in the manifest and tool file.
+5. Submit the offer; Microsoft runs automated validation, then a functional and safety review
+   (evaluation evidence speeds it up). Resubmit when tools or metadata change.
+
+## 8. Google: Gemini Enterprise, the Gemini app, Gemini CLI
+
+Google has **no public directory submission** for MCP servers today; customers add the server.
+
+- **Gemini Enterprise** (*preview*): Google Cloud console, Gemini Enterprise, **Data stores**,
+  **Create data store**, search **Custom MCP Server**, **Add MCP server**, URL
+  `https://gtm.infojoy.com/mcp`, authentication **OAuth 2.0**: create a client as in section 7
+  with the redirect URL the form shows, and enter its id and secret and our authorize and token
+  URLs. Then open the data store's **Actions** tab, **Reload custom actions**, and enable the
+  tools (none are enabled by default), and connect the data store to the app. Streamable HTTP
+  only; Private Service Connect is not supported.
+- **The Gemini app** (personal accounts): connected apps take a custom MCP server URL where the
+  account is eligible; OAuth works as for Claude.
+- **Gemini CLI / Antigravity CLI** (developers): `gemini mcp add --transport http infojoy-gtm
+  https://gtm.infojoy.com/mcp`, or in settings use the key **`httpUrl`** (a plain `url` means SSE).
+  An API key goes in `headers`. The Gemini CLI extensions gallery lists public GitHub repositories
+  automatically and is not reviewed by Google.
+
+## 9. Mistral: Vibe (formerly Le Chat)
+
+A workspace **administrator** adds connectors (Work, Connectors): either from Mistral's curated
+directory or **custom** by server URL. Custom connectors detect the authentication type from the
+URL; ours resolves to OAuth through the discovery documents. To appear in the curated directory,
+contact Mistral's partnerships team with the materials in section 4 (there is no self-serve form).
+
+## 10. Perplexity
+
+Paid plans (Pro, Max, Enterprise; Enterprise governed by workspace admins): web or desktop app,
+Settings, **Connectors**, **+ Custom connector**, Streamable HTTP, OAuth. If Perplexity reports a
+client registration error, create a client as in section 7 with the redirect URL it shows and
+enter the id and secret. No public directory submission is offered.
+
+## 11. xAI: Grok
+
+- **grok.com**: Connectors, New connector, **Custom**, paste the server URL; OAuth.
+- **xAI API** (Responses API and SDK "remote MCP tools"): the server URL plus
+  `Authorization: Bearer <API key>` from Settings, AI apps.
+
+## 12. The MCP Registry and the directories built on it (VS Code, GitHub Copilot, Cursor, others)
+
+1. Install `mcp-publisher` (`brew install modelcontextprotocol/tap/mcp-publisher`, or a release
    binary from `github.com/modelcontextprotocol/registry`).
-2. Generate a key pair locally and add the DNS TXT record on `infojoy.com` that
+2. Generate an ed25519 key pair locally and add the DNS TXT record on `infojoy.com` that
    `mcp-publisher login dns --domain infojoy.com --private-key-file key.pem` asks for
    (`v=MCPv1; k=ed25519; p=<public key>`). Keep the private key out of git.
 3. From `distribution/mcp-registry/`: `mcp-publisher validate` (if it names a newer `$schema`,
-   update `server.json` to the URL it gives), then `mcp-publisher publish`.
+   update `server.json` to it), then `mcp-publisher publish`. A remote server is listed by its
+   `remotes` entry; no package is needed.
 4. Confirm: `curl "https://registry.modelcontextprotocol.io/v0/servers?search=com.infojoy/gtm"`.
 5. Raise `version` in `server.json` whenever the listing changes.
 
-Other directories (Cursor's, Smithery, Glama, PulseMCP) mostly index the registry or GitHub; once
-the registry entry exists, claim or confirm those listings if they appear.
+Smithery, Glama, PulseMCP and Cursor's directory mostly index the registry or GitHub; claim the
+listings once they appear. Developer tools connect directly too (setup guide): Claude Code
+(`claude mcp add --transport http infojoy-gtm https://gtm.infojoy.com/mcp`), Cursor and VS Code
+(`mcp.json`), and model APIs (OpenAI Responses `type: "mcp"`, Anthropic's MCP connector) with an
+API key.
 
-## 7. Check everything works
+## 13. After listing
 
-- **Unit and integration tests**: `pytest tests/test_mcp_*.py` (all offline).
-- **Protocol conformance with the official client**, in its own virtual environment (it pulls
-  packages the app does not need), against production with an API key that has Read:
-  `pip install "mcp==2.3.0"` then
-  `python scripts/mcp_conformance.py --url https://gtm.infojoy.com/mcp --key nxk_...`.
-  It lists tools, calls two read-only ones and checks a bad id is refused, in both protocol
-  dialects, and prints PASS. It spends no credits and changes nothing.
-- **MCP Inspector** against production with an API key (`npx @modelcontextprotocol/inspector`,
-  transport Streamable HTTP, URL `https://gtm.infojoy.com/mcp`, header
-  `Authorization: Bearer <key>`): list tools, call `get_credit_balance`.
-- **Each client once** with OAuth: Claude custom connector, ChatGPT developer mode, Claude Code
-  (`/mcp`), and VS Code. Each should show the consent screen with the right app name and redirect
-  host, list tools filtered by the ticked permissions, and appear on Settings, AI apps.
-- **Revoke** one connection from Settings, AI apps and confirm the client is asked to sign in again.
-
-## After listing
-
-- Both directories review continuously. Keep tool names, titles and annotations stable; adding a
-  tool is fine, renaming one breaks saved workflows.
-- A change of production address means: new `app_base_url`, new URLs in the plugin and registry,
-  and resubmitting the connector URL in both portals.
+- Keep tool names, titles and annotations stable: adding a tool is fine (ChatGPT holds new tools
+  until approved; Microsoft wants a resubmission), renaming one breaks saved workflows.
+- Watch `nexus_mcp_requests_total`, `nexus_mcp_tool_calls_total` and `nexus_oauth_events_total` on
+  `/metrics`; a spike in `unauthorized` or `refused` is the first sign a client changed.
+- A new production address means a new `app_base_url`, new URLs in the plugin and registry, and a
+  resubmission in every portal (ChatGPT needs support to change it).
 - Incidents: Control plane, Feature switches, `module.mcp` to `maintenance` stops every tool call
-  with the message you write, while connections stay in place.
+  with your message while connections stay in place.
+
+### Sources (checked 2026-10-21)
+
+- Anthropic: [Submit a connector to the directory](https://claude.com/docs/connectors/building/submission)
+- OpenAI: [Upload and submit your plugin](https://developers.openai.com/apps-sdk/deploy/submission), [Submitting apps to the ChatGPT app directory](https://help.openai.com/en/articles/20001040-submitting-apps-to-the-chatgpt-app-directory)
+- Microsoft: [MCP server certification (preview)](https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-certification), [legacy certification](https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-server-certification)
+- Google: [Set up a custom MCP server (Gemini Enterprise)](https://docs.cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server), [Gemini CLI extensions](https://geminicli.com/extensions/)
+- Mistral: [MCP connectors (Vibe)](https://docs.mistral.ai/vibe/work/connectors/mcp-connectors.md), [Configuring a custom connector](https://help.mistral.ai/en/articles/393572-configuring-a-custom-connector)
+- MCP Registry: [modelcontextprotocol/registry](https://github.com/modelcontextprotocol/registry)
+- Perplexity and xAI have no public submission process; their custom-connector steps above come
+  from their apps' own settings screens and current third-party setup guides, so confirm in the
+  app when you do it.

@@ -3076,6 +3076,16 @@ server (`nxo_` access, `nxr_` refresh). Spec, plan and marketplace steps:
 - **Scopes are `read` / `research` / `write`, chosen per connection.** `tools/list` shows only
   what the connection may use; a call outside its scope is a readable tool error, not a protocol
   fault. Never sending email, launching campaigns, deleting, billing, settings or admin.
+- **36 tools reach most of the product** (2026-10-19, branch `feat/mcp-coverage`; 11 read, 13
+  research, 12 write). Owner decisions: campaign drafts (opening emails written, never approved
+  or launched), Populate, queueing and logging calls (never dialed), removing list members (records
+  stay), and the reply desk's read, draft and save. Newer tools live in one module per area under
+  `nexus/mcp/tools/` over `common.py`; `catalog.py` keeps the `tools/list` order.
+  `test_nothing_reaches_approve_launch_send_dial_or_delete` refuses any tool path past the line. A
+  502/503/504 carries the app's own sentence to the assistant; a 500 stays generic.
+- **Deploying and listing**: `docs/mcp/listing-guide.md` (Anthropic, OpenAI plugins, Microsoft
+  certification, Google, Mistral, Perplexity, xAI, the MCP Registry). Microsoft has no DCR: it needs
+  a confidential client from `POST /api/admin/oauth-clients` (no screen yet).
 - **Two protocol dialects in one endpoint** (`protocol.py`): the 2025 handshake revisions
   (`initialize`, `MCP-Protocol-Version` header, absent = `2025-03-26`) and the stateless
   `2026-07-28` (`_meta` version, `server/discover`, `resultType`, `ttlMs`/`cacheScope`). No SDK at
