@@ -165,7 +165,44 @@ async def mark_processed(
 def _object(event: VerifiedEvent) -> dict:
     data = event.payload.get("data") or {}
     obj = data.get("object") or {}
-    return obj if isinstance(obj, dict) else {}
+    return _in_pinned_shape(event.event_type, obj) if isinstance(obj, dict) else {}
+
+
+def _in_pinned_shape(event_type: str, obj: dict) -> dict:
+    """The event's object as `StripePaymentProvider.API_VERSION` (2024-06-20) shapes it.
+
+    Stripe renders a webhook in its ENDPOINT's API version. Create webhook in Stripe pins ours; an
+    endpoint added by hand in Stripe's Dashboard takes the account's default, and from 2025-03-31
+    that moved two fields read below (measured 2026-10-21 on 2026-06-24.dahlia):
+
+    * a subscription's ``current_period_start``/``end`` are only on its items, so the period never
+      synced and a workspace that bought an annual plan kept the month it had on Free;
+    * an invoice's ``subscription`` is only under ``parent.subscription_details``, so a paid renewal
+      was never credited and an invoice from a subscription moved to another account passed
+      ``_is_retired``.
+
+    Fills only what is missing, so a pinned endpoint's events read exactly as before, and returns a
+    copy: the payload as Stripe sent it is what the dedupe row digests. The invoice's
+    ``payment_intent`` is not in the newer event at all; `payment_risk` asks Stripe for the charge
+    when it cannot match one."""
+    if event_type.startswith("customer.subscription.") and (
+            obj.get("current_period_start") is None or obj.get("current_period_end") is None):
+        items = obj.get("items")
+        rows = items.get("data") if isinstance(items, dict) else None
+        item = next((i for i in rows or [] if isinstance(i, dict)
+                     and i.get("current_period_end") is not None), None)
+        if item is not None:
+            obj = dict(obj)
+            for field in ("current_period_start", "current_period_end"):
+                if obj.get(field) is None:
+                    obj[field] = item.get(field)
+    elif event_type.startswith("invoice.") and not obj.get("subscription"):
+        parent = obj.get("parent")
+        details = parent.get("subscription_details") if isinstance(parent, dict) else None
+        psp = _str(details.get("subscription")) if isinstance(details, dict) else ""
+        if psp:
+            obj = {**obj, "subscription": psp}
+    return obj
 
 
 # ---- provider state -> our state ---------------------------------------------------------------

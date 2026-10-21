@@ -980,6 +980,15 @@ grants the plan's credits keyed `stripe_renewal:<invoice>`, and the roll grants 
 `psp_subscription_id` starts `sub_`. The first invoice (`subscription_create`) is the purchase,
 already credited by Checkout or the subscription event. Workspaces billed here roll as before.
 
+**A webhook reads the same in any Stripe API version** (2026-10-21, `webhooks._in_pinned_shape`,
+`tests/test_stripe_event_versions.py`). Stripe renders a webhook in its ENDPOINT's version: Create
+webhook in Stripe pins `API_VERSION` (2024-06-20), an endpoint added in Stripe's Dashboard takes the
+account's default. Since 2025-03-31 that moves a subscription's period onto its items and an invoice's
+`subscription` under `parent.subscription_details`; measured by paying real test-mode Checkouts on
+2026-06-24.dahlia, an annual purchase kept Free's one-month period, and a renewal would have been
+charged and never credited. The handlers read the pinned shape; missing fields are filled from the
+new places, never overwritten. Outbound calls send `Stripe-Version` and are unaffected.
+
 **Refunds, chargebacks and fraud warnings reach the workspace** (2026-10-12,
 `nexus/billing/payment_risk.py`, `tests/test_disputes_and_refunds.py`). The webhook looked the
 event's OWN id up as a PaymentIntent, but a refund's object is a charge and a dispute's a dispute,
