@@ -74,6 +74,17 @@ def annual_price_cents(monthly_cents: int, discount_pct: int) -> int:
     return ((int(monthly_cents) * 12 * (100 - int(discount_pct)) + 5000) // 10000) * 100
 
 
+def implied_discount_pct(monthly_cents: int, annual_cents: int) -> int:
+    """The whole % off twelve monthly payments that an annual price comes to, halves up.
+
+    For an annual price typed in rather than derived (2026-10-21): it is what the twin records as its
+    discount and what its seat price takes. A free monthly plan has nothing to discount."""
+    twelve = int(monthly_cents) * 12
+    if twelve <= 0:
+        return 0
+    return ((twelve - int(annual_cents)) * 200 + twelve) // (2 * twelve)
+
+
 def _annual_twin_id(plan_id: str) -> str:
     from nexus.billing.plans import ANNUAL_ID_SUFFIX
 
@@ -221,6 +232,7 @@ async def create_sellable_plan(
     entitlement_overrides: dict[str, dict] | None = None,
     metered_from_zero: bool = False,
     annual_discount_pct: int | None = None,
+    annual_price: int | None = None,
 ) -> dict:
     """Create a plan the public price list can sell. Returns a summary plus any margin warning.
 
@@ -230,6 +242,10 @@ async def create_sellable_plan(
     discount is on price, never on credits, as the seeded ladder does), sorted beside the monthly.
     The summary carries it under ``annual``. Its id taken, or the id too long, refuses the whole
     create: half a pair is the thing this exists to prevent.
+
+    ``annual_price`` (cents a year) sets the twin's price as typed instead (2026-10-21); the discount
+    it records, and its seat price takes, is the one that price implies. It must lie between twelve
+    monthly payments and the largest discount allowed. Without it nothing differs from before.
 
     ``metered_from_zero`` builds a **pay-as-you-go** plan: every metered entitlement gets
     ``quota=0`` so that all consumption is overage and therefore rated onto an invoice.
@@ -254,10 +270,19 @@ async def create_sellable_plan(
         # are already subscribed to, because someone reused an id, is not a create.
         raise PlanAuthoringError(f"plan '{plan_id}' already exists")
     twin_id = ""
-    if annual_discount_pct is not None:
+    if annual_discount_pct is not None or annual_price is not None:
         # Checked before anything is written, so a refusal leaves neither plan behind.
         if interval != "month":
             raise PlanAuthoringError("only a monthly plan can have an annual plan made beside it")
+        if annual_price is not None:
+            if not 0 <= int(annual_price) <= int(base_price_cents) * 12:
+                raise PlanAuthoringError(
+                    "the annual price must be between 0 and twelve monthly payments")
+            annual_discount_pct = implied_discount_pct(base_price_cents, annual_price)
+            if annual_discount_pct > MAX_ANNUAL_DISCOUNT_PCT:
+                raise PlanAuthoringError(
+                    f"the annual price is more than {MAX_ANNUAL_DISCOUNT_PCT}% off twelve "
+                    f"monthly payments")
         if not 0 <= int(annual_discount_pct) <= MAX_ANNUAL_DISCOUNT_PCT:
             raise PlanAuthoringError(
                 f"the annual discount must be between 0 and {MAX_ANNUAL_DISCOUNT_PCT}%")
@@ -314,7 +339,8 @@ async def create_sellable_plan(
             plan_id=twin_id,
             name=f"{plan.name} (annual)",
             base_plan_id=base_plan_id,
-            base_price_cents=annual_price_cents(plan.base_price_cents, pct),
+            base_price_cents=(int(annual_price) if annual_price is not None
+                              else annual_price_cents(plan.base_price_cents, pct)),
             included_credits=plan.included_credits * 12,
             description=f"{plan.name}, paid yearly. {pct}% off.",
             seat_price_cents=annual_price_cents(plan.seat_price_cents or 0, pct),

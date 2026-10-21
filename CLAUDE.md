@@ -675,6 +675,11 @@ transaction, same base, entitlements, seats, trial and status:
   0-90 refuses the WHOLE create: half a pair is what this prevents. Created on sale, both get their
   Stripe price and are fitted to the price list monthly first, so the annual joins the monthly's
   card or both are hidden together. Afterwards they are two plans, edited and published separately.
+- **the annual price can be typed instead** (2026-10-21, `annual_price_cents`): the dialog's Annual
+  price is worked out from the discount until someone types one, then the discount shows what that
+  price comes to (`implied_discount_pct`, the same integer expression in `PlanDialog.impliedPct`),
+  which the twin records and its seat price takes. Between 0 and twelve monthly payments, at most 90%
+  off, or the whole create is refused. Credits stay twelve months' worth.
 
 **The Plans tab is where this is used** (`admin/PlanDialog.tsx`, 2026-10-01). For five weeks the
 server half had no screen: the tab offered only "What's included", the API client carried an

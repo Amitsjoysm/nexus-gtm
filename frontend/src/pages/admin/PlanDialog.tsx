@@ -53,6 +53,13 @@ function annualCents(monthlyCents: number, pct: number): number {
   return Math.floor((monthlyCents * 12 * (100 - pct) + 5000) / 10000) * 100;
 }
 
+/** The whole % off twelve monthly payments an annual price comes to, halves up: the SAME integer
+ * expression as `implied_discount_pct` in `plan_authoring.py`, which records it on the plan. */
+function impliedPct(monthlyCents: number, annual: number): number {
+  const twelve = monthlyCents * 12;
+  return twelve <= 0 ? 0 : Math.floor(((twelve - annual) * 200 + twelve) / (2 * twelve));
+}
+
 /**
  * Create a plan the price list can sell, or edit a plan's commercial terms.
  *
@@ -90,6 +97,9 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
   // A monthly tier is sold yearly too, as its own `-annual` plan the price list pairs with it.
   const [withAnnual, setWithAnnual] = useState(true);
   const [discount, setDiscount] = useState(DEFAULT_ANNUAL_DISCOUNT);
+  // The yearly price, worked out from the discount until someone types one (2026-10-21).
+  const [annualPrice, setAnnualPrice] = useState("");
+  const [annualTyped, setAnnualTyped] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // The plans a new tier can start from: real tiers, never another workspace's bespoke deal.
@@ -115,6 +125,8 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
     setDescription(plan?.description ?? "");
     setWithAnnual(true);
     setDiscount(DEFAULT_ANNUAL_DISCOUNT);
+    setAnnualPrice("");
+    setAnnualTyped(false);
   }, [open, plan, bases]);
 
   const effectiveId = creating ? (idTouched ? slug(planId) : slug(name)) : plan?.id ?? "";
@@ -127,7 +139,18 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
   const seatLimit = maxSeats.trim() === "" ? null : whole(maxSeats);
   const trial = whole(trialDays);
   const makeAnnual = creating && billing === "month" && withAnnual;
-  const discountPct = whole(discount);
+  // A typed yearly price sets the discount it comes to; otherwise the discount sets the price.
+  const typedAnnual = annualTyped ? cents(annualPrice) : null;
+  const shownDiscount =
+    typedAnnual != null && priceCents != null && priceCents > 0 && typedAnnual <= priceCents * 12
+      ? String(impliedPct(priceCents, typedAnnual))
+      : discount;
+  const discountPct = whole(shownDiscount);
+  const derivedAnnual =
+    priceCents != null && discountPct != null && discountPct <= MAX_ANNUAL_DISCOUNT
+      ? annualCents(priceCents, discountPct)
+      : null;
+  const annualPriceCents = annualTyped ? typedAnnual : derivedAnnual;
   const annualId = `${effectiveId}-annual`;
 
   const errors = {
@@ -149,11 +172,20 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
     trial: trial == null ? "A whole number of days." : undefined,
     discount: !makeAnnual
       ? undefined
-      : discountPct == null || discountPct > MAX_ANNUAL_DISCOUNT
+      : !annualTyped && (discountPct == null || discountPct > MAX_ANNUAL_DISCOUNT)
         ? `A whole number from 0 to ${MAX_ANNUAL_DISCOUNT}.`
         : plans.some((p) => p.id === annualId)
           ? `${annualId} already exists. Untick this, or choose another plan id.`
           : undefined,
+    annualPrice: !makeAnnual || !annualTyped
+      ? undefined
+      : typedAnnual == null
+        ? "Enter the yearly price, 0 or more."
+        : priceCents != null && typedAnnual > priceCents * 12
+          ? "More than twelve monthly payments, so nobody would choose annual."
+          : discountPct != null && discountPct > MAX_ANNUAL_DISCOUNT
+            ? `More than ${MAX_ANNUAL_DISCOUNT}% off twelve monthly payments.`
+            : undefined,
   };
   const valid = Object.values(errors).every((e) => e === undefined);
 
@@ -174,6 +206,7 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
           max_seats: seatLimit,
           trial_days: trial,
           annual_discount_pct: makeAnnual ? discountPct : null,
+          annual_price_cents: makeAnnual && annualTyped ? typedAnnual : null,
         });
         toast.success(
           result.annual
@@ -321,17 +354,39 @@ export function PlanDialog({ open, onClose, plan, plans, onDone }: Props) {
             </label>
             {withAnnual && (
               <>
-                <Field
-                  label="Annual discount (%)"
-                  hint="Off twelve monthly payments. Credits stay twelve months' worth."
-                  error={errors.discount}
-                >
-                  <Input type="number" min="0" max={MAX_ANNUAL_DISCOUNT} step="1" value={discount}
-                    onChange={(e) => setDiscount(e.target.value)} />
-                </Field>
+                <div className={styles.row}>
+                  <Field
+                    label="Annual discount (%)"
+                    hint="Off twelve monthly payments."
+                    error={errors.discount}
+                  >
+                    <Input type="number" min="0" max={MAX_ANNUAL_DISCOUNT} step="1"
+                      value={shownDiscount}
+                      onChange={(e) => {
+                        setDiscount(e.target.value);
+                        setAnnualTyped(false);
+                      }} />
+                  </Field>
+                  <Field
+                    label="Annual price per year (USD)"
+                    hint={annualTyped
+                      ? "Set by you. Change the discount to work it out again."
+                      : "Worked out from the discount. Type a price to set it yourself."}
+                    error={errors.annualPrice}
+                  >
+                    <Input type="number" min="0" step="1"
+                      value={annualTyped ? annualPrice : dollars(derivedAnnual)}
+                      onChange={(e) => {
+                        setAnnualTyped(true);
+                        setAnnualPrice(e.target.value);
+                      }}
+                      placeholder="950" />
+                  </Field>
+                </div>
                 <p className={styles.hint} aria-live="polite">
-                  {priceCents != null && discountPct != null && discountPct <= MAX_ANNUAL_DISCOUNT
-                    ? `${name.trim() || "The plan"} (annual): ${formatPrice(annualCents(priceCents, discountPct), "USD")} a year instead of ${formatPrice(priceCents * 12, "USD")}${creditCount != null ? `, ${(creditCount * 12).toLocaleString()} credits a year` : ""}. Created as a draft beside the monthly plan; the price list shows them as one card.`
+                  {priceCents != null && annualPriceCents != null && errors.annualPrice === undefined
+                    && discountPct != null && discountPct <= MAX_ANNUAL_DISCOUNT
+                    ? `${name.trim() || "The plan"} (annual): ${formatPrice(annualPriceCents, "USD")} a year instead of ${formatPrice(priceCents * 12, "USD")}, ${discountPct}% off${creditCount != null ? `, ${(creditCount * 12).toLocaleString()} credits a year` : ""}. Credits stay twelve months' worth. Created as a draft beside the monthly plan; the price list shows them as one card.`
                     : "Enter the monthly price to see the annual price."}
                 </p>
               </>

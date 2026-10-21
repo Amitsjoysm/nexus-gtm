@@ -141,3 +141,51 @@ def test_the_dialog_offers_it_and_previews_the_server_price():
             / "frontend/src/pages/admin/PlanDialog.tsx").read_text(encoding="utf-8")
     assert "annual_discount_pct" in page
     assert "+ 5000) / 10000" in page
+
+
+# ---- an annual price typed in (2026-10-21) --------------------------------------------------------
+# Asked: "when SuperAdmin creates a plan, annual plans are also created simultaneously; add fields for
+# input related to annuals". The dialog asked only for a % off; an operator thinks in the yearly
+# price ($950), so it can now be typed, and the discount recorded is the one that price implies.
+# Credits stay exactly twelve months' worth whatever the price: the discount is never on credits.
+
+async def test_an_annual_price_typed_in_is_the_price_the_twin_is_made_at(client, monkeypatch):
+    token = await _superadmin(client, monkeypatch, slug="tw7", email="boss@tw7.com")
+    r = await client.post("/api/admin/billing/plans", headers=auth(token),
+                          json=_plan(annual_discount_pct=20, annual_price_cents=230000,
+                                     seat_price_cents=1000))
+    assert r.status_code == 201, r.text
+    annual = await _row("scale-annual")
+    assert annual.base_price_cents == 230000          # as typed, not 249 x 12 x 0.8
+    assert annual.included_credits == 144000          # still 12 x 12,000
+    # 2,988 a year monthly, 2,300 annual: 23% off, which is what the seat price takes too.
+    assert annual.meta.get("annual_discount_pct") == 23
+    assert annual.seat_price_cents == 9200
+
+
+async def test_an_annual_price_alone_also_makes_the_twin(client, monkeypatch):
+    token = await _superadmin(client, monkeypatch, slug="tw8", email="boss@tw8.com")
+    r = await client.post("/api/admin/billing/plans", headers=auth(token),
+                          json=_plan(annual_price_cents=298800))
+    assert r.status_code == 201, r.text
+    assert r.json()["annual"]["plan_id"] == "scale-annual"
+    annual = await _row("scale-annual")
+    assert (annual.base_price_cents, annual.meta.get("annual_discount_pct")) == (298800, 0)
+
+
+@pytest.mark.parametrize("price", [298801, -100, 1000])  # over 12 months, negative, 99.7% off
+async def test_an_annual_price_that_makes_no_sense_refuses_the_whole_create(
+        client, monkeypatch, price):
+    token = await _superadmin(client, monkeypatch, slug="tw9", email="boss@tw9.com")
+    r = await client.post("/api/admin/billing/plans", headers=auth(token),
+                          json=_plan(annual_discount_pct=20, annual_price_cents=price))
+    assert r.status_code == 400, r.text
+    assert await _row("scale") is None and await _row("scale-annual") is None
+
+
+def test_the_dialog_lets_the_annual_price_be_typed():
+    from pathlib import Path
+
+    page = (Path(__file__).resolve().parents[1]
+            / "frontend/src/pages/admin/PlanDialog.tsx").read_text(encoding="utf-8")
+    assert "annual_price_cents" in page and "Annual price" in page

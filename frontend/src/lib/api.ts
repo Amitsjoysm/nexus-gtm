@@ -1933,6 +1933,8 @@ export class ApiClient {
     interval?: string; max_seats?: number | null; trial_days?: number;
     /** Monthly plans only: also create `<plan_id>-annual` at this % off twelve months. */
     annual_discount_pct?: number | null;
+    /** The annual plan's price as typed, cents a year; its discount is then the one it implies. */
+    annual_price_cents?: number | null;
   }) {
     return this.request<{
       plan_id: string; status: string; warning?: string | null;

@@ -1165,6 +1165,9 @@ class SellablePlanIn(BaseModel):
     # A monthly plan only: also make `<plan_id>-annual` at this % off twelve months, so the tier is
     # sold both ways as one card (`plan_authoring.annual_price_cents`). Omitted, nothing else is made.
     annual_discount_pct: int | None = None
+    # The annual plan's price as typed, in cents a year, instead of one derived from the discount
+    # (2026-10-21). Also makes the annual plan; its discount is then the one this price implies.
+    annual_price_cents: int | None = None
 
 
 class PlanStatusIn(BaseModel):
@@ -1214,6 +1217,7 @@ async def create_sellable_plan_endpoint(
                 entitlement_overrides=body.entitlement_overrides or None,
                 metered_from_zero=body.metered_from_zero,
                 annual_discount_pct=body.annual_discount_pct,
+                annual_price=body.annual_price_cents,
             )
         except PlanAuthoringError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
