@@ -199,7 +199,7 @@ async def test_the_full_flow_issues_tokens_that_work_with_the_granted_permission
     assert tokens.headers["cache-control"] == "no-store"
     r = await client.post("/mcp", headers={"Authorization": f"Bearer {body['access_token']}"},
                           json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-    assert r.status_code == 200 and len(r.json()["result"]["tools"]) == 8
+    assert r.status_code == 200 and len(r.json()["result"]["tools"]) == 11
     listed = (await client.get("/api/connections", headers=auth(token))).json()
     assert listed[0]["kind"] == "oauth" and listed[0]["client_name"] == "Claude"
 

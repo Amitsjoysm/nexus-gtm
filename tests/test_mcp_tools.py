@@ -30,7 +30,9 @@ def test_every_tool_has_a_title_and_the_hints_the_directories_require():
 
 def test_names_are_unique_short_and_snake_case():
     names = [t.name for t in TOOLS]
-    assert len(names) == len(set(names)) == 20
+    # 36 since 2026-10-19 (most of the product, owner decisions): under the ~40 tools some clients
+    # cap across every connected server.
+    assert len(names) == len(set(names)) == 36
     for n in names:
         assert len(n) <= 64 and re.fullmatch(r"[a-z][a-z_]*", n), n
 
@@ -41,11 +43,21 @@ def test_the_order_is_read_then_research_then_write():
     assert set(order) == {"read", "research", "write"}
 
 
-def test_read_tools_are_the_eight_free_ones():
+def test_read_tools_are_the_free_ones():
     # prospector_search browses the prospect database masked, which is free (decision D3).
     assert [t.name for t in TOOLS if t.scope == "read"] == [
         "search", "fetch", "list_signals", "list_inbox", "list_lists", "list_campaigns",
-        "get_credit_balance", "prospector_search"]
+        "get_credit_balance", "prospector_search", "get_workspace_overview", "list_queue",
+        "search_network"]
+
+
+def test_nothing_reaches_approve_launch_send_dial_or_delete():
+    """The line the app keeps (spec 2026-10-13, kept by the owner on 2026-10-19)."""
+    for t in TOOLS:
+        for method, path in t.calls:
+            assert method in ("GET", "POST"), (t.name, method)
+            assert not re.search(r"/(approve|approve-all|launch|send|send-email|dial|archive|merge"
+                                 r"|owner|delete)(/|$)", path), (t.name, path)
 
 
 def test_descriptions_name_no_vendor():
@@ -101,14 +113,19 @@ async def test_handlers_only_send_the_requests_they_declare():
 
     samples = {"id": "account:abc123", "query": "a", "account_id": "abc123", "contact_id": "abc123",
                "list_id": "abc123", "campaign_id": "abc123", "task_id": "abc123", "name": "n",
-               "body": "b"}
+               "body": "b", "reply_id": "abc123", "alert_id": "abc123", "kind": "alerts",
+               "count": 1, "disposition": "connected"}
     for t in TOOLS:
         rec = Recorder()
-        args = validate(t.input_schema, {k: v for k, v in samples.items()
-                                         if k in t.input_schema["properties"]})
+        props = t.input_schema["properties"]
+        # A sample a tool's own enum does not allow (create_list's kind) is left to its default.
+        args = validate(t.input_schema, {k: v for k, v in samples.items() if k in props
+                                         and v in props[k].get("enum", [v])})
         await t.handler(rec, args)  # type: ignore[arg-type]
         declared = {(m, tpl.replace("{id}", "abc123")) for m, tpl in t.calls}
         declared |= {(m, tpl.replace("{id}", "acc1")) for m, tpl in t.calls}
+        # An id the handler got back from its own earlier call (queue_call's new task).
+        declared |= {(m, tpl.replace("{id}", "x1")) for m, tpl in t.calls}
         for sent in rec.sent:
             assert sent in declared, (t.name, sent)
             assert path_allowed(*sent)

@@ -6,43 +6,21 @@ Descriptions are written for a model choosing between tools: what it does, what 
 costs, and what it never does. They name no vendor: these words are shown to customers in Claude and
 ChatGPT.
 
-Never here: sending email, launching or approving campaigns, deleting, archiving, merging, changing
-owners, billing, settings, members, integrations. Those stay in the app (spec 2026-10-13).
+Never here: sending email, launching or approving campaigns, dialing, deleting a record, archiving,
+merging, changing owners, billing, settings, members, integrations. Those stay in the app (spec
+2026-10-13). Added with the owner on 2026-10-19, each short of that line: a campaign created as a
+draft with its opening emails written, Populate, queueing and logging calls, and taking members off
+a list (the records stay). The newer tools live in one module per area; this file keeps the original
+ones and the order ``tools/list`` answers in.
 """
 from __future__ import annotations
 
 from nexus.mcp.gateway import Gateway, ToolOutcome
-from nexus.mcp.tools.registry import ID_PATTERN, REQUEST_ID, ToolSpec
+from nexus.mcp.tools import calling, discovery, engagement, enrichment, records, workspace
+from nexus.mcp.tools.common import ID as _ID, IDS as _IDS, fail as _fail, link as _link
+from nexus.mcp.tools.common import obj as _obj, ok as _ok
+from nexus.mcp.tools.registry import REQUEST_ID, ToolSpec
 from nexus.mcp.brand import PRODUCT_NAME
-
-_ID = {"type": "string", "pattern": ID_PATTERN}
-_IDS = {"type": "array", "items": {"type": "string", "pattern": ID_PATTERN}, "maxItems": 500}
-
-
-def _obj(properties: dict, required: tuple[str, ...] = ()) -> dict:
-    schema: dict = {"type": "object", "properties": properties, "additionalProperties": False}
-    if required:
-        schema["required"] = list(required)
-    return schema
-
-
-def _base_url() -> str:
-    from nexus.core.config import get_settings
-
-    return (get_settings().app_base_url or "").rstrip("/")
-
-
-def _link(path: str) -> str | None:
-    base = _base_url()
-    return f"{base}{path}" if base else None
-
-
-def _fail(out: ToolOutcome) -> ToolOutcome:
-    return ToolOutcome(False, None, out.message, out.status)
-
-
-def _ok(data) -> ToolOutcome:
-    return ToolOutcome(True, data)
 
 
 # ---- read ------------------------------------------------------------------------------------
@@ -92,6 +70,8 @@ async def _fetch(gw: Gateway, args: dict) -> ToolOutcome:
         account_id = (contact.data or {}).get("account_id")
         return _ok({"type": "contact", "contact": contact.data,
                     "url": _link(f"/accounts/{account_id}") if account_id else None})
+    if kind in records.FETCHERS:
+        return await records.FETCHERS[kind](gw, rid)
     plist = await gw.get(f"/api/lists/{rid}")
     if not plist.ok:
         return _fail(plist)
@@ -276,6 +256,16 @@ async def _add_to_list(gw: Gateway, args: dict) -> ToolOutcome:
     return _ok(out.data) if out.ok else _fail(out)
 
 
+async def _remove_from_list(gw: Gateway, args: dict) -> ToolOutcome:
+    out = await gw.post(f"/api/lists/{args['list_id']}/members/remove", json={
+        "account_ids": args.get("account_ids") or [], "contact_ids": args.get("contact_ids") or [],
+    })
+    if not out.ok:
+        return _fail(out)
+    return _ok({**(out.data or {}), "note": "Taken off the list only: the accounts and contacts "
+                                            "are still in the workspace."})
+
+
 async def _add_to_campaign(gw: Gateway, args: dict) -> ToolOutcome:
     body = {"contact_ids": args.get("contact_ids") or [],
             "account_ids": args.get("account_ids") or []}
@@ -320,18 +310,23 @@ TOOLS: tuple[ToolSpec, ...] = (
         handler=_search, calls=(("GET", "/api/accounts"), ("GET", "/api/contacts")),
     ),
     ToolSpec(
-        name="fetch", title="Get an account, contact or list", scope="read",
-        description="Everything about one record by its id from search: an account with its fit "
-                    "score, recent buying signals and contacts; a contact with their company and "
-                    "email status; or a list with its members.",
+        name="fetch", title="Get one record", scope="read",
+        description="Everything about one record by its id: an account with its fit score, recent "
+                    "buying signals and contacts; a contact with their company and email status; a "
+                    "list with its members; a campaign with its results; a reply waiting on the "
+                    "reply desk; a queued call's pre-call brief; a person in the team's network "
+                    "with who can introduce them; or a Populate run's progress.",
         input_schema=_obj({
-            "id": {"type": "string", "pattern": "^(account|contact|list):[A-Za-z0-9_-]{1,64}$",
-                   "description": "'account:<id>', 'contact:<id>' or 'list:<id>'."},
+            "id": {"type": "string",
+                   "pattern": "^(account|contact|list|campaign|reply|call|person|populate):"
+                              "[A-Za-z0-9_-]{1,64}$",
+                   "description": "'<kind>:<id>', kind being account, contact, list, campaign, "
+                                  "reply, call, person or populate."},
         }, ("id",)),
         handler=_fetch,
         calls=(("GET", "/api/accounts/{id}"), ("GET", "/api/signals"),
                ("GET", "/api/accounts/{id}/contacts"), ("GET", "/api/contacts/{id}"),
-               ("GET", "/api/lists/{id}"), ("GET", "/api/lists/{id}/members")),
+               ("GET", "/api/lists/{id}"), ("GET", "/api/lists/{id}/members"), *records.CALLS),
     ),
     ToolSpec(
         name="list_signals", title="List buying signals", scope="read",
@@ -395,6 +390,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         }),
         handler=_prospector_search, calls=(("POST", "/api/prospector/search"),),
     ),
+    *workspace.READ,
     # ---- research ----
     ToolSpec(
         name="find_contacts", title="Find contacts at an account", scope="research",
@@ -453,6 +449,9 @@ TOOLS: tuple[ToolSpec, ...] = (
         handler=_draft_email, price_capability="ai.email_draft", price_unit="per draft",
         calls=(("GET", "/api/contacts/{id}"), ("POST", "/api/agents/messaging/run")),
     ),
+    *enrichment.RESEARCH,
+    *discovery.RESEARCH,
+    *engagement.RESEARCH,
     # ---- write ----
     ToolSpec(
         name="create_account", title="Add an account", scope="write",
@@ -483,6 +482,15 @@ TOOLS: tuple[ToolSpec, ...] = (
         input_schema=_obj({"list_id": _ID, "account_ids": _IDS, "contact_ids": _IDS},
                           ("list_id",)),
         handler=_add_to_list, idempotent=True, calls=(("POST", "/api/lists/{id}/members"),),
+    ),
+    ToolSpec(
+        name="remove_from_list", title="Remove from a list", scope="write",
+        description="Take accounts or contacts off a list the user may change. Only the list "
+                    "membership goes: the records stay in the workspace.",
+        input_schema=_obj({"list_id": _ID, "account_ids": _IDS, "contact_ids": _IDS},
+                          ("list_id",)),
+        handler=_remove_from_list, idempotent=True,
+        calls=(("POST", "/api/lists/{id}/members/remove"),),
     ),
     ToolSpec(
         name="add_contacts_to_campaign", title="Add contacts to a campaign", scope="write",
@@ -535,6 +543,9 @@ TOOLS: tuple[ToolSpec, ...] = (
         handler=_prospector_save, idempotent=True,
         calls=(("POST", "/api/prospector/deliver"),),
     ),
+    *workspace.WRITE,
+    *engagement.WRITE,
+    *calling.WRITE,
 )
 
 _BY_NAME = {t.name: t for t in TOOLS}

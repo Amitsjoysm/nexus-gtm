@@ -97,7 +97,7 @@ async def test_tools_listed_follow_the_connections_permissions(client):
     read_only = await _key(token, scopes=("read",))
     full = (await _post(client, everything, rpc(1, "tools/list"))).json()["result"]["tools"]
     small = (await _post(client, read_only, rpc(1, "tools/list"))).json()["result"]["tools"]
-    assert len(full) == 20 and len(small) == 8
+    assert len(full) == 36 and len(small) == 11
     assert all(t["annotations"]["readOnlyHint"] for t in small)
     names = [t["name"] for t in full]
     assert names == sorted(names, key=names.index)  # stable order
