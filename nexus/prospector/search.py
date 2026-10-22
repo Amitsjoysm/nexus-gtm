@@ -17,6 +17,7 @@ Ordering inside a request (the ``fetching/cache.py`` rule): every cache write ha
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 from nexus.prospector import cursor as cursors
@@ -92,7 +93,7 @@ async def search(ts, *, user_id: str, body: SearchIn) -> SearchOut:
 async def _total(ts, body: SearchIn, canonical: dict) -> tuple[SearchOut, int, int]:
     await limits.ensure_budget(ts, body.page_size)
     fetched = await fetch_page(body.view, canonical, page=body.page, size=body.page_size,
-                               count=body.include_count, client=client())
+                               count=body.include_count, client=client(), ts=ts)
     items = fetched.parsed.items
     shown = await present(ts, body.view, items, api_page=body.page, api_page_size=body.page_size)
     out = SearchOut(rows=shown.rows, page=body.page, page_size=body.page_size,
@@ -104,6 +105,12 @@ def _scan_cap() -> int:
     from nexus.core.config import get_settings
 
     return max(1, int(get_settings().prospector_net_new_scan_rows))
+
+
+#: A Net new scan stops asking for further pages once this many seconds have passed and returns
+#: what it found with a cursor ("Keep scanning" resumes). Without it a scan of five slow provider
+#: pages could keep the rep waiting for minutes on one click.
+NET_NEW_DEADLINE_S = 45.0
 
 
 async def _net_new(ts, body: SearchIn, canonical: dict) -> tuple[SearchOut, int, int]:
@@ -118,9 +125,14 @@ async def _net_new(ts, body: SearchIn, canonical: dict) -> tuple[SearchOut, int,
     page, offset, size = position["p"], position["o"], position["s"]
     rows: list[ProspectRowOut] = []
     scanned = bought = 0
-    exhausted = False
+    exhausted = timed_out = False
+    started = time.monotonic()
     while len(rows) < body.page_size and scanned < cap:
-        fetched = await fetch_page(body.view, canonical, page=page, size=size, client=client())
+        if scanned and time.monotonic() - started >= NET_NEW_DEADLINE_S:
+            timed_out = True                         # keep what was found; Next resumes here
+            break
+        fetched = await fetch_page(body.view, canonical, page=page, size=size, client=client(),
+                                   ts=ts)
         bought += fetched.vendor_rows
         items = fetched.parsed.items
         window = items[offset:]
@@ -148,5 +160,6 @@ async def _net_new(ts, body: SearchIn, canonical: dict) -> tuple[SearchOut, int,
         ts.tenant_id, {"p": page, "o": offset, "s": size, "q": query})
     out = SearchOut(rows=rows, page=1, page_size=body.page_size, has_more=not exhausted,
                     next_cursor=next_cursor, scanned=scanned, exhausted=exhausted,
-                    scan_capped=(not exhausted and len(rows) < body.page_size and scanned >= cap))
+                    scan_capped=(not exhausted and len(rows) < body.page_size
+                                 and (scanned >= cap or timed_out)))
     return out, scanned, bought

@@ -321,7 +321,10 @@ export function ProspectorPage() {
                 iconLeft={<Icons.SearchIcon />}>
                 Filters{filterCount ? ` (${filterCount})` : ""}
               </Button>
-              {tab === "total" && searchResult && searchResult.total === null && (
+              {/* Only where the provider can count: it cannot today, and the button timed out on
+                  contacts and re-bought a page for nothing on companies (2026-10-22). */}
+              {tab === "total" && catalog.data?.can_count && searchResult
+                && searchResult.total === null && (
                 <Button variant="ghost" size="sm" onClick={() => setIncludeCount(true)}>
                   Show total
                 </Button>

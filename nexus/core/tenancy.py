@@ -13,8 +13,9 @@ matching ``tenant_id`` raises :class:`TenancyViolation` rather than leaking acro
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import Sequence, TypeVar
+from typing import AsyncIterator, Sequence, TypeVar
 
 from sqlalchemy import String, event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,6 +100,22 @@ async def apply_rls(session: AsyncSession, tenant_id: str) -> None:
         )
 
 
+# Whether the open transaction has flushed a write: once flushed, a write leaves no trace on
+# `session.new`/`dirty`, and `connection_released` must never commit one early.
+_WROTE = "nexus_transaction_wrote"
+
+
+@event.listens_for(Session, "after_flush")
+def _mark_written(session: Session, flush_context) -> None:
+    session.info[_WROTE] = True
+
+
+@event.listens_for(Session, "after_commit")
+@event.listens_for(Session, "after_rollback")
+def _clear_written(session: Session) -> None:
+    session.info.pop(_WROTE, None)
+
+
 class TenantSession:
     """Tenant-scoped facade over an :class:`AsyncSession`.
 
@@ -157,3 +174,33 @@ class TenantSession:
 
     async def refresh(self, obj) -> None:
         await self.session.refresh(obj)
+
+
+@asynccontextmanager
+async def connection_released(ts: TenantSession) -> AsyncIterator[bool]:
+    """Give the request's database connection back to the pool while awaiting something slow
+    outside the database, then bind the tenant again. Yields whether it released.
+
+    A request's session holds its transaction, and so a pooled connection, from its first statement
+    to the end of the request. Measured 2026-10-22 on the local stack: a Prospector search left one
+    connection "idle in transaction" for the whole 30 s provider wait, so a handful of reps meeting
+    a cold provider could hold every connection the database allows (35 on production's B1ms).
+
+    It releases only when nothing has been written in the transaction (nothing pending, nothing
+    flushed, no savepoint open): committing then would make half a request's work permanent, so in
+    that case it waits holding the connection, exactly as before.
+
+    The re-bind is not optional: ``apply_rls`` is transaction-local, so the first read after the
+    commit would run with no tenant bound and return nothing under RLS.
+    """
+    session = ts.session
+    unsafe = (bool(session.new or session.dirty or session.deleted)
+              or bool(session.info.get(_WROTE)) or session.in_nested_transaction())
+    if unsafe:
+        yield False
+        return
+    await session.commit()
+    try:
+        yield True
+    finally:
+        await apply_rls(session, ts.tenant_id)

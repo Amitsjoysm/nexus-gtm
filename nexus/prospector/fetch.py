@@ -50,13 +50,29 @@ def _raise(outcome: SearchOutcome) -> None:
 
 
 async def fetch_page(view: str, payload: dict, *, page: int, size: int, count: bool = False,
-                     client: InfoJoyClient | None = None) -> Fetched:
+                     client: InfoJoyClient | None = None, ts=None) -> Fetched:
+    """One page, from the cache or the provider.
+
+    ``ts``: the request's TenantSession, whose database connection is handed back to the pool for
+    the provider wait (``core.tenancy.connection_released``) and bound to the tenant again after.
+    Pass it only before the request has written anything; the helper refuses to release otherwise.
+    """
+    from nexus.core.tenancy import connection_released
+    from nexus.prospector.client import counts_supported
+
+    # A count the provider cannot give is not asked for, and does not turn a cached page into a
+    # miss: that re-bought the page on every "Show total" click and still showed no total.
+    count = bool(count) and counts_supported(view)
     key = cache.page_key(view, payload, page, size)
     hit = await cache.get_page(key)
     if hit is not None and (not count or hit.total is not None):
         return Fetched(parsed=hit, cached=True)
-    outcome = await (client or InfoJoyClient()).search(view, payload, page=page, size=size,
-                                                      count=count)
+    provider = client or InfoJoyClient()
+    if ts is None:
+        outcome = await provider.search(view, payload, page=page, size=size, count=count)
+    else:
+        async with connection_released(ts):
+            outcome = await provider.search(view, payload, page=page, size=size, count=count)
     if not outcome.ok or outcome.page is None:
         logger.info("prospector fetch refused: %s", outcome.status)
         _raise(outcome)

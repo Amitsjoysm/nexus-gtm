@@ -12,6 +12,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from nexus.api.csv_export import safe_cell
+from nexus.enrichment.linkedin import person_profile_url
 from nexus.models.account import Account, Contact
 from nexus.prospector import charges
 from nexus.prospector.deliver import prepare
@@ -22,7 +23,8 @@ from nexus.prospector.records import VendorCompany, VendorContact
 from nexus.prospector.selection import Selection
 
 CONTACT_COLUMNS = ("first_name", "last_name", "title", "department", "seniority", "email",
-                   "direct_phone", "company_name", "company_domain", "country", "state", "city")
+                   "direct_phone", "company_name", "company_domain", "country", "state", "city",
+                   "linkedin_url")
 COMPANY_COLUMNS = ("company_name", "domain", "country", "state", "city", "industry",
                    "employee_size_range", "linkedin_url")
 
@@ -52,6 +54,7 @@ async def _own(ts, lines: list[Line]) -> dict[str, dict]:
                 "direct_phone": c.phone or "", "company_name": a.name or "",
                 "company_domain": a.domain or "", "country": where.get("country", ""),
                 "state": where.get("state", ""), "city": where.get("city", ""),
+                "linkedin_url": c.linkedin_url or "",
             }
     if account_ids:
         rows = (await ts.session.scalars(select(Account).where(
@@ -82,6 +85,7 @@ def _vendor(record: VendorContact | VendorCompany) -> dict:
         "direct_phone": record.direct_phone, "company_name": record.company_name,
         "company_domain": domain_of(record.company_url), "country": record.country,
         "state": record.state, "city": record.city,
+        "linkedin_url": person_profile_url(record.linkedin_url) or "",
     }
 
 

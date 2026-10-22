@@ -111,7 +111,7 @@ export function ResultsTable({
     },
     {
       key: "reach",
-      header: "Email & phone",
+      header: "Email, phone & LinkedIn",
       render: (row) => (
         <div className={styles.stack}>
           {row.saved && row.record?.email
@@ -122,6 +122,9 @@ export function ResultsTable({
             ? <span className={styles.mono}>{row.record.phone}</span>
             : row.has_direct_phone ? <Masked mask={row.phone_masked} kind="Phone number" />
               : <Missing text="No direct phone" />}
+          {/* The person's own profile comes with the contact when it is saved. */}
+          {!row.saved && row.has_linkedin
+            && <Masked mask={row.linkedin_masked} kind="LinkedIn profile" />}
         </div>
       ),
     },

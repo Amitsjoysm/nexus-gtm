@@ -21,6 +21,11 @@ def _record(held: Held | None) -> SavedRecordOut | None:
 
 def contact_row(record: VendorContact, *, key: str, held: Held | None, api_page: int,
                 api_page_size: int) -> ProspectRowOut:
+    from nexus.enrichment.linkedin import person_profile_url
+
+    # Shown only when it is a profile delivery would write: "has LinkedIn" must not promise a
+    # value the save then drops.
+    profile = person_profile_url(record.linkedin_url) or ""
     return ProspectRowOut(
         row_key=key, api_page=api_page, api_page_size=api_page_size,
         saved=held is not None, record=_record(held),
@@ -30,7 +35,9 @@ def contact_row(record: VendorContact, *, key: str, held: Held | None, api_page:
         city=record.city,
         email_masked=mask_email(record.email), phone_masked=mask_phone(record.direct_phone),
         domain_masked=mask_domain(record.company_url),
+        linkedin_masked=mask_linkedin(profile),
         has_email=bool(record.email), has_direct_phone=bool(record.direct_phone),
+        has_linkedin=bool(profile),
     )
 
 

@@ -231,3 +231,54 @@ async def test_the_saved_tabs_json_filters_run_on_postgres_under_rls(rls_db):
 
     assert (await _saved("companies", company_cities=["Boston"])).total == 1
     assert (await _saved("contacts", person_cities=["Paris"])).total == 0
+
+
+async def test_a_search_releases_its_connection_and_still_reads_as_the_tenant(rls_db):
+    """The provider wait no longer holds a connection 'idle in transaction' (measured 2026-10-22),
+    and the commit that releases it does not lose the tenant: ``apply_rls`` is transaction-local,
+    so without the re-bind the held contact below would read as new and the day's count would be
+    refused by the policy's WITH CHECK."""
+    import httpx
+
+    from nexus.core.db import get_sessionmaker
+    from nexus.core.tenancy import TenantSession, apply_rls
+    from nexus.prospector import search
+    from nexus.prospector.client import InfoJoyClient
+    from nexus.prospector.limits import rows_today
+    from nexus.prospector.schemas import SearchIn
+
+    await _seed_workspaces()
+    items = [{"FirstName": "Ava", "LastName": "Patel", "Email": "ava@northwind-a.example.com",
+              "CompanyName": "Northwind Example", "CompanyURL": "northwind-a.example.com"},
+             {"FirstName": "Leo", "LastName": "Grant", "Email": "leo@fresh-example.com",
+              "CompanyName": "Fresh Example", "CompanyURL": "fresh-example.com"}]
+    seen: list[bool] = []
+
+    def vendor(request):
+        return httpx.Response(200, json={"PageNumber": 1, "PageSize": 25, "Items": items})
+
+    class Watching(InfoJoyClient):
+        async def search(self, *a, **kw):
+            seen.append(ts.session.in_transaction())
+            return await super().search(*a, **kw)
+
+    search.set_client(Watching(keys=["k"], transport=httpx.MockTransport(vendor), backoff_s=0))
+    try:
+        async with get_sessionmaker()() as session:
+            await apply_rls(session, TENANT_A)
+            ts = TenantSession(session, TENANT_A)
+            out = await search.search(ts, user_id="u", body=SearchIn(view="contacts"))
+            counted = await rows_today(ts)
+            await session.commit()
+    finally:
+        search.set_client(None)
+
+    assert seen == [False]
+    assert [r.saved for r in out.rows] == [True, False]
+    assert counted == 2
+    owner = await asyncpg.connect(_admin_dsn(DATABASE), timeout=20)
+    try:
+        assert await owner.fetchval(
+            "SELECT tenant_id FROM prospector_daily_rows") == TENANT_A
+    finally:
+        await owner.close()

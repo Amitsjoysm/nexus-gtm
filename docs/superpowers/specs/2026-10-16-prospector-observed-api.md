@@ -59,3 +59,53 @@ fields), so nothing on our side can make a search succeed.
    API names to what was observed; re-run the suite.
 3. If the second location set's names cannot be proven by the probe, ask the owner for InfoJoy's
    field names rather than guess.
+
+## Third look, 2026-10-22: the provider answers
+
+Measured on the local stack through the app's own client and `scripts/infojoy_probe.py`
+(~300 records). Values are redacted in the probe's output; only names, types, fill rates and the
+bounded vocabularies were read.
+
+**Success shape.** `{"PageNumber", "PageSize", "Items"}` on both endpoints. **No total field is ever
+returned**, with or without `IncludeTotalCount`.
+
+**Contact item keys**: Title, FirstName, LastName, Email, Extension, EmployeeLinkedIn, DirectPhone,
+Department, EmployeeFacebook, EmployeeTwitter, CompanyName, CompanyURL (a bare domain, 50 of 50),
+Address, Country, State, City, ZipCode, TimeZone, Revenue, CompanyLinkedin, EmployeeSize,
+Companytwitter, CompanyFacebook, SIC_Code, SubIndustry, IndustryType, About, RegionCode, Technology,
+Keywords, Fax, Phone, SeniorityLevel, EmployeeSizeRange, RevenueRange. **Company items** carry the
+company half of the same set.
+
+**Phones.** In 50 contacts `DirectPhone` was filled 6 times and `Phone` 35; the 4 holding both held
+different numbers; `HasDirectPhone: true` returned 20 of 20 with `DirectPhone`, `false` 2 of 20. So
+`Phone` is the office line, not the person's: `records.py` reads only `DirectPhone` as a direct phone.
+
+**LinkedIn.** `EmployeeLinkedIn` 26 of 50, every one a `/in/` profile; `CompanyLinkedin` 29 of 50,
+every one `/company/`.
+
+**Vocabularies** (now the `fields.py` options): SeniorityLevel `Entry, Manager, Senior, VP, Director,
+C Level, Owner, Internship`; EmployeeSizeRange `1-10 … 10000+` plus the stored variants `" 1-10"`,
+`"1-10 employees"`, `"Not Available"` and bare headcounts; RevenueRange `$0M-$1M … $10B+`. Department
+and IndustryType are not bounded (seniority words appear as departments; the two endpoints spell
+industries differently), so both stay free text. Placeholders `"NULL"` and `"Not Available"` appear
+as values and are read as empty.
+
+**Location filters (contacts).** `Countries`, `States`, `Cities`, `ZipCodes` are honoured (an
+impossible City or ZipCode returns no rows; an impossible Country or State makes the provider time
+out at 120 s). None of the `Contact*`, `Person*`, `Company*` or `Hq*` names is honoured, so the
+company-level location set stays disabled on the Contacts view.
+
+**Latency.** Cold start, the first call after the provider idles: 14 s, 50 s, 124 s on three
+occasions. Warm: 0.5-5 s. **Faults on the provider's side**, reported to the owner to raise with
+InfoJoy: `IncludeTotalCount` on contacts answers 500 after 120 s even warm; `IndustryTypes` with a
+country answered 500 after 120 s warm; the documented sample (Titles + SeniorityLevels + Countries)
+timed out at 120 s cold; a contact's State can contradict its City and RegionCode.
+
+### Consequences in the code
+
+- Read timeout 60 s (was 30 s), and the request's database connection is handed back to the pool
+  while the provider answers (`core.tenancy.connection_released`), so waiting costs no connection.
+  A timeout says the first search after a quiet spell can take up to two minutes.
+- `IncludeTotalCount` is never sent (`client.COUNT_SUPPORTED`), and "Show total" is not offered
+  (`GET /prospector/filters` returns `can_count: false`).
+- A Net new scan stops asking for pages after 45 s and returns a cursor ("Keep scanning").

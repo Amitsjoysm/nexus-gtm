@@ -103,8 +103,13 @@ async def test_fetch_serves_the_second_identical_request_from_the_cache():
     assert second.parsed.items == first.parsed.items
 
 
-async def test_asking_for_a_count_refetches_a_page_cached_without_one():
+async def test_asking_for_a_count_refetches_a_page_cached_without_one(monkeypatch):
+    from nexus.prospector import client as prospector_client
     from nexus.prospector.fetch import fetch_page
+
+    # Only where the provider can count; otherwise the cached page is served
+    # (test_prospector_observed_provider.py).
+    monkeypatch.setitem(prospector_client.COUNT_SUPPORTED, "contacts", True)
 
     vendor = FakeVendor()
     await fetch_page("contacts", {}, page=1, size=2, client=_client(vendor))

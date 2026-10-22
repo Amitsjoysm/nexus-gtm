@@ -22,7 +22,12 @@ def _client(handler, keys=("k1",), **kw):
     return InfoJoyClient(keys=list(keys), transport=transport, backoff_s=0, **kw)
 
 
-async def test_the_body_is_exactly_the_documented_shape():
+async def test_the_body_is_exactly_the_documented_shape(monkeypatch):
+    from nexus.prospector import client as prospector_client
+
+    # The shape when a count is asked for; whether one may be is `COUNT_SUPPORTED`'s question
+    # (test_prospector_observed_provider.py).
+    monkeypatch.setitem(prospector_client.COUNT_SUPPORTED, "contacts", True)
     vendor = FakeVendor()
     out = await _client(vendor.transport()).search(
         "contacts", {"Titles": ["VP Sales"]}, page=2, size=3, count=True)
@@ -117,7 +122,7 @@ async def test_a_timeout_is_unavailable_not_an_exception():
         raise httpx.ReadTimeout("slow", request=request)
 
     out = await _client(handler).search("contacts", {}, page=1, size=10)
-    assert out.status == "unavailable" and "did not answer" in out.detail
+    assert out.status == "unavailable" and "longer than a minute" in out.detail
 
 
 async def test_a_server_error_is_unavailable():

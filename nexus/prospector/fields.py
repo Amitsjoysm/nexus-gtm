@@ -18,6 +18,12 @@ Rules carried here (spec §8, decisions D14-D16):
   means "not searchable at the provider yet", and the section is disabled on Total/Net new rather
   than sent under a guessed name that the API might silently ignore.
 * ``options`` are the provider's observed vocabulary for small bounded sets. Empty means free text.
+  Seniority, company size and revenue were free text until the first real answers (2026-10-22), so
+  a rep had to guess the provider's spelling ("C Level", not "C-Level") and a wrong guess returned
+  no rows with no error, which reads as an empty market. They are now the observed values.
+* ``aliases`` are other spellings the provider stores for one option. Its data carries " 1-10" and
+  "1-10 employees" beside "1-10", and a filter matches what is stored, so choosing an option sends
+  every spelling of it (OR within a filter, as the API documents).
 """
 from __future__ import annotations
 
@@ -41,6 +47,17 @@ class FieldSpec:
     options: tuple[str, ...] = ()
     #: Whether the Saved tab can apply it to workspace records.
     saved: bool = True
+    #: option -> other spellings the provider stores for it, all sent when the option is chosen.
+    aliases: dict[str, tuple[str, ...]] = dc_field(default_factory=dict)
+
+    def provider_values(self, values: list[str]) -> list[str]:
+        """``values`` with every stored spelling of each, in order, without repeats."""
+        out: list[str] = []
+        for value in values:
+            for spelling in (value, *self.aliases.get(value, ())):
+                if spelling not in out:
+                    out.append(spelling)
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +76,19 @@ def _both(name: str) -> dict[str, str]:
 
 _LOCATION_HINT = "City, state, country or postal code."
 
+# Observed 2026-10-22 (scripts/infojoy_probe.py, ~300 contacts and companies), most senior first.
+SENIORITY_OPTIONS = ("Owner", "C Level", "VP", "Director", "Manager", "Senior", "Entry",
+                     "Internship")
+SIZE_OPTIONS = ("1-10", "11-50", "51-200", "201-500", "501-1000", "1001-5000", "5001-10000",
+                "10000+")
+# " 1-10" and "1-10 employees" were seen beside "1-10"; the "N employees" form is sent for every
+# bucket, since a spelling that is not stored matches nothing and costs nothing.
+SIZE_ALIASES = {size: ((" 1-10",) if size == "1-10" else ()) + (f"{size} employees",)
+                for size in SIZE_OPTIONS}
+# All but $250M-$500M were seen; it is the step between $100M-$250M and $500M-$1B.
+REVENUE_OPTIONS = ("$0M-$1M", "$1M-$10M", "$10M-$50M", "$50M-$100M", "$100M-$250M",
+                   "$250M-$500M", "$500M-$1B", "$1B-$10B", "$10B+")
+
 SECTIONS: tuple[SectionSpec, ...] = (
     SectionSpec("name", "Name", ("contacts",), (
         FieldSpec("first_name", "First name", "text", {"contacts": "FirstName"}),
@@ -67,7 +97,8 @@ SECTIONS: tuple[SectionSpec, ...] = (
     SectionSpec("job_titles", "Job titles", ("contacts",), (
         FieldSpec("titles", "Job titles", "text_list", {"contacts": "Titles"}),
         FieldSpec("departments", "Departments", "text_list", {"contacts": "Departments"}),
-        FieldSpec("seniorities", "Seniority", "enum_list", {"contacts": "SeniorityLevels"}),
+        FieldSpec("seniorities", "Seniority", "enum_list", {"contacts": "SeniorityLevels"},
+                  options=SENIORITY_OPTIONS),
     )),
     SectionSpec("company", "Company", BOTH, (
         FieldSpec("company_names", "Company names", "text_list", _both("CompanyNames")),
@@ -92,10 +123,12 @@ SECTIONS: tuple[SectionSpec, ...] = (
                   {"contacts": "", "companies": "ZipCodes"}),
     ), hint=_LOCATION_HINT),
     SectionSpec("employees", "Employees", BOTH, (
-        FieldSpec("employee_sizes", "Company size", "enum_list", _both("EmployeeSizeRanges")),
+        FieldSpec("employee_sizes", "Company size", "enum_list", _both("EmployeeSizeRanges"),
+                  options=SIZE_OPTIONS, aliases=SIZE_ALIASES),
     )),
     SectionSpec("revenue", "Revenue", BOTH, (
-        FieldSpec("revenue_ranges", "Annual revenue", "enum_list", _both("RevenueRanges")),
+        FieldSpec("revenue_ranges", "Annual revenue", "enum_list", _both("RevenueRanges"),
+                  options=REVENUE_OPTIONS),
     )),
     SectionSpec("industry", "Industry & keywords", BOTH, (
         FieldSpec("industries", "Industries", "text_list", _both("IndustryTypes")),
@@ -175,4 +208,7 @@ def catalog(view: str) -> dict:
             })
         sections.append({"key": section.key, "label": section.label, "hint": section.hint,
                          "workspace_only": section.workspace_only, "fields": fields_out})
-    return {"view": view, "sections": sections}
+    from nexus.prospector.client import counts_supported
+
+    # Whether the screen may offer "Show total": only when the provider can answer one.
+    return {"view": view, "sections": sections, "can_count": counts_supported(view)}

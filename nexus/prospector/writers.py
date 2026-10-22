@@ -73,11 +73,17 @@ async def upsert_contact(ts, account: Account, record: VendorContact, *,
         custom["department"] = record.department
     if location:
         custom["location"] = location
+    from nexus.enrichment.linkedin import person_profile_url
+
+    # The person's own profile comes with the contact, at no extra charge: only a whole /in/ URL
+    # is written, as every LinkedIn writer must (`enrichment/linkedin.py`).
+    profile = person_profile_url(record.linkedin_url)
     contact = Contact(
         tenant_id=ts.tenant_id, account_id=account.id, full_name=full_name[:200],
         title=(record.title or None), seniority=(record.seniority[:40] or None),
         email=(email or None), phone=(record.direct_phone[:40] if include_phone and
                                       record.direct_phone else None),
+        linkedin_url=(profile[:255] if profile else None),
         enrichment_source=SOURCE, email_status=None, custom_fields=custom,
     )
     ts.add(contact)

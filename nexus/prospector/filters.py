@@ -111,7 +111,7 @@ class SearchFilters(BaseModel):
                 raise ProspectorError(
                     422, f"{section.label}: {spec.label} cannot be searched at the data provider "
                          "yet. It works on the Saved tab.")
-            payload[api_name] = value
+            payload[api_name] = spec.provider_values(value) if isinstance(value, list) else value
         return payload
 
     def canonical(self, view: str) -> dict[str, object]:

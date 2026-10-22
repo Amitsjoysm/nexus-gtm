@@ -77,7 +77,7 @@ def test_no_mask_carries_three_characters_of_what_it_hides():
             mask = mask_email(email).lower()
             for part in (local, domain.split(".")[0]):
                 assert not (_fragments(part) & _fragments(mask)), (email, mask)
-        phone = re.sub(r"\D", "", contact["DirectPhone"])
+        phone = re.sub(r"\D", "", contact.get("DirectPhone") or "")
         if phone:
             assert phone[:6] not in re.sub(r"\D", "", mask_phone(contact["DirectPhone"]))
         url = contact["CompanyURL"]

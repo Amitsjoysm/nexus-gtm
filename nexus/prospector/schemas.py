@@ -119,6 +119,9 @@ class SavedOut(BaseModel):
 class FieldCatalogOut(BaseModel):
     view: View
     sections: list[dict]
+    #: Whether the provider can count matches for this view ("Show total"). See
+    #: `client.COUNT_SUPPORTED`.
+    can_count: bool = False
 
 
 RequestId = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")

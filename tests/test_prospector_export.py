@@ -71,7 +71,8 @@ async def test_a_contact_export_carries_real_values_and_is_charged(client, vendo
     assert r.headers["X-Row-Count"] == str(len(CONTACTS))
     rows = _read(r)
     assert list(rows[0]) == ["first_name", "last_name", "title", "department", "seniority",
-                             "email", "company_name", "company_domain", "country", "state", "city"]
+                             "email", "company_name", "company_domain", "country", "state", "city",
+                             "linkedin_url"]
     assert rows[0]["email"] == "john.smith@acme-example.com"
     assert rows[0]["company_domain"] == "acme-example.com"
     async with tenant_session(tid) as ts:

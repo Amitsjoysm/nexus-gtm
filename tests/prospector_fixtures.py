@@ -1,9 +1,10 @@
 """Synthetic InfoJoy Search API answers for Prospector's tests.
 
 Every name, address, number and domain here is invented (example-style domains); no real person's
-data is in the suite. The shape follows the provider's documented samples (PascalCase keys,
-``{"PageNumber", "PageSize", "Items"}``) until the first real calls are recorded in
-``docs/superpowers/specs/2026-10-16-prospector-observed-api.md``.
+data is in the suite. The shape follows the provider's real answers, first recorded 2026-10-22
+(``docs/superpowers/specs/2026-10-16-prospector-observed-api.md``): PascalCase keys in
+``{"PageNumber", "PageSize", "Items"}``, a contact's own ``EmployeeLinkedIn``, and an office ``Phone``
+beside ``DirectPhone`` that is NOT a direct phone.
 
 ``FakeVendor`` is an ``httpx.MockTransport`` handler that serves contacts or companies by page, can
 answer with a status instead, and records every request, so a test can assert what was sent and how
@@ -20,11 +21,15 @@ CONTACTS = [
     {"Title": "VP Sales", "FirstName": "John", "LastName": "Smith",
      "Email": "john.smith@acme-example.com", "DirectPhone": "+1 (415) 555-7890",
      "Department": "Sales", "SeniorityLevel": "VP", "CompanyName": "Acme Example Inc",
-     "CompanyURL": "acme-example.com", "Country": "United States"},
+     "CompanyURL": "acme-example.com", "Country": "United States",
+     "EmployeeLinkedIn": "https://www.linkedin.com/in/johnsmith-acmeexample"},
+    # No direct phone, but the office line every colleague shares: never a direct phone.
     {"Title": "Head of Revenue Operations", "FirstName": "Priya", "LastName": "Raman",
-     "Email": "priya@globex-example.io", "DirectPhone": "", "Department": "Operations",
+     "Email": "priya@globex-example.io", "DirectPhone": None, "Phone": "+1 212 555 0100",
+     "Extension": None, "Department": "Operations",
      "SeniorityLevel": "Director", "CompanyName": "Globex Example",
-     "CompanyURL": "www.globex-example.io", "Country": "United States"},
+     "CompanyURL": "www.globex-example.io", "Country": "United States",
+     "EmployeeLinkedIn": "https://www.linkedin.com/company/globex-example"},
     {"Title": "Chief Financial Officer", "FirstName": "Wei", "LastName": "Lindqvist",
      "Email": "", "DirectPhone": "+44 20 7946 0123", "Department": "Finance",
      "SeniorityLevel": "C-Level", "CompanyName": "Initech Example",
@@ -52,10 +57,12 @@ COMPANIES = [
 #: Every person-identifying or paid value in the fixtures: none may appear in a masked response.
 SECRETS = [
     *(c["Email"] for c in CONTACTS if c["Email"]),
-    *(c["DirectPhone"] for c in CONTACTS if c["DirectPhone"]),
+    *(c["DirectPhone"] for c in CONTACTS if c.get("DirectPhone")),
     *(c["CompanyLinkedin"] for c in COMPANIES if c["CompanyLinkedin"]),
+    *(c["EmployeeLinkedIn"] for c in CONTACTS if c.get("EmployeeLinkedIn")),
     "acme-example", "globex-example", "initech-example", "umbrella-example",
     "john.smith", "ana.okafor", "priya@", "5557890", "79460123", "5550147",
+    "johnsmith-acmeexample", "5550100", "555 0100",
 ]
 
 

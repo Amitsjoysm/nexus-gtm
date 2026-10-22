@@ -92,7 +92,7 @@ async def _by_rows(ts, selection: Selection, canonical: dict, client) -> Resolve
         page_key = (ref.api_page, ref.api_page_size)
         if page_key not in pages:
             fetched = await fetch_page(selection.view, canonical, page=ref.api_page,
-                                       size=ref.api_page_size, client=client)
+                                       size=ref.api_page_size, client=client, ts=ts)
             out.vendor_rows += fetched.vendor_rows
             index: dict[str, tuple[str, Record]] = {}
             for item in fetched.parsed.items:
@@ -117,7 +117,7 @@ async def _all_matching(ts, selection: Selection, canonical: dict, client) -> Re
     seen: set[str] = set()
     for page in range(1, MAX_BULK_PAGES + 1):
         fetched = await fetch_page(selection.view, canonical, page=page, size=BULK_PAGE,
-                                   client=client)
+                                   client=client, ts=ts)
         out.vendor_rows += fetched.vendor_rows
         records = [parse(item) for item in fetched.parsed.items]
         held: dict = {}

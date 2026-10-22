@@ -35,6 +35,8 @@ export interface FilterSectionSpec {
 export interface FilterCatalog {
   view: ProspectView;
   sections: FilterSectionSpec[];
+  /** Whether the data provider can count matches for this view ("Show total"). */
+  can_count?: boolean;
 }
 
 export interface SavedRecordRef {

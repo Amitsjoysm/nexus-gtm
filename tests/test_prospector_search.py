@@ -84,7 +84,11 @@ async def test_a_full_page_says_there_is_more(client, vendor):
     assert len(body["rows"]) == 25 and body["has_more"] is True and body["page"] == 2
 
 
-async def test_a_count_is_asked_for_only_explicitly(client, vendor):
+async def test_a_count_is_asked_for_only_explicitly(client, vendor, monkeypatch):
+    from nexus.prospector import client as prospector_client
+
+    # Where the provider can count; it cannot today (test_prospector_observed_provider.py).
+    monkeypatch.setitem(prospector_client.COUNT_SUPPORTED, "contacts", True)
     h, _ = await _workspace(client, "ps3")
     body = (await _search(client, h, include_count=True)).json()
     assert body["total"] == len(CONTACTS)

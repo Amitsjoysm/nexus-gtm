@@ -11,9 +11,14 @@
   internal address.
 * **"Not configured" is not "nothing matched".** No key is ``not_configured`` and nothing is sent; an
   unreadable 200 is ``bad_response``, never an empty page.
-* **Bounded**: 5 s to connect, 30 s to read (the first call after the provider idles was measured at
-  16 s, docs/superpowers/specs/2026-10-16-prospector-observed-api.md), at most 500 rows a page (the
-  provider's own limit, refused here before sending).
+* **Bounded**: 5 s to connect, 60 s to read, at most 500 rows a page (the provider's own limit,
+  refused here before sending). Measured 2026-10-22: the first call after the provider idles took
+  14 s, 50 s and 124 s on three cold starts and answered in 0.5-5 s warm, so 30 s failed nearly every
+  first search of the day. A minute covers most cold starts; waiting longer is cheap only because
+  `fetch_page` hands the request's database connection back to the pool while it waits.
+* **Counts are not asked for** (``COUNT_SUPPORTED``). With ``IncludeTotalCount`` the contacts
+  endpoint answered 500 after 120 s even warm, and the companies endpoint answered without any
+  total field, so "Show total" timed out on one view and silently re-bought a page on the other.
 
 State is per call, never on the instance, so one client may serve concurrent requests.
 """
@@ -33,8 +38,21 @@ logger = logging.getLogger("nexus.prospector.client")
 
 PROVIDER = "infojoy_search"
 MAX_PAGE_SIZE = 500
-DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+READ_TIMEOUT_S = 60.0
+DEFAULT_TIMEOUT = httpx.Timeout(READ_TIMEOUT_S, connect=5.0)
 ENDPOINTS = {"contacts": "/api/search/contacts", "companies": "/api/search/companies"}
+
+#: Whether the provider can count matches for a view. Both False as observed 2026-10-22; set one
+#: True once the provider returns a total quickly, and "Show total" appears for that view.
+COUNT_SUPPORTED: dict[str, bool] = {"contacts": False, "companies": False}
+
+SLOW_ANSWER = ("The data provider took longer than a minute to answer. Its first search after a "
+               "quiet spell can take up to two minutes, and some filters are slow there. Try "
+               "again in a moment, or remove a filter.")
+
+
+def counts_supported(view: str) -> bool:
+    return bool(COUNT_SUPPORTED.get(view, False))
 
 Status = Literal["ok", "not_configured", "invalid", "rejected", "busy", "unavailable",
                  "bad_response"]
@@ -128,7 +146,8 @@ class InfoJoyClient:
                 detail="Prospector is not set up: a superadmin adds an InfoJoy Search key in "
                        "Control plane > Provider keys.")
         body = {"PageNumber": max(1, int(page)), "PageSize": int(size),
-                "IncludeTotalCount": bool(count), "Filters": dict(filters or {})}
+                "IncludeTotalCount": bool(count) and counts_supported(view),
+                "Filters": dict(filters or {})}
         url = self._url(view)
 
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
@@ -137,9 +156,11 @@ class InfoJoyClient:
                 for key in keys:
                     try:
                         resp = await client.post(url, headers={"X-Api-Token": key}, json=body)
-                    except httpx.TimeoutException:
+                    except httpx.ConnectTimeout:
                         return SearchOutcome("unavailable",
-                                             detail="The data provider did not answer in time.")
+                                             detail="The data provider could not be reached.")
+                    except httpx.TimeoutException:
+                        return SearchOutcome("unavailable", detail=SLOW_ANSWER)
                     except httpx.HTTPError as exc:
                         logger.warning("prospector transport error: %s", type(exc).__name__)
                         return SearchOutcome("unavailable",
