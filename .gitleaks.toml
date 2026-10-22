@@ -48,6 +48,12 @@
 #
 #   idempotency_key=f"populate:{run_id}"  nexus/prospecting/populate.py - the billing idempotency
 #                            key for one populate run, built from the run's id. Not a credential.
+#
+# Added 2026-10-22 (linkedin-client-id, gitleaks 8.24.3):
+#
+#   "employeelinkedin", "personlinkedin"  nexus/prospector/records.py - the InfoJoy FIELD NAMES a
+#                            contact's LinkedIn profile is read from. `personlinkedin` is 14
+#                            letters after the word "linkedin", which is the rule's client-id shape.
 
 [extend]
 useDefault = true
@@ -65,4 +71,5 @@ regexes = [
   'a-test-pseudonymisation-secret-with-enough-variety-0123456789',
   'an-integration-pseudonymisation-secret-0123456789abcdef',
   'idempotency_key=f"populate:\{run_id\}"',
+  '"employeelinkedin", "personlinkedin"',
 ]
