@@ -512,18 +512,62 @@ async def _grant_pending_credits(session, sub, outcome: dict) -> None:
     await session.flush()
 
 
+def _is_proration(line: dict) -> bool:
+    """A proration line, in either shape Stripe renders invoice lines."""
+    if line.get("proration") is True:
+        return True
+    parent = line.get("parent")
+    details = parent.get("subscription_item_details") if isinstance(parent, dict) else None
+    return isinstance(details, dict) and details.get("proration") is True
+
+
+def _starts_a_scheduled_period(sub, obj: dict, plan) -> str:
+    """Which recorded change this `subscription_update` invoice starts the period of, or ''.
+
+    Measured 2026-10-22 with a test clock: when a schedule's next phase starts at period end, the
+    invoice that pays for the new plan's first period says `subscription_update`, not
+    `subscription_cycle`. It is told apart from a switch's or a proration's invoice by what was
+    recorded: the change landing (`landed_change`, written when the price moved) or still
+    scheduled (`scheduled_change`, when this invoice arrives first), for the plan this invoice
+    bills, starting within a day of this invoice's period. No proration line, ever."""
+    from datetime import datetime
+
+    lines = obj.get("lines")
+    rows = [r for r in (lines.get("data") if isinstance(lines, dict) else None) or []
+            if isinstance(r, dict)]
+    if plan is None or not rows or any(_is_proration(r) for r in rows):
+        return ""
+    period = rows[0].get("period")
+    start = int((period or {}).get("start") or 0) if isinstance(period, dict) else 0
+    meta = sub.meta or {}
+    for key in ("landed_change", "scheduled_change"):
+        change = meta.get(key)
+        if not isinstance(change, dict) or str(change.get("plan_id") or "") != plan.id:
+            continue
+        try:
+            at = int(datetime.fromisoformat(str(change.get("at") or "")).timestamp())
+        except ValueError:
+            at = 0
+        if not at or not start or abs(at - start) <= 86400:
+            return key
+    return ""
+
+
 async def _grant_renewal_credits(session, sub, obj: dict, outcome: dict) -> None:
     """A paid Stripe RENEWAL credits its period, once per invoice (2026-10-12).
 
     The period roll used to grant before Stripe had tried the card, and missed the grant whenever
-    Stripe moved the period first. Only `subscription_cycle` counts: the first invoice paid for the
-    purchase (credited by the Checkout or subscription event), and a plan change pays for its own.
+    Stripe moved the period first. `subscription_cycle` counts, and so does the
+    `subscription_update` invoice that starts the period of a downgrade Stripe held until period
+    end (`_starts_a_scheduled_period`, 2026-10-22). The first invoice paid for the purchase is
+    credited by the Checkout or subscription event, and any other plan change pays for its own.
     Only the subscription this row follows. Never raises, like `_grant_plan_credits`."""
     from nexus.core.tenancy import TenantSession, apply_rls
     from nexus.models.billing import BillingPlan
 
     invoice_id = _str(obj.get("id"))
-    if (str(obj.get("billing_reason") or "") != "subscription_cycle" or not invoice_id
+    reason = str(obj.get("billing_reason") or "")
+    if (reason not in ("subscription_cycle", "subscription_update") or not invoice_id
             or _str(obj.get("subscription")) != (sub.psp_subscription_id or "")):
         return
     try:
@@ -531,7 +575,18 @@ async def _grant_renewal_credits(session, sub, obj: dict, outcome: dict) -> None
         from nexus.billing.rollups import period_key
         from nexus.core.db import utcnow
 
-        plan = await session.get(BillingPlan, sub.plan_id)
+        from nexus.billing.plan_changes import invoice_price_id, plan_for_price
+
+        # The plan the PAID invoice billed, not the one the row holds: at a downgrade boundary
+        # this event can arrive before the `customer.subscription.updated` that moves the row, and
+        # the old plan's allowance would be granted for the new plan's period (2026-10-22).
+        billed = await plan_for_price(session, invoice_price_id(obj))
+        landed = ""
+        if reason == "subscription_update":
+            landed = _starts_a_scheduled_period(sub, obj, billed)
+            if not landed:
+                return
+        plan = billed or await session.get(BillingPlan, sub.plan_id)
         if plan is None or not plan.included_credits:
             return
         await apply_rls(session, sub.tenant_id)
@@ -542,6 +597,9 @@ async def _grant_renewal_credits(session, sub, obj: dict, outcome: dict) -> None
             period_key=period_key(utcnow(), "period"),
         ):
             outcome["renewal_credits_for"] = plan.id
+        if landed == "landed_change":
+            sub.meta = {k: v for k, v in (sub.meta or {}).items() if k != "landed_change"}
+            await session.flush()
     except Exception as exc:
         logger.warning("could not credit renewal %s for %s", invoice_id, sub.tenant_id,
                        exc_info=True)
@@ -551,6 +609,170 @@ async def _grant_renewal_credits(session, sub, obj: dict, outcome: dict) -> None
         except Exception:
             logger.exception("renewal credit dead-letter FAILED tenant=%s invoice=%s",
                              sub.tenant_id, invoice_id)
+
+
+async def _read_schedule(event: VerifiedEvent, obj: dict) -> dict | None:
+    """The subscription schedule a subscription event's subscription carries (2026-10-22).
+
+    ``{}`` when it carries none, None when it carries one that could not be read, so what was
+    recorded stays. Read from Stripe (pinned version) because the event names only its id. Never
+    raises: a missing preview of a change must not fail the event that reports the money state."""
+    if event.event_type not in ("customer.subscription.created", "customer.subscription.updated"):
+        return None
+    raw = obj.get("schedule")
+    if isinstance(raw, dict) and raw.get("phases") is not None:
+        return raw
+    schedule_id = _str(raw)
+    if not schedule_id:
+        return {}
+    try:
+        from nexus.billing.payments import resolve_payment_provider
+
+        found = await (await resolve_payment_provider()).get_subscription_schedule(schedule_id)
+    except Exception:
+        logger.warning("could not read subscription schedule %s", schedule_id, exc_info=True)
+        return None
+    return {"id": schedule_id, **found} if isinstance(found, dict) and found else None
+
+
+async def _scheduled_change(session, sub, schedule: dict) -> dict | None:
+    """What a schedule moves this workspace to and when, or None when it changes nothing here:
+    no phase still to start, the next one billing the plan held, or a price NEXUS did not make."""
+    from nexus.billing.plan_changes import next_scheduled_phase, phase_price_id, plan_for_price
+    from nexus.core.db import utcnow
+
+    phase = next_scheduled_phase(schedule, int(utcnow().timestamp()))
+    if phase is None:
+        return None
+    plan = await plan_for_price(session, phase_price_id(phase))
+    if plan is None or plan.id == sub.plan_id:
+        return None
+    at = _epoch(phase.get("start_date"))
+    return {"plan_id": plan.id, "at": at.isoformat() if at else "",
+            "schedule": _str(schedule.get("id"))}
+
+
+async def _invoice_was_paid(session, sub, latest) -> bool:
+    """Whether a subscription's latest invoice is already paid: expanded on the event, or recorded
+    here by an `invoice.paid` that arrived first."""
+    from sqlalchemy import select
+
+    from nexus.models.billing import BillingInvoice
+
+    if isinstance(latest, dict):
+        return str(latest.get("status") or "") == "paid"
+    invoice_id = _str(latest)
+    if not invoice_id:
+        return False
+    row = (await session.scalars(select(BillingInvoice).where(
+        BillingInvoice.tenant_id == sub.tenant_id,
+        BillingInvoice.period_key == f"stripe:{invoice_id}"))).first()
+    return row is not None and row.status == "paid"
+
+
+async def _grant_portal_upgrade(session, sub, invoice_id: str, pending: dict,
+                                outcome: dict) -> bool:
+    """Credit an upgrade made in Stripe's portal: the prorated amount worked out when the price
+    moved, once per proration invoice (`portal_upgrade:<invoice>`). Returns False only when the
+    grant failed, so the caller keeps it pending; never raises.
+
+    Not parked as a replayable dead letter: that job grants a plan's FULL allowance, and this is a
+    part of one. The pending entry on the row is what a redelivered `invoice.paid` grants from."""
+    from nexus.core.tenancy import TenantSession, apply_rls
+    from nexus.models.billing import BillingPlan
+
+    credits = int(pending.get("credits") or 0)
+    if credits <= 0:
+        return True
+    try:
+        from nexus.billing.credits import grant_credits
+        from nexus.billing.rollups import period_key
+        from nexus.core.db import utcnow
+
+        plan = await session.get(BillingPlan, str(pending.get("plan_id") or ""))
+        await apply_rls(session, sub.tenant_id)
+        if await grant_credits(
+            TenantSession(session, sub.tenant_id), credits, kind="grant",
+            reason=f"{plan.name if plan is not None else 'Plan'} upgrade, prorated",
+            idempotency_key=f"portal_upgrade:{invoice_id}",
+            period_key=period_key(utcnow(), "period"),
+        ):
+            outcome["portal_upgrade_credits"] = credits
+        return True
+    except Exception:
+        logger.error("could not credit the portal upgrade paid by %s for %s; it stays pending",
+                     invoice_id, sub.tenant_id, exc_info=True)
+        try:
+            from nexus.core import metrics
+
+            metrics.record_webhook_event("stripe", "credit_grant_failed")
+        except Exception:
+            pass
+        return False
+
+
+async def _grant_portal_upgrade_on_invoice(session, sub, obj: dict, outcome: dict) -> None:
+    """On `invoice.paid`: the proration invoice of an upgrade made in the portal is paid, so its
+    prorated credits arrive. Only for the plan the workspace is still on."""
+    from nexus.core.tenancy import apply_rls
+
+    pending = (sub.meta or {}).get("portal_upgrade_pending")
+    invoice_id = _str(obj.get("id"))
+    if (not isinstance(pending, dict) or not invoice_id
+            or str(obj.get("billing_reason") or "") != "subscription_update"
+            or _str(obj.get("subscription")) != (sub.psp_subscription_id or "")
+            or str(pending.get("invoice") or "") not in ("", invoice_id)
+            or str(pending.get("plan_id") or "") != sub.plan_id):
+        return
+    if await _grant_portal_upgrade(session, sub, invoice_id, pending, outcome):
+        await apply_rls(session, sub.tenant_id)
+        sub.meta = {k: v for k, v in (sub.meta or {}).items() if k != "portal_upgrade_pending"}
+        await session.flush()
+
+
+async def _take_change_made_in_stripe(session, sub, bought, obj: dict, meta: dict,
+                                      outcome: dict) -> None:
+    """The billed price moved to another plan inside Stripe (2026-10-22): a downgrade the portal
+    held until period end, or an upgrade made in the portal (or the Dashboard).
+
+    A downgrade grants nothing here: the renewal invoice that starts the new period credits the
+    new plan (`_grant_renewal_credits`). An upgrade earns the new plan's extra credits for the part
+    of the period left, once its proration invoice is paid: at once when it already is (the
+    `invoice.paid` arrived first), otherwise recorded as pending for that invoice."""
+    from nexus.billing.plan_changes import (
+        is_downgrade,
+        prorated_upgrade_credits,
+        remaining_fraction,
+    )
+    from nexus.billing.subscriptions import take_plan_terms
+    from nexus.core.db import utcnow
+    from nexus.models.billing import BillingPlan
+
+    old = await session.get(BillingPlan, sub.plan_id)
+    meta.update({"previous_plan_id": sub.plan_id, "changed_via": "stripe_portal",
+                 "changed_at": utcnow().isoformat()})
+    meta.pop("scheduled_change", None)
+    take_plan_terms(sub, bought)
+    if is_downgrade(old, bought):
+        # Its first invoice says `subscription_update`; this is how `_grant_renewal_credits`
+        # knows that invoice starts the new plan's period.
+        start = sub.current_period_start
+        meta["landed_change"] = {"plan_id": bought.id, "at": start.isoformat() if start else ""}
+        outcome["changed_in_stripe"] = "downgrade"
+        return
+    outcome["changed_in_stripe"] = "upgrade"
+    credits = prorated_upgrade_credits(old, bought, remaining_fraction(
+        sub.current_period_start, sub.current_period_end, utcnow()))
+    if credits <= 0:
+        return
+    invoice_id = _str(obj.get("latest_invoice"))
+    pending = {"invoice": invoice_id, "plan_id": bought.id, "credits": credits}
+    if (invoice_id and await _invoice_was_paid(session, sub, obj.get("latest_invoice"))
+            and await _grant_portal_upgrade(session, sub, invoice_id, pending, outcome)):
+        meta.pop("portal_upgrade_pending", None)
+        return
+    meta["portal_upgrade_pending"] = pending
+    outcome["portal_upgrade_pending"] = credits
 
 
 async def _grant_plan_credits(session, sub, plan) -> None:
@@ -642,6 +864,8 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
     from nexus.billing.payments import CARRIED_FROM_KEY
 
     meta_in = _metadata(obj)
+    # Before the row lock below: it can be a call to Stripe.
+    schedule = await _read_schedule(event, obj)
     sub, tenant_id = await _resolve_subscription(session, obj, event)
     if sub is not None:
         # Re-read under the row lock a customer's plan switch holds while Stripe answers it, so
@@ -791,10 +1015,27 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
         trial_end = _epoch(obj.get("trial_end"))
         if trial_end is not None:
             sub.trial_end = trial_end
-        plan_id = str(meta_in.get("plan_id") or "")
-        if plan_id and (created or plan_id != sub.plan_id):
+        from nexus.billing.plan_changes import plan_for_price, subscription_price_id
+
+        meta_plan = str(meta_in.get("plan_id") or "")
+        # The plan the PRICE bills (2026-10-22). Stripe's portal changes the price and leaves
+        # `metadata.plan_id` as it was, so the metadata answers only for a price NEXUS did not make.
+        billed = await plan_for_price(session, subscription_price_id(obj))
+        plan_id = billed.id if billed is not None else meta_plan
+        # Changed inside Stripe, on the subscription this row already follows: the price names
+        # another plan than the metadata NEXUS writes with every change it makes itself.
+        in_stripe = (billed is not None and billed.id != meta_plan and not created
+                     and event.event_type == "customer.subscription.updated"
+                     and psp_in == following)
+        # Stripe does not promise order. A price older than the last event applied must not move
+        # the plan back.
+        last = int(meta.get("psp_event_created") or 0)
+        stale = in_stripe and bool(last) and 0 < _event_created(event) < last
+        if plan_id and not stale and (created or plan_id != sub.plan_id):
             bought = await session.get(BillingPlan, plan_id)
-            if bought is not None:
+            if bought is not None and in_stripe:
+                await _take_change_made_in_stripe(session, sub, bought, obj, meta, outcome)
+            elif bought is not None:
                 take_plan_terms(sub, bought)
                 if _credits_on_payment(meta_in) or not started:
                     # Paid by emailed invoice (started from the console, 2026-10-09): the credits
@@ -809,6 +1050,14 @@ async def _apply_subscription_event(session, event: VerifiedEvent, obj: dict, ou
                     # and the grant is keyed per plan per period, so whichever arrives second is a
                     # no-op rather than a second helping.
                     await _grant_plan_credits(session, sub, bought)
+        if schedule is not None:
+            # A downgrade the portal holds until period end, shown on the billing page and
+            # blocking an in-app switch until it is cancelled; gone once released or applied.
+            change = await _scheduled_change(session, sub, schedule)
+            if change:
+                meta["scheduled_change"] = change
+            else:
+                meta.pop("scheduled_change", None)
         outcome["provider_status"] = raw_status
 
     meta["psp_synced_from_event"] = event.event_id
@@ -929,8 +1178,13 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
     if sub is not None:
         outcome["tenant_id"] = sub.tenant_id
     if event.event_type == "invoice.paid" and sub is not None:
+        # Under the row lock the subscription event takes, so a portal upgrade's proration invoice
+        # paid at the same moment as its `customer.subscription.updated` is credited by one of the
+        # two, never neither (SQLite has no row locks and skips it).
+        await session.refresh(sub, with_for_update=True)
         await _grant_pending_credits(session, sub, outcome)
         await _grant_renewal_credits(session, sub, obj, outcome)
+        await _grant_portal_upgrade_on_invoice(session, sub, obj, outcome)
 
     if event.event_type == "invoice.upcoming":
         # A PREVIEW of the next renewal. It has no persisted invoice at the provider and none

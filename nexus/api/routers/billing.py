@@ -54,6 +54,14 @@ class ProrationLineOut(BaseModel):
     days_in_period: int
 
 
+class ScheduledChangeOut(BaseModel):
+    """The plan Stripe moves this workspace to at the end of the period, and when."""
+
+    plan_id: str
+    plan_name: str
+    at: str | None = None
+
+
 class UsageOut(BaseModel):
     plan: str | None
     plan_name: str | None
@@ -76,6 +84,10 @@ class UsageOut(BaseModel):
     # True when the workspace pays through a live Stripe subscription: its price list switches plan
     # on that subscription (`/billing/switch-plan`) instead of opening a second Checkout.
     switch_in_place: bool = False
+    # A downgrade made in Stripe's portal, waiting for the end of the period (2026-10-22), and
+    # whether the paid plan is set to end then (the downgrade to Free).
+    scheduled_change: ScheduledChangeOut | None = None
+    cancel_at_period_end: bool = False
 
 
 @router.get("/usage", response_model=UsageOut)
@@ -175,6 +187,14 @@ async def get_usage(
     adjustments = await ts.list(
         BillingProrationAdjustment, BillingProrationAdjustment.period_key == key
     )
+    scheduled = (sub.meta or {}).get("scheduled_change") if sub is not None else None
+    scheduled_out = None
+    if isinstance(scheduled, dict) and scheduled.get("plan_id"):
+        target = await ts.session.get(BillingPlan, str(scheduled["plan_id"]))
+        scheduled_out = ScheduledChangeOut(
+            plan_id=str(scheduled["plan_id"]),
+            plan_name=target.name if target is not None else str(scheduled["plan_id"]),
+            at=str(scheduled.get("at") or "") or None)
     return UsageOut(
         plan=sub.plan_id if sub else None,
         plan_name=plan.name if plan else None,
@@ -196,6 +216,8 @@ async def get_usage(
         ],
         switch_in_place=bool(sub is not None and sub.status in ("trialing", "active", "past_due")
                              and (sub.psp_subscription_id or "").strip()),
+        scheduled_change=scheduled_out,
+        cancel_at_period_end=bool(sub is not None and sub.cancel_at_period_end),
     )
 
 
@@ -434,6 +456,10 @@ class SellablePlanOut(BaseModel):
     # picker renders one card per tier without guessing pairs from ids or names.
     family: str
     counterpart_id: str | None
+    # Moving to this plan from the current one is a downgrade (`plan_changes.is_downgrade`): for a
+    # workspace paying through Stripe it is scheduled in Stripe's portal for the end of the period,
+    # not switched now. Decided here so the browser never carries a second copy of the rule.
+    downgrade: bool = False
 
 
 @router.get("/plans", response_model=list[SellablePlanOut])
@@ -461,11 +487,13 @@ async def list_sellable_plans(
     Non-active plans are omitted too, which is how a plan is retired: set `status` in Admin and it
     leaves the price list without any code change.
     """
+    from nexus.billing.plan_changes import is_downgrade
     from nexus.billing.plans import interval_pairs
     from nexus.models.billing import BillingCapability
 
     sub = await _current_subscription(ts)
     current_plan_id = sub.plan_id if sub is not None else None
+    current_plan = await ts.session.get(BillingPlan, current_plan_id) if current_plan_id else None
 
     rows = (
         await ts.session.scalars(
@@ -539,6 +567,7 @@ async def list_sellable_plans(
                 sort_order=plan.sort_order, current=plan.id == current_plan_id,
                 includes=includes, excludes=excludes,
                 family=pairs[plan.id].family, counterpart_id=pairs[plan.id].counterpart_id,
+                downgrade=plan.id != current_plan_id and is_downgrade(current_plan, plan),
             )
         )
     return out
@@ -785,6 +814,115 @@ async def create_portal(
     )
 
 
+#: A change Stripe already holds for the end of the period, before its event reached us. Stripe's
+#: Manage billing page shows such a change but offers no way to cancel it (seen 2026-10-22), so
+#: the way out is the app's own Keep button (`POST /billing/scheduled-change/cancel`).
+_SCHEDULED_SENTENCE = (
+    "A plan change is already scheduled in Stripe for the end of this period. Reload the Billing "
+    "page and choose Keep to cancel it, then change plan. Nothing was changed.")
+
+
+def _day(value) -> str:
+    from datetime import datetime
+
+    try:
+        moment = datetime.fromisoformat(str(value or ""))
+    except ValueError:
+        return ""
+    return f"{moment.day} {moment:%B %Y}"
+
+
+async def _plan_change(
+    ts: TenantSession, plan_id: str,
+) -> tuple[BillingPlan, BillingSubscription, BillingPlan | None]:
+    """The plan asked for, the Stripe subscription that moves to it and the plan it is on now, or
+    the 4xx saying why it cannot move. The guards `switch-plan` and `downgrade` share."""
+    from nexus.billing.stripe_subscriptions import stripe_subscription_of
+
+    plan = await ts.session.get(BillingPlan, plan_id)
+    if plan is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown plan '{plan_id}'")
+    billed = await stripe_subscription_of(ts)
+    if billed is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This workspace does not pay through Stripe yet, so there is nothing to switch. "
+            "Choose Continue to checkout on the plan you want.")
+    await _reject_if_admin_managed(ts, billed)
+    free = plan.plan_class == "free"
+    if (plan.status != "active" or plan.plan_class in ADMIN_MANAGED_PLAN_CLASSES
+            or (not free and (plan.plan_class in UNPURCHASABLE_PLAN_CLASSES
+                              or int(plan.base_price_cents or 0) <= 0))):
+        raise HTTPException(status.HTTP_409_CONFLICT, f"'{plan.name}' is not on sale.")
+    if billed.plan_id == plan.id:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"This workspace is already on {plan.name}.")
+    current = await ts.session.get(BillingPlan, billed.plan_id)
+    if billed.status == "past_due":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A payment for this workspace is overdue. Update your card with Manage payment "
+            "method, then switch.")
+    if billed.status != "active":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Plans can be switched once the trial has ended. Nothing was changed.")
+    if billed.cancel_at_period_end:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Your plan is set to end. Renew it with Manage payment method first, then switch.")
+    if str((billed.meta or {}).get("collection") or "") == "send_invoice":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This workspace is billed by invoice. Ask your account team to change its plan.")
+    if (not free and current is not None
+            and (current.currency or "USD") != (plan.currency or "USD")):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{plan.name} is sold in {plan.currency}, and this workspace pays in "
+            f"{current.currency}.")
+    scheduled = (billed.meta or {}).get("scheduled_change")
+    if isinstance(scheduled, dict) and scheduled.get("plan_id"):
+        # Stripe holds a downgrade on a schedule until period end. Changing the price now would
+        # fight that schedule, so the customer cancels it first (2026-10-22).
+        target = await ts.session.get(BillingPlan, str(scheduled["plan_id"]))
+        when = _day(scheduled.get("at"))
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"A move to {target.name if target else 'another plan'}"
+            f"{' on ' + when if when else ''} is scheduled in Stripe. Choose Keep "
+            f"{current.name if current else 'your plan'} on the Billing page to cancel it, then "
+            "change plan. Nothing was changed.")
+    return plan, billed, current
+
+
+async def _portal_products(ts: TenantSession, account: str, first: list,
+                           interval: str) -> list[dict]:
+    """Every plan on sale in this Stripe account at ``interval`` as the portal's product list,
+    ``first`` (the target, then the current plan) at the head so Stripe's cap can never leave
+    either out. Only one interval: measured, the portal applies a yearly-to-monthly change at once
+    and credits the unused year to the customer's balance, so it is never offered one."""
+    from nexus.billing.payments import PORTAL_PRODUCTS_MAX
+    from nexus.billing.stripe_catalog import sellable_at_provider
+
+    on_sale = (await ts.session.scalars(
+        select(BillingPlan).where(BillingPlan.status == "active")
+        .order_by(BillingPlan.sort_order))).all()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for plan in [p for p in first if p is not None] + [p for p in on_sale
+                                                       if sellable_at_provider(p)]:
+        if plan.interval != interval:
+            continue
+        meta = plan.meta or {}
+        product, price = str(meta.get("product_id") or ""), str(meta.get("price_id") or "")
+        if (not product or not price or product in seen or meta.get("price_account") != account
+                or meta.get("price_active") is False):
+            continue
+        seen.add(product)
+        out.append({"product": product, "prices": [price]})
+    return out[:PORTAL_PRODUCTS_MAX]
+
+
 class SwitchPlanIn(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -818,61 +956,33 @@ async def switch_plan(
     not be (upgrade on the last day for a few cents, take the whole allowance). It applies only if
     the payment succeeds. Our row moves only after Stripe agreed, under a row lock the webhook
     also takes, so its credits cannot be granted twice.
+
+    Upgrades only (owner decision 2026-10-22). A downgrade is refused with a sentence naming
+    `POST /billing/downgrade`, which schedules it in Stripe for the end of the period.
     """
     from nexus.billing.credits import grant_credits
-    from nexus.billing.payments import PaymentError, PaymentNotConfigured, resolve_payment_provider
-    from nexus.billing.rollups import period_key
-    from nexus.billing.stripe_subscriptions import (
-        NO_CREDENTIAL,
-        in_previous_account,
-        stripe_subscription_of,
+    from nexus.billing.payments import (
+        PaymentError,
+        PaymentNotConfigured,
+        ScheduledChangePending,
+        resolve_payment_provider,
     )
+    from nexus.billing.plan_changes import is_downgrade
+    from nexus.billing.rollups import period_key
+    from nexus.billing.stripe_subscriptions import NO_CREDENTIAL, in_previous_account
     from nexus.billing.subscriptions import take_plan_terms
     from nexus.billing.webhooks import _epoch
     from nexus.core.db import utcnow
 
-    plan = await ts.session.get(BillingPlan, body.plan_id)
-    if plan is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown plan '{body.plan_id}'")
-    billed = await stripe_subscription_of(ts)
-    if billed is None:
+    plan, billed, current = await _plan_change(ts, body.plan_id)
+    if is_downgrade(current, plan):
+        # Owner decision 2026-10-22: a downgrade takes effect when the period paid for ends, and
+        # Stripe holds it until then. Switching now would charge in full for a smaller plan.
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "This workspace does not pay through Stripe yet, so there is nothing to switch. "
-            "Choose Continue to checkout on the plan you want.")
-    await _reject_if_admin_managed(ts, billed)
-    if plan.status != "active" or plan.plan_class in ADMIN_MANAGED_PLAN_CLASSES:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"'{plan.name}' is not on sale.")
-    if plan.plan_class in UNPURCHASABLE_PLAN_CLASSES or int(plan.base_price_cents or 0) <= 0:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"To move to {plan.name}, cancel your plan with Manage payment method. It moves to "
-            f"{plan.name} when the period you paid for ends.")
-    if billed.plan_id == plan.id:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"This workspace is already on {plan.name}.")
-    current = await ts.session.get(BillingPlan, billed.plan_id)
-    if billed.status == "past_due":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "A payment for this workspace is overdue. Update your card with Manage payment "
-            "method, then switch.")
-    if billed.status != "active":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Plans can be switched once the trial has ended. Nothing was changed.")
-    if billed.cancel_at_period_end:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Your plan is set to end. Renew it with Manage payment method first, then switch.")
-    if str((billed.meta or {}).get("collection") or "") == "send_invoice":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "This workspace is billed by invoice. Ask your account team to change its plan.")
-    if current is not None and (current.currency or "USD") != (plan.currency or "USD"):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"{plan.name} is sold in {plan.currency}, and this workspace pays in "
-            f"{current.currency}.")
+            f"Moving from {current.name if current else 'your plan'} to {plan.name} is a "
+            "downgrade, so it takes effect when your current period ends. Choose Downgrade to "
+            f"{plan.name} to schedule it with Stripe. Nothing was changed.")
 
     # One switch at a time per workspace, and the webhook waits for it (row lock; SQLite ignores).
     await ts.session.execute(
@@ -904,6 +1014,9 @@ async def switch_plan(
             idempotency_key=f"switch:{psp}:{plan.id}:{anchor}")
     except PaymentNotConfigured as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except ScheduledChangePending as exc:
+        # Scheduled in Stripe before its event reached us.
+        raise HTTPException(status.HTTP_409_CONFLICT, _SCHEDULED_SENTENCE) from exc
     except PaymentError as exc:
         gone = in_previous_account(exc, psp)
         raise HTTPException(
@@ -932,7 +1045,11 @@ async def switch_plan(
         billed.current_period_start = start
     if end is not None:
         billed.current_period_end = end
-    billed.meta = {**(billed.meta or {}), "previous_plan_id": previous,
+    # A portal upgrade's credits still waiting for their invoice, and a landed downgrade whose
+    # first invoice is still to come, belong to the plan just left.
+    billed.meta = {**{k: v for k, v in (billed.meta or {}).items()
+                      if k not in ("portal_upgrade_pending", "landed_change")},
+                   "previous_plan_id": previous,
                    "changed_by": principal.user_id, "changed_at": utcnow().isoformat(),
                    "changed_via": "self_serve_switch", "switch_invoice": out.invoice_id}
     await ts.flush()
@@ -945,6 +1062,193 @@ async def switch_plan(
     logger.info("workspace %s switched %s -> %s at Stripe (%s)", ts.tenant_id, previous, plan.id,
                 psp)
     return out
+
+
+class DowngradeIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    plan_id: str
+    return_url: str = ""
+
+
+class DowngradeOut(HostedSessionOut):
+    #: `schedule_change`: Stripe's page confirming the smaller plan, applied when the period ends.
+    #: `cancel`: Stripe's page confirming the paid plan ends with the period (the move to Free).
+    #: `scheduled`: yearly to monthly, already held at Stripe until the period ends; no page
+    #: (`url` is empty), because the portal would apply it at once.
+    flow: str
+    period_end: str | None = None
+
+
+@router.post("/downgrade", response_model=DowngradeOut)
+async def downgrade_plan(
+    body: DowngradeIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> DowngradeOut:
+    """Downgrade at the end of the period already paid for (owner decision 2026-10-22).
+
+    Stripe holds the change on a subscription schedule until then, and the webhook moves the plan
+    when the price moves. Within one billing interval this is a redirect, like `/portal`: the
+    portal's update page under that interval's downgrade configuration, which holds a cheaper
+    price until period end. Free is the portal's cancel page (at period end).
+
+    Yearly to monthly is the exception, measured in test mode: the portal applied it AT ONCE and
+    credited the unused year to the customer's balance, which would leave them the year's credits
+    plus monthly renewals paid from that balance. So the app holds it itself
+    (`schedule_price_change_at_period_end`) after the customer confirms on the price list, and
+    records the scheduled change at once. An upgrade is refused: it is `/billing/switch-plan`.
+    """
+    from nexus.billing.payments import (
+        PaymentError,
+        PaymentNotConfigured,
+        ScheduledChangePending,
+        resolve_payment_provider,
+    )
+    from nexus.billing.plan_changes import is_downgrade
+    from nexus.billing.stripe_catalog import current_account, customer_id_for, plan_price_id
+    from nexus.billing.stripe_subscriptions import NO_CREDENTIAL, in_previous_account, owner_email
+    from nexus.billing.webhooks import _epoch
+
+    return_url = _own_url(body.return_url, "/settings/billing")
+    plan, billed, current = await _plan_change(ts, body.plan_id)
+    if not is_downgrade(current, plan):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Moving from {current.name if current else 'your plan'} to {plan.name} is an "
+            f"upgrade. Choose Switch to {plan.name}: it starts today and is charged now.")
+
+    # The same lock the switch takes, so a downgrade and a switch cannot be opened at once.
+    await ts.session.execute(
+        ts.select(BillingSubscription, BillingSubscription.id == billed.id).with_for_update())
+    psp = (billed.psp_subscription_id or "").strip()
+    provider = await resolve_payment_provider()
+    if provider.name != "stripe" and psp.startswith("sub_"):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"This workspace is billed through Stripe. {NO_CREDENTIAL}")
+    free = int(plan.base_price_cents or 0) <= 0
+    interval = current.interval if current is not None else plan.interval
+    held_here = not free and plan.interval != interval
+    period_end = billed.current_period_end.isoformat() if billed.current_period_end else None
+    try:
+        if provider.name == "stripe":
+            from nexus.billing.stripe_carryover import ensure_in_current_account
+
+            moved = await ensure_in_current_account(ts.session, billed, provider,
+                                                    actor=principal.user_id)
+            if moved["outcome"] in ("failed", "skipped"):
+                raise HTTPException(status.HTTP_409_CONFLICT,
+                                    str(moved.get("detail") or "It cannot be changed now."))
+            psp = (billed.psp_subscription_id or "").strip()
+        account = await current_account(provider)
+        if held_here:
+            price_id = await plan_price_id(plan, provider, account=account)
+            await ts.flush()
+            held = await provider.schedule_price_change_at_period_end(
+                subscription_id=psp, price_id=price_id, plan_id=plan.id)
+            at = _epoch(held.get("at"))
+            billed.meta = {**(billed.meta or {}), "scheduled_change": {
+                "plan_id": plan.id, "at": at.isoformat() if at else (period_end or ""),
+                "schedule": str(held.get("schedule") or "")}}
+            await ts.flush()
+            logger.info("workspace %s scheduled %s -> %s for period end at Stripe (%s)",
+                        ts.tenant_id, billed.plan_id, plan.id, psp)
+            return DowngradeOut(id=str(held.get("schedule") or ""), url="",
+                                provider=provider.name, plan_id=plan.id, flow="scheduled",
+                                period_end=period_end)
+        customer_id = await customer_id_for(
+            billed, provider, tenant_id=ts.tenant_id, email=await owner_email(ts),
+            account=account) or (billed.psp_customer_id or "")
+        if free:
+            await ts.flush()
+            session_out = await provider.create_cancel_portal_session(
+                customer_id=customer_id, subscription_id=psp, return_url=return_url)
+        else:
+            price_id = await plan_price_id(plan, provider, account=account)
+            products = await _portal_products(ts, account, [plan, current], interval)
+            await ts.flush()
+            session_out = await provider.create_plan_change_portal_session(
+                customer_id=customer_id, subscription_id=psp, price_id=price_id,
+                products=products, return_url=return_url, interval=interval)
+    except PaymentNotConfigured as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except ScheduledChangePending as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, _SCHEDULED_SENTENCE) from exc
+    except PaymentError as exc:
+        gone = in_previous_account(exc, psp)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT if gone else status.HTTP_502_BAD_GATEWAY,
+            gone or f"Stripe could not open the downgrade, so nothing changed: {exc}") from exc
+
+    logger.info("workspace %s opened a downgrade %s -> %s at Stripe (%s)", ts.tenant_id,
+                billed.plan_id, plan.id, psp)
+    return DowngradeOut(
+        id=str(session_out.get("id", "")), url=str(session_out.get("url", "")),
+        provider=str(session_out.get("provider", provider.name)), plan_id=plan.id,
+        flow="cancel" if free else "schedule_change", period_end=period_end)
+
+
+class KeepPlanOut(BaseModel):
+    status: str
+    plan_id: str
+
+
+@router.post("/scheduled-change/cancel", response_model=KeepPlanOut)
+async def keep_plan(
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
+) -> KeepPlanOut:
+    """Keep the plan this workspace is on: cancel the downgrade Stripe holds for period end.
+
+    Stripe's Manage billing page shows a scheduled change but offers no way to cancel it (seen in
+    test mode, 2026-10-22), so the app releases the schedule itself. The subscription keeps the
+    price it bills now and renews as before; our row changes only after Stripe agreed, and the
+    `customer.subscription.updated` that follows finds nothing left to clear.
+    """
+    from nexus.billing.payments import PaymentError, PaymentNotConfigured, resolve_payment_provider
+    from nexus.billing.stripe_subscriptions import (
+        NO_CREDENTIAL,
+        in_previous_account,
+        stripe_subscription_of,
+    )
+    from nexus.core.db import utcnow
+
+    billed = await stripe_subscription_of(ts)
+    if billed is None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "This workspace does not pay through Stripe, so nothing is scheduled.")
+    await _reject_if_admin_managed(ts, billed)
+    scheduled = (billed.meta or {}).get("scheduled_change")
+    if not (isinstance(scheduled, dict) and scheduled.get("plan_id")):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Nothing is scheduled to change on this plan.")
+
+    await ts.session.execute(
+        ts.select(BillingSubscription, BillingSubscription.id == billed.id).with_for_update())
+    psp = (billed.psp_subscription_id or "").strip()
+    provider = await resolve_payment_provider()
+    if provider.name != "stripe" and psp.startswith("sub_"):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"This workspace is billed through Stripe. {NO_CREDENTIAL}")
+    try:
+        await provider.release_subscription_schedule(subscription_id=psp)
+    except PaymentNotConfigured as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except PaymentError as exc:
+        gone = in_previous_account(exc, psp)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT if gone else status.HTTP_502_BAD_GATEWAY,
+            gone or f"Stripe could not cancel the scheduled change, so it still applies: {exc}",
+        ) from exc
+
+    meta = {k: v for k, v in (billed.meta or {}).items() if k != "scheduled_change"}
+    meta["scheduled_change_cancelled"] = {"plan_id": str(scheduled["plan_id"]),
+                                          "by": principal.user_id, "at": utcnow().isoformat()}
+    billed.meta = meta
+    await ts.flush()
+    logger.info("workspace %s kept %s; the scheduled move to %s was cancelled at Stripe (%s)",
+                ts.tenant_id, billed.plan_id, scheduled["plan_id"], psp)
+    return KeepPlanOut(status="kept", plan_id=billed.plan_id)
 
 
 # ---- entitlements: what this workspace's plan actually includes -------------------------------

@@ -80,9 +80,15 @@ async def compare_subscription(ts: TenantSession, sub: BillingSubscription) -> d
             "drift": {"remote": "missing", "local_status": sub.status, **terms},
         }
 
+    from nexus.billing.plan_changes import plan_for_price, subscription_price_id
+
     raw_status = str(remote.get("status") or "")
     mapped = STRIPE_SUBSCRIPTION_STATUS.get(raw_status)
-    remote_plan = str(((remote.get("metadata") or {}).get("plan_id")) or "")
+    # The plan the price bills, as the webhook reads it: a change made in Stripe's portal leaves
+    # `metadata.plan_id` behind (2026-10-22), and reporting that as drift would be noise.
+    billed = await plan_for_price(ts.session, subscription_price_id(remote))
+    remote_plan = billed.id if billed is not None else str(
+        ((remote.get("metadata") or {}).get("plan_id")) or "")
 
     drift: dict = dict(terms)
     # An unmapped remote status is not drift — webhooks deliberately leave those alone, so
