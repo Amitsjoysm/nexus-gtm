@@ -16,6 +16,8 @@ function credits(n: number): string {
 
 export function CreditEstimate({ estimate }: { estimate: CampaignEstimate }) {
   const lines = Object.entries(estimate.per_capability).filter(([, l]) => l.units > 0);
+  // What is still ahead: emails already sent, and people who finished, are not priced again.
+  const left = estimate.emails_left ?? estimate.contacts * estimate.email_steps;
   return (
     <section className={styles.estimate} aria-labelledby="estimate-title">
       <h3 id="estimate-title" className={styles.title}>What this campaign can cost</h3>
@@ -24,9 +26,8 @@ export function CreditEstimate({ estimate }: { estimate: CampaignEstimate }) {
           <dt>Most it can cost</dt>
           <dd className={styles.worst}>{credits(estimate.worst_credits)} credits</dd>
           <dd className={styles.note}>
-            {estimate.contacts} {estimate.contacts === 1 ? "contact" : "contacts"} ×{" "}
-            {estimate.email_steps} {estimate.email_steps === 1 ? "email" : "emails"}, each
-            replying once
+            {left.toLocaleString()} {left === 1 ? "email" : "emails"} still to send to{" "}
+            {estimate.contacts} {estimate.contacts === 1 ? "contact" : "contacts"}, each replying once
           </dd>
         </div>
         <div className={styles.figure}>

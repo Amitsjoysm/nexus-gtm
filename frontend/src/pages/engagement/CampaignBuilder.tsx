@@ -107,7 +107,9 @@ export function CampaignBuilder() {
             campaign.id, handedContacts, handedAccounts, listId || undefined,
           );
           toast.success("Campaign created",
-            `${added.added.length} ${added.added.length === 1 ? "person" : "people"} added. Draft their first emails next.`);
+            added.remaining
+              ? `${added.added.length} people added. ${added.remaining.toLocaleString()} more are on the list: add it again from the campaign page to add them.`
+              : `${added.added.length} ${added.added.length === 1 ? "person" : "people"} added. Draft their first emails next.`);
         } catch (err) {
           toast.error("Campaign created, but nobody was added",
             err instanceof ApiError ? err.detail : "Add people from the campaign page.");

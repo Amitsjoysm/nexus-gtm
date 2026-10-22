@@ -2934,6 +2934,25 @@ their routers, workers and pages are gone; their tables stay as read-only histor
   desk); Save to Drafts goes through `engagement.sending.drafts.save_draft`, unmetered, which the
   reply desk uses too. SMTP remains the fallback and behaves as before.
 
+**Nobody silently stops being emailed** (2026-10-22, `tests/test_campaign_recovery.py`). Each of
+these left a person paused or a campaign refused while the screen said all was well:
+- **A reconnected mailbox resumes who it paused.** `advance` pauses an enrollment
+  `mailbox_disconnected` (the campaign stays "Running") and nothing resumed it: reconnecting
+  updates the row in place, the campaign page offers a mailbox only while it is NOT connected, and
+  health counts what is due, which a paused person never is. `due_enrollments` now also picks them
+  up once the campaign's mailbox reads `connected`, whatever made it so.
+- **Resume takes back the person who hit the credit wall** (`launch` → `_resume_after_credits`;
+  one still owed a re-engagement goes back to `snoozed`), and an approved follow-up waiting for
+  review is looked for at the step the person is ON (`current_messages`), not step 0.
+- **The gate prices what is still ahead** (`estimate.emails_left`): steps already sent and people
+  finished are not priced again, nor an email already written (charged when drafted). It priced
+  every step for every person, so a top-up covering what was left was still refused.
+- **One add takes `MAX_PER_ADD` (2,000) people not already in the campaign** and returns
+  `remaining`; adding the list again takes the next ones. It sliced the first 2,000 of the whole
+  list, so the rest were dropped silently and could never be added.
+- `enroll`, `review_queue` and a drafting pass read a fixed number of times whatever the count
+  (they read per person: about 16,000 reads to add a 2,000-person list).
+
 **When campaigns stop, Platform health says which stage** (2026-10-02, `engagement/health.py`, the
 `campaigns` row). Reported from staging as "no drafts, first emails never send, follow-ups never
 send, replies not picked up". The whole engine was then run once end to end on the production image

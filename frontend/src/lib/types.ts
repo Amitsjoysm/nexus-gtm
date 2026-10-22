@@ -2518,6 +2518,8 @@ export interface EnrollResult {
   skipped: { contact_id: string; reason: string }[];
   /** The person is already in a colleague's (or another) live campaign. Added anyway. */
   warnings: { contact_id: string; campaign_id: string; campaign_name: string; owner: string }[];
+  /** Not added this time because one add takes at most 2,000: adding again takes the next ones. */
+  remaining?: number;
 }
 
 export interface ReviewItem {
@@ -2563,8 +2565,11 @@ export interface CapabilityLine {
 
 /** GET /engagement/campaigns/{id}/estimate (spec §10, D18). */
 export interface CampaignEstimate {
+  /** People who have not finished the sequence. */
   contacts: number;
   email_steps: number;
+  /** Emails still to send across them: what the worst case prices (already-sent steps are not). */
+  emails_left?: number;
   worst_credits: number;
   likely_credits: number;
   balance: number;

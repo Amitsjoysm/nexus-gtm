@@ -38,16 +38,29 @@ async def due_enrollments(now: datetime, limit: int = BATCH) -> list[tuple[str, 
     """``[(tenant_id, enrollment_id)]`` due now, across workspaces, soonest first.
 
     Read on the platform sessionmaker: under the RLS-bound app role a cross-tenant read returns zero
-    rows, and a heartbeat that finds nothing due looks exactly like a quiet day."""
+    rows, and a heartbeat that finds nothing due looks exactly like a quiet day.
+
+    Someone paused because the mailbox was disconnected is due again once it is connected
+    (2026-10-22). Nothing resumed them: reconnecting updates the mailbox row in place, the campaign
+    had stayed "Running", the screen offers a mailbox only while it is NOT connected, and Platform
+    health counts what is due, which a paused person never is. Every token expiry silently ended
+    the sequence for whoever came due during it. Picking them up here covers every way a mailbox
+    comes back: a reconnect, a refresh that succeeds again, a mailbox app an admin repaired."""
     from sqlalchemy import or_, select
 
     from nexus.core.db import get_platform_sessionmaker
-    from nexus.models.engagement import EngagementCampaign, EngagementEnrollment
+    from nexus.models.engagement import (
+        EngagementCampaign,
+        EngagementEnrollment,
+        MailboxConnection,
+    )
 
     async with get_platform_sessionmaker()() as session:
         rows = (await session.execute(
             select(EngagementEnrollment.tenant_id, EngagementEnrollment.id)
             .join(EngagementCampaign, EngagementCampaign.id == EngagementEnrollment.campaign_id)
+            .outerjoin(MailboxConnection,
+                       MailboxConnection.id == EngagementCampaign.mailbox_connection_id)
             .where(EngagementCampaign.status == "active")
             .where(or_(
                 (EngagementEnrollment.status == "active")
@@ -57,6 +70,9 @@ async def due_enrollments(now: datetime, limit: int = BATCH) -> list[tuple[str, 
                 (EngagementEnrollment.status == "paused")
                 & (EngagementEnrollment.status_reason == "out_of_office")
                 & (EngagementEnrollment.snoozed_until <= now),
+                (EngagementEnrollment.status == "paused")
+                & (EngagementEnrollment.status_reason == "mailbox_disconnected")
+                & (MailboxConnection.status == "connected"),
             ))
             .order_by(EngagementEnrollment.next_action_at)
             .limit(limit)
@@ -109,6 +125,15 @@ async def process(ts, enrollment_id: str, *, now: datetime) -> str:
         # Back from out of office: resume the step it was on (§8). No extra email is added.
         enrollment.snoozed_until = None
         enrollment.next_action_at = now
+        await set_status(ts, enrollment, "active")
+    if enrollment.status == "paused" and enrollment.status_reason == "mailbox_disconnected":
+        # The mailbox is back (see `due_enrollments`): carry on with the step that was due. A step
+        # that fell due while it was away goes now, in order, not skipped.
+        back = await ts.get(MailboxConnection, campaign.mailbox_connection_id)
+        if back is None or back.status != "connected":
+            return "mailbox_disconnected"
+        if enrollment.next_action_at is None:
+            enrollment.next_action_at = now
         await set_status(ts, enrollment, "active")
     snoozed = enrollment.status == "snoozed" and enrollment.snoozed_until \
         and enrollment.snoozed_until <= now

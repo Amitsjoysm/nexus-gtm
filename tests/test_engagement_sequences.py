@@ -260,8 +260,11 @@ async def test_launch_is_refused_when_the_worst_case_cannot_be_covered(monkeypat
             await launch(ts, campaign, user_id=user_id)
         estimate = refused.value.estimate
         per = estimate.per_capability
-        # 2 contacts x 3 email steps x (draft 2 + send 1) = 18 credits for the emails alone...
-        assert per["ai.email_draft"]["credits"] + per["outreach.email_send"]["credits"] == 18
+        # 2 contacts x 3 email steps, each sent (1) and drafted (2), less the two openers already
+        # written and charged: 6 sends + 4 drafts = 14 credits for the emails alone (2026-10-22:
+        # it was 18, pricing the written openers a second time)...
+        assert per["outreach.email_send"]["units"] == 6 and per["ai.email_draft"]["units"] == 4
+        assert per["ai.email_draft"]["credits"] + per["outreach.email_send"]["credits"] == 14
         # ...and the worst case is every priced line, including one reply read per contact.
         assert estimate.worst_credits == sum(line["credits"] for line in per.values())
         assert estimate.gate_applies

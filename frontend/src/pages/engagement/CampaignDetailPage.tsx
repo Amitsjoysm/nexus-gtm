@@ -106,8 +106,7 @@ export function CampaignDetailPage() {
     try {
       const result = await api.addCampaignContacts(campaignId, ids);
       setLastAdd(result);
-      toast.success(`${result.added.length} added`,
-        result.skipped.length ? `${result.skipped.length} could not be added.` : "Next, write and review their opening emails.");
+      toast.success(`${result.added.length} added`, addedNote(result));
       refresh();
     } catch (err) {
       toast.error("Couldn't add them", err instanceof ApiError ? err.detail : "Please try again.");
@@ -121,9 +120,9 @@ export function CampaignDetailPage() {
     try {
       const result = await api.addCampaignContacts(campaignId, [], [], wholeList);
       setLastAdd(result);
-      toast.success(`${result.added.length} added from the list`,
-        result.skipped.length ? `${result.skipped.length} could not be added.` : "Next, write and review their opening emails.");
-      setWholeList("");
+      toast.success(`${result.added.length} added from the list`, addedNote(result));
+      // Keep the list chosen while some of it is still to add, so the next press takes the rest.
+      if (!result.remaining) setWholeList("");
       refresh();
     } catch (err) {
       toast.error("Couldn't add the list", err instanceof ApiError ? err.detail : "Please try again.");
@@ -256,6 +255,16 @@ export function CampaignDetailPage() {
       </TabPanel>
     </div>
   );
+}
+
+/** The line under "N added": what is left of a big list first, since it needs another press. */
+function addedNote(result: EnrollResult): string {
+  if (result.remaining) {
+    return `${result.remaining.toLocaleString()} more were not added yet: one add takes up to 2,000 people. Add the list again to add the next ones.`;
+  }
+  return result.skipped.length
+    ? `${result.skipped.length} could not be added.`
+    : "Next, write and review their opening emails.";
 }
 
 function AddResult({ result, people }: { result: EnrollResult; people: EngagementEnrollment[] }) {

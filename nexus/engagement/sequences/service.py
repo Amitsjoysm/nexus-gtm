@@ -27,6 +27,9 @@ FIRST_SEND_MODES = ("on_approval", "scheduled")
 PAUSE_REASONS = ("manual", "colleague_replied", "out_of_office", "needs_decision",
                  "out_of_credits", "mailbox_disconnected")
 STOP_REASONS = ("replied", "declined", "unsubscribed", "bounced", "manual")
+#: The most people one add enrolls. A bigger list is added in several presses, each taking the next
+#: ones not yet in the campaign; the response says how many are left.
+MAX_PER_ADD = 2000
 
 
 class CampaignError(ValueError):
@@ -149,8 +152,14 @@ async def steps_of(ts, campaign) -> list:
 # ---- enrollment ---------------------------------------------------------------------------------
 
 async def enroll(ts, campaign, contact_ids: list[str]) -> EnrollResult:
-    """Add contacts. Skips what cannot be emailed; warns about what someone else is emailing."""
-    from nexus.engagement.suppression.service import active_block
+    """Add contacts. Skips what cannot be emailed; warns about what someone else is emailing.
+
+    A fixed number of reads whatever the count (2026-10-22). It read the contact, their company,
+    their do-not-contact rows and their other campaigns one person at a time, about eight reads
+    each, so "Add everyone on it" for a 2,000-person list was some 16,000 reads in one request."""
+    from sqlalchemy import select
+
+    from nexus.engagement.suppression.service import active_reasons, normalize_email
     from nexus.prospector.hold import HOLD_REASON, held_until_verified
     from nexus.engagement.timekeeping import resolve_zone
     from nexus.models.account import Account, Contact
@@ -163,12 +172,22 @@ async def enroll(ts, campaign, contact_ids: list[str]) -> EnrollResult:
 
     if campaign.status not in ("draft", "reviewing", "active", "paused"):
         raise CampaignError("Contacts cannot be added to a completed campaign.")
-    mailbox = await ts.get(MailboxConnection, campaign.mailbox_connection_id)
     result = EnrollResult()
-    existing = {e.contact_id for e in await ts.list(
-        EngagementEnrollment, EngagementEnrollment.campaign_id == campaign.id)}
-    for contact_id in dict.fromkeys(contact_ids):
-        contact = await ts.get(Contact, contact_id)
+    wanted = list(dict.fromkeys(contact_ids))
+    if not wanted:
+        return result
+    mailbox = await ts.get(MailboxConnection, campaign.mailbox_connection_id)
+    existing = set((await ts.session.scalars(
+        select(EngagementEnrollment.contact_id)
+        .where(EngagementEnrollment.tenant_id == ts.tenant_id,
+               EngagementEnrollment.campaign_id == campaign.id))).all())
+    contacts = {c.id: c for c in await ts.list(Contact, Contact.id.in_(wanted))}
+    accounts = {a.id: a for a in await ts.list(
+        Account, Account.id.in_({c.account_id for c in contacts.values()}))} if contacts else {}
+    blocked = await active_reasons(ts, [c.email or "" for c in contacts.values()])
+
+    for contact_id in wanted:
+        contact = contacts.get(contact_id)
         if contact is None or getattr(contact, "deleted_at", None) is not None:
             result.skipped.append({"contact_id": contact_id, "reason": "not_found"})
             continue
@@ -183,11 +202,11 @@ async def enroll(ts, campaign, contact_ids: list[str]) -> EnrollResult:
             # verifier calls it deliverable (D19). A one-off email is not held.
             result.skipped.append({"contact_id": contact_id, "reason": HOLD_REASON})
             continue
-        block = await active_block(ts, contact.email)
-        if block is not None:
-            result.skipped.append({"contact_id": contact_id, "reason": f"do_not_contact:{block.reason}"})
+        reason = blocked.get(normalize_email(contact.email))
+        if reason is not None:
+            result.skipped.append({"contact_id": contact_id, "reason": f"do_not_contact:{reason}"})
             continue
-        account = await ts.get(Account, contact.account_id)
+        account = accounts.get(contact.account_id)
         zone = resolve_zone(
             contact_tz=(contact.custom_fields or {}).get("timezone"),
             account_country=getattr(account, "country", None),
@@ -197,18 +216,27 @@ async def enroll(ts, campaign, contact_ids: list[str]) -> EnrollResult:
             campaign_id=campaign.id, contact_id=contact.id, account_id=contact.account_id,
             mailbox_connection_id=campaign.mailbox_connection_id, status="awaiting_review",
             current_step_index=0, contact_timezone=zone.name))
+        existing.add(contact_id)
         result.added.append(contact.id)
 
+    if result.added:
+        # The duplicate-outreach guard (§19), for everyone added, in three reads.
         others = await ts.list(
-            EngagementEnrollment, EngagementEnrollment.contact_id == contact.id,
+            EngagementEnrollment, EngagementEnrollment.contact_id.in_(result.added),
             EngagementEnrollment.campaign_id != campaign.id,
             EngagementEnrollment.status.in_(("active", "awaiting_review", "paused", "snoozed")))
-        for other in others:
-            other_campaign = await ts.get(EngagementCampaign, other.campaign_id)
-            owner = await ts.session.get(User, other_campaign.owner_user_id) \
-                if other_campaign else None
+        campaigns = {c.id: c for c in await ts.list(
+            EngagementCampaign, EngagementCampaign.id.in_({o.campaign_id for o in others}))} \
+            if others else {}
+        owner_ids = {c.owner_user_id for c in campaigns.values() if c.owner_user_id}
+        owners = {u.id: u for u in (await ts.session.scalars(
+            select(User).where(User.id.in_(owner_ids)))).all()} if owner_ids else {}
+        order = {cid: i for i, cid in enumerate(result.added)}
+        for other in sorted(others, key=lambda o: order.get(o.contact_id, 0)):
+            other_campaign = campaigns.get(other.campaign_id)
+            owner = owners.get(getattr(other_campaign, "owner_user_id", None))
             result.warnings.append({
-                "contact_id": contact.id, "campaign_id": other.campaign_id,
+                "contact_id": other.contact_id, "campaign_id": other.campaign_id,
                 "campaign_name": getattr(other_campaign, "name", ""),
                 "owner": getattr(owner, "full_name", "") or getattr(owner, "email", ""),
             })
@@ -253,6 +281,8 @@ async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
 
     ``only`` limits it to those enrollments: a referral adds one person to a running campaign and
     must not pay to draft anyone else who happens to be waiting."""
+    from sqlalchemy import select
+
     from nexus.engagement.drafting.drafter import draft
     from nexus.models.account import Account, Contact
     from nexus.models.engagement import (
@@ -269,14 +299,23 @@ async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
     mailbox = await ts.get(MailboxConnection, campaign.mailbox_connection_id)
     pending = await ts.list(EngagementEnrollment, EngagementEnrollment.campaign_id == campaign.id,
                             EngagementEnrollment.status == "awaiting_review")
+    # Who already has an opener, in one read. It was one read per person on every pass, and the
+    # screen drafts in passes of ten, so a list of 2,000 re-read up to 2,000 rows per pass.
+    has_opener = set((await ts.session.scalars(
+        select(EngagementMessage.enrollment_id)
+        .where(EngagementMessage.tenant_id == ts.tenant_id,
+               EngagementMessage.enrollment_id.in_([e.id for e in pending]),
+               EngagementMessage.step_index == 0, EngagementMessage.direction == "out")
+    )).all()) if pending else set()
     drafted = failed = 0
     errors: list[dict] = []
-    for enrollment in pending:
+    # Oldest first, the order Review shows them in.
+    for enrollment in sorted(pending, key=lambda e: e.created_at):
         if only is not None and enrollment.id not in only:
             continue
         if limit is not None and drafted >= limit:
             break
-        if await first_draft(ts, enrollment) is not None:
+        if enrollment.id in has_opener:
             continue
         contact = await ts.get(Contact, enrollment.contact_id)
         account = await ts.get(Account, enrollment.account_id)
@@ -312,19 +351,33 @@ async def first_draft(ts, enrollment):
                           EngagementMessage.direction == "out")
 
 
-async def review_queue(ts, campaign) -> list[tuple]:
-    """``[(enrollment, draft_row_or_None)]`` for everyone awaiting review, oldest first."""
-    from nexus.models.engagement import EngagementEnrollment, EngagementMessage
+async def current_messages(ts, enrollments) -> dict:
+    """``{enrollment_id: outbound row at the step it is on}``, in one read for any number."""
+    from nexus.models.engagement import EngagementMessage
 
-    waiting = await ts.list(EngagementEnrollment, EngagementEnrollment.campaign_id == campaign.id,
-                            EngagementEnrollment.status == "awaiting_review")
-    out = []
-    for enrollment in sorted(waiting, key=lambda e: e.created_at):
-        row = await ts.first(EngagementMessage, EngagementMessage.enrollment_id == enrollment.id,
-                             EngagementMessage.step_index == enrollment.current_step_index,
-                             EngagementMessage.direction == "out")
-        out.append((enrollment, row))
+    if not enrollments:
+        return {}
+    step_of = {e.id: e.current_step_index for e in enrollments}
+    out: dict = {}
+    for row in await ts.list(EngagementMessage, EngagementMessage.enrollment_id.in_(list(step_of)),
+                             EngagementMessage.direction == "out"):
+        if row.step_index == step_of.get(row.enrollment_id):
+            out.setdefault(row.enrollment_id, row)
     return out
+
+
+async def review_queue(ts, campaign) -> list[tuple]:
+    """``[(enrollment, draft_row_or_None)]`` for everyone awaiting review, oldest first.
+
+    Two reads whatever the size: it used to read once per person, on every refresh of Review."""
+    from nexus.models.engagement import EngagementEnrollment
+
+    waiting = sorted(await ts.list(EngagementEnrollment,
+                                   EngagementEnrollment.campaign_id == campaign.id,
+                                   EngagementEnrollment.status == "awaiting_review"),
+                     key=lambda e: e.created_at)
+    current = await current_messages(ts, waiting)
+    return [(enrollment, current.get(enrollment.id)) for enrollment in waiting]
 
 
 async def approve(ts, message, *, user_id: str, subject: str | None = None,
@@ -462,13 +515,36 @@ async def launch(ts, campaign, *, user_id: str):
     campaign.pause_reason = None
     campaign.launched_at = campaign.launched_at or now
     await ts.flush()
-    for enrollment in await ts.list(EngagementEnrollment,
-                                    EngagementEnrollment.campaign_id == campaign.id,
-                                    EngagementEnrollment.status == "awaiting_review"):
-        row = await first_draft(ts, enrollment)
+    waiting = await ts.list(EngagementEnrollment, EngagementEnrollment.campaign_id == campaign.id,
+                            EngagementEnrollment.status == "awaiting_review")
+    # The message at the step each person is ON, not step 0: a follow-up held for review (D17, or
+    # review every touch) and approved while the campaign was paused was looked for at step 0,
+    # whose row had already been sent, so that person never went out again.
+    current = await current_messages(ts, waiting)
+    for enrollment in waiting:
+        row = current.get(enrollment.id)
         if row is not None and row.status == "approved":
             await _activate(ts, campaign, enrollment, row, row.approved_at or now, user_id)
+    # The person whose email hit the credit wall was paused with the campaign (D18). Resuming the
+    # campaign left them paused for good, under a notice promising it "continues from where it
+    # stopped"; nothing else ever resumes an `out_of_credits` pause.
+    for enrollment in await ts.list(EngagementEnrollment,
+                                    EngagementEnrollment.campaign_id == campaign.id,
+                                    EngagementEnrollment.status == "paused",
+                                    EngagementEnrollment.status_reason == "out_of_credits"):
+        await _resume_after_credits(ts, enrollment, now, user_id)
     return result
+
+
+async def _resume_after_credits(ts, enrollment, now, user_id) -> None:
+    """Back to what it was doing when the charge failed. A re-engagement email still owed (its
+    snooze date had passed) stays snoozed, so it is that email which goes, not the next step."""
+    if enrollment.snoozed_until is not None:
+        await set_status(ts, enrollment, "snoozed", None, user_id=user_id)
+        return
+    if enrollment.next_action_at is None or enrollment.next_action_at < now:
+        enrollment.next_action_at = now
+    await set_status(ts, enrollment, "active", None, user_id=user_id)
 
 
 async def _activate(ts, campaign, enrollment, message, approved_at, user_id) -> None:

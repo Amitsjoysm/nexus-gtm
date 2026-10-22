@@ -416,9 +416,10 @@ async def add_contacts(
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.run_engagement)),
 ) -> dict:
+    from nexus.engagement.sequences import service
     from nexus.engagement.sequences.service import CampaignError, enroll
-
     from nexus.models.account import Contact
+    from nexus.models.engagement import EngagementEnrollment
 
     campaign = await _campaign(ts, campaign_id, principal)
     contact_ids = list(body.contact_ids)
@@ -441,11 +442,22 @@ async def add_contacts(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "Nobody to add: choose people, or companies with contacts that have "
                             "an email address.")
+    # The cap applies to people NOT already in the campaign. It was a plain slice of the first
+    # 2,000, which dropped the rest of a bigger list without a word, and adding the list again took
+    # the same first 2,000, so the rest could never be added at all.
+    enrolled = {e.contact_id for e in await ts.list(
+        EngagementEnrollment, EngagementEnrollment.campaign_id == campaign.id)}
+    fresh = [c for c in contact_ids if c not in enrolled]
+    batch, rest = fresh[:service.MAX_PER_ADD], fresh[service.MAX_PER_ADD:]
+    # Someone chosen by name who is already in is still reported; a list or company re-added is not
+    # a page of "already in this campaign" lines.
+    named_again = [c for c in dict.fromkeys(body.contact_ids) if c in enrolled]
     try:
-        result = await enroll(ts, campaign, contact_ids[:2000])
+        result = await enroll(ts, campaign, batch + named_again)
     except CampaignError as exc:
         raise _refuse(exc) from exc
-    return {"added": result.added, "skipped": result.skipped, "warnings": result.warnings}
+    return {"added": result.added, "skipped": result.skipped, "warnings": result.warnings,
+            "remaining": len(rest)}
 
 
 @router.post("/campaigns/{campaign_id}/draft")
