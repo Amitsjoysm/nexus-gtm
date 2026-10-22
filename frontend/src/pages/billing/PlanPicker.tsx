@@ -75,6 +75,12 @@ export function PlanPicker({
   // A workspace already paying through Stripe changes plan on that subscription, after reading
   // the terms here. Checkout would open a second subscription billed beside the first.
   const switchInPlace = usage?.switch_in_place === true;
+  // A downgrade Stripe holds until the period ends, or a paid plan set to end then. Either way a
+  // switch would be refused until it is cancelled, so the buttons say so instead of failing.
+  const scheduled = switchInPlace ? (usage?.scheduled_change ?? null) : null;
+  const endsWithPeriod = switchInPlace && usage?.cancel_at_period_end === true;
+  const held = scheduled !== null || endsWithPeriod;
+  const periodEnd = usage?.period_end ?? null;
   const [confirming, setConfirming] = useState<SellablePlan | null>(null);
   const [switching, setSwitching] = useState(false);
   const currentRow = (plans.data ?? []).find((p) => p.current) ?? null;
@@ -142,6 +148,57 @@ export function PlanPicker({
     }
   }
 
+  const [keeping, setKeeping] = useState(false);
+  async function keepPlan() {
+    setKeeping(true);
+    try {
+      await api.billingKeepPlan();
+      toast.success(
+        `You're staying on ${usage?.plan_name ?? "your plan"}`,
+        "The scheduled change was cancelled.",
+      );
+      refetch();
+      onChanged?.();
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.detail : "Please try again.";
+      toast.error("Couldn't cancel the scheduled change", detail);
+    } finally {
+      setKeeping(false);
+    }
+  }
+
+  // A downgrade takes effect when the period ends. Within one billing interval it is confirmed on
+  // Stripe's own page, so the click only opens that page. Yearly to monthly is held by the server
+  // itself (Stripe's page would apply it at once), so it is confirmed here first and the page
+  // re-reads instead of leaving.
+  const [confirmingDowngrade, setConfirmingDowngrade] = useState<SellablePlan | null>(null);
+  const heldInApp = (plan: SellablePlan) =>
+    currentRow !== null && currentRow.interval === "year" && plan.interval === "month" &&
+    plan.base_price_cents > 0;
+
+  async function downgrade(plan: SellablePlan) {
+    setBusy(plan.id);
+    try {
+      const session = await api.billingDowngrade(plan.id);
+      if (session.flow === "scheduled") {
+        setConfirmingDowngrade(null);
+        setBusy(null);
+        toast.success(
+          `Moving to ${plan.name} ${session.period_end ? `on ${longDate(session.period_end)}` : "when this period ends"}`,
+          "Nothing was charged today.",
+        );
+        refetch();
+        onChanged?.();
+        return;
+      }
+      window.location.assign(session.url);
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.detail : "Please try again.";
+      toast.error("Couldn't schedule the downgrade", detail);
+      setBusy(null);
+    }
+  }
+
   function choose(next: BillingInterval) {
     setChosen(next);
     // The switch announces its own state; this says what changed on the rest of the screen.
@@ -168,7 +225,11 @@ export function PlanPicker({
     <Card padding="lg">
       <CardHeader
         title="Plans"
-        subtitle="Change plan at any time. You are charged for the days you use."
+        subtitle={
+          switchInPlace
+            ? "Upgrades start today. Downgrades start when your current period ends."
+            : "Change plan at any time. You are charged for the days you use."
+        }
         actions={
           usage?.plan ? (
             <Button
@@ -196,6 +257,29 @@ export function PlanPicker({
         </p>
       )}
 
+      {held && (
+        <div className={styles.scheduled} role="status">
+          <p className={styles.scheduledText}>
+            {scheduled
+              ? `Moves to ${scheduled.plan_name} ${scheduled.at ? `on ${longDate(scheduled.at)}` : "when this period ends"}. Until then you keep ${usage?.plan_name ?? "your plan"} and its credits.`
+              : `Your paid plan ends ${periodEnd ? `on ${longDate(periodEnd)}` : "when this period ends"}. To change plan, renew it with Manage payment method first.`}
+          </p>
+          {/* Stripe's Manage billing page shows a scheduled change but cannot cancel it, so the
+              way back is here. */}
+          {scheduled && (
+            <Button
+              variant="secondary"
+              size="lg"
+              onClick={() => void keepPlan()}
+              loading={keeping}
+              disabled={busy !== null}
+            >
+              Keep {usage?.plan_name ?? "my plan"}
+            </Button>
+          )}
+        </div>
+      )}
+
       {families.length > 0 && (
         <>
           {switchable && (
@@ -217,8 +301,15 @@ export function PlanPicker({
                 animate={chosen !== null}
                 busy={busy}
                 switchInPlace={switchInPlace}
+                held={held}
+                scheduledPlanId={scheduled?.plan_id ?? null}
+                periodEnd={periodEnd}
                 onCheckout={(planId) => go("checkout", planId)}
                 onSwitch={setConfirming}
+                onDowngrade={(plan) =>
+                  heldInApp(plan) ? setConfirmingDowngrade(plan) : void downgrade(plan)
+                }
+                confirmsHere={heldInApp}
               />
             ))}
           </ul>
@@ -234,19 +325,34 @@ export function PlanPicker({
           onConfirm={() => void switchTo(confirming)}
         />
       )}
+
+      {confirmingDowngrade && (
+        <DowngradeDialog
+          plan={confirmingDowngrade}
+          current={currentRow}
+          periodEnd={periodEnd}
+          working={busy === confirmingDowngrade.id}
+          onCancel={() => setConfirmingDowngrade(null)}
+          onConfirm={() => void downgrade(confirmingDowngrade)}
+        />
+      )}
     </Card>
   );
 }
 
-/** Per month, whatever the interval, so a smaller plan can be told apart from a cheaper bill. */
-function monthlyCents(plan: SellablePlan): number {
-  return plan.interval === "year" ? perMonthCents(plan) : plan.base_price_cents;
+/** A date as the customer reads it, e.g. "Nov 22, 2026". */
+function longDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? "the end of this period"
+    : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 /**
  * The terms of a switch, before any money moves. The new plan starts today and is charged in full
  * now; nothing is refunded and the credits already held stay. Said plainly here because it is the
- * opposite of the proration a customer might expect, and the button names the amount.
+ * opposite of the proration a customer might expect, and the button names the amount. Only
+ * upgrades get here: a downgrade waits for the period to end and is confirmed on Stripe's page.
  */
 function SwitchDialog({
   plan,
@@ -262,7 +368,6 @@ function SwitchDialog({
   onConfirm: () => void;
 }) {
   const price = formatPrice(plan.base_price_cents, plan.currency);
-  const smaller = current !== null && monthlyCents(plan) < monthlyCents(current);
   return (
     <Modal
       open
@@ -288,12 +393,55 @@ function SwitchDialog({
         The rest of your current period is not refunded, and the credits you already have stay in
         your balance. If the payment does not go through, nothing changes.
       </p>
-      {smaller && (
-        <p className={styles.contract}>
-          To move to a smaller plan when your current period ends instead, cancel with Manage
-          payment method and choose {plan.name} then.
-        </p>
-      )}
+    </Modal>
+  );
+}
+
+/**
+ * Yearly to monthly, confirmed here because no Stripe page confirms it: the server holds it until
+ * the paid year ends. Says when it starts, what it costs from then, and that nothing is charged now.
+ */
+function DowngradeDialog({
+  plan,
+  current,
+  periodEnd,
+  working,
+  onCancel,
+  onConfirm,
+}: {
+  plan: SellablePlan;
+  current: SellablePlan | null;
+  periodEnd: string | null;
+  working: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const price = formatPrice(plan.base_price_cents, plan.currency);
+  const when = periodEnd ? `on ${longDate(periodEnd)}` : "when your current period ends";
+  return (
+    <Modal
+      open
+      onClose={working ? () => undefined : onCancel}
+      title={`Downgrade to ${plan.name}?`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onCancel} disabled={working}>
+            Keep {current?.name ?? "my plan"}
+          </Button>
+          <Button onClick={onConfirm} loading={working}>
+            Schedule the downgrade
+          </Button>
+        </>
+      }
+    >
+      <p className={styles.note}>
+        {plan.name} starts {when}, at {price} a month from then. Nothing is charged today.
+      </p>
+      <p className={styles.contract}>
+        Until then you keep {current?.name ?? "your plan"} and the credits it came with. You can
+        cancel the scheduled change on this page before it starts.
+      </p>
     </Modal>
   );
 }
@@ -363,18 +511,31 @@ function PlanCard({
   animate,
   busy,
   switchInPlace,
+  held,
+  scheduledPlanId,
+  periodEnd,
   onCheckout,
   onSwitch,
+  onDowngrade,
+  confirmsHere,
 }: {
   family: PlanFamily;
   interval: BillingInterval;
   /** True once the switch has been used: the price only moves when someone moved it. */
   animate: boolean;
   busy: string | null;
-  /** The workspace pays through Stripe: paid plans switch in place instead of checking out. */
+  /** The workspace pays through Stripe: dearer plans switch in place, cheaper ones are scheduled. */
   switchInPlace: boolean;
+  /** A change is already scheduled, or the paid plan is set to end: nothing else can be chosen. */
+  held: boolean;
+  /** The plan Stripe moves this workspace to when the period ends, if any. */
+  scheduledPlanId: string | null;
+  periodEnd: string | null;
   onCheckout: (planId: string) => void;
   onSwitch: (plan: SellablePlan) => void;
+  onDowngrade: (plan: SellablePlan) => void;
+  /** This downgrade is confirmed on the price list rather than on Stripe's page. */
+  confirmsHere: (plan: SellablePlan) => boolean;
 }) {
   const reduceMotion = useReducedMotion();
   const noteId = useId();
@@ -401,6 +562,21 @@ function PlanCard({
     note = `You're on ${tier.name}, billed ${billed}. ${change}`;
   } else if (onShownPlan && plan.interval !== "year" && benefits && benefits.savedCents > 0) {
     note = `Annual billing would save you ${formatPrice(benefits.savedCents, plan.currency)} a year on this plan.`;
+  }
+  // A downgrade waits for the period already paid for, and the customer confirms it on Stripe's
+  // page. Said on the card, before the click leaves the app, rather than in a dialog.
+  const scheduledHere = scheduledPlanId !== null && scheduledPlanId === plan.id;
+  const downgrade = switchInPlace && plan.downgrade && !onShownPlan;
+  if (scheduledHere) {
+    note = `Moves to ${tier.name} ${periodEnd ? `on ${longDate(periodEnd)}` : "when your current period ends"}.`;
+  } else if (downgrade) {
+    const when = periodEnd ? ` on ${longDate(periodEnd)}` : "";
+    note =
+      plan.base_price_cents === 0
+        ? `Your paid plan ends when your current period ends${when}. You confirm it on Stripe, and nothing is refunded.`
+        : confirmsHere(plan)
+          ? `${tier.name} starts when your current period ends${when}. Nothing is charged today.`
+          : `${tier.name} starts when your current period ends${when}. You confirm it on Stripe, and nothing is charged today.`;
   }
 
   return (
@@ -484,11 +660,32 @@ function PlanCard({
           >
             Your plan
           </Button>
+        ) : scheduledHere ? (
+          <Button
+            variant="secondary"
+            size="lg"
+            disabled
+            aria-describedby={note ? noteId : undefined}
+          >
+            Scheduled
+          </Button>
+        ) : downgrade ? (
+          // Secondary: the dearer plans keep the primary action on a price list.
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={() => onDowngrade(plan)}
+            loading={busy === plan.id}
+            disabled={busy !== null || held}
+            aria-describedby={note ? noteId : undefined}
+          >
+            Downgrade to {tier.name}
+          </Button>
         ) : switchInPlace && plan.base_price_cents > 0 ? (
           <Button
             size="lg"
             onClick={() => onSwitch(plan)}
-            disabled={busy !== null}
+            disabled={busy !== null || held}
             aria-describedby={note ? noteId : undefined}
           >
             Switch to {tier.name}

@@ -1297,6 +1297,10 @@ export interface BillingUsage {
   proration_lines: ProrationLine[];
   /** Pays through a live Stripe subscription: a plan change switches it in place, never a second Checkout. */
   switch_in_place?: boolean;
+  /** A downgrade made in Stripe, waiting for the end of the period. */
+  scheduled_change?: ScheduledPlanChange | null;
+  /** The paid plan ends with the current period (the downgrade to Free). */
+  cancel_at_period_end?: boolean;
 }
 
 /** A named switch a plan entitlement can hang off. Platform-global, not per-tenant. */
@@ -1466,6 +1470,12 @@ export interface SellablePlan {
   family: string;
   /** The same tier billed on the other interval, or null when this plan is sold on one only. */
   counterpart_id: string | null;
+  /**
+   * Moving here from the current plan is a downgrade (same interval at a lower price, yearly to
+   * monthly, or Free). Decided by the server: for a workspace paying through Stripe it is scheduled
+   * in Stripe for the end of the period rather than switched now.
+   */
+  downgrade: boolean;
 }
 
 /** A redirect to the payment provider. Nothing is written until the webhook comes back. */
@@ -1474,6 +1484,24 @@ export interface HostedSession {
   url: string;
   provider: string;
   plan_id: string | null;
+}
+
+/**
+ * `POST /billing/downgrade`. `schedule_change`: Stripe's page confirming the smaller plan, which
+ * starts when the period ends. `cancel`: Stripe's page ending the paid plan then (the move to
+ * Free). `scheduled`: yearly to monthly, already held at Stripe until the period ends; `url` is
+ * empty, because Stripe's page would apply it at once.
+ */
+export interface DowngradeSession extends HostedSession {
+  flow: "schedule_change" | "cancel" | "scheduled";
+  period_end: string | null;
+}
+
+/** A downgrade Stripe holds until the end of the period. */
+export interface ScheduledPlanChange {
+  plan_id: string;
+  plan_name: string;
+  at: string | null;
 }
 
 /** `POST /billing/switch-plan`. `confirm_payment`: the bank wants the customer to confirm on Stripe's invoice page. */

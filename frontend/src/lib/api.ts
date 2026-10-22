@@ -133,6 +133,7 @@ import type {
   LedgerStoreStatus,
   TrainingConsentState,
   SellablePlan,
+  DowngradeSession,
   HostedSession,
   PlanSwitchResult,
   PlatformAdmin,
@@ -1348,6 +1349,26 @@ export class ApiClient {
     return this.request<PlanSwitchResult>("/billing/switch-plan", {
       method: "POST",
       body: { plan_id: planId },
+    });
+  }
+  /**
+   * Opens Stripe's page confirming a downgrade, which takes effect when the current period ends.
+   * Upgrades are `billingSwitchPlan`; the server refuses each the other's direction.
+   */
+  billingDowngrade(planId: string) {
+    return this.request<DowngradeSession>("/billing/downgrade", {
+      method: "POST",
+      body: { plan_id: planId },
+    });
+  }
+  /**
+   * Keeps the current plan: cancels the downgrade Stripe holds for the end of the period. Stripe's
+   * Manage billing page shows a scheduled change but cannot cancel it, so the app does.
+   */
+  billingKeepPlan() {
+    return this.request<{ status: "kept"; plan_id: string }>("/billing/scheduled-change/cancel", {
+      method: "POST",
+      body: {},
     });
   }
   /** Opens the hosted Customer Portal, where a card is changed or a plan is cancelled. */

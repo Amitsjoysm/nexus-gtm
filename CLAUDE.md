@@ -781,11 +781,12 @@ synchronous callers and for `set_payment_provider` test injection, which always 
   changes our row only if Stripe agreed. A refusal is a 502 that says nothing changed here; a `sub_`
   subscription with no Stripe credential in force is a 409 (cancelling locally would stop nothing).
   Admin-managed subscriptions (no `psp_subscription_id`) cancel here only, as before.
-- **No plan switching in the customer portal.** We learn the plan only at Checkout, so a price
-  changed in the portal was charged while the workspace kept the old plan. Every portal session now
-  names NEXUS's own configuration (`PORTAL_CONFIG_TAG`, found by metadata or created once per
-  account): cards, invoices, address and at-period-end cancellation on, `subscription_update` off.
-  If it cannot be created the portal does not open: failing closed beats charging the wrong price.
+- **No plan switching in Manage billing** (the portal behind "Manage payment method"). It used to
+  be true of every portal session; since the hybrid plan changes (2026-10-22, below) it applies to
+  Manage billing only: downgrades open a second configuration built for them. Manage billing names
+  NEXUS's own configuration (`PORTAL_CONFIG_TAG`, found by metadata or created once per account):
+  cards, invoices, address and at-period-end cancellation on, `subscription_update` off. If it
+  cannot be created the portal does not open: failing closed beats charging the wrong price.
 - **The panel tells the truth.** `webhooks.HANDLED_EVENTS` (17 since 2026-10-12) is what the webhook panel lists; it
   summed two of the three tuples and showed 9, and a test checks every `event_type ==` branch is in
   it. Live/Test comes from the key prefix (`credentials.stripe_key_mode`: `sk_`/`rk_` x
@@ -973,9 +974,85 @@ any money moves:
   row lock that the webhook also takes (`session.refresh(sub, with_for_update=True)`), so its
   `customer.subscription.updated` sees the plan already moved and grants nothing more.
 - Only an `active`, card-billed subscription that is not set to end, to a paid plan on sale in the
-  same currency; each refusal says what to do instead (past due: update the card; Free: cancel in
-  the portal). A `sub_` id with no Stripe credential in force is refused. Stripe idempotency key
-  `switch:<sub>:<plan>:<period start>`, so a double click charges once.
+  same currency; each refusal says what to do instead (past due: update the card; a downgrade:
+  Downgrade to X). A `sub_` id with no Stripe credential in force is refused. Stripe idempotency
+  key `switch:<sub>:<plan>:<period start>`, so a double click charges once.
+
+**Hybrid plan changes: upgrades in the app, downgrades in Stripe at period end** (owner decisions
+2026-10-22, `nexus/billing/plan_changes.py`, `tests/test_hybrid_plan_changes.py`). Asked: "when a
+user upgrades or downgrades, direct them to Stripe so the change happens correctly"; decided as a
+hybrid, with prorated credits for portal upgrades and downgrades at period end.
+- **A downgrade is the same interval at a lower price, yearly to monthly billing, or Free**
+  (`is_downgrade`); everything else, monthly to yearly included, is an upgrade. The same two
+  conditions the downgrade configuration hands Stripe (`decreasing_item_amount`,
+  `shortening_interval`), so what the app calls a downgrade is exactly what Stripe holds.
+  `GET /billing/plans` says which rows are downgrades (`downgrade`); the browser never re-derives it.
+- **Upgrades stay `POST /billing/switch-plan`** (above), which now refuses a downgrade with a
+  sentence naming Downgrade to X. **Downgrades are `POST /billing/downgrade`** (`manage_workspace`,
+  the same guards through `_plan_change`), which refuses an upgrade. Three flows:
+  - **Within one interval** (`schedule_change`): a redirect, like `/portal`, to the portal's
+    `subscription_update_confirm` flow on the subscription's one item and the target price, under
+    that interval's downgrade configuration (`downgrade_v1_month` / `downgrade_v1_year`:
+    `subscription_update` on, price changes only, `always_invoice`, `schedule_at_period_end`,
+    cancel at period end). Each offers only its own interval's prices, target and current first
+    (Stripe caps a list at 10), rewritten whenever the list changes (cached per account, interval
+    and list hash; no idempotency key, so a list changed back still applies; the pinned version
+    does not render `products`, so a configuration found by listing is rewritten once per process).
+  - **Yearly to monthly** (`scheduled`, empty `url`): **measured in test mode, the portal applies an
+    interval change AT ONCE** despite `shortening_interval`, crediting the unused year to the
+    customer's Stripe balance; that balance then paid monthly renewals, each granting a month's
+    credits on top of the year's already held. So the app holds it itself, after a confirmation on
+    the price list (`DowngradeDialog`): `schedule_price_change_at_period_end` makes a schedule from
+    the subscription (current phase to the period end, then one period of the target, then
+    release; nothing prorated or charged) and records `scheduled_change` at once. No phase
+    metadata names the plan, or the boundary would read as a change NEXUS made and grant twice.
+  - **Free** (`cancel`): the portal's `subscription_cancel` flow on the Manage billing configuration.
+  Redirects return to the billing page.
+- **Keep my plan** (`POST /billing/scheduled-change/cancel`, `manage_workspace`): Manage billing
+  shows a scheduled change ("Your service will be updated on ...") but **offers no way to cancel
+  it** (seen 2026-10-22), so the price list's "Keep X" releases the schedule
+  (`release_subscription_schedule`); the row clears after Stripe agreed, and Stripe's event finds
+  nothing left. The refusals while a change is scheduled name this button.
+- **The plan follows the PRICE Stripe bills** (`plan_for_price`, over `meta.price_id` and
+  `previous_stripe`), ahead of `metadata.plan_id`, which the portal leaves as it was; the metadata
+  answers only for a price NEXUS did not make. Reconciliation reads it the same way. A price that
+  names another plan than the metadata, on the subscription the row already follows, is a change
+  made in Stripe (`_take_change_made_in_stripe`); one older than the last event applied is ignored.
+- **A downgrade grants nothing when it lands**: the invoice that starts the new period credits it,
+  and `_grant_renewal_credits` credits the plan whose price is on the PAID invoice's first line
+  (pinned `price.id`, newer `pricing.price_details.price`), falling back to the row's plan, so an
+  `invoice.paid` arriving before the price moves cannot credit the old plan. **Measured with test
+  clocks, that invoice's `billing_reason` depends on the change**: `subscription_cycle` within one
+  interval, `subscription_update` when the interval changes (yearly to monthly). The second is
+  credited too, keyed `stripe_renewal:<invoice>`, but only when it starts the period of a change we
+  recorded (`landed_change`, written when the price moved, or `scheduled_change` when the invoice
+  arrives first) for the plan it bills, within a day of its period start, with no proration line:
+  a switch's or a proration's invoice is never read as one. Before this a yearly-to-monthly
+  customer paid the first month and received no credits.
+- **An upgrade made in the portal earns prorated credits once its proration invoice is paid**: the
+  new plan's extra credits times the part of the period left, rounded down, keyed
+  `portal_upgrade:<invoice>`. Pending on the row (`meta.portal_upgrade_pending`) until
+  `invoice.paid` (`billing_reason: subscription_update`); granted at once when that invoice was
+  already recorded paid. `invoice.paid` takes the row lock, so the two events arriving together
+  grant once, never zero times.
+- **A scheduled downgrade is shown and blocks a switch.** When the subscription carries a
+  `schedule`, the webhook reads it from Stripe (`GET /subscription_schedules/{id}`, pinned version,
+  before the row lock) and records `meta.scheduled_change {plan_id, at, schedule}` from the phase
+  still to start, judged by the schedule's own `current_phase` (Stripe's clock: under a test clock
+  ours is a year behind, and comparing with it picked the running phase); it is cleared when the
+  schedule is released or the price moves.
+  `UsageOut.scheduled_change` and `cancel_at_period_end` feed the price list ("Moves to X on
+  <date>", with Keep X), and every switch or downgrade is refused until the customer keeps their
+  plan (`switch_subscription_now` also refuses a pending phase it meets at Stripe,
+  `ScheduledChangePending`, and releases a schedule whose last phase is already running, which
+  would otherwise block upgrades for a whole period).
+- **No new webhook events**: the portal's changes arrive as `customer.subscription.updated` and
+  `invoice.paid`, so existing endpoints keep working unchanged.
+- **Proven end to end in Stripe test mode, 2026-10-22**, on the production image with the branch
+  mounted, against a COPY of the local database (`nexus_hybrid`), Stripe's real events (rendered
+  2026-06-24.dahlia) delivered to the signed webhook route, test clocks for the boundaries:
+  portal downgrade held to period end; Keep releasing it; in-app upgrades credited once; yearly to
+  monthly held by the app's schedule; both kinds of boundary invoice crediting the new plan once.
 
 **A Stripe renewal is credited when Stripe is paid for it, once** (2026-10-12,
 `webhooks._grant_renewal_credits`, `tests/test_stripe_renewal_credits.py`). `roll_period` granted a

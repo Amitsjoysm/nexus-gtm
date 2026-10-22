@@ -41,6 +41,12 @@ class PaymentNotConfigured(PaymentError):
     """The selected provider has no credentials. Never raised by the noop provider."""
 
 
+class ScheduledChangePending(PaymentError):
+    """The subscription carries a change Stripe applies at period end (a downgrade made in the
+    portal, 2026-10-22). Changing its price now would fight the schedule that holds it, so a plan
+    switch is refused until the customer cancels that change."""
+
+
 #: Subscription metadata that says the plan's credits arrive when an invoice is PAID, not when the
 #: subscription starts. Set on subscriptions a superadmin starts by emailed invoice (2026-10-09).
 CREDITS_META_KEY = "nexus_credits"
@@ -161,8 +167,8 @@ class PaymentProvider(abc.ABC):
 
         Card changes, cancellations and invoice history live there; every one of those comes
         back to us as a ``customer.subscription.*`` or ``invoice.*`` event. Plan switching is
-        deliberately NOT offered: we learn the plan only at Checkout, so a switch made in the portal
-        would charge the new price while the workspace kept the old plan.
+        deliberately NOT offered on this page (Manage billing): upgrades are switched in the app
+        and downgrades open their own page, ``create_plan_change_portal_session`` (2026-10-22).
         """
 
     @abc.abstractmethod
@@ -277,6 +283,45 @@ class PaymentProvider(abc.ABC):
         it, the payment was refused and nothing is left pending."""
         raise PaymentError(f"{self.name} cannot switch a subscription's plan")
 
+    async def create_plan_change_portal_session(
+        self, *, customer_id: str, subscription_id: str, price_id: str, products: list[dict],
+        return_url: str = "", interval: str = "month",
+    ) -> dict:
+        """Open the provider's portal on the confirm page of a move to ``price_id`` (2026-10-22,
+        the customer's own downgrade within one billing interval). The provider applies it at
+        period end and the webhook moves the plan when the price moves. ``products`` is every plan
+        on sale at ``interval``, ``{"product", "prices"}``: the portal applies a change of interval
+        at once whatever it is told, so it is never offered one. Returns at least
+        ``{"id", "url"}``."""
+        raise PaymentError(f"{self.name} cannot open a plan change")
+
+    async def schedule_price_change_at_period_end(
+        self, *, subscription_id: str, price_id: str, plan_id: str,
+    ) -> dict:
+        """Hold a move to ``price_id`` until the current period ends: the yearly-to-monthly
+        downgrade, which the portal would apply at once (seen 2026-10-22). Nothing is charged now.
+        Returns ``{"schedule", "at"}`` (the epoch it applies at, 0 when unknown)."""
+        raise PaymentError(f"{self.name} cannot schedule a plan change")
+
+    async def create_cancel_portal_session(
+        self, *, customer_id: str, subscription_id: str, return_url: str = "",
+    ) -> dict:
+        """Open the provider's portal on the confirm page of cancelling at period end: the
+        downgrade to Free. Returns at least ``{"id", "url"}``."""
+        raise PaymentError(f"{self.name} cannot open a cancellation")
+
+    async def get_subscription_schedule(self, schedule_id: str) -> dict:
+        """A subscription schedule as the provider has it, or {}: what a scheduled downgrade
+        moves to, and when."""
+        return {}
+
+    async def release_subscription_schedule(self, *, subscription_id: str) -> dict:
+        """Cancel a downgrade the provider holds for period end: the subscription keeps the plan it
+        bills now. Returns ``{"released", "schedule"}``; ``released`` is False when nothing was
+        held. Stripe's Manage billing page shows such a change but cannot cancel it (seen
+        2026-10-22), so the app offers this as Keep my plan."""
+        raise PaymentError(f"{self.name} cannot cancel a scheduled change")
+
 
 class NoopPaymentProvider(PaymentProvider):
     """Offline default. Records intent, moves no money, never fails.
@@ -314,6 +359,14 @@ class NoopPaymentProvider(PaymentProvider):
         self.switches: list[dict[str, Any]] = []
         #: What the next plan switch's payment does: ``paid``, ``declined`` or ``requires_action``.
         self.switch_outcome = "paid"
+        #: Portal pages opened on a plan change or a cancellation (2026-10-22).
+        self.portal_flows: list[dict[str, Any]] = []
+        #: Subscription schedules a test stages, as Stripe would describe them.
+        self.schedules: dict[str, dict[str, Any]] = {}
+        #: Subscriptions whose scheduled change was cancelled (Keep my plan).
+        self.released: list[str] = []
+        #: Changes held until period end by a schedule the app made (yearly to monthly).
+        self.scheduled_changes: list[dict[str, Any]] = []
 
     async def ensure_customer(self, *, tenant_id: str, email: str, name: str = "") -> str:
         cid = self.customers.setdefault(tenant_id, f"noop_cus_{tenant_id[:12]}")
@@ -457,6 +510,44 @@ class NoopPaymentProvider(PaymentProvider):
         self.portal_sessions.append(record)
         return record
 
+    def _portal_flow(self, kind: str, **fields) -> dict:
+        session_id = f"noop_ps_flow_{len(self.portal_flows) + 1}"
+        record = {"id": session_id, "kind": kind, **fields, "provider": self.name,
+                  "url": f"https://portal.local.test/{session_id}"}
+        self.portal_flows.append(record)
+        return record
+
+    async def create_plan_change_portal_session(
+        self, *, customer_id: str, subscription_id: str, price_id: str, products: list[dict],
+        return_url: str = "", interval: str = "month",
+    ) -> dict:
+        return self._portal_flow("subscription_update_confirm", customer_id=customer_id,
+                                 subscription_id=subscription_id, price_id=price_id,
+                                 products=[dict(p) for p in products], return_url=return_url,
+                                 interval=interval)
+
+    async def schedule_price_change_at_period_end(
+        self, *, subscription_id: str, price_id: str, plan_id: str,
+    ) -> dict:
+        n = len(self.scheduled_changes) + 1
+        at = int((self.subscriptions.get(subscription_id) or {}).get("current_period_end") or 0)
+        self.scheduled_changes.append({"subscription_id": subscription_id, "price_id": price_id,
+                                       "plan_id": plan_id, "schedule": f"noop_sched_{n}"})
+        return {"schedule": f"noop_sched_{n}", "at": at}
+
+    async def create_cancel_portal_session(
+        self, *, customer_id: str, subscription_id: str, return_url: str = "",
+    ) -> dict:
+        return self._portal_flow("subscription_cancel", customer_id=customer_id,
+                                 subscription_id=subscription_id, return_url=return_url)
+
+    async def get_subscription_schedule(self, schedule_id: str) -> dict:
+        return dict(self.schedules.get(schedule_id) or {})
+
+    async def release_subscription_schedule(self, *, subscription_id: str) -> dict:
+        self.released.append(subscription_id)
+        return {"released": True, "schedule": ""}
+
     async def cancel_subscription(
         self, *, subscription_id: str, at_period_end: bool = True
     ) -> dict:
@@ -543,6 +634,15 @@ class NoopPaymentProvider(PaymentProvider):
 #: Bump the suffix if the configuration's features ever change: a new tag creates a new one.
 PORTAL_CONFIG_TAG = "no_plan_switch_v1"
 
+#: The portal configurations used only for the customer's own downgrade (2026-10-22): plan
+#: switching on, a cheaper plan held until period end. One per billing interval, tagged
+#: `downgrade_v1_month` / `downgrade_v1_year`, each offering only its own interval's prices: the
+#: portal applies an interval change at once. Manage billing never opens either.
+DOWNGRADE_CONFIG_TAG = "downgrade_v1"
+
+#: Stripe's cap on the products one portal configuration may offer.
+PORTAL_PRODUCTS_MAX = 10
+
 #: Stamped on the webhook endpoint NEXUS registers, so a later registration for the same URL can
 #: find and replace its own endpoint and never touch one somebody made by hand.
 WEBHOOK_TAG = "billing_webhook_v1"
@@ -550,6 +650,10 @@ WEBHOOK_TAG = "billing_webhook_v1"
 #: Configuration id per Stripe account, keyed by a hash of the secret key (never the key itself).
 #: A provider instance is rebuilt every 30s, so the cache lives at module level.
 _portal_configurations: dict[str, str] = {}
+
+#: The downgrade configuration per Stripe account (same key digest), with a hash of the product list
+#: it was last given: the list follows the price list, and a changed one is updated in place.
+_downgrade_configurations: dict[str, tuple[str, str]] = {}
 
 #: Account id per key digest. One `GET /v1/account` per key per process: the answer cannot change
 #: for a given key, and every cached plan, price and customer id is checked against it.
@@ -1070,6 +1174,22 @@ class StripePaymentProvider(PaymentProvider):
             raise PaymentError(
                 f"stripe subscription {subscription_id} has {len(items)} items; "
                 "change it in the Stripe dashboard")
+        schedule_id = str((current.get("schedule") or {}).get("id") or "") if isinstance(
+            current.get("schedule"), dict) else str(current.get("schedule") or "")
+        if schedule_id:
+            # A downgrade made in the portal holds the subscription on a schedule. While its next
+            # phase is still to come, the customer cancels it first; once that phase is running
+            # the schedule has nothing left to change and is released, so the switch can apply.
+            import time as _time
+
+            from nexus.billing.plan_changes import next_scheduled_phase
+
+            schedule = await self._get(f"/subscription_schedules/{schedule_id}")
+            if next_scheduled_phase(schedule, int(_time.time())) is not None:
+                raise ScheduledChangePending(
+                    f"stripe subscription {subscription_id} has a change scheduled for period end")
+            if str(schedule.get("status") or "") in ("active", "not_started"):
+                await self._post(f"/subscription_schedules/{schedule_id}/release", {})
         data = await self._post(f"/subscriptions/{subscription_id}", {
             "items[0][id]": str(items[0]["id"]), "items[0][price]": price_id,
             "billing_cycle_anchor": "now", "proration_behavior": "none",
@@ -1197,10 +1317,10 @@ class StripePaymentProvider(PaymentProvider):
         """The id of a portal configuration with plan switching OFF, created once per account.
 
         The account's default portal configuration is whatever someone clicked in the Stripe
-        dashboard, and Stripe enables subscription updates on it readily. NEXUS learns the plan only
-        at Checkout (`checkout.session.completed` carries our plan id), so a price changed in the
-        portal was billed while the workspace kept the old plan's entitlements. Passing our own
-        configuration on every session makes "no plan switching" true whatever the dashboard says.
+        dashboard, and Stripe enables subscription updates on it readily. Manage billing passes our
+        own configuration on every session, so "no plan switching" is true there whatever the
+        dashboard says: plan changes go through the app's own buttons, which say what happens and
+        when. The downgrade page uses a second configuration (`_downgrade_configuration`).
 
         Cards, invoices, address and cancellation stay available; cancellation is at period end,
         matching the admin console's default. If the configuration cannot be created the portal
@@ -1239,6 +1359,213 @@ class StripePaymentProvider(PaymentProvider):
         _portal_configurations[cache_key] = str(created.get("id", ""))
         return _portal_configurations[cache_key]
 
+    async def _open_portal(self, form: dict[str, Any], customer_id: str,
+                           return_url: str) -> dict:
+        if return_url:
+            # Back to the app once the change is confirmed, not to the portal's own home page.
+            form = {**form, "return_url": return_url,
+                    "flow_data[after_completion][type]": "redirect",
+                    "flow_data[after_completion][redirect][return_url]": return_url}
+        data = await self._post("/billing_portal/sessions", form)
+        return {"id": str(data.get("id", "")), "url": str(data.get("url", "")),
+                "provider": self.name, "customer_id": customer_id}
+
+    async def create_plan_change_portal_session(
+        self, *, customer_id: str, subscription_id: str, price_id: str, products: list[dict],
+        return_url: str = "", interval: str = "month",
+    ) -> dict:
+        """The portal's confirm page for moving the subscription's only item to ``price_id``, under
+        the downgrade configuration for ``interval``: Stripe holds a cheaper price until period end
+        and invoices a dearer one prorated at once (2026-10-22). Measured in test mode, the same
+        configuration applied a yearly-to-monthly change AT ONCE despite ``shortening_interval``,
+        crediting the unused year to the customer's balance, so each interval has its own
+        configuration offering only its own prices."""
+        self._require()
+        current = await self._get(f"/subscriptions/{subscription_id}")
+        items = (current.get("items") or {}).get("data") or []
+        if len(items) != 1:
+            raise PaymentError(
+                f"stripe subscription {subscription_id} has {len(items)} items; "
+                "change it in the Stripe dashboard")
+        item = items[0]
+        form: dict[str, Any] = {
+            "customer": customer_id,
+            "configuration": await self._downgrade_configuration(products, interval),
+            "flow_data[type]": "subscription_update_confirm",
+            "flow_data[subscription_update_confirm][subscription]": subscription_id,
+            "flow_data[subscription_update_confirm][items][0][id]": str(item.get("id") or ""),
+            "flow_data[subscription_update_confirm][items][0][price]": price_id,
+            "flow_data[subscription_update_confirm][items][0][quantity]":
+                str(int(item.get("quantity") or 1)),
+        }
+        return await self._open_portal(form, customer_id, return_url)
+
+    async def create_cancel_portal_session(
+        self, *, customer_id: str, subscription_id: str, return_url: str = "",
+    ) -> dict:
+        """The portal's confirm page for cancelling at period end, under the configuration Manage
+        billing uses: cancelling needs no plan switching."""
+        self._require()
+        form: dict[str, Any] = {
+            "customer": customer_id,
+            "configuration": await self._portal_configuration(),
+            "flow_data[type]": "subscription_cancel",
+            "flow_data[subscription_cancel][subscription]": subscription_id,
+        }
+        return await self._open_portal(form, customer_id, return_url)
+
+    async def get_subscription_schedule(self, schedule_id: str) -> dict:
+        self._require()
+        return await self._get(f"/subscription_schedules/{schedule_id}")
+
+    async def release_subscription_schedule(self, *, subscription_id: str) -> dict:
+        """Release the schedule holding a downgrade: the subscription stays on the price it bills
+        now and renews as before. No idempotency key, like cancelling: releasing twice is the same
+        outcome, and a lost answer is checked against the schedule rather than retried."""
+        self._require()
+        current = await self._get(f"/subscriptions/{subscription_id}")
+        raw = current.get("schedule")
+        schedule_id = str((raw or {}).get("id") or "") if isinstance(raw, dict) else str(raw or "")
+        if not schedule_id:
+            return {"released": False, "schedule": ""}
+        try:
+            await self._post(f"/subscription_schedules/{schedule_id}/release", {})
+        except PaymentError:
+            schedule = await self._get(f"/subscription_schedules/{schedule_id}")
+            if str(schedule.get("status") or "") != "released":
+                raise
+        return {"released": True, "schedule": schedule_id}
+
+    async def schedule_price_change_at_period_end(
+        self, *, subscription_id: str, price_id: str, plan_id: str,
+    ) -> dict:
+        """A subscription schedule made from the subscription: its current phase runs to the
+        period end on the price it bills now, then one period of ``price_id``, then the schedule
+        releases and the subscription renews on that price. Nothing is prorated or charged now.
+
+        A schedule left by an interrupted earlier call (attached, nothing still to start) is
+        reused rather than refused; one still holding a change is ``ScheduledChangePending``."""
+        import time as _time
+
+        from nexus.billing.plan_changes import next_scheduled_phase
+
+        self._require()
+        current = await self._get(f"/subscriptions/{subscription_id}")
+        items = (current.get("items") or {}).get("data") or []
+        if len(items) != 1:
+            raise PaymentError(
+                f"stripe subscription {subscription_id} has {len(items)} items; "
+                "change it in the Stripe dashboard")
+        raw = current.get("schedule")
+        schedule_id = str((raw or {}).get("id") or "") if isinstance(raw, dict) else str(raw or "")
+        if schedule_id:
+            schedule = await self._get(f"/subscription_schedules/{schedule_id}")
+            if next_scheduled_phase(schedule, int(_time.time())) is not None:
+                raise ScheduledChangePending(
+                    f"stripe subscription {subscription_id} has a change scheduled for period end")
+        else:
+            schedule = await self._post("/subscription_schedules",
+                                        {"from_subscription": subscription_id})
+            schedule_id = str(schedule.get("id") or "")
+        end = int(current.get("current_period_end") or 0)
+        phases = schedule.get("phases") or []
+        start = int((phases[0] if phases else {}).get("start_date") or 0)
+        price_now = items[0].get("price")
+        price_now = str(price_now.get("id") or "") if isinstance(price_now, dict) else str(
+            price_now or "")
+        quantity = str(int(items[0].get("quantity") or 1))
+        # No phase metadata naming the plan: with it, the webhook would read the boundary as a
+        # change NEXUS made and grant the plan's credits on top of the renewal's. Without it, the
+        # price moves past `metadata.plan_id` like any change made in Stripe, which grants nothing
+        # and leaves the renewal invoice to credit the new plan.
+        await self._post(f"/subscription_schedules/{schedule_id}", {
+            "end_behavior": "release",
+            "proration_behavior": "none",
+            "phases[0][items][0][price]": price_now,
+            "phases[0][items][0][quantity]": quantity,
+            "phases[0][start_date]": str(start),
+            "phases[0][end_date]": str(end),
+            "phases[1][items][0][price]": price_id,
+            "phases[1][items][0][quantity]": quantity,
+            "phases[1][iterations]": "1",
+            "phases[1][proration_behavior]": "none",
+        })
+        return {"schedule": schedule_id, "at": end}
+
+    async def _downgrade_configuration(self, products: list[dict], interval: str = "month") -> str:
+        """The id of the downgrade configuration for ``interval``, created once per account and
+        kept offering exactly ``products``.
+
+        A separate configuration, so Manage billing keeps plan switching off. A cheaper price is
+        held until period end (``schedule_at_period_end``; ``shortening_interval`` is set too but,
+        measured, does not hold an interval change, which is why each interval gets its own
+        configuration); anything dearer is invoiced prorated at once (``always_invoice``) and
+        credited pro rata when paid. Stripe offers only the products listed, so the list follows the
+        price list: a changed one is written to the same configuration rather than making another.
+
+        The pinned API version does not render a configuration's ``products``, so a configuration
+        found by listing is rewritten once per process to be sure of its list; after that the
+        cache answers."""
+        import hashlib
+        import json
+
+        tag = f"{DOWNGRADE_CONFIG_TAG}_{interval}"
+        cache_key = f"{hashlib.sha256(self.secret_key.encode()).hexdigest()[:16]}:{interval}"
+        wanted = [{"product": str(p["product"]), "prices": [str(x) for x in p["prices"]]}
+                  for p in products if p.get("product") and p.get("prices")]
+        wanted = wanted[:PORTAL_PRODUCTS_MAX]
+        fingerprint = hashlib.sha256(json.dumps(_product_set(wanted)).encode()).hexdigest()[:16]
+        cached = _downgrade_configurations.get(cache_key)
+        if cached and cached[0] == fingerprint:
+            return cached[1]
+
+        config_id = cached[1] if cached else ""
+        if not config_id:
+            listed = await self._get("/billing_portal/configurations?active=true&limit=100")
+            for conf in listed.get("data") or []:
+                if (conf.get("metadata") or {}).get("nexus") != tag:
+                    continue
+                config_id = str(conf["id"])
+                offered = ((conf.get("features") or {}).get("subscription_update") or {}).get(
+                    "products") or []
+                if offered and _product_set(offered) == _product_set(wanted):
+                    _downgrade_configurations[cache_key] = (fingerprint, config_id)
+                    return config_id
+                break
+
+        listing: dict[str, Any] = {}
+        for i, product in enumerate(wanted):
+            listing[f"features[subscription_update][products][{i}][product]"] = product["product"]
+            for j, price in enumerate(product["prices"]):
+                listing[f"features[subscription_update][products][{i}][prices][{j}]"] = price
+        if config_id:
+            # No idempotency key: setting the list is idempotent in effect, and a key would make a
+            # list changed back within 24 hours replay the earlier answer without applying.
+            await self._post(f"/billing_portal/configurations/{config_id}", listing)
+        else:
+            created = await self._post(
+                "/billing_portal/configurations",
+                {
+                    "features[subscription_update][enabled]": "true",
+                    "features[subscription_update][default_allowed_updates][0]": "price",
+                    "features[subscription_update][proration_behavior]": "always_invoice",
+                    "features[subscription_update][schedule_at_period_end][conditions][0][type]":
+                        "decreasing_item_amount",
+                    "features[subscription_update][schedule_at_period_end][conditions][1][type]":
+                        "shortening_interval",
+                    **listing,
+                    "features[subscription_cancel][enabled]": "true",
+                    "features[subscription_cancel][mode]": "at_period_end",
+                    "features[payment_method_update][enabled]": "true",
+                    "features[invoice_history][enabled]": "true",
+                    "metadata[nexus]": tag,
+                },
+                idempotency_key=f"portal-config:{tag}:{fingerprint}",
+            )
+            config_id = str(created.get("id", ""))
+        _downgrade_configurations[cache_key] = (fingerprint, config_id)
+        return config_id
+
     async def cancel_subscription(
         self, *, subscription_id: str, at_period_end: bool = True
     ) -> dict:
@@ -1276,6 +1603,15 @@ class StripePaymentProvider(PaymentProvider):
         """
         self._require()
         return await self._get(f"/subscriptions/{subscription_id}")
+
+
+def _product_set(products) -> list:
+    """A portal product list in a comparable form: order does not matter to Stripe."""
+    out = []
+    for p in products or []:
+        if isinstance(p, dict) and p.get("product"):
+            out.append([str(p["product"]), sorted(str(x) for x in p.get("prices") or [])])
+    return sorted(out)
 
 
 _provider: PaymentProvider | None = None

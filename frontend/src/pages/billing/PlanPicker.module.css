@@ -294,6 +294,32 @@
   text-wrap: pretty;
 }
 
+/* A change Stripe holds until the period ends, said once above the cards it holds back, with the
+   way back beside it. The same quiet info surface the Billing page's notices use; the button wraps
+   under the sentence on a narrow screen. */
+.scheduled {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--info) 40%, transparent);
+  border-radius: var(--radius);
+  background: var(--info-quiet);
+}
+
+.scheduledText {
+  flex: 1 1 24rem;
+  max-width: 68ch;
+  margin: 0;
+  color: var(--text-default);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  text-wrap: pretty;
+}
+
 .contract {
   margin: var(--space-3) 0 0;
   max-width: 68ch;
