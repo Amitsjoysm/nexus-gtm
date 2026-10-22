@@ -15,7 +15,7 @@ import { DataState } from "@/components/DataState";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
-import { usePlatformCan } from "@/app/RequirePlatformAdmin";
+import { usePlatformCan, usePlatformIdentity } from "@/app/RequirePlatformAdmin";
 import {
   ADMINS_MANAGE,
   PRICING_WRITE,
@@ -476,6 +476,15 @@ function Plans() {
     >
       {(rows) => (
         <>
+          {!canManageStripe && (
+            // The controls are hidden, not broken: say so, or a finance or support admin reads
+            // their absence as a fault (2026-10-21, "cannot create or edit plans").
+            <p className={styles.notice} role="status">
+              Creating, editing, publishing and holding plans changes what Stripe sells, so it
+              needs the Stripe permission, which superadmins hold.
+              {canEdit ? " You can still change what each plan includes." : ""}
+            </p>
+          )}
           {canManageStripe && (
             <div className={styles.tableToolbar}>
               <p className={styles.toolbarNote} aria-live="polite">
@@ -998,6 +1007,7 @@ function UserAdmin() {
 export function AdminBillingPage() {
   const [tab, setTab] = useState("rates");
   const can = usePlatformCan();
+  const identity = usePlatformIdentity();
   // Access is where power is granted, so it is visible only to admins who can grant it. The other
   // three tabs are reads, which every platform role holds.
   const tabs = [
@@ -1046,6 +1056,15 @@ export function AdminBillingPage() {
         title="Billing control plane"
         description="Prices, plans, and who is on what. Changes here take effect without a deploy."
       />
+      {/* Said once, here: otherwise every tab fails on its own with a 403 while the page itself
+          looks fine, which was reported as "superadmin cannot edit plans" (2026-10-21). */}
+      {identity && identity.origin_allowed === false && (
+        <p className={styles.notice} role="alert">
+          This network address ({identity.origin_seen || "unknown"}) is not on the Control plane
+          IP allowlist, so every tab below is refused. Open the console from an allowed network,
+          or change Configuration › Control plane IP allowlist from one.
+        </p>
+      )}
       <Card padding="lg">
         <CardHeader
           title="Platform billing"

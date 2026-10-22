@@ -135,6 +135,17 @@ async def refresh_allowlist() -> None:
         logger.warning("could not refresh the admin IP allowlist; leaving it as-is", exc_info=True)
 
 
+def origin_status(request) -> tuple[bool, str]:
+    """``(allowed, observed address)``: what ``check_admin_origin`` would decide, without raising.
+
+    For ``whoami``, which must answer even when the console is refused, so the console can say once,
+    at the top, that this address is not on the allowlist. Reported 2026-10-21 as "superadmin cannot
+    create, edit or delete plans": every tab failed separately with a 403 and the page itself looked
+    like it worked."""
+    observed = client_ip_of(request)
+    return ip_allowed(observed, _nets), observed
+
+
 def check_admin_origin(request) -> None:
     """Raise 403 when the Control plane is not permitted from this address."""
     from fastapi import HTTPException, status

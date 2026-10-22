@@ -2027,6 +2027,10 @@ export interface PlatformIdentity {
   permissions: string[];
   /** Ceiling on this caller's credit grants; null means no ceiling. */
   credit_grant_cap: number | null;
+  /** Whether the Control plane IP allowlist admits this caller; false means every tab is refused. */
+  origin_allowed?: boolean;
+  /** The address the server saw, for the allowlist banner. */
+  origin_seen?: string;
 }
 
 export interface PlatformAdmin {

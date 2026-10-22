@@ -482,10 +482,12 @@ annual unpaired rather than pointing a card at a plan checkout would refuse.
 - Savings, extra seats and extra credits are computed from plan fields in `planFamilies.ts`, never
   written down; `tests/test_plan_picker_ui.py` refuses price literals. Credits per month are equal
   on both intervals, so no "more credits" line appears unless an admin makes it true.
-- **Nothing says when annual credits are granted.** The purchase grant delivers the whole
-  allowance, but the Stripe webhook moves `plan_id` without setting `sub.interval` (only
-  `change_plan` does), and `roll_period` renews on `sub.interval`. Renewal cadence for a self-serve
-  annual is therefore not a claim the price list can back.
+- **Annual credits: the whole year at purchase, the next year when Stripe is paid for it.** The
+  webhook takes a bought plan through `take_plan_terms`, so `sub.interval` is `year`; the period is
+  Stripe's, read in any API version (`_in_pinned_shape`); and a renewal is credited only on
+  `invoice.paid` for `subscription_cycle` (see *A Stripe renewal is credited...*). Verified
+  2026-10-21 by paying a test-mode annual Checkout: 24,000 credits, period end a year out. (This
+  line used to say the webhook left `sub.interval` behind; that was fixed with `take_plan_terms`.)
 
 ## Authoring a capability (`nexus/billing/capability_authoring.py`)
 
@@ -3169,11 +3171,19 @@ list or export. Spec, 25 owner decisions (D1-D25), plan and the first real calls
   phones never gain an apostrophe (owner, 2026-10-19); `savedCsv.ts` applies the same rule in the
   browser. The Accounts and Contacts exports adopt the same `safe_cell` on branch
   `fix-csv-formula-injection`, whose copy of it is byte-identical, so the two merge cleanly.
-- **The provider was failing when this was built** (2026-10-19): a valid token answers HTTP 500 with
-  an empty body on every search (401 for a bad token; the documented 400 for PageSize > 500). The
-  success shape, vocabularies and the two location field sets (D15) are still provisional: rerun
-  `scripts/infojoy_probe.py` in the app container once InfoJoy answers, then update `records.py`
-  aliases and `fields.py` names/options. Read timeout is 30 s (16 s cold start observed).
+- **The provider answers since 2026-10-22, slowly and without counts** (observed shape and faults:
+  `docs/superpowers/specs/2026-10-16-prospector-observed-api.md`, "Third look";
+  `tests/test_prospector_observed_provider.py`). A contact's `Phone` is the office line, so only
+  `DirectPhone` is a direct phone (reading `Phone` sold a switchboard as a direct dial, 29 rows in
+  50); the person's `EmployeeLinkedIn` is masked like the rest and delivered with the contact,
+  through `person_profile_url`. Seniority, size and revenue are checkbox lists of the observed
+  values, sizes sent with every stored spelling (`FieldSpec.aliases`). No count is asked for
+  (`client.COUNT_SUPPORTED`; contacts 500s after 120 s, companies return no total), so "Show
+  total" is hidden. Cold starts took 14-124 s: the read timeout is 60 s, and every provider wait
+  hands the request's database connection back to the pool (`core.tenancy.connection_released`,
+  which refuses to commit unwritten work and re-binds RLS after; measured: one connection "idle in
+  transaction" for the whole wait before). A Net new scan stops after `NET_NEW_DEADLINE_S` (45 s)
+  with a cursor.
 - MCP: `prospector_search` (read, masked) and `prospector_save` (write, charged), both through
   `gateway._ALLOWED`.
 - UI: `frontend/src/pages/prospector/` (filter state lives in the URL `f=` param; the rail, table,

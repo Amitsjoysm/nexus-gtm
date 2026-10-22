@@ -10,7 +10,7 @@ and must return false rather than 403.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -308,10 +308,26 @@ class WhoAmIOut(BaseModel):
     # The ceiling on this caller's credit grants, or null for no ceiling. Surfaced so the console
     # can state the actual limit instead of hardcoding a number that config can change.
     credit_grant_cap: float | None = None
+    # Whether the Control plane IP allowlist admits this caller's address, and the address seen.
+    # Reported for platform admins only: when it is false every console request is a 403.
+    origin_allowed: bool = True
+    origin_seen: str = ""
 
 
 @router.get("/whoami", response_model=WhoAmIOut)
-async def whoami(principal: Principal = Depends(get_principal)) -> WhoAmIOut:
+async def whoami(request: Request, principal: Principal = Depends(get_principal)) -> WhoAmIOut:
+    out = await _whoami(principal)
+    if out.is_platform_admin:
+        from nexus.api.deps import _refresh_runtime_config
+        from nexus.api.deps_ip import origin_status
+
+        # The allowlist the console's own requests will be judged by, as a 403 would read it.
+        await _refresh_runtime_config()
+        out.origin_allowed, out.origin_seen = origin_status(request)
+    return out
+
+
+async def _whoami(principal: Principal) -> WhoAmIOut:
     """Is the caller a platform admin?
 
     Deliberately gated on plain authentication, not on require_platform_admin: it answers

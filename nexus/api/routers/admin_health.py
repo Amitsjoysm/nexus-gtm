@@ -105,6 +105,69 @@ async def _probe_queue() -> tuple[str, str]:
     return OK, f"redis, depth={depth if depth is not None else 'unknown'}"
 
 
+#: Where Stripe must deliver events for this app (`routers/billing_webhooks.py`).
+WEBHOOK_PATH = "/api/billing/webhooks/stripe"
+
+
+def webhook_endpoint_problem(endpoints: list[dict], *, base_url: str,
+                             handled: tuple[str, ...]) -> str:
+    """"" when an enabled endpoint at this app's webhook URL receives every event the app handles,
+    else the sentence an operator needs (2026-10-22).
+
+    "Some endpoint exists" was the whole check, so an endpoint left pointing at an old domain, one
+    switched off at Stripe, or one created by hand without the subscription events all read healthy
+    while every payment stayed at Stripe and nothing activated."""
+    expected = f"{base_url.rstrip('/')}{WEBHOOK_PATH}" if base_url else ""
+
+    def ours(endpoint: dict) -> bool:
+        url = str(endpoint.get("url") or "").rstrip("/")
+        return url == expected if expected else url.endswith(WEBHOOK_PATH)
+
+    where = expected or f"this app's {WEBHOOK_PATH}"
+    mine = [e for e in endpoints if ours(e)]
+    if not mine:
+        found = ", ".join(sorted({str(e.get("url") or "?") for e in endpoints})[:3]) or "none"
+        return (f"NO WEBHOOK ENDPOINT POINTS AT THIS APP: Stripe must send events to {where}; "
+                f"its endpoints are {found}. Payments complete at Stripe and never arrive here")
+    enabled = [e for e in mine if str(e.get("status") or "") == "enabled"]
+    if not enabled:
+        return f"the webhook endpoint at {where} is DISABLED at Stripe: no event arrives"
+    missing: list[str] | None = None
+    for endpoint in enabled:
+        events = set(endpoint.get("enabled_events") or [])
+        if "*" in events:
+            return ""
+        gap = sorted(set(handled) - events)
+        if missing is None or len(gap) < len(missing):
+            missing = gap
+    if missing:
+        return (f"the webhook endpoint at {where} does not send {len(missing)} event(s) this app "
+                f"acts on: {', '.join(missing[:6])}")
+    return ""
+
+
+async def signing_secret_problem() -> str:
+    """"" when a webhook signing secret is in force, else why every Stripe event is refused.
+
+    Without one `verify_stripe_signature` refuses every delivery, and the only trace was a log line:
+    the money moved at Stripe and no workspace ever moved off its old plan (2026-10-22)."""
+    from nexus.billing.credentials import active_credential, resolve_stripe_secrets
+
+    _key, secret, _pub = await resolve_stripe_secrets()
+    if secret:
+        return ""
+    try:
+        managed = await active_credential("stripe") is not None
+    except Exception:  # noqa: BLE001 - the row reports what it can
+        managed = False
+    if managed:
+        return ("NO WEBHOOK SIGNING SECRET: the active Payments credential has none of its own, so "
+                "every Stripe event is refused. Create webhook in Stripe on the Payments tab "
+                "stores one")
+    return ("NO WEBHOOK SIGNING SECRET (NEXUS_STRIPE_WEBHOOK_SECRET is empty): every Stripe event "
+            "is refused")
+
+
 async def _probe_payments() -> tuple[str, str]:
     # The provider IN FORCE, which an active credential on the Payments tab selects on its own,
     # and that provider's key. This read the environment's key and provider only, so a panel-only
@@ -132,16 +195,25 @@ async def _probe_payments() -> tuple[str, str]:
         notes = [f"{mode} mode", f"account={account.get('id')}"]
         if not account.get("charges_enabled"):
             notes.append("charges_enabled=FALSE — the account cannot take payment")
-        # THE one that silently breaks everything: subscription state arrives only by webhook.
+        # THE one that silently breaks everything: subscription state arrives only by webhook,
+        # and only if this app can verify it.
+        secret_gap = await signing_secret_problem()
+        if secret_gap:
+            return ERROR, secret_gap + ". " + ", ".join(notes)
         wh = await client.get("https://api.stripe.com/v1/webhook_endpoints",
-                              headers={"Authorization": f"Bearer {key}"}, params={"limit": 5})
+                              headers={"Authorization": f"Bearer {key}"}, params={"limit": 100})
         endpoints = (wh.json().get("data") or []) if wh.status_code == 200 else []
-        if not endpoints:
-            return DEGRADED, (
-                "NO WEBHOOK ENDPOINT REGISTERED — checkout will complete at Stripe and the "
-                "subscription will never reach this database. " + ", ".join(notes)
-            )
-        notes.append(f"{len(endpoints)} webhook endpoint(s)")
+        if wh.status_code != 200:
+            notes.append(f"webhook endpoints unreadable with this key ({wh.status_code})")
+        else:
+            from nexus.billing.webhooks import HANDLED_EVENTS
+            from nexus.core.config import get_settings
+
+            gap = webhook_endpoint_problem(endpoints, base_url=get_settings().app_base_url or "",
+                                           handled=tuple(HANDLED_EVENTS))
+            if gap:
+                return DEGRADED, gap + ". " + ", ".join(notes)
+            notes.append(f"{len(endpoints)} webhook endpoint(s), this app's enabled")
     # What Checkout would refuse on, read the same way the checkout preflight reads it, so this row
     # names the cause of "no valid payment methods" before a customer meets it (2026-10-12).
     from nexus.billing.checkout_readiness import checkout_readiness
