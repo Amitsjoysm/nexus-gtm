@@ -32,9 +32,13 @@ async def test_usage_never_leaks_another_tenant(client):
     r1 = await client.get("/api/billing/usage", headers=t1)
     r2 = await client.get("/api/billing/usage", headers=t2)
     assert r1.status_code == 200 and r2.status_code == 200
-    # Each tenant sees its own (empty) usage, never the other's rows.
+    # Each tenant sees its own (empty) usage, never the other's rows. Seats are a live count since
+    # 2026-10-23: each workspace has its one signer, never both.
     for body in (r1.json(), r2.json()):
-        assert all(c["used"] == 0 for c in body["capabilities"])
+        assert all(c["used"] == 0 for c in body["capabilities"]
+                   if c["capability_id"] != "seat.member")
+        seats = [c["used"] for c in body["capabilities"] if c["capability_id"] == "seat.member"]
+        assert seats in ([], [1])
 
 
 async def test_usage_endpoint_agrees_with_the_enforced_counter(client):

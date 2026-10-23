@@ -1301,6 +1301,10 @@ export interface BillingUsage {
   scheduled_change?: ScheduledPlanChange | null;
   /** The paid plan ends with the current period (the downgrade to Free). */
   cancel_at_period_end?: boolean;
+  /** Has a customer at the payment provider, so Manage payment method opens something. */
+  payment_account?: boolean;
+  /** Start of the paid period (an annual plan's is a year, not the calendar month in `period`). */
+  period_start?: string | null;
 }
 
 /** A named switch a plan entitlement can hang off. Platform-global, not per-tenant. */
@@ -1440,6 +1444,13 @@ export interface Invoice {
   total_cents: number;
   finalized_at: string | null;
   lines: InvoiceLine[];
+  /** Stripe's hosted invoice and its PDF; empty when there is none. */
+  hosted_url?: string;
+  pdf_url?: string;
+  /** When it was issued, and the service period it bills (a Stripe invoice's `period_key` is an id). */
+  issued_at?: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
 }
 
 /**

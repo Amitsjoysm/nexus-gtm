@@ -24,7 +24,8 @@ import pytest
 from nexus.billing.payments import PaymentError, StripePaymentProvider
 
 HEALTHY = {"id": "acct_1", "country": "US", "default_currency": "usd", "charges_enabled": True,
-           "capabilities": {"card_payments": "active"}, "requirements": {"currently_due": []}}
+           "capabilities": {"card_payments": "active"}, "requirements": {"currently_due": []},
+           "business_profile": {"name": "InfoJoy GTM"}}
 CONFIGS = {"data": [{"id": "pmc_1", "is_default": True, "active": True,
                      "card": {"available": True, "display_preference": {"value": "on"}}}]}
 
@@ -77,6 +78,15 @@ async def _ready(provider, currencies=("USD",)):
 async def test_a_ready_account_has_nothing_to_say():
     r = await _ready(FakeStripe())
     assert r.ok and r.blocking == [] and r.warnings == []
+
+
+async def test_an_account_with_no_public_business_name_is_warned_about():
+    """Seen walking the flow, 2026-10-23: Checkout read "you authorize  to charge you" and the
+    portal named the business "New Business". A warning, never a refusal: the payment works."""
+    for profile in ({}, {"name": ""}, {"name": "New Business"}):
+        r = await _ready(FakeStripe({**HEALTHY, "business_profile": profile}))
+        assert r.ok and r.blocking == []
+        assert len(r.warnings) == 1 and "business name" in r.warnings[0]
 
 
 async def test_an_account_stripe_has_not_activated_blocks_checkout():

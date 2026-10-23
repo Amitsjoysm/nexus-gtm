@@ -787,7 +787,7 @@ synchronous callers and for `set_payment_provider` test injection, which always 
   NEXUS's own configuration (`PORTAL_CONFIG_TAG`, found by metadata or created once per account):
   cards, invoices, address and at-period-end cancellation on, `subscription_update` off. If it
   cannot be created the portal does not open: failing closed beats charging the wrong price.
-- **The panel tells the truth.** `webhooks.HANDLED_EVENTS` (17 since 2026-10-12) is what the webhook panel lists; it
+- **The panel tells the truth.** `webhooks.HANDLED_EVENTS` (18 since 2026-10-23, with `invoice.voided`) is what the webhook panel lists; it
   summed two of the three tuples and showed 9, and a test checks every `event_type ==` branch is in
   it. Live/Test comes from the key prefix (`credentials.stripe_key_mode`: `sk_`/`rk_` x
   `live_`/`test_`); it was "charges enabled and not `sk_test_`", so a restricted test key read Live.
@@ -976,7 +976,8 @@ any money moves:
 - Only an `active`, card-billed subscription that is not set to end, to a paid plan on sale in the
   same currency; each refusal says what to do instead (past due: update the card; a downgrade:
   Downgrade to X). A `sub_` id with no Stripe credential in force is refused. Stripe idempotency
-  key `switch:<sub>:<plan>:<period start>`, so a double click charges once.
+  key `switch:<sub>:<plan>:<period start>:<latest invoice>`, so a double click charges once and a
+  retry after a decline (whose voided invoice is now the latest) is a new request at Stripe.
 
 **Hybrid plan changes: upgrades in the app, downgrades in Stripe at period end** (owner decisions
 2026-10-22, `nexus/billing/plan_changes.py`, `tests/test_hybrid_plan_changes.py`). Asked: "when a
@@ -1063,6 +1064,37 @@ already been spent; and when Stripe's `customer.subscription.updated` moved the 
 grants the plan's credits keyed `stripe_renewal:<invoice>`, and the roll grants nothing when
 `psp_subscription_id` starts `sub_`. The first invoice (`subscription_create`) is the purchase,
 already credited by Checkout or the subscription event. Workspaces billed here roll as before.
+
+**The Stripe flow as a customer walks it** (2026-10-23, `tests/test_stripe_journey_fixes.py`,
+`tests/test_billing_journey_ui.py`). Walked end to end on the local deploy in Stripe test mode with
+the published test cards: Checkout, upgrade in the app, downgrade through Stripe and Keep, monthly
+to annual and back, decline, 3D Secure, cancel to Free and resume. What was wrong, now fixed:
+- **A retry after a decline replayed the decline for 24 hours.** The switch's idempotency key named
+  the subscription, plan and period, none of which a decline changes, so updating the card and
+  pressing Switch again (what the 402 says to do) got the same refusal. It now also names the
+  subscription's latest invoice (`switch_subscription_now`).
+- **A declined switch's voided invoice stayed listed as unpaid.** `invoice.voided` is handled (the
+  local row becomes `void`), paid and void are final (a late `invoice.finalized` or
+  `payment_failed` cannot reopen one, which would also have sent a paid own invoice to dunning), and
+  `GET /billing/invoices` leaves Stripe's voided invoices out, as Stripe's own portal does.
+- **The invoice list** showed `stripe:in_...` as the period, sorted by Stripe id, with no charges
+  and no link. Rows now carry `issued_at`, the service period (`period_start`/`period_end`, from
+  the first line: an invoice's own period fields describe the previous period on a renewal) and
+  Stripe's lines (`meta.lines`, copied, never priced); the screen links View invoice and the PDF.
+- **Seats read "0 of 1"** for a workspace whose creator is a member: `/billing/usage` summed events
+  for a gauge enforcement reads live. Gauges with a resolver now read `entitlements.gauge_level`.
+- **Manage payment method** appears only with a provider customer (`UsageOut.payment_account`).
+- **Keep my plan also resumes a plan set to end** (`resume_subscription`): it could be resumed only on
+  Stripe's page. The header says Ends, not Renews, and shows the paid period (`period_start`).
+- **Back from Checkout** the page waits for Stripe's word (up to a minute) and says so; it ignored
+  `?checkout=`, so a customer whose webhook was a moment behind saw Free. Cancelled says nothing
+  was charged. The non-Stripe subtitle no longer promises "charged for the days you use".
+- **Platform health**: no endpoint at this app, or a disabled one, is an ERROR (no payment ever
+  arrives); a missing event stays degraded; a test-mode account is no longer told it "cannot take
+  payment". Checkout readiness warns when the account has no public business name: customers saw
+  "you authorize  to charge you" on Checkout and "New Business" on the portal.
+- Not code, for the owner: the Stripe account charges Indian buyers in INR with a 4% conversion fee
+  (Adaptive Pricing, an account setting), and its public business name is unset.
 
 **A webhook reads the same in any Stripe API version** (2026-10-21, `webhooks._in_pinned_shape`,
 `tests/test_stripe_event_versions.py`). Stripe renders a webhook in its ENDPOINT's version: Create

@@ -150,7 +150,7 @@ async def test_a_superadmin_creates_it_and_the_signing_secret_is_saved(client, m
     r = await client.post(f"/api/admin/payment-credentials/{cid}/webhook-endpoint",
                           headers=auth(boss))
     assert r.status_code == 200, r.text
-    assert r.json()["url"] == URL and len(r.json()["events"]) == 17
+    assert r.json()["url"] == URL and len(r.json()["events"]) == 18   # invoice.voided, 2026-10-23
     assert "secret" not in r.json()                      # it is stored, never returned
     assert await _webhook_secret(cid) == "whsec_1"
 

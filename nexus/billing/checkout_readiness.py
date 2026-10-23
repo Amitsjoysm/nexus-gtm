@@ -58,6 +58,10 @@ class Readiness:
                 "charges_enabled": self.charges_enabled, "card_payments": self.card_payments}
 
 
+#: The name Stripe gives a new account until someone sets one.
+_PLACEHOLDER_NAME = "new business"
+
+
 def clear_cache() -> None:
     _cache.clear()
 
@@ -103,6 +107,15 @@ async def checkout_readiness(provider, *, currencies: set[str] | None = None,
     if r.card_payments and r.card_payments != "active":
         live_only.append(f"Card payments are {r.card_payments} on this Stripe account, so "
                          "Checkout has no way to take a payment.")
+    # Seen walking the flow in test mode (2026-10-23): with no public business name, Checkout read
+    # "you authorize  to charge you" and the portal named the business "New Business", Stripe's
+    # placeholder. A customer about to pay a business with no name may stop there.
+    public_name = str((account.get("business_profile") or {}).get("name") or "").strip()
+    if not public_name or public_name.lower() == _PLACEHOLDER_NAME:
+        r.warnings.append(
+            "Stripe shows customers no business name: Checkout reads \"you authorize  to charge "
+            "you\" and the billing portal says \"New Business\". Set the public business name in "
+            "the Stripe Dashboard (Settings > Business > Public details).")
 
     try:
         if pmc:

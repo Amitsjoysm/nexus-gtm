@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Badge, Card, CardHeader, EmptyState, Skeleton } from "@/components/ui";
+import { Badge, Card, CardHeader, EmptyState, Skeleton, useToast } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { PlanPicker } from "./billing/PlanPicker";
@@ -48,6 +48,25 @@ function shortDate(iso: string): string {
     ? "—"
     : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
+
+/** "Oct 23 – Nov 23, 2026": a paid period, which for an annual plan is a year, not a month. */
+function dateRange(start: string, end: string): string {
+  return `${shortDate(start)} – ${shortDate(end)}`;
+}
+
+/**
+ * What an invoice bills. A Stripe invoice's `period_key` is `stripe:<id>`, which the list showed as
+ * its period (2026-10-23), so its service period comes first, then the day it was issued.
+ */
+function invoicePeriod(inv: Invoice): string {
+  if (inv.period_start && inv.period_end) return dateRange(inv.period_start, inv.period_end);
+  if (/^\d{4}-\d{2}$/.test(inv.period_key)) return periodLabel(inv.period_key);
+  return inv.issued_at ? `Issued ${shortDate(inv.issued_at)}` : "—";
+}
+
+/** How long to wait for Stripe's word after Checkout returns: its webhooks usually land in seconds. */
+const CONFIRM_ATTEMPTS = 30;
+const CONFIRM_EVERY_MS = 2000;
 
 /**
  * The one line about this subscription the customer needs before reading anything else.
@@ -188,6 +207,55 @@ export function BillingPage() {
   const credits = useApi<BillingCredits>((signal) => api.billingCredits(signal), []);
   const invoices = useApi<Invoice[]>((signal) => api.billingInvoices(signal), []);
   const [openInvoice, setOpenInvoice] = useState<string | null>(null);
+  const toast = useToast();
+
+  // Back from Stripe Checkout (2026-10-23). The page ignored `?checkout=`, and Stripe's redirect
+  // often beats its webhook, so a customer who had just paid could see Free and no word that the
+  // payment went through. Wait for Stripe's word, say what happened, and consume the parameter so a
+  // refresh does not say it again.
+  const [confirming, setConfirming] = useState<"waiting" | "late" | null>(null);
+  const returned = useRef(false);
+  const { refetch: refetchUsage } = usage;
+  const { refetch: refetchCredits } = credits;
+  const { refetch: refetchInvoices } = invoices;
+  useEffect(() => {
+    if (returned.current) return;
+    returned.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get("checkout");
+    if (!outcome) return;
+    params.delete("checkout");
+    const rest = params.toString();
+    window.history.replaceState(window.history.state, "",
+      `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`);
+    if (outcome === "cancelled") {
+      toast.toast({ title: "Checkout cancelled", description: "Nothing was charged." });
+      return;
+    }
+    if (outcome !== "success") return;
+    setConfirming("waiting");
+    // Not cancelled on unmount: the ref above runs it once, and it ends by itself within a minute.
+    void (async () => {
+      for (let attempt = 0; attempt < CONFIRM_ATTEMPTS; attempt += 1) {
+        try {
+          const now = await api.billingUsage();
+          if (now.switch_in_place) {
+            setConfirming(null);
+            refetchUsage();
+            refetchCredits();
+            refetchInvoices();
+            toast.success(`You're on ${now.plan_name ?? "your new plan"}`,
+              "Your payment went through and your credits are in your balance.");
+            return;
+          }
+        } catch {
+          // A blip while waiting is not the answer; keep asking until the time is up.
+        }
+        await new Promise((r) => window.setTimeout(r, CONFIRM_EVERY_MS));
+      }
+      setConfirming("late");
+    })();
+  }, [api, toast, refetchUsage, refetchCredits, refetchInvoices]);
 
   // GAUGES ONLY. This card used to list every capability with usage, drawing a "40 of 500" bar
   // against the plan quota. Under credits-only billing that quota is no longer what gates a priced
@@ -229,7 +297,7 @@ export function BillingPage() {
   ];
 
   const invoiceColumns: Column<Invoice>[] = [
-    { key: "period_key", header: "Period", render: (r) => periodLabel(r.period_key) },
+    { key: "period_key", header: "Period", render: (r) => invoicePeriod(r) },
     {
       key: "number",
       header: "Invoice",
@@ -271,6 +339,20 @@ export function BillingPage() {
           >
             {(data) => (
               <>
+                {confirming && (
+                  <div className={cn(styles.notice, styles.notice_info)} role="status">
+                    <p className={styles.noticeTitle}>
+                      {confirming === "waiting"
+                        ? "Confirming your payment with Stripe…"
+                        : "Your payment went through at Stripe"}
+                    </p>
+                    <p className={styles.noticeBody}>
+                      {confirming === "waiting"
+                        ? "This usually takes a few seconds. Your new plan and its credits appear here as soon as Stripe confirms it."
+                        : "Your plan updates here as soon as Stripe confirms it, usually within a minute. There is no need to pay again: refresh this page in a moment."}
+                    </p>
+                  </div>
+                )}
                 <SubscriptionNotice data={data} />
                 <div className={styles.summary}>
                   <div className={styles.summaryItem}>
@@ -286,11 +368,20 @@ export function BillingPage() {
                   </div>
                   <div className={styles.summaryItem}>
                     <span className={styles.summaryLabel}>Billing period</span>
-                    <span className={styles.summaryValue}>{periodLabel(data.period)}</span>
+                    <span className={styles.summaryValue}>
+                      {/* The paid period itself: an annual plan's is a year, not this month. */}
+                      {data.period_start && data.period_end
+                        ? dateRange(data.period_start, data.period_end)
+                        : periodLabel(data.period)}
+                    </span>
                   </div>
                   <div className={styles.summaryItem}>
                     <span className={styles.summaryLabel}>
-                      {data.status === "trialing" ? "Trial ends" : "Renews"}
+                      {data.status === "trialing"
+                        ? "Trial ends"
+                        : data.cancel_at_period_end
+                          ? "Ends"
+                          : "Renews"}
                     </span>
                     <span className={styles.summaryValue}>
                       {data.status === "trialing"
@@ -415,27 +506,49 @@ export function BillingPage() {
                   onRowClick={(r) => setOpenInvoice(openInvoice === r.id ? null : r.id)}
                   caption="Invoices"
                 />
-                {openInvoice && (
-                  <div className={styles.lines}>
-                    <h3 className={styles.linesTitle}>
-                      Charges on{" "}
-                      {periodLabel(rows.find((r) => r.id === openInvoice)?.period_key ?? "")}
-                    </h3>
-                    <ul className={styles.lineList}>
-                      {(rows.find((r) => r.id === openInvoice)?.lines ?? []).map((ln, i) => (
-                        <li key={`${ln.kind}-${i}`} className={styles.line}>
-                          <span className={styles.lineDesc}>{ln.description}</span>
-                          <span className={cn(styles.mono, styles.lineAmount)}>
-                            {money(
-                              ln.amount_cents,
-                              rows.find((r) => r.id === openInvoice)?.currency,
-                            )}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                {openInvoice && (() => {
+                  const inv = rows.find((r) => r.id === openInvoice);
+                  if (!inv) return null;
+                  return (
+                    <div className={styles.lines}>
+                      <h3 className={styles.linesTitle}>Charges for {invoicePeriod(inv)}</h3>
+                      {inv.lines.length > 0 ? (
+                        <ul className={styles.lineList}>
+                          {inv.lines.map((ln, i) => (
+                            <li key={`${ln.kind}-${i}`} className={styles.line}>
+                              <span className={styles.lineDesc}>{ln.description}</span>
+                              <span className={cn(styles.mono, styles.lineAmount)}>
+                                {money(ln.amount_cents, inv.currency)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className={styles.noticeBody}>
+                          {inv.hosted_url
+                            ? "The charges are listed on Stripe's copy of this invoice."
+                            : "No charges are listed for this invoice."}
+                        </p>
+                      )}
+                      {/* Stripe's own copy and its PDF, the document a customer files. Shown only
+                          when there is one: a link that opens nothing is worse than none. */}
+                      {(inv.hosted_url || inv.pdf_url) && (
+                        <p className={styles.invoiceLinks}>
+                          {inv.hosted_url && (
+                            <a href={inv.hosted_url} target="_blank" rel="noreferrer noopener">
+                              View invoice
+                            </a>
+                          )}
+                          {inv.pdf_url && (
+                            <a href={inv.pdf_url} target="_blank" rel="noreferrer noopener">
+                              Download PDF
+                            </a>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
               </>
             )}
           </DataState>

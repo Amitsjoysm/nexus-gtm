@@ -322,6 +322,12 @@ class PaymentProvider(abc.ABC):
         2026-10-22), so the app offers this as Keep my plan."""
         raise PaymentError(f"{self.name} cannot cancel a scheduled change")
 
+    async def resume_subscription(self, *, subscription_id: str) -> dict:
+        """Undo a cancel at period end: the subscription renews as before. Returns
+        ``{"id", "status", "cancel_at_period_end"}``. Keep my plan for a paid plan set to end
+        (2026-10-23): resuming was possible only on Stripe's page."""
+        raise PaymentError(f"{self.name} cannot resume a subscription")
+
 
 class NoopPaymentProvider(PaymentProvider):
     """Offline default. Records intent, moves no money, never fails.
@@ -365,6 +371,8 @@ class NoopPaymentProvider(PaymentProvider):
         self.schedules: dict[str, dict[str, Any]] = {}
         #: Subscriptions whose scheduled change was cancelled (Keep my plan).
         self.released: list[str] = []
+        #: Subscriptions set to end that were resumed (Keep my plan, 2026-10-23).
+        self.resumed: list[str] = []
         #: Changes held until period end by a schedule the app made (yearly to monthly).
         self.scheduled_changes: list[dict[str, Any]] = []
 
@@ -547,6 +555,10 @@ class NoopPaymentProvider(PaymentProvider):
     async def release_subscription_schedule(self, *, subscription_id: str) -> dict:
         self.released.append(subscription_id)
         return {"released": True, "schedule": ""}
+
+    async def resume_subscription(self, *, subscription_id: str) -> dict:
+        self.resumed.append(subscription_id)
+        return {"id": subscription_id, "status": "active", "cancel_at_period_end": False}
 
     async def cancel_subscription(
         self, *, subscription_id: str, at_period_end: bool = True
@@ -1190,12 +1202,20 @@ class StripePaymentProvider(PaymentProvider):
                     f"stripe subscription {subscription_id} has a change scheduled for period end")
             if str(schedule.get("status") or "") in ("active", "not_started"):
                 await self._post(f"/subscription_schedules/{schedule_id}/release", {})
+        # The key also names the subscription's latest invoice (2026-10-23). A decline voids its
+        # invoice, which becomes the latest, so the press after the customer updated their card is a
+        # new request; with subscription, plan and period alone Stripe replayed the decline for 24
+        # hours, under a 402 telling them to update the card and try again. A double click still
+        # meets the same latest invoice, so it is still one charge at most.
+        latest = current.get("latest_invoice")
+        latest_id = str((latest or {}).get("id") or "") if isinstance(latest, dict) \
+            else str(latest or "")
         data = await self._post(f"/subscriptions/{subscription_id}", {
             "items[0][id]": str(items[0]["id"]), "items[0][price]": price_id,
             "billing_cycle_anchor": "now", "proration_behavior": "none",
             "payment_behavior": "pending_if_incomplete", "metadata[plan_id]": plan_id,
             "expand[0]": "latest_invoice.payment_intent",
-        }, idempotency_key=idempotency_key)
+        }, idempotency_key=f"{idempotency_key}:{latest_id}" if latest_id else idempotency_key)
         invoice = data.get("latest_invoice") if isinstance(data.get("latest_invoice"), dict) else {}
         intent = invoice.get("payment_intent") if isinstance(invoice.get("payment_intent"),
                                                              dict) else {}
@@ -1591,6 +1611,15 @@ class StripePaymentProvider(PaymentProvider):
             if not done:
                 raise
             data = current
+        return {"id": str(data.get("id") or subscription_id), "status": str(data.get("status", "")),
+                "cancel_at_period_end": bool(data.get("cancel_at_period_end"))}
+
+    async def resume_subscription(self, *, subscription_id: str) -> dict:
+        """Clear `cancel_at_period_end`. No idempotency key, like cancel: both are idempotent in
+        effect, and a key would make a resume after a second cancel replay the first answer."""
+        self._require()
+        data = await self._request("POST", f"/subscriptions/{subscription_id}",
+                                   form={"cancel_at_period_end": "false"})
         return {"id": str(data.get("id") or subscription_id), "status": str(data.get("status", "")),
                 "cancel_at_period_end": bool(data.get("cancel_at_period_end"))}
 

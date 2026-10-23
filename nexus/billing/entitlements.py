@@ -382,6 +382,13 @@ async def _count_seats(ts: TenantSession) -> float:
 _GAUGE_RESOLVERS = {"seat.member": _count_seats}
 
 
+async def gauge_level(ts: TenantSession, capability_id: str) -> float | None:
+    """The live level of a gauge with a resolver, or None: what a usage page must show for it,
+    since enforcement reads exactly this."""
+    resolver = _GAUGE_RESOLVERS.get(capability_id)
+    return await resolver(ts) if resolver is not None else None
+
+
 def _valid_quantity(quantity: float) -> bool:
     """Reject anything that would corrupt the counters.
 

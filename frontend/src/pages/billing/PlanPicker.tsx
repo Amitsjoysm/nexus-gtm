@@ -155,13 +155,15 @@ export function PlanPicker({
       await api.billingKeepPlan();
       toast.success(
         `You're staying on ${usage?.plan_name ?? "your plan"}`,
-        "The scheduled change was cancelled.",
+        scheduled
+          ? "The scheduled change was cancelled."
+          : `It renews${periodEnd ? ` on ${longDate(periodEnd)}` : ""} as before.`,
       );
       refetch();
       onChanged?.();
     } catch (err) {
       const detail = err instanceof ApiError ? err.detail : "Please try again.";
-      toast.error("Couldn't cancel the scheduled change", detail);
+      toast.error(scheduled ? "Couldn't cancel the scheduled change" : "Couldn't keep your plan", detail);
     } finally {
       setKeeping(false);
     }
@@ -228,10 +230,13 @@ export function PlanPicker({
         subtitle={
           switchInPlace
             ? "Upgrades start today. Downgrades start when your current period ends."
-            : "Change plan at any time. You are charged for the days you use."
+            : // Checkout charges the plan's full price and it renews from that day: nothing here
+              // is charged "for the days you use" (2026-10-23).
+              "Pay for a plan on Stripe's secure checkout. It starts as soon as the payment goes through and renews automatically."
         }
         actions={
-          usage?.plan ? (
+          // Only with a customer at Stripe: on Free the portal answered "no payment account yet".
+          usage?.payment_account ? (
             <Button
               variant="secondary"
               onClick={() => go("portal")}
@@ -262,21 +267,19 @@ export function PlanPicker({
           <p className={styles.scheduledText}>
             {scheduled
               ? `Moves to ${scheduled.plan_name} ${scheduled.at ? `on ${longDate(scheduled.at)}` : "when this period ends"}. Until then you keep ${usage?.plan_name ?? "your plan"} and its credits.`
-              : `Your paid plan ends ${periodEnd ? `on ${longDate(periodEnd)}` : "when this period ends"}. To change plan, renew it with Manage payment method first.`}
+              : `Your paid plan ends ${periodEnd ? `on ${longDate(periodEnd)}` : "when this period ends"} and this workspace moves to Free. Keep it to carry on, or to change plan.`}
           </p>
-          {/* Stripe's Manage billing page shows a scheduled change but cannot cancel it, so the
-              way back is here. */}
-          {scheduled && (
-            <Button
-              variant="secondary"
-              size="lg"
-              onClick={() => void keepPlan()}
-              loading={keeping}
-              disabled={busy !== null}
-            >
-              Keep {usage?.plan_name ?? "my plan"}
-            </Button>
-          )}
+          {/* Stripe's Manage billing page shows a scheduled change but cannot cancel it, and a plan
+              set to end could be resumed only there, so the way back from both is here. */}
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={() => void keepPlan()}
+            loading={keeping}
+            disabled={busy !== null}
+          >
+            Keep {usage?.plan_name ?? "my plan"}
+          </Button>
         </div>
       )}
 
@@ -679,7 +682,10 @@ function PlanCard({
             disabled={busy !== null || held}
             aria-describedby={note ? noteId : undefined}
           >
-            Downgrade to {tier.name}
+            {/* The same tier at a shorter interval is a billing change, not a smaller plan. */}
+            {current !== null && plan.base_price_cents > 0
+              ? "Switch to monthly billing"
+              : `Downgrade to ${tier.name}`}
           </Button>
         ) : switchInPlace && plan.base_price_cents > 0 ? (
           <Button

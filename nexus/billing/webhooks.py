@@ -260,6 +260,9 @@ INVOICE_EVENTS = (
     # Stripe's advance notice of what the next renewal will cost, several days out. Several
     # jurisdictions expect a renewal notice and this is the only event that can trigger one.
     "invoice.upcoming",
+    # A declined plan switch voids its invoice at Stripe; without this the local copy stayed in the
+    # customer's list as unpaid (2026-10-23).
+    "invoice.voided",
 )
 
 #: One-off payment events, matched to our own invoice by the stored provider reference.
@@ -277,6 +280,44 @@ PAYMENT_EVENTS = (
 #: reads this, and a test checks every `event_type ==` branch below is in it. The panel used to add
 #: up the first two tuples only and listed 9 of the 13 (reported 2026-09-30).
 HANDLED_EVENTS = SUBSCRIPTION_EVENTS + INVOICE_EVENTS + PAYMENT_EVENTS
+
+
+#: The most lines of a Stripe invoice copied onto its local row: enough to explain a subscription
+#: invoice, bounded because the row is JSON on a hot table.
+_INVOICE_LINES_KEPT = 20
+
+
+def _invoice_reading(obj: dict) -> dict:
+    """What the customer's invoice list shows of a Stripe invoice (2026-10-23): when it was issued,
+    the service period it bills (its first line's period, which for a subscription is the period
+    paid for; the invoice's own period fields describe the previous one on a renewal) and its
+    lines as Stripe wrote them. Copied, never priced here."""
+    lines = ((obj.get("lines") or {}).get("data") or []) if isinstance(obj.get("lines"), dict) \
+        else []
+    out: dict = {}
+    issued = _epoch(((obj.get("status_transitions") or {}) or {}).get("finalized_at")) \
+        or _epoch(obj.get("created"))
+    if issued:
+        out["issued_at"] = issued.isoformat()
+    period = (lines[0].get("period") or {}) if lines and isinstance(lines[0], dict) else {}
+    start = _epoch(period.get("start") or obj.get("period_start"))
+    end = _epoch(period.get("end") or obj.get("period_end"))
+    if start and end and end > start:
+        out["service_start"], out["service_end"] = start.isoformat(), end.isoformat()
+    kept = []
+    for line in lines[:_INVOICE_LINES_KEPT]:
+        if not isinstance(line, dict):
+            continue
+        try:
+            amount = int(line.get("amount") or 0)
+            quantity = float(line.get("quantity") or 1)
+        except (TypeError, ValueError):
+            continue
+        kept.append({"description": str(line.get("description") or "")[:300],
+                     "amount_cents": amount, "quantity": quantity, "kind": "provider"})
+    if kept:
+        out["lines"] = kept
+    return out
 
 
 def _epoch(value) -> "datetime | None":
@@ -1128,11 +1169,16 @@ async def _record_provider_invoice(session, sub, obj: dict, psp_invoice_id: str)
     except (TypeError, ValueError):
         amount_cents = 0
     # Stripe's own status vocabulary, narrowed to ours. `paid` is the only one that means the
-    # money arrived; everything else stays `finalized`, which is what dunning reads.
-    paid = str(obj.get("status") or "") == "paid"
+    # money arrived and `void` the only one that means it never will; everything else stays
+    # `finalized`, which is what dunning reads. Paid and void are final: events arrive in any
+    # order, and a late `invoice.finalized` must not reopen either (2026-10-23).
+    stripe_status = str(obj.get("status") or "")
+    new_status = "paid" if stripe_status == "paid" else "void" if stripe_status == "void" \
+        else "finalized"
 
     row = existing or BillingInvoice(tenant_id=sub.tenant_id, period_key=period)
-    row.status = "paid" if paid else "finalized"
+    if existing is None or row.status not in ("paid", "void"):
+        row.status = new_status
     row.number = str(obj.get("number") or "")[:40] or row.number
     row.currency = str(obj.get("currency") or "usd").upper()[:3]
     row.subtotal_cents = amount_cents
@@ -1145,6 +1191,7 @@ async def _record_provider_invoice(session, sub, obj: dict, psp_invoice_id: str)
         "origin": "provider",
         "hosted_invoice_url": str(obj.get("hosted_invoice_url") or ""),
         "invoice_pdf_url": str(obj.get("invoice_pdf") or ""),
+        **_invoice_reading(obj),
     }
     # On the indexed columns too, the PaymentIntent included: a dispute or fraud warning names the
     # PaymentIntent and not the invoice, and this is how it finds the money it is about
@@ -1254,12 +1301,23 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
     if not invoice.psp_invoice_id:
         invoice.psp_invoice_id = (meta.get("psp_invoice_id") or "") or None
 
+    if meta.get("origin") == "provider":
+        # Stripe's own invoice: keep what the list shows of it current (2026-10-23).
+        meta.update(_invoice_reading(obj))
+        meta["hosted_invoice_url"] = str(obj.get("hosted_invoice_url") or "") \
+            or meta.get("hosted_invoice_url", "")
+        meta["invoice_pdf_url"] = str(obj.get("invoice_pdf") or "") or meta.get("invoice_pdf_url", "")
+
     if event.event_type == "invoice.paid":
         invoice.status = "paid"
         meta["confirmed_by_webhook_at"] = utcnow().isoformat()
         # A recovered invoice must leave the dunning queue, or the next sweep charges a card for
         # money the provider has already taken.
         meta.pop("next_attempt_at", None)
+    elif event.event_type == "invoice.payment_failed" and invoice.status in ("paid", "void"):
+        # Delivered late: the failure that came before the payment (or the void). Taking it would
+        # reopen a settled invoice, and dunning would chase money already paid (2026-10-23).
+        outcome["note"] = f"a late payment failure for an invoice already {invoice.status}"
     elif event.event_type == "invoice.payment_failed":
         # Stays finalized. The debt is real; dunning decides what happens next, and it keys off
         # payment_failed_at (nexus/billing/dunning.py::is_due).
@@ -1269,6 +1327,12 @@ async def _apply_invoice_event(session, event: VerifiedEvent, obj: dict, outcome
             ((obj.get("last_finalization_error") or {}) or {}).get("message", "")
             or "provider reported invoice.payment_failed"
         )[:300]
+    elif event.event_type == "invoice.voided":
+        # Nothing is owed: out of dunning, and out of the customer's list if it is Stripe's own.
+        if invoice.status != "paid":
+            invoice.status = "void"
+        meta.pop("next_attempt_at", None)
+        meta["voided_at"] = utcnow().isoformat()
     elif event.event_type == "invoice.finalized":
         # Informational: the provider has issued the invoice. Our own finalization is our own
         # (nexus/billing/rating.py) and is not overridden here.

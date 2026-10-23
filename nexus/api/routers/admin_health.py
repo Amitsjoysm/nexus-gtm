@@ -117,6 +117,14 @@ def webhook_endpoint_problem(endpoints: list[dict], *, base_url: str,
     "Some endpoint exists" was the whole check, so an endpoint left pointing at an old domain, one
     switched off at Stripe, or one created by hand without the subscription events all read healthy
     while every payment stayed at Stripe and nothing activated."""
+    return webhook_endpoint_severity(endpoints, base_url=base_url, handled=handled)[1]
+
+
+def webhook_endpoint_severity(endpoints: list[dict], *, base_url: str,
+                              handled: tuple[str, ...]) -> tuple[str, str]:
+    """``(ok | degraded | error, sentence)`` (2026-10-23). No endpoint at this app, or only a
+    disabled one, is an ERROR: no payment ever arrives, nothing activates. It read as degraded,
+    the same as an endpoint missing one event, which still delivers the rest."""
     expected = f"{base_url.rstrip('/')}{WEBHOOK_PATH}" if base_url else ""
 
     def ours(endpoint: dict) -> bool:
@@ -127,23 +135,34 @@ def webhook_endpoint_problem(endpoints: list[dict], *, base_url: str,
     mine = [e for e in endpoints if ours(e)]
     if not mine:
         found = ", ".join(sorted({str(e.get("url") or "?") for e in endpoints})[:3]) or "none"
-        return (f"NO WEBHOOK ENDPOINT POINTS AT THIS APP: Stripe must send events to {where}; "
-                f"its endpoints are {found}. Payments complete at Stripe and never arrive here")
+        return ERROR, (f"NO WEBHOOK ENDPOINT POINTS AT THIS APP: Stripe must send events to "
+                       f"{where}; its endpoints are {found}. Payments complete at Stripe and never "
+                       f"arrive here")
     enabled = [e for e in mine if str(e.get("status") or "") == "enabled"]
     if not enabled:
-        return f"the webhook endpoint at {where} is DISABLED at Stripe: no event arrives"
+        return ERROR, f"the webhook endpoint at {where} is DISABLED at Stripe: no event arrives"
     missing: list[str] | None = None
     for endpoint in enabled:
         events = set(endpoint.get("enabled_events") or [])
         if "*" in events:
-            return ""
+            return OK, ""
         gap = sorted(set(handled) - events)
         if missing is None or len(gap) < len(missing):
             missing = gap
     if missing:
-        return (f"the webhook endpoint at {where} does not send {len(missing)} event(s) this app "
-                f"acts on: {', '.join(missing[:6])}")
-    return ""
+        return DEGRADED, (f"the webhook endpoint at {where} does not send {len(missing)} event(s) "
+                          f"this app acts on: {', '.join(missing[:6])}")
+    return OK, ""
+
+
+def charges_note(mode: str) -> str:
+    """What to say about an account Stripe has not enabled for charges (2026-10-23). In test mode
+    it takes test payments anyway, so "cannot take payment" sent an operator chasing a fault that
+    was not there."""
+    if mode == "test":
+        return ("charges not enabled for live payments yet (Stripe activation pending); test-mode "
+                "payments still work")
+    return "charges_enabled=FALSE — the account cannot take payment"
 
 
 async def signing_secret_problem() -> str:
@@ -194,7 +213,7 @@ async def _probe_payments() -> tuple[str, str]:
         mode = stripe_key_mode(key)
         notes = [f"{mode} mode", f"account={account.get('id')}"]
         if not account.get("charges_enabled"):
-            notes.append("charges_enabled=FALSE — the account cannot take payment")
+            notes.append(charges_note(mode))
         # THE one that silently breaks everything: subscription state arrives only by webhook,
         # and only if this app can verify it.
         secret_gap = await signing_secret_problem()
@@ -209,10 +228,11 @@ async def _probe_payments() -> tuple[str, str]:
             from nexus.billing.webhooks import HANDLED_EVENTS
             from nexus.core.config import get_settings
 
-            gap = webhook_endpoint_problem(endpoints, base_url=get_settings().app_base_url or "",
-                                           handled=tuple(HANDLED_EVENTS))
+            severity, gap = webhook_endpoint_severity(
+                endpoints, base_url=get_settings().app_base_url or "",
+                handled=tuple(HANDLED_EVENTS))
             if gap:
-                return DEGRADED, gap + ". " + ", ".join(notes)
+                return severity, gap + ". " + ", ".join(notes)
             notes.append(f"{len(endpoints)} webhook endpoint(s), this app's enabled")
     # What Checkout would refuse on, read the same way the checkout preflight reads it, so this row
     # names the cause of "no valid payment methods" before a customer meets it (2026-10-12).

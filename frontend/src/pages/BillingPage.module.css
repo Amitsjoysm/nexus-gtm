@@ -225,6 +225,31 @@
   white-space: nowrap;
 }
 
+/* Stripe's copy of the invoice and its PDF: the documents a customer files. */
+.invoiceLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-base);
+}
+
+.invoiceLinks a {
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+  text-underline-offset: 3px;
+}
+
+.invoiceLinks a:hover {
+  color: var(--accent-hover);
+}
+
+.invoiceLinks a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm, 4px);
+}
+
 /* The net of a plan change: the number the customer will actually see move. Ruled off from the
    two lines that produce it, so it reads as a total rather than a third charge. */
 .lineNet {

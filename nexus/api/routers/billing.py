@@ -13,6 +13,7 @@ abandoned the page or changed something in the portal.
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -88,6 +89,12 @@ class UsageOut(BaseModel):
     # whether the paid plan is set to end then (the downgrade to Free).
     scheduled_change: ScheduledChangeOut | None = None
     cancel_at_period_end: bool = False
+    # Whether the workspace has a customer at the payment provider, so Manage payment method opens
+    # something (2026-10-23: a Free workspace was offered it and told "no payment account yet").
+    payment_account: bool = False
+    # The paid period's start, beside `period_end`: an annual plan's period is a year, not the
+    # calendar month `period` names.
+    period_start: str | None = None
 
 
 @router.get("/usage", response_model=UsageOut)
@@ -169,10 +176,15 @@ async def get_usage(
         )
     ).all()
 
+    from nexus.billing.entitlements import gauge_level
+
     out = []
     for c in caps:
         ent = ents.get(c.id)
-        used = rollups.get(c.id, 0.0) + tail.get(c.id, 0.0)
+        # A gauge is a level, read the way enforcement reads it (2026-10-23): summing its events
+        # showed "0 of 1" seats to a workspace whose creator is a member.
+        level = await gauge_level(ts, c.id) if c.meter_kind == "gauge" else None
+        used = level if level is not None else rollups.get(c.id, 0.0) + tail.get(c.id, 0.0)
         # Only surface things the customer can actually reason about: anything they've used, or
         # anything their plan puts a number on. Pure-internal shadow meters stay hidden.
         if used == 0 and ent is None:
@@ -218,6 +230,10 @@ async def get_usage(
                              and (sub.psp_subscription_id or "").strip()),
         scheduled_change=scheduled_out,
         cancel_at_period_end=bool(sub is not None and sub.cancel_at_period_end),
+        payment_account=bool(sub is not None and (sub.psp_customer_id or "").strip()),
+        period_start=(
+            sub.current_period_start.isoformat() if sub and sub.current_period_start else None
+        ),
     )
 
 
@@ -256,6 +272,11 @@ class InvoiceOut(BaseModel):
     # there is one, because a button that opens nothing is worse than no button.
     hosted_url: str = ""
     pdf_url: str = ""
+    # When it was issued, and the service period it bills (2026-10-23). A Stripe invoice's
+    # `period_key` is `stripe:<id>`, which the list showed as its period, in Stripe-id order.
+    issued_at: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
 
 
 @router.get("/credits", response_model=CreditsOut)
@@ -288,15 +309,47 @@ async def list_invoices(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> list[InvoiceOut]:
-    """This workspace's invoices, newest period first, each with its charge lines."""
+    """This workspace's invoices, newest first, each with its charge lines.
+
+    A Stripe invoice that Stripe voided is left out, as Stripe's own customer portal leaves it out:
+    a declined upgrade's invoice used to sit here as an unpaid $1,910 for a switch that never
+    happened (2026-10-23)."""
     from nexus.models.billing import BillingInvoice, BillingInvoiceLine
 
-    invoices = await ts.list(BillingInvoice)
-    invoices.sort(key=lambda i: i.period_key, reverse=True)
+    invoices = [inv for inv in await ts.list(BillingInvoice)
+                if not (inv.status == "void" and (inv.meta or {}).get("origin") == "provider")]
+
+    def issued(inv) -> str:
+        meta = inv.meta or {}
+        when = meta.get("issued_at") or (inv.finalized_at.isoformat() if inv.finalized_at else "")
+        return str(when or (inv.created_at.isoformat() if inv.created_at else ""))
+
+    def order(inv) -> str:
+        # A usage invoice raised here closes its calendar month, so it sorts at that month's end;
+        # a Stripe invoice (`stripe:<id>`) sorts by when Stripe issued it, never by its id.
+        if re.fullmatch(r"\d{4}-\d{2}", inv.period_key or ""):
+            return f"{inv.period_key}-99"
+        return issued(inv)
+
+    invoices.sort(key=lambda i: (order(i), i.period_key), reverse=True)
     all_lines = await ts.list(BillingInvoiceLine)
     by_invoice: dict[str, list] = {}
     for line in all_lines:
         by_invoice.setdefault(line.invoice_id, []).append(line)
+
+    def lines_of(inv) -> list[InvoiceLineOut]:
+        rows = by_invoice.get(inv.id, [])
+        if rows:
+            return [InvoiceLineOut(kind=ln.kind, capability_id=ln.capability_id,
+                                   description=ln.description, quantity=float(ln.quantity),
+                                   amount_cents=ln.amount_cents)
+                    for ln in sorted(rows, key=lambda x: (x.kind, x.description))]
+        # A Stripe invoice's own lines, copied when it arrived; nothing is priced here.
+        return [InvoiceLineOut(kind=str(ln.get("kind") or "provider"), capability_id=None,
+                               description=str(ln.get("description") or ""),
+                               quantity=float(ln.get("quantity") or 1),
+                               amount_cents=int(ln.get("amount_cents") or 0))
+                for ln in (inv.meta or {}).get("lines") or [] if isinstance(ln, dict)]
 
     return [
         InvoiceOut(
@@ -305,13 +358,10 @@ async def list_invoices(
             finalized_at=inv.finalized_at.isoformat() if inv.finalized_at else None,
             hosted_url=(inv.meta or {}).get("hosted_invoice_url", ""),
             pdf_url=(inv.meta or {}).get("invoice_pdf_url", ""),
-            lines=[
-                InvoiceLineOut(
-                    kind=ln.kind, capability_id=ln.capability_id, description=ln.description,
-                    quantity=float(ln.quantity), amount_cents=ln.amount_cents,
-                )
-                for ln in sorted(by_invoice.get(inv.id, []), key=lambda x: (x.kind, x.description))
-            ],
+            issued_at=issued(inv) or None,
+            period_start=(inv.meta or {}).get("service_start") or None,
+            period_end=(inv.meta or {}).get("service_end") or None,
+            lines=lines_of(inv),
         )
         for inv in invoices
     ]
@@ -1198,12 +1248,14 @@ async def keep_plan(
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.manage_workspace)),
 ) -> KeepPlanOut:
-    """Keep the plan this workspace is on: cancel the downgrade Stripe holds for period end.
+    """Keep the plan this workspace is on: cancel the downgrade Stripe holds for period end, and
+    undo a cancel at period end (the move to Free).
 
     Stripe's Manage billing page shows a scheduled change but offers no way to cancel it (seen in
-    test mode, 2026-10-22), so the app releases the schedule itself. The subscription keeps the
-    price it bills now and renews as before; our row changes only after Stripe agreed, and the
-    `customer.subscription.updated` that follows finds nothing left to clear.
+    test mode, 2026-10-22), so the app releases the schedule itself. A plan set to end could be
+    resumed only on Stripe's page, under a banner here saying so (2026-10-23); it is resumed here
+    too. The subscription keeps the price it bills now and renews as before; our row changes only
+    after Stripe agreed, and the `customer.subscription.updated` that follows finds nothing left.
     """
     from nexus.billing.payments import PaymentError, PaymentNotConfigured, resolve_payment_provider
     from nexus.billing.stripe_subscriptions import (
@@ -1219,7 +1271,9 @@ async def keep_plan(
                             "This workspace does not pay through Stripe, so nothing is scheduled.")
     await _reject_if_admin_managed(ts, billed)
     scheduled = (billed.meta or {}).get("scheduled_change")
-    if not (isinstance(scheduled, dict) and scheduled.get("plan_id")):
+    has_schedule = isinstance(scheduled, dict) and bool(scheduled.get("plan_id"))
+    ending = bool(billed.cancel_at_period_end)
+    if not has_schedule and not ending:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "Nothing is scheduled to change on this plan.")
 
@@ -1231,23 +1285,33 @@ async def keep_plan(
         raise HTTPException(status.HTTP_409_CONFLICT,
                             f"This workspace is billed through Stripe. {NO_CREDENTIAL}")
     try:
-        await provider.release_subscription_schedule(subscription_id=psp)
+        if has_schedule:
+            await provider.release_subscription_schedule(subscription_id=psp)
+        if ending:
+            await provider.resume_subscription(subscription_id=psp)
     except PaymentNotConfigured as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     except PaymentError as exc:
         gone = in_previous_account(exc, psp)
+        still = ("the scheduled change still applies" if has_schedule
+                 else "the plan still ends with this period")
         raise HTTPException(
             status.HTTP_409_CONFLICT if gone else status.HTTP_502_BAD_GATEWAY,
-            gone or f"Stripe could not cancel the scheduled change, so it still applies: {exc}",
+            gone or f"Stripe could not keep your plan, so {still}: {exc}",
         ) from exc
 
     meta = {k: v for k, v in (billed.meta or {}).items() if k != "scheduled_change"}
-    meta["scheduled_change_cancelled"] = {"plan_id": str(scheduled["plan_id"]),
-                                          "by": principal.user_id, "at": utcnow().isoformat()}
+    stamp = {"by": principal.user_id, "at": utcnow().isoformat()}
+    if has_schedule:
+        meta["scheduled_change_cancelled"] = {"plan_id": str(scheduled["plan_id"]), **stamp}
+    if ending:
+        billed.cancel_at_period_end = False
+        meta["resumed"] = stamp
     billed.meta = meta
     await ts.flush()
-    logger.info("workspace %s kept %s; the scheduled move to %s was cancelled at Stripe (%s)",
-                ts.tenant_id, billed.plan_id, scheduled["plan_id"], psp)
+    logger.info("workspace %s kept %s at Stripe (%s): %s", ts.tenant_id, billed.plan_id, psp,
+                f"scheduled move to {scheduled['plan_id']} cancelled" if has_schedule
+                else "set to end, resumed")
     return KeepPlanOut(status="kept", plan_id=billed.plan_id)
 
 
