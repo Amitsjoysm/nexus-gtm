@@ -1614,6 +1614,11 @@ class StripePaymentProvider(PaymentProvider):
         return {"id": str(data.get("id") or subscription_id), "status": str(data.get("status", "")),
                 "cancel_at_period_end": bool(data.get("cancel_at_period_end"))}
 
+    async def get_invoice(self, invoice_id: str) -> dict:
+        """One Stripe invoice, in the pinned API version (``scripts/repair_provider_invoices.py``)."""
+        self._require()
+        return await self._get(f"/invoices/{invoice_id}")
+
     async def resume_subscription(self, *, subscription_id: str) -> dict:
         """Clear `cancel_at_period_end`. No idempotency key, like cancel: both are idempotent in
         effect, and a key would make a resume after a second cancel replay the first answer."""

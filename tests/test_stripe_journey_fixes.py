@@ -136,6 +136,43 @@ def test_the_voided_event_is_one_the_app_asks_stripe_for():
     assert "invoice.voided" in HANDLED_EVENTS
 
 
+async def test_the_repair_takes_stripes_word_on_copies_written_before_the_fix(
+        client, monkeypatch, noop_provider):
+    """Rows written before `invoice.voided` was handled still read "finalized" and have no issue
+    date: `scripts/repair_provider_invoices.py` asks Stripe, dry run first."""
+    from sqlalchemy import select
+
+    from nexus.billing.invoice_repair import repair_provider_invoices
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.billing import BillingInvoice
+
+    token, tid = await _seeded_tenant(client, slug="sjrep", plan_id="launch-annual")
+    await _follow(tid, "sub_sjrep", plan_id="launch-annual")
+    await _send(client, monkeypatch, "invoice.finalized",
+                _invoice(tid, "sub_sjrep", "in_sjrep1", status="open"))
+    async with get_platform_sessionmaker()() as s:       # as a row from before the fix looked
+        row = (await s.scalars(select(BillingInvoice).where(
+            BillingInvoice.tenant_id == tid))).one()
+        row.meta = {k: v for k, v in row.meta.items()
+                    if k not in ("issued_at", "service_start", "service_end", "lines")}
+        await s.commit()
+
+    class AtStripe:
+        async def get_invoice(self, invoice_id):
+            assert invoice_id == "in_sjrep1"
+            return _invoice(tid, "sub_sjrep", "in_sjrep1", status="void")
+
+    dry = await repair_provider_invoices(AtStripe(), apply=False)
+    assert (dry.examined, dry.voided, dry.filled) == (1, 1, 1)
+    assert [i["status"] for i in await _invoices(client, token)] == ["finalized"]
+
+    done = await repair_provider_invoices(AtStripe(), apply=True)
+    assert done.voided == 1
+    assert await _invoices(client, token) == []
+    again = await repair_provider_invoices(AtStripe(), apply=True)
+    assert again.examined == 0                           # idempotent: nothing left to ask about
+
+
 # ---- the invoice list reads like an invoice list -------------------------------------------------
 
 async def test_a_stripe_invoice_shows_its_service_period_lines_and_links(client, monkeypatch,

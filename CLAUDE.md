@@ -1093,6 +1093,10 @@ to annual and back, decline, 3D Secure, cancel to Free and resume. What was wron
   arrives); a missing event stays degraded; a test-mode account is no longer told it "cannot take
   payment". Checkout readiness warns when the account has no public business name: customers saw
   "you authorize  to charge you" on Checkout and "New Business" on the portal.
+- **Rows written before the fix** (a voided invoice still "finalized", no issue date or lines) are
+  repaired by `scripts/repair_provider_invoices.py` (`invoice_repair.py`, dry run by default): it
+  asks Stripe about each local copy and takes `void`/`paid` as final; our own invoices are never
+  touched.
 - Not code, for the owner: the Stripe account charges Indian buyers in INR with a 4% conversion fee
   (Adaptive Pricing, an account setting), and its public business name is unset.
 
