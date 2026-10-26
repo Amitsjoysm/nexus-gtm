@@ -187,11 +187,11 @@ async def pooled_people_at(domain: str, targets, *, company_name: str, limit: in
     from sqlalchemy import select
 
     from nexus.core.db import get_platform_sessionmaker, utcnow
-    from nexus.lookalike.contacts import _is_excluded, icp_title_fit
+    from nexus.lookalike.contacts import title_fits
     from nexus.models.person import Person
     from nexus.prospecting.linkedin import LinkedInPerson
 
-    if not domain or limit <= 0 or not targets.wanted:
+    if not domain or limit <= 0 or not (targets.wanted or targets.spec.get("job_levels")):
         return []
     try:
         async with get_platform_sessionmaker()() as session:
@@ -209,7 +209,7 @@ async def pooled_people_at(domain: str, targets, *, company_name: str, limit: in
     out = []
     for row in rows:
         title = row.title or ""
-        if _is_excluded(title, targets) or icp_title_fit(title, targets)[0] <= 0:
+        if not title_fits(title, targets):
             continue
         first, _, last = (row.full_name or "").strip().partition(" ")
         out.append(LinkedInPerson(linkedin_url=row.linkedin_url, first_name=first,

@@ -22,12 +22,13 @@ from nexus.api.schemas import (
     LookalikeResponse,
     SimilarPersonAddedOut,
     SimilarPersonIn,
+    SourcedContactsOut,
 )
 from nexus.core.rbac import Permission, has_permission
 from nexus.core.tenancy import TenantSession
-from nexus.integrations.provenance import display_sources
 from nexus.enrichment.waterfall import get_enricher
 from nexus.integrations.company_search import domain_from_url
+from nexus.integrations.provenance import display_sources
 from nexus.lookalike import get_lookalike_service
 from nexus.models.account import Account, Contact
 from nexus.models.intelligence import AccountScore
@@ -773,22 +774,24 @@ async def add_similar_person(
     )
 
 
-@router.post("/{account_id}/source-contacts", response_model=list[ContactOut])
+@router.post("/{account_id}/source-contacts", response_model=SourcedContactsOut)
 async def source_contacts(
     account_id: str,
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
     limit: int = 5,
-) -> list[ContactOut]:
+) -> SourcedContactsOut:
     """Source the buying committee for this account (net-new people, deduped + email-verified).
-    Powers the account 'Find contacts' action; returns only the contacts newly added."""
+    Powers the account 'Find contacts' action: the contacts newly added, what each step found, and
+    why it found nobody when it did (2026-10-26: that reason used to be logged and never shown)."""
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
-    from nexus.contacts.sourcing import source_account_contacts
+    from nexus.contacts.sourcing import find_contacts
 
-    created = await source_account_contacts(ts, account, limit=max(1, min(limit, 25)))
-    return [_contact_out(c) for c in created]
+    result = await find_contacts(ts, account, limit=max(1, min(limit, 25)))
+    return SourcedContactsOut(contacts=[_contact_out(c) for c in result.contacts],
+                              outcome=result.outcome, message=result.message_for(account))
 
 
 @router.post("/from-lookalike", response_model=AccountOut, status_code=status.HTTP_201_CREATED)

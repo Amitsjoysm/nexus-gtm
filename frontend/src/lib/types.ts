@@ -66,11 +66,30 @@ export interface Account {
   owner_user_id?: string | null;
   /** The owner's name. `null` when unowned, or when the owner has since left the workspace. */
   owner_name?: string | null;
+  /** Where each value came from, so a rep can check it against the evidence. */
+  field_sources?: FieldSources;
 }
+
+/** Where one stored value came from (`field_sources`). */
+export interface FieldSource {
+  /** linkedin | pool | web_search | enrichment_web | source_database | b2b_actor | infojoy |
+   *  csv_import | crm | manual | shared_record | an email finder's name | not_recorded */
+  source: string;
+  /** The evidence: a LinkedIn page or profile, a search hit, a record. */
+  ref?: string | null;
+  /** Every page an AI read to fill the value, when there were several. */
+  refs?: string[];
+  detail?: string | null;
+  at?: string | null;
+  /** For `not_recorded`: how the record itself arrived (`csv_import`, `crm:hubspot`, ...). */
+  arrived_via?: string;
+}
+
+export type FieldSources = Record<string, FieldSource>;
 
 export type AccountInput = Omit<
   Account,
-  "id" | "crm_source" | "crm_synced_at" | "owner_user_id" | "owner_name"
+  "id" | "crm_source" | "crm_synced_at" | "owner_user_id" | "owner_name" | "field_sources"
 >;
 
 export interface Lookalike {
@@ -206,6 +225,20 @@ export interface Contact {
   email_provider: string | null;
   phone_confidence: number;
   enrichment_source: string | null;
+  /** The person, title, email, phone and profile, each with its source. */
+  field_sources?: FieldSources;
+}
+
+/** What one Find contacts did: who it added, each step's outcome, and why when nobody. */
+export interface SourcedContacts {
+  contacts: Contact[];
+  outcome: {
+    linkedin: { status: string; found?: number; pooled?: number; discarded?: Record<string, number> };
+    web: { status: string; found?: number };
+    emails: { verified: number; unconfirmed: number; none: number };
+  };
+  /** One sentence a rep can act on. */
+  message: string;
 }
 
 export interface WorkspaceContact {
@@ -227,6 +260,7 @@ export interface WorkspaceContact {
   phone_confidence: number;
   linkedin_url: string | null;
   enrichment_source: string | null;
+  field_sources?: FieldSources;
 }
 
 export interface ReverifyResult {

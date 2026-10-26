@@ -50,6 +50,50 @@ def _name_key(name: str | None) -> str:
     return re.sub(r"\s+", " ", (name or "").strip().lower())
 
 
+#: A word that names a rung, not a role. On its own it asks LinkedIn for every VP at the company.
+_LEVEL_ONLY = frozenset({"vp", "svp", "evp", "avp", "vice president", "head", "director",
+                         "manager", "lead", "chief", "senior", "sr", "executive"})
+_ACRONYM = re.compile(r"^[A-Z][A-Za-z&]{1,6}$")
+
+
+def _variants(title: str) -> list[str]:
+    """A title as LinkedIn's title filter can match it.
+
+    "Chief Revenue Officer (CRO)" is two: the words and the acronym a headline uses. "Founder / CEO"
+    is two roles. Sent as typed, the brackets and the slash are part of the phrase, which no
+    profile holds."""
+    text = " ".join(str(title or "").split())
+    out: list[str] = []
+    for bracketed in re.findall(r"\(([^)]*)\)", text):
+        if _ACRONYM.match(bracketed.strip()):
+            out.append(bracketed.strip())
+    text = re.sub(r"\s*\([^)]*\)\s*", " ", text).strip()
+    parts = [p.strip() for p in re.split(r"\s*/\s*|\s+\bor\b\s+|\s*\|\s*", text) if p.strip()]
+    return [p for p in parts if p.lower() not in _LEVEL_ONLY] + out
+
+
+def linkedin_search_titles(icp: dict) -> list[str]:
+    """The ``jobTitles`` the employees actor is asked for: the ICP's buyer titles as a person holds
+    them, then its level-and-keyword phrasings ("Director of Facilities"). Never a bare level code:
+    levels are a gate on what comes back (`lookalike.contacts.title_fits`), not a title."""
+    from nexus.relevance.job_levels import expand_titles, spec_from_icp
+
+    icp = icp or {}
+    raw: list[str] = []
+    for key in ("buyer_titles", "titles"):
+        values = icp.get(key) or []
+        raw.extend([values] if isinstance(values, str) else list(values))
+    titles: list[str] = []
+    for title in raw:
+        for variant in _variants(title):
+            if variant.lower() not in {t.lower() for t in titles}:
+                titles.append(variant)
+    spec = spec_from_icp(icp)
+    if spec.get("title_keywords"):
+        titles += [t for t in expand_titles(spec) if t.lower() not in {x.lower() for x in titles}]
+    return titles[:MAX_TITLES]
+
+
 async def linkedin_contacts(ts, account, icp: dict, *, limit: int, client=None) -> ContactsResult:
     """Up to ``limit`` people at the account who fit the ICP's titles. Never raises for LinkedIn
     being unavailable; that is a note, and the caller falls back to web search."""
@@ -61,7 +105,8 @@ async def linkedin_contacts(ts, account, icp: dict, *, limit: int, client=None) 
 
     result = ContactsResult()
     targets = icp_title_targets(icp or {})
-    if not targets.wanted:
+    titles = linkedin_search_titles(icp or {})
+    if not titles:
         # Without titles the only request possible is "everyone who works there".
         result.notes["linkedin"] = "no_titles"
         return result
@@ -97,8 +142,7 @@ async def linkedin_contacts(ts, account, icp: dict, *, limit: int, client=None) 
             result.notes["linkedin"] = reason
             return result
         found = await li.company_employees(
-            page.url, list(targets.wanted)[:MAX_TITLES],
-            limit=min(MAX_PROFILES, max(want * 2, 5)), client=client,
+            page.url, titles, limit=min(MAX_PROFILES, max(want * 2, 5)), client=client,
         )
     except ApifyNotConfigured:
         result.notes["linkedin"] = "not_configured"

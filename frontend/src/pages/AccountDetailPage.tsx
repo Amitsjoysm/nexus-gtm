@@ -436,18 +436,14 @@ export function AccountDetailPage() {
   async function findContacts() {
     setFindingContacts(true);
     try {
-      const added = await api.sourceContacts(id, 5);
-      if (added.length > 0) {
-        toast.success(
-          "Contacts found",
-          `Added ${added.length} contact${added.length === 1 ? "" : "s"} to this account.`,
-        );
+      const result = await api.sourceContacts(id, 5);
+      // The server's sentence says which step stopped and what to do about it; the generic
+      // "couldn't source" it replaced sent reps changing titles when titles were not the problem.
+      if (result.contacts.length > 0) {
+        toast.success("Contacts found", result.message);
         contacts.refetch();
       } else {
-        toast.success(
-          "No new contacts",
-          "Couldn't source net-new people for this account right now.",
-        );
+        toast.success("No new contacts", result.message);
       }
     } catch (err) {
       toast.error("Couldn't find contacts", err instanceof ApiError ? err.detail : "Try again.");

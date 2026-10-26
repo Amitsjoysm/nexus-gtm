@@ -120,13 +120,95 @@ def get_contact_sourcing_service() -> ContactSourcingService:
     return _service
 
 
+#: What LinkedIn's note means to the person who pressed Find contacts, and what they can do.
+_LINKEDIN_REASONS = {
+    "no_titles": "Add buyer titles on the Relevance page: without them LinkedIn is not searched.",
+    "no_domain": "This account has no website domain, so its LinkedIn page cannot be proven.",
+    "no_verified_page": "No LinkedIn page lists {domain} as its website, so we could not tell "
+                        "which page is this company's.",
+    "unavailable": "LinkedIn search is unavailable right now.",
+}
+
+
+@dataclass
+class FindContactsResult:
+    """What one Find contacts did, step by step, so the page can say why it found nobody.
+
+    The chain always knew (LinkedIn's note, the rows it discarded, the web fallback's count) and only
+    logged it, so the SDR team changed buyer titles when titles were not what stopped it."""
+
+    contacts: list[Contact]
+    #: {"status": found | no_titles | no_domain | no_verified_page | nobody_fits | unavailable,
+    #:  "found", "pooled", "discarded": {wrong_company, wrong_title, duplicate}}
+    linkedin: dict
+    #: {"status": not_needed | found | none | unavailable, "found"}
+    web: dict
+    #: The account's domain, which the sentence names.
+    domain: str = ""
+
+    @property
+    def message(self) -> str:
+        return self._sentence(self.domain or "this company")
+
+    @property
+    def outcome(self) -> dict:
+        verified = sum(1 for c in self.contacts if c.email and c.email_status == "valid")
+        unconfirmed = sum(1 for c in self.contacts
+                          if c.email and c.email_status in ("catch_all", "risky"))
+        return {"linkedin": dict(self.linkedin), "web": dict(self.web),
+                "emails": {"verified": verified, "unconfirmed": unconfirmed,
+                           "none": sum(1 for c in self.contacts if not c.email)}}
+
+    def message_for(self, account: Account) -> str:
+        return self._sentence(account.domain or "this company")
+
+    def _sentence(self, domain: str) -> str:
+        if self.contacts:
+            where = "LinkedIn" if self.linkedin.get("status") == "found" else "web search"
+            n = len(self.contacts)
+            emails = self.outcome["emails"]
+            people = "person" if n == 1 else "people"
+            if emails["verified"] == n:
+                return f"Added {n} {people} from {where}, each with a verified email."
+            parts = [f"{emails['verified']} with a verified email"] if emails["verified"] else []
+            if emails["unconfirmed"]:
+                parts.append(f"{emails['unconfirmed']} whose email cannot be confirmed (the "
+                             "domain accepts every address)")
+            if emails["none"]:
+                parts.append(f"{emails['none']} with no email we could verify")
+            return f"Added {n} {people} from {where}: " + ", ".join(parts) + "."
+        status = self.linkedin.get("status", "")
+        if status == "nobody_fits":
+            seen = sum(self.linkedin.get("discarded", {}).values())
+            other = self.linkedin.get("discarded", {}).get("wrong_company", 0)
+            reason = (f"LinkedIn listed {seen} people here, none in one of your buyer titles"
+                      + (f" ({other} named another company)" if other else "") + ".")
+        else:
+            reason = _LINKEDIN_REASONS.get(status, "LinkedIn found nobody.").format(domain=domain)
+        web = self.web.get("status")
+        if web == "unavailable":
+            tail = "Web search is unavailable right now too."
+        elif web == "none":
+            tail = f"Web search found nobody with your buyer titles at {domain} either."
+        else:
+            tail = ""
+        return " ".join(p for p in (reason, tail) if p)
+
+
 async def source_account_contacts(
     ts: TenantSession, account: Account, *, limit: int = 5, linkedin_client=None,
 ) -> list[Contact]:
+    """The contacts `find_contacts` created, for callers that need only those (the pipeline)."""
+    return (await find_contacts(ts, account, limit=limit, linkedin_client=linkedin_client)).contacts
+
+
+async def find_contacts(
+    ts: TenantSession, account: Account, *, limit: int = 5, linkedin_client=None,
+) -> FindContactsResult:
     """Source the buying committee for one account: net-new people, deduped against existing
-    contacts, persisted, and email-verified. Never raises — returns the contacts created (possibly
-    empty). Used by the account "Find contacts" action and the manual Run-pipeline button (not the
-    automated sweep, which stays cheap).
+    contacts, persisted, and email-verified. Never raises for a provider being down; returns what
+    was created and why each step found what it found. Used by the account "Find contacts" action
+    and the manual Run-pipeline button (not the automated sweep, which stays cheap).
 
     LinkedIn first (``nexus/prospecting/contacts.py``): people at the account's own page with the
     ICP's titles. The contact-search registry (web search) only when that finds nobody.
@@ -138,14 +220,32 @@ async def source_account_contacts(
 
     from nexus.prospecting.contacts import linkedin_contacts
 
-    linkedin = await linkedin_contacts(ts, account, icp, limit=limit, client=linkedin_client)
-    if linkedin.notes or linkedin.discarded:
+    found = await linkedin_contacts(ts, account, icp, limit=limit, client=linkedin_client)
+    if found.notes or found.discarded:
         logger.info("LinkedIn contacts for %s: notes=%s discarded=%s", account.id,
-                    linkedin.notes, dict(linkedin.discarded))
-    if linkedin.people:
-        return await _persist_linkedin_people(ts, account, linkedin.people,
-                                              pooled=linkedin.pooled)
+                    found.notes, dict(found.discarded))
+    note = found.notes.get("linkedin", "")
+    linkedin = {
+        "status": "found" if found.people else (
+            "unavailable" if note in ("failed", "not_configured") else note or "nobody_fits"),
+        "found": len(found.people), "pooled": len(found.pooled),
+        "discarded": dict(found.discarded),
+    }
+    if found.people:
+        created = await _persist_linkedin_people(ts, account, found.people, pooled=found.pooled)
+        return FindContactsResult(created, linkedin, {"status": "not_needed", "found": 0},
+                                  domain=account.domain or "")
 
+    created = await _from_web_search(ts, account, icp, limit=limit)
+    web = {"status": "found" if created else "none", "found": len(created or [])}
+    if created is None:
+        web, created = {"status": "unavailable", "found": 0}, []
+    return FindContactsResult(created, linkedin, web, domain=account.domain or "")
+
+
+async def _from_web_search(ts: TenantSession, account: Account, icp: dict, *,
+                           limit: int) -> list[Contact] | None:
+    """The web fallback. None when the search itself failed, which is not "nobody there"."""
     from nexus.integrations.registry import get_registry
 
     registry = get_registry()
@@ -170,7 +270,7 @@ async def source_account_contacts(
         raise
     except Exception as exc:  # provider hiccup must not break the button
         logger.warning("contact_search failed for %s: %r", account.name, exc)
-        return []
+        return None
 
     from nexus.enrichment.waterfall import get_enricher
 

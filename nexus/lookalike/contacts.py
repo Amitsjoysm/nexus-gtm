@@ -238,10 +238,14 @@ class IcpTitleTargets:
     wanted: tuple[str, ...] = ()
     wanted_tokens: frozenset[str] = frozenset()
     excluded: tuple[str, ...] = ()
+    #: The ICP's level/keyword spec (`relevance/job_levels.spec_from_icp`): a GATE on a title, never
+    #: a title itself. Its level codes ("head", "c_level") used to sit in ``wanted``, so LinkedIn
+    #: was asked for people titled "head" and any title containing "vp" counted as a buyer title.
+    spec: dict = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
-        return not self.wanted and not self.excluded
+        return not self.wanted and not self.excluded and not self.spec.get("job_levels")
 
 
 #: Abbreviations a LinkedIn headline uses where a CRM record spells the role out. Applied to the
@@ -311,9 +315,11 @@ def icp_title_targets(icp: dict | None) -> IcpTitleTargets:
     in has expressed the same intent and silently ignoring it is the "configured and doing nothing"
     state this codebase keeps finding.
     """
+    from nexus.relevance.job_levels import spec_from_icp
+
     icp = icp or {}
     wanted: list[str] = []
-    for key in ("buyer_titles", "titles", "title_keywords", "job_levels"):
+    for key in ("buyer_titles", "titles", "title_keywords"):
         values = icp.get(key) or []
         if isinstance(values, str):
             values = [values]
@@ -331,6 +337,7 @@ def icp_title_targets(icp: dict | None) -> IcpTitleTargets:
         wanted=tuple(dict.fromkeys(wanted)),
         wanted_tokens=frozenset(tokens),
         excluded=tuple(dict.fromkeys(excluded)),
+        spec=spec_from_icp(icp),
     )
 
 
@@ -356,6 +363,17 @@ def icp_title_fit(title: str, targets: IcpTitleTargets) -> tuple[float, str]:
         return 0.0, ""
     fit = min(1.0, len(overlap) / 2.0)
     return fit, f"Matches ICP buyer titles on {', '.join(sorted(overlap)[:3])}"
+
+
+def title_fits(title: str, targets: IcpTitleTargets) -> bool:
+    """The one gate a found person's title passes, wherever they were found (LinkedIn, the pool):
+    not excluded, inside the ICP's job levels and keywords (`job_levels.matches_title`, the gate
+    the web search already applies), and one of its buyer titles when it names any."""
+    from nexus.relevance.job_levels import matches_title
+
+    if _is_excluded(title, targets) or not matches_title(title, targets.spec):
+        return False
+    return not targets.wanted or icp_title_fit(title, targets)[0] > 0
 
 
 def _is_excluded(title: str, targets: IcpTitleTargets) -> bool:

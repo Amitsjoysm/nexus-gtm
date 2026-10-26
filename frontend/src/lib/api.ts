@@ -146,6 +146,7 @@ import type {
   EmailTestResult,
   Mailbox,
   WorkspaceContact,
+  SourcedContacts,
   ReverifyResult,
   ContactReverifyResult,
   CallTask,
@@ -694,9 +695,9 @@ export class ApiClient {
       signal,
     });
   }
-  /** Source the buying committee for an account; returns the contacts newly added. */
+  /** Source the buying committee for an account: who was added, and why when nobody was. */
   sourceContacts(accountId: string, limit = 5, signal?: AbortSignal) {
-    return this.request<Contact[]>(`/accounts/${accountId}/source-contacts?limit=${limit}`, {
+    return this.request<SourcedContacts>(`/accounts/${accountId}/source-contacts?limit=${limit}`, {
       method: "POST",
       signal,
     });

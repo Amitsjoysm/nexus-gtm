@@ -285,6 +285,15 @@ class ContactOut(ContactIn):
     field_sources: dict = Field(default_factory=dict)
 
 
+class SourcedContactsOut(BaseModel):
+    """What Find contacts did: the people it added, each step's outcome, and one sentence a rep
+    can act on ("No LinkedIn page lists acme.io as its website ...")."""
+
+    contacts: list[ContactOut]
+    outcome: dict
+    message: str
+
+
 class WorkspaceContactOut(BaseModel):
     """A contact with its account context, for the workspace-wide Contacts list."""
 

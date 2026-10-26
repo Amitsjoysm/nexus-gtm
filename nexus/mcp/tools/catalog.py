@@ -176,9 +176,16 @@ async def _find_contacts(gw: Gateway, args: dict) -> ToolOutcome:
                         params={"limit": args["limit"]}, idempotency_key=args.get("request_id"))
     if not out.ok:
         return _fail(out)
-    found = out.data or []
-    return _ok({"added": found, "count": len(found),
-                "note": f"Found people are saved to the account in {PRODUCT_NAME}, as Find contacts does."})
+    data = out.data or {}
+    # The endpoint answers {contacts, outcome, message} (2026-10-26), so an assistant asked "why
+    # nobody?" has the reason the page shows; a list is what it answered before.
+    found = data.get("contacts", []) if isinstance(data, dict) else list(data)
+    result = {"added": found, "count": len(found),
+              "note": f"Found people are saved to the account in {PRODUCT_NAME}, as Find contacts does."}
+    if isinstance(data, dict):
+        result["why"] = data.get("message", "")
+        result["outcome"] = data.get("outcome", {})
+    return _ok(result)
 
 
 async def _find_similar(gw: Gateway, args: dict) -> ToolOutcome:

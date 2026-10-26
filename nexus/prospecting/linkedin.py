@@ -365,16 +365,12 @@ def employee_fits(person: LinkedInPerson, company_names, targets) -> tuple[bool,
     title must fit the ICP when the ICP names titles, and must not be one it excludes.
     """
     from nexus.accounts.dedupe import normalise_name
-    from nexus.lookalike.contacts import _is_excluded, icp_title_fit
+    from nexus.lookalike.contacts import title_fits
 
     names = [company_names] if isinstance(company_names, str) else list(company_names)
     wanted = {normalise_name(n) for n in names} - {""}
     if normalise_name(person.company_name) not in wanted:
         return False, "wrong_company"
-    if _is_excluded(person.title, targets):
+    if not title_fits(person.title, targets):
         return False, "wrong_title"
-    if targets.wanted:
-        fit, _ = icp_title_fit(person.title, targets)
-        if fit <= 0:
-            return False, "wrong_title"
     return True, ""
