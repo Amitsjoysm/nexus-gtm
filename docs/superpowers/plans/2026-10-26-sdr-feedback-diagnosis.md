@@ -393,6 +393,10 @@ received.
 
 ## 7. Plan, in the team's priority order
 
+**This is the plan as proposed, before the decisions.** The owner's answers changed it: there are no
+sub-campaigns and no agency parent, discovery is contact-first, and drafting gets a Superadmin model
+control. The plan that stands is "The plan after the decisions" in section 8.
+
 | Phase | Contents | Depends on |
 |---|---|---|
 | 0 | Feedback files. Which environment and screens. Approved paid probe (D-measure) on a **DB copy** to size LinkedIn's self-labels, Find-contacts reasons and email verdicts for about 20 Oil & Gas companies | owner |
@@ -414,24 +418,125 @@ Each phase follows the standing rules:
 The questions go out in the session with trade-offs stated. Answers are recorded below as they
 arrive.
 
+Asked and answered 2026-10-26. The owner's words are quoted where they added to an option.
+
 | Id | Decision | Answer |
 |---|---|---|
-| Files | Where the team's feedback files are | — |
-| Env | Which environment they tested on; read-only access to count stamped rows there | — |
-| D1 | How a company's industry is decided | — |
-| D2 | Cleanup of stamped data | — |
-| D-measure | Paid probe on a DB copy | — |
-| D3 | Unknown value on a mandatory field | — |
-| D3b | Country rule: HQ or any office | — |
-| D4 | Tech-stack data source | — |
-| D6 | InfoJoy in Find contacts | — |
-| D7 | Provenance: per field or per record | — |
-| D5 | Signals in the ICP | — |
-| D8 | What drafts may be grounded on | — |
-| D8b | Drafting model | — |
-| D9 | Several clients in one account | — |
-| D9b | Same company or person under two clients | — |
-| D10 | How an uploaded script is used | — |
+| Files | The team's feedback files | The **Dispositions and Categories** table was given in the session (below), with "best UX with easy drop downs for various categories". The detailed-feedback file has not been seen. |
+| Env | Where the team tested | **Production.** Not touched; the local stack stands in for measurement. |
+| D1 | How a company's industry is decided | **Evidence + website**: "ensure they are highly accurate and the source is traceable". |
+| D2 | Cleanup of stamped data | **Fix forward only.** Existing accounts keep their values. |
+| D2b | Stamped shared rows (202 locally) | **Quarantine**: not offered for new deliveries until a real source re-labels them. |
+| D-measure | Paid probe on a DB copy | **Approved** (LinkedIn page, about 20 Find-contacts runs, Exa, Reacher, InfoJoy records). |
+| D3 | Mandatory fields | "Location, tech stack, industry, size, titles etc. can be marked Mandatory **so only exact matches**." No data means no match. |
+| D3a | Meaning of "exact" | **Same meaning**: LinkedIn sub-industries count; titles match after abbreviations and word order, not loose keyword overlap; size inside the band; tech by product alias. |
+| D3b | Country rule | **Headquarters.** |
+| D3c | New: search for companies **that have contacts** | **Pool, then InfoJoy**, "but add others as well for fallback; we also don't want to waste companies research; best effective ways". Cost-effective, accurate and precise, with duplicate controls. A company researched with no buyer found yet is kept for a later retry, not re-bought. |
+| D4 | Tech-stack evidence | **InfoJoy + website**, product names normalised, each with source and date. |
+| D5 | Signals in the ICP | **Filter + new kinds + discover by signal.** Also a **signals filter on Accounts**, and the **Signals page opens the account page**. "Ask details wherever needed": the exact discovery queries and their cost go to the owner before they are built. |
+| D7 | Provenance | **Per field** (source, link, date), following from D1's "traceable". |
+| D8 | Drafts grounded on | **Verified facts only, minus wrong ones, plus previous emails, the prospect's LinkedIn profile, posts and signals.** Campaign drafts do not use the person brief today; only the composer and call scripts do. |
+| D8b | Drafting model | **A Superadmin control** choosing the model for emails and for call scripts: **Claude by default and first**, then the next best provider available or added. |
+| D9 | Several clients | **Client = workspace, no structural change.** Make sure SDRs can create separate workspaces. |
+| D9a | Sub-campaigns with their own ICP and offer | **No: one ICP and one offer per workspace.** |
+| D9b | Same company or person under two clients | **Allowed, never mixed.** |
+| D9c | Plan of a new client workspace | **As today**: each new workspace is billed to the owner who creates it. |
+| D10 | Uploaded call scripts | **Shown verbatim, with an AI side panel**, "and also an option to fine-tune or enhance the uploaded script". |
+| D12 | What counts as an industry (from the probe) | **Activity decides.** What the company does decides its industry, for every industry: producers, midstream, refining and oilfield services are Oil & Gas; equipment and machinery makers are Manufacturing even when they call themselves Oil & Gas. An ICP can tick "include suppliers to this industry" to add them back. A self-label (LinkedIn, Exa, InfoJoy) is evidence, not the verdict. |
+| D11 | Disposition actions | **Record + safe actions**: DNC/Opt-out → do-not-contact; Bad Number and Number Disconnected → phone bad; Bounce → email bad; Callback and Follow-Up Required → dated task; Outside ICP, Existing Customer and Duplicate Lead → account flagged, nothing deleted; Wrong Person and Reference Shared → ask for the right contact; the rest record only. |
+
+**The team's Dispositions and Categories** (one list for Email and Calling reps; channel-only values,
+such as Bounce and Busy Signal, appear only on their channel):
+
+| Category | Dispositions |
+|---|---|
+| Positive Outcome | LEAD; Interested - Send Information (MQL); Reference Shared |
+| Follow-Up | Callback; Follow-Up Required |
+| Call Attempt | No Answer; Voicemail; Busy Signal; Opening Hang-Up |
+| Contacted - Negative Outcome | Not Interested; Hung Up - No Interest; Not Interested - Reason Shared; No Budget / No Plans |
+| Contact Issues | Wrong Person; Bad Number; Number Disconnected |
+| Company Qualification | Existing Customer; Decision at Another Location; Using Competitor - Not Switching; In-House Solution; Outside ICP; Duplicate Lead; Already Engaged with Colleague; Supplier Registration Required |
+| Compliance | DNC / Opt Out / Unsubscribe |
+| Gatekeeper | Gatekeeper |
+| Other | Other |
+| Bounce | Bounce |
+
+### The plan after the decisions
+
+| Phase | Contents |
+|---|---|
+| 0 | Paid probe on a DB copy (approved). Ask for the detailed-feedback file. |
+| 1 Data accuracy | Remove the stamp. Refuse search-vendor domains. Quarantine stamped shared rows for new deliveries. A LinkedIn read replaces derived text. Industry from evidence (LinkedIn code, InfoJoy IndustryType/SIC, website classification), each with source, link, date and confidence; the website classifier is enabled only after a precision bar is met on a hand-checked sample. Per-field provenance for accounts and contacts, with the person's source kept apart from the email's, shown in the UI. Find contacts returns its reasons; job levels stop being sent as titles; titles are normalised; the contact chain becomes pool → InfoJoy → LinkedIn → web. **Contact-first discovery**: a company is a match only with a matching buyer. Researched companies with no buyer yet are kept for retry. Dedupe by domain and by person. |
+| 2 Mandatory ICP | `mandatory` on Industry, Size, HQ Country/Region, Tech and Titles. Exact means same meaning; no data means no match. One gate on every path, including LinkedIn and database candidates. Tech from InfoJoy and the website, with aliases and chip input. Fit % shown only for accounts that pass. |
+| 3 Signals | ICP signal criteria with windows. New kinds (expansion, new facility, new location; hiring with role titles). A signals filter on Accounts. Signals page → account page. Signal-led discovery once the owner approves the exact queries and cost. |
+| 4 Personalization | Verified facts only, plus previous emails, LinkedIn profile, posts and strong signals, in **campaign drafts as well**. Weak news out. A title alone no longer counts as a fact. Facts used are shown beside each draft. A Superadmin model control per purpose (email, call script): Claude first, then fallbacks. |
+| 5 Workspaces | Verify end to end that an SDR can create a separate workspace and switch between them. Billing stays per workspace, to the owner. No sub-campaigns. |
+| 6 Scripts and dispositions | Upload a script (PDF, DOCX or TXT) per campaign. Shown verbatim with an AI side panel, plus "Enhance" (a suggested revision, the original kept, the SDR accepts or rejects). Two-level Category → Disposition dropdowns with the team's 29 values; the safe actions above; the AI reply classifier mapped into the same categories. |
+
+---
+
+## 9. Probe results (2026-10-26, approved, run on the DB copy `nexus_sdrprobe`)
+
+Run on the production image (`docker compose run --rm --no-deps --entrypoint python worker`) with
+the database URL pointed at the copy, the in-memory queue and billing enforcement off. The live
+`nexus` database, the queue and the running app and worker were not touched. Script and outputs:
+`probe.py` and `out/*.json` in this session's scratchpad. Spend: a few Exa searches (about $0.20).
+Apify and InfoJoy spent nothing because both refused, as below.
+
+**Both primary data sources are down on this stack.**
+- **Apify (LinkedIn):** key 0 answers 403 *"Monthly usage hard limit exceeded"* and key 1 answers
+  401 *"User was not found or authentication token is not valid"*. Every LinkedIn step fails:
+  company search, the page lookup and the employee search.
+- **InfoJoy:** every search answers **HTTP 500**, including a one-company lookup by website and a
+  titles-only contacts search (18-49 s cold, then about 1 s). The provider is failing as a whole,
+  not on particular filters.
+- **Consequence, if production shares this Apify account and this InfoJoy service:** every ICP
+  account there comes from the web step that stamps labels (1a), Find contacts runs on web search
+  alone (1b), and Prospector fails. That alone explains much of what the team saw. **The owner
+  needs to check production's Apify usage and keys, and InfoJoy's service.**
+
+**A. The SDR complaint, reproduced.** The web company step with US, 51-5000 employees:
+- **ICP "Oil & Gas" alone.** The query is "Oil & Gas companies in United States". 23 hits, all
+  genuine producers (SM Energy, Mewbourne, Jonah Energy, Petro-Hunt, ...), all labelled
+  "Oil & Gas / United States". The stamp happens to be right here.
+- **ICP "Oil & Gas, Manufacturing".** The query is "Oil & Gas Manufacturing companies in United
+  States". 24 hits, mostly **oilfield equipment manufacturers** (Process Manufacturing, Lincoln
+  Manufacturing, JMI Manufacturing, Machine Specialty & Manufacturing, Fabritech, TSI Flow
+  Products, ...), **every one labelled "Oil & Gas"**. This is exactly "pulled Manufacturing
+  companies and labelled them Oil & Gas". The ICP's industries are joined into one keyword query
+  (`company_search.icp_to_query`), and the first one is stamped on every result.
+- **ICP of four industries** (Oil & Gas, Manufacturing, Energy, Industrial Machinery). Exa's own
+  profile text calls 5 of 24 "Machinery Manufacturing" or "Industrial Machinery Manufacturing"
+  (LeTourneau, Fisher Energy, United Engines, Reel Power, Entro), and they are still labelled
+  "Oil & Gas".
+- **Identity errors:** Dyna-Drill Technologies is filed under `slb.com`, its parent, and
+  GEODynamics under `perf.com`.
+- **Evidence we already receive and throw away:** Exa's company results state an industry
+  ("X is a Oil and Gas company") in the snippet. That is a free, traceable source for D1.
+- **Definition matters:** most equipment makers *call themselves* Oil and Gas (in Exa and on
+  LinkedIn). Whether a supplier to the industry counts as "Oil & Gas" is a business definition,
+  and the classifier must follow the owner's answer (D12).
+
+**C. Find contacts on 20 of those genuine producers.** ICP titles: Operations, Procurement, Supply
+Chain, HSE, Maintenance, Plant Manager, VP Operations, Director of Operations.
+- **LinkedIn `failed` on all 20** (Apify), so every run took the web fallback.
+- **4 of 20 accounts (20%) got nobody**, which the page reports only as "No new contacts".
+- **37 people found; 21 have an email** (17 valid, 4 catch-all). **16 (43%) have none**:
+  - 6 had all 10 patterns proven invalid, which points to a different mail domain or format;
+  - 10 got no conclusive verdict, so policy kept no address.
+- **Titles drift from the ICP:** "Lead Operator" (twice), "Land Manager", "Manager", "President",
+  "Inventory Manager", "Senior Exploitation Manager". Loose token overlap ("manager",
+  "president") lets them through. D3a's same-meaning rule fixes this.
+- **The person's source is overwritten, confirmed:** all 21 contacts with an email read
+  `pattern_verified`, and only the 16 without one still read `sourcing:search` (1c).
+- Median 23 s per account, 63 s at most.
+
+**D. InfoJoy.** It could not be measured (HTTP 500 throughout), so InfoJoy's industry and SIC
+precision and its contact coverage remain unmeasured. Re-run `PROBE_PARTS=bd` once Apify and
+InfoJoy answer.
+
+The copy `nexus_sdrprobe` is left on `nexus-gtm-postgres-1` for re-runs. It holds the 20 probe
+accounts in "SDR Demo" with an Oil & Gas ICP. Drop it when no longer needed.
 
 ---
 
