@@ -15,8 +15,6 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-import pytest
-
 from nexus.companies import industry_evidence as ev
 
 MAKER = ("Lincoln Manufacturing builds pressure-control equipment. We manufacture wellhead "
