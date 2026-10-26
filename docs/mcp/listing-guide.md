@@ -148,7 +148,7 @@ Have all of it before opening any form. What is built is in `distribution/`; the
 |---|---|
 | Documentation URL | `https://gtm.infojoy.com/help/ai-apps` (after the deploy) |
 | Support | `https://gtm.infojoy.com/help/ai-apps#support`, which names **hello@marketjoy.com** (confirmed by the owner, 2026-10-26). Portals asking for a support email get the same address; to change it, edit `nexus/mcp/help/ai-apps.md`. |
-| Privacy policy, terms | `https://infojoy.com/legal.html#privacy`, `#terms`. **Needs your legal review before submitting**: the policy (MarketJoy, Inc., undated; the terms say 22 May 2023) names neither InfoJoy GTM nor AI apps, and Anthropic and OpenAI reviewers check that it covers what a connected app receives. A section to add, for your counsel to adapt: `docs/mcp/privacy-ai-apps-draft.md`. The terms also forbid "intelligent agents" on the Website, which your counsel may want to reconcile with an AI app acting for a signed-in customer. |
+| Privacy policy, terms | `https://infojoy.com/legal.html#privacy`, `#terms`. **Needs your legal review before submitting**: the policy (MarketJoy, Inc., undated; the terms say 22 May 2023) names neither InfoJoy GTM nor AI apps, and Anthropic and OpenAI reviewers check that it covers what a connected app receives. The section to add, ready to paste after counsel reads it, with the facts to re-check and a one-sentence Terms exception (the terms forbid "intelligent agents" on the Website): `docs/mcp/privacy-policy-ai-apps.md`. |
 | Website | `https://infojoy.com/gtm.html` |
 | Icons | Built (`distribution/assets/`). The 32px outline is mechanically derived: a designer may want to redraw it. |
 | Names and descriptions | Below; they are in the manifests already |
