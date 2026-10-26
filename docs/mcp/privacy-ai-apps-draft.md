@@ -42,4 +42,4 @@ workspace audit log's retention of [period, counsel to set].
 
 **Your choices and contact.** A user can disconnect an app, or change what it may do, at any time;
 workspace administrators can see and revoke every connection in the workspace. Questions:
-[support address].
+hello@marketjoy.com.
