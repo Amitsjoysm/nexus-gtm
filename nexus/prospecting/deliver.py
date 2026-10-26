@@ -68,6 +68,48 @@ def fit_screen(profile, min_fit: int):
     return passes
 
 
+async def _industry_from_evidence(built, icp: dict, settings) -> set[str]:
+    """Apply `companies.industry_evidence` per ``industry_evidence_mode``. Returns the domains whose
+    own activity is not one of the ICP's industries (``on`` only), which are not delivered.
+
+    ``on``: a verdict becomes the account's industry, with the page and the quote as its source;
+    what the company called itself is kept as ``custom_fields.industry_self_label``. A supplier
+    (its self-label is in the ICP, its activity is not) is delivered only when the ICP includes
+    suppliers. No verdict keeps the source's label: an unreadable site is no evidence either way.
+    ``shadow``: the verdict is recorded on the account for measuring; nothing else changes."""
+    mode = getattr(settings, "industry_evidence_mode", "off")
+    if mode not in ("shadow", "on") or not built:
+        return set()
+    from nexus.companies import industry_evidence as ev
+    from nexus.integrations.provenance import record
+    from nexus.relevance.engine import _same_linkedin_industry
+
+    verdicts = await ev.classify_many([(c.domain, c.name) for c, _ in built])
+    codes = icp.get("linkedin_industry_ids") or []
+    wrong: set[str] = set()
+    for cand, account in built:
+        verdict = verdicts.get(cand.domain)
+        if verdict is None:
+            continue
+        custom = dict(account.custom_fields or {})
+        if mode == "shadow":
+            custom["industry_evidence"] = {"code": verdict.code, "label": verdict.label,
+                                           "url": verdict.url, "quote": verdict.quote}
+            account.custom_fields = custom
+            continue
+        said = account.industry
+        account.industry = verdict.label
+        record(account, "industry", "website", ref=verdict.url, detail=f'"{verdict.quote}"')
+        if said and said != verdict.label:
+            custom["industry_self_label"] = said
+        account.custom_fields = custom
+        if codes and not ev.matches_icp(verdict, icp):
+            supplier = bool(icp.get("include_suppliers")) and _same_linkedin_industry(said, codes)
+            if not supplier:
+                wrong.add(cand.domain)
+    return wrong
+
+
 async def deliver(
     ts, profile, candidates: list[Candidate], *, limit: int, source: str, min_fit: int,
     discarded: Counter, owner_user_id: str | None = None,
@@ -89,6 +131,10 @@ async def deliver(
         for cand in candidates
     ]
 
+    # What each company DOES, from its own site (2026-10-26). Before web enrichment, so a quoted
+    # verdict is never overwritten by enrichment's looser guess (it fills blanks only).
+    wrong_industry = await _industry_from_evidence(built, icp, settings)
+
     web = [account for cand, account in built if cand.source == "web"]
     enrich = settings.icp_discovery_enrich_candidates
     if enrich is None:
@@ -104,6 +150,9 @@ async def deliver(
     for cand, account in built:
         if len(account_ids) >= limit:
             break
+        if cand.domain in wrong_industry:
+            discarded["wrong_industry"] += 1
+            continue
         if cand.source in SCREENED_SOURCES and not (
             _within_size_band(account.employee_count, icp) and _within_geo(account.country, icp)
         ):

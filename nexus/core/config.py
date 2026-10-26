@@ -508,6 +508,13 @@ class Settings(BaseSettings):
     icp_discovery_enrich_candidates: bool | None = None
     icp_discovery_enrich_max: int = 40         # max candidates to web-enrich per run (cost bound)
     icp_discovery_enrich_concurrency: int = 5  # concurrent enrichments
+    # What a delivered company DOES, read off its own website with a quote
+    # (`companies/industry_evidence.py`, 2026-10-26). off: not asked. shadow: recorded on the
+    # account (custom_fields.industry_evidence) for measuring, nothing changes. on: the verdict is
+    # the account's industry, and a company whose own activity is not one of the ICP's industries
+    # is not delivered unless the ICP includes suppliers. Off until a hand-checked sample clears
+    # the precision bar (`scripts/measure_industry_evidence.py`).
+    industry_evidence_mode: Literal["off", "shadow", "on"] = "off"
 
     # Cold Calling (sub-project G): AI call scripts + a call queue + dispositions + cadence
     # "call" touches. The workflow is offline-safe (no telephony in v1), so it's on by default.

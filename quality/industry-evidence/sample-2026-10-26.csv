@@ -1,0 +1,92 @@
+group,domain,name,accept
+oil_gas_producer,sm-energy.com,SM Energy Company,57
+oil_gas_producer,mewbourne.com,Mewbourne Oil Company,57
+oil_gas_producer,jonahenergy.com,Jonah Energy,57
+oil_gas_producer,usedc.com,U.S. Energy Development Corporation,57
+oil_gas_producer,empirepetroleumcorp.com,Empire Petroleum Corporation,57
+oil_gas_producer,wildfire-energy.com,WildFire Energy LLC,57
+oil_gas_producer,murchisonoil.com,Murchison Oil & Gas,57
+oil_gas_producer,pogresources.com,PO&G Resources,57
+oil_gas_producer,walteroil.com,Walter Oil & Gas,57
+oil_gas_producer,coxoil.com,Cox Oil,57
+oil_gas_producer,encinoenergy.com,Encino Energy,57
+oil_gas_producer,nadelgussman.com,Nadel and Gussman,57
+oil_gas_producer,darrahoil.com,Darrah Oil Company,57
+oil_gas_producer,lariooil.com,Lario Oil & Gas,57
+oil_gas_producer,glacieroil.com,Glacier Oil & Gas,57
+oil_gas_producer,onealoilandgas.com,O'Neal Oil & Gas,57
+oil_gas_producer,petro-hunt.com,Petro-Hunt,57
+oil_gas_producer,hogresources.com,HOG Resources,57
+oil_gas_producer,ridgeog.com,Ridge Oil & Gas,57
+oil_gas_producer,americo-usa.com,Americo Oil,57
+oil_gas_producer,massifoil.com,Massif Oil & Gas,57
+oil_gas_equipment_maker,lincolnmanufacturing.com,Lincoln Manufacturing,25
+oil_gas_equipment_maker,jmimfg.com,JMI Manufacturing,25
+oil_gas_equipment_maker,msmmfg.com,Machine Specialty & Manufacturing,25
+oil_gas_equipment_maker,processmfg.com,Process Manufacturing,25
+oil_gas_equipment_maker,petroleum-inc.com,Petroleum Machinery,25
+oil_gas_equipment_maker,meyer-fabritech.com,Fabritech Manufacture and Solutions,25
+oil_gas_equipment_maker,cpe-llc.com,Custom Process Equipment,25
+oil_gas_equipment_maker,tsiflowproducts.com,TSI Flow Products,25
+oil_gas_equipment_maker,uscortec.com,CORTEC,25
+oil_gas_equipment_maker,letourneautechnologies.com,LeTourneau Technologies,25
+oil_gas_equipment_maker,f-e-t.com,Forum Energy Technologies,25
+oil_gas_equipment_maker,spmoilandgas.com,Weir Oil and Gas,25
+oil_gas_equipment_maker,arrowengine.com,Arrow Engine,25
+oil_gas_equipment_maker,kobelco-machinery-energy.com,Kobelco Compressors America,25
+oil_gas_equipment_maker,entro-eng.com,Entro Industries,25
+oil_gas_equipment_maker,stabildrill.com,Stabil Drill,25
+oil_gas_equipment_maker,accudyneindustries.com,Accudyne Industries,25
+oil_gas_equipment_maker,reelpowerme.com,Reel Power Marine & Energy,25
+software,zuora.com,Zuora,4|6|2458
+software,maxio.com,Maxio,4|6|2458
+software,syspro.com,Syspro,4|6|2458
+software,notion.com,Notion,4|6|2458
+software,docker.com,Docker,4|6|2458
+software,confluent.io,Confluent,4|6|2458
+software,ivanti.com,Ivanti,4|6|2458
+software,diligent.com,Diligent,4|6|2458
+software,palantir.com,Palantir Technologies,4|6|2458
+software,yoobic.com,YOOBIC,4|6|2458
+software,hackerrank.com,HackerRank,4|6|2458
+software,gomotive.com,Motive,4|6|2458
+beauty_brand,glowrecipe.com,Glow Recipe,18|54|27|1445
+beauty_brand,kravebeauty.com,KraveBeauty,18|54|27|1445
+beauty_brand,milkmakeup.com,Milk Makeup,18|54|27|1445
+beauty_brand,harrys.com,Harry's,18|54|27|1445
+beauty_brand,briogeohair.com,Briogeo Hair Care,18|54|27|1445
+media,economist.com,The Economist,3133|3132
+media,nytco.com,The New York Times Company,3133|3132
+media,wsj.com,The Wall Street Journal,3133|3132
+media,washingtonpost.com,The Washington Post,3133|3132
+media,cnbc.com,CNBC,3133|3132
+media,cnn.com,CNN,3133|3132
+media,venturebeat.com,VentureBeat,3133|3132
+media_trap,electrek.co,Electrek,3133|3132
+media_trap,autofinancenews.net,Auto Finance News,3133|3132
+media_trap,cargofacts.com,Cargo Facts,3133|3132
+media_trap,dairyherd.com,Dairy Herd Management,3133|3132
+staffing,insightglobal.com,Insight Global,104
+staffing,bhsg.com,Beacon Hill,104
+finance,blackstone.com,Blackstone,43
+finance,kkr.com,KKR,43
+aerospace_defense_maker,spacex.com,SpaceX,25
+aerospace_defense_maker,jetson.com,Jetson,25
+aerospace_defense_maker,robinsonunmanned.com,Robinson Unmanned,25
+aerospace_defense_maker,anduril.com,Anduril Industries,25
+aerospace_defense_maker,arraylabs.io,Array Labs,25
+job_board_trap,clearedjobs.net,ClearedJobs.Net,104|6
+job_board_trap,jobswithdod.com,JOBSwithDOD,104|6
+training_trap,mobiusinstitute.com,Mobius Institute,1999|105|1810
+association,afcea.org,AFCEA International,90|100
+association,marssociety.org,The Mars Society,90|100
+association,aaps.org,American Association of Pharmaceutical Scientists,90|100
+association,pda.org,Parenteral Drug Association,90|100
+association,idfa.org,International Dairy Foods Association,90|100
+association,hida.org,Health Industry Distributors Association,90|100
+pharma,torrentpharma.com,Torrent Pharma,15
+medical_device_maker,sourceray.com,Source-Ray,17|25
+medical_device_maker,noctrixhealth.com,Noctrix Health,17|25
+food_maker,earthsidefarms.com,Earthside Farms,23|27|1445
+food_maker,smalls.com,Smalls,23|27|1445
+hvac_maker,rheem-mea.com,Rheem Middle East and Africa,25

@@ -561,6 +561,19 @@ _SPECS: tuple[SettingSpec, ...] = (
                 "which cannot tell headcount or tech stack apart.",
         risk="medium",
     ),
+    SettingSpec(
+        key="industry_evidence_mode", label="Industry from the company's own website",
+        group=AUTOMATION, kind="str", options=("off", "shadow", "on"),
+        option_labels=(("off", "Off"), ("shadow", "Record only (measuring)"),
+                       ("on", "On: what the company does decides its industry")),
+        effect="Reads each delivered company's homepage and About page and picks its industry "
+               "from what it does, with the sentence that shows it. On, a supplier to an ICP's "
+               "industry is not delivered unless the ICP includes suppliers.",
+        warning="Each company read is up to two page fetches and two short AI calls. Turn it on "
+                "only after scripts/measure_industry_evidence.py clears the precision bar on a "
+                "hand-checked sample.",
+        risk="medium",
+    ),
 
     # ---- outreach and CRM -----------------------------------------------------------------------
     SettingSpec(
