@@ -211,6 +211,12 @@ async def store_companies(companies) -> dict[str, str]:
                             row.linkedin_url = c.linkedin_url or row.linkedin_url
                             row.linkedin_id = c.linkedin_id or row.linkedin_id
                             row.linkedin_industry_id = c.industry_id
+                            # LinkedIn's own label and HQ replace text another route left
+                            # (2026-10-26): `resolve_company` fills blanks only, so a stamped
+                            # "Manufacturing" outlived the read that coded a row as software.
+                            row.industry = c.industry_name or row.industry
+                            row.country = country_label(c.hq_country) or row.country
+                            row.labels_quarantined_at = None
                             row.employee_range_min = c.range_min
                             row.employee_range_max = c.range_max
                             row.hq_country_code = c.hq_country or row.hq_country_code
@@ -258,6 +264,9 @@ def _matching(ts, q: ProspectQuery, taken: set[str]):
         .where(Company.linkedin_industry_id.in_(sorted(descendants(q.industry_ids))))
         .where(~exists(select(Account.id).where(
             Account.tenant_id == ts.tenant_id, Account.domain == Company.domain)))
+        # A label that was an ICP's own words stamped onto a web find is not offered to anybody
+        # until a LinkedIn read labels the row (`scripts/quarantine_stamped_companies.py`).
+        .where(Company.labels_quarantined_at.is_(None))
     )
     if q.countries:
         stmt = stmt.where(exists(select(CompanyCountry.company_id).where(

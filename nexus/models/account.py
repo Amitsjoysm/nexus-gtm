@@ -47,6 +47,10 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
     custom_fields: Mapped[dict] = mapped_column(JSON, default=dict)
     # Provenance: "discovery" for web-sourced rows so results can filter own vs discovered.
     source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Where each FIELD came from: {field: {source, ref, at, ...}} (`integrations/provenance`,
+    # migration 0073). `source` above says how the row arrived; this says who said what, so an SDR
+    # can check "Industry: Oil and Gas" against the page that said it. NULL = not recorded.
+    field_sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Who works this account. Accounts had no owner at all, so "only alerts for MY accounts" had no
     # source of truth — found when an SDR could not route their own alerts. Set to whoever adds the
     # account; a rep can claim an unowned one or release their own, and a manager can reassign.
@@ -153,5 +157,8 @@ class Contact(IdMixin, TimestampMixin, TenantScoped, Base):
     enrichment_source: Mapped[str | None] = mapped_column(String(60), nullable=True)
     # Proprietary per-tenant columns (see CustomFieldDef).
     custom_fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Where each FIELD came from: the person (found on LinkedIn, in the pool, by web search, in an
+    # upload), their title, the email (finder, verifier, verdict) and the phone. NULL = not recorded.
+    field_sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     account: Mapped[Account] = relationship(back_populates="contacts")

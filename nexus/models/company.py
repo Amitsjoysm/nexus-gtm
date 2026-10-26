@@ -85,6 +85,12 @@ class Company(TimestampMixin, Base):
     # LinkedIn's "similar pages": [{name, linkedin_url, industry}]. They carry no website, so
     # none becomes an account until a details lookup proves its domain.
     similar_linkedin: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Where each value came from (`integrations/provenance.record`, migration 0073).
+    field_sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Set when this row's industry and country were an ICP's own words stamped onto a web find
+    # (2026-10-26). The chain's shared step does not offer it to another workspace until a
+    # LinkedIn read labels it (`scripts/quarantine_stamped_companies.py`).
+    labels_quarantined_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
 
 
 class CompanyCountry(Base):
