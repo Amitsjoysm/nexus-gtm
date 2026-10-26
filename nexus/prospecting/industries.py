@@ -71,7 +71,69 @@ SYNONYMS: dict[str, tuple[int, ...]] = {
     # Services sold to businesses, which LinkedIn files under Professional Services. Matched no
     # label, so it went to the LLM and came back different from one save to the next.
     "b2b services": (1810,),
+    # ---- every vertical, read off LinkedIn's own tree (2026-10-26) ----------------------------
+    # Whole-word containment picks the label with the fewest extra words, so a word that appears
+    # in ONE niche label filed the whole vertical there. Measured on an audit of ~170 ICP terms;
+    # `tests/test_linkedin_industries.py` pins each entry.
+    "shipping": (95, 87),                   # was Boilers, Tanks, and Shipping Container Mfg
+    "distribution": (133,),                 # was Natural Gas Distribution
+    "wholesale distribution": (133,),
+    "consumer goods": (23, 18, 727),        # was Consumer Goods Rental
+    "cpg": (23, 18, 727),
+    "fmcg": (23, 18, 727),
+    "agriculture": (201,),                  # was Agriculture, Construction, Mining Machinery Mfg
+    "furniture": (26,),                     # was Reupholstery and Furniture Repair
+    "beverages": (142,),                    # was Wholesale Alcoholic Beverages
+    # Oil and gas, power generation (renewables are its child), the grid, gas distribution. Was
+    # Services for Renewable Energy, a professional-services code.
+    "energy": (57, 383, 382, 397),
+    "renewable energy": (3240, 3243, 3241),
+    "clean energy": (3240, 3243, 3241),
+    "transportation": (116,),               # the sector, was Truck Transportation
+    "consulting": (11,),                    # was Operations Consulting
+    "management consulting": (11, 102),
+    "engineering": (3242,),                 # Engineering Services, was Civil Engineering
+    "facilities": (122,),                   # Facilities Services, was Recreational Facilities
+    "facilities management": (122,),
+    # Publishing, broadcast and film. The parent "Media & Telecommunications" also holds the
+    # telecom carriers, which an ICP saying "Media" does not mean.
+    "media": (82, 36, 35),
+    "paper": (61,),
+    "metals": (807, 840),
+    "steel": (807,),
+    # Common words that matched no label and went to the LLM.
+    "pharmaceuticals": (15,),
+    "pharma": (15,),
+    "biotech": (12,),
+    "medical devices": (17,),
+    "life sciences": (12, 15, 17),
+    "automotive": (53, 1042),
+    "chemicals": (54,),
+    "semiconductors": (7,),
+    "telecom": (8,),
+    "banks": (41,),
+    "public sector": (75,),
+    "nonprofit": (100,),
+    "law firms": (9,),
+    "textiles": (60,),
+    "commercial real estate": (44,),
+    "trucking": (92,),
+    "video games": (109, 3131),
+    "car dealerships": (1292,),
+    "automotive dealers": (1292,),
+    "dental": (2045,),
+    "senior living": (2091,),
+    "b2b saas": (4,),
+    "enterprise software": (4,),
+    "k 12": (67,),
 }
+
+#: Bumped whenever SYNONYMS or the matching rules change what a term maps to. An ICP stores the
+#: version its codes were mapped with, so codes from an older mapping are known to be stale and are
+#: mapped again (`api/routers/relevance._with_linkedin_codes`, `companies.query_for_icp`). Without
+#: it, a workspace whose "Shipping" was filed under container manufacturing kept that until somebody
+#: changed the words.
+MAPPING_VERSION = 2
 
 _WORD = re.compile(r"[a-z0-9]+")
 # Connectives that carry no meaning in a label ("Hospitals and Health Care").

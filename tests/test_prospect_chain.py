@@ -142,7 +142,11 @@ async def test_a_child_industry_counts_for_its_parent():
     tid = await make_tenant("db5")
     await _store(_row(1, industry=129))            # Capital Markets, under Financial Services (43)
 
-    result = await _run(tid, 5, icp={**ICP, "linkedin_industry_ids": [43]})
+    from nexus.prospecting.industries import MAPPING_VERSION
+
+    result = await _run(tid, 5, icp={**ICP, "industries": ["Financial Services"],
+                                     "linkedin_industry_ids": [43],
+                                     "linkedin_industry_map_version": MAPPING_VERSION})
 
     assert [c.domain for c in result.candidates] == ["co1.example-co.io"]
 

@@ -95,9 +95,10 @@ class DiscoveryAgent(BaseAgent):
         # The LinkedIn codes the ICP's industries map to, so a LinkedIn-sourced account labelled
         # "Software Development" counts as an industry match for "SaaS" (as on the saved ICP).
         if scoring_icp.get("industries"):
-            from nexus.prospecting.industries import map_industries
+            from nexus.prospecting.industries import MAPPING_VERSION, map_industries
 
             scoring_icp["linkedin_industry_ids"] = await map_industries(scoring_icp["industries"])
+            scoring_icp["linkedin_industry_map_version"] = MAPPING_VERSION
             profile.icp = scoring_icp
 
         accounts = await ctx.ts.list(Account)

@@ -149,11 +149,16 @@ def country_label(code: str | None) -> str | None:
 
 async def query_for_icp(icp: dict) -> ProspectQuery:
     """The LinkedIn search an ICP describes. Industry codes are read from the ICP when saving it
-    stored them, and mapped now otherwise."""
+    stored them with the current mapping, and mapped now otherwise: codes an older mapping produced
+    are known to be stale (`industries.MAPPING_VERSION`), and searching on them would keep filing a
+    vertical under the niche the old mapping chose."""
     from nexus.contacts.phone import region_for
+    from nexus.prospecting.industries import MAPPING_VERSION
 
     ids = [int(i) for i in (icp.get("linkedin_industry_ids") or []) if str(i).strip().isdigit()]
-    if not ids and icp.get("industries"):
+    if icp.get("linkedin_industry_map_version") != MAPPING_VERSION and icp.get("industries"):
+        ids = await map_industries(icp.get("industries")) or ids
+    elif not ids and icp.get("industries"):
         ids = await map_industries(icp.get("industries"))
     names = [str(c).strip() for c in (icp.get("countries") or []) if str(c).strip()]
     codes = [code for code in (region_for(n) for n in names) if code]

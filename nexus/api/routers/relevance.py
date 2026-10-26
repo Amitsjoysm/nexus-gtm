@@ -64,28 +64,36 @@ async def update_profile(
     )
 
 
+_DERIVED_KEYS = ("linkedin_industry_ids", "linkedin_industry_map_version")
+
+
 def _without_codes(icp: dict) -> dict:
-    return {k: v for k, v in (icp or {}).items() if k != "linkedin_industry_ids"}
+    return {k: v for k, v in (icp or {}).items() if k not in _DERIVED_KEYS}
 
 
 async def _with_linkedin_codes(icp: dict, saved: dict) -> dict:
     """The ICP with ``linkedin_industry_ids``: the LinkedIn industry codes its industries map to.
 
     Derived here, never taken from the request, so the codes always describe the words beside them.
-    Unchanged industries keep the codes already stored (no LLM call on every save); changed ones are
-    mapped again. Mapping never raises: a term nothing can place costs that term, not the save.
+    Unchanged industries keep the codes already stored (no LLM call on every save) when the current
+    mapping produced them; changed ones, and codes from an older mapping, are mapped again. Mapping
+    never raises: a term nothing can place costs that term, not the save.
     """
-    icp.pop("linkedin_industry_ids", None)
+    from nexus.prospecting.industries import MAPPING_VERSION, map_industries
+
+    for key in _DERIVED_KEYS:
+        icp.pop(key, None)
     industries = list(icp.get("industries") or [])
     if not industries:
         return icp
-    if industries == list(saved.get("industries") or []) and saved.get("linkedin_industry_ids"):
+    if (industries == list(saved.get("industries") or []) and saved.get("linkedin_industry_ids")
+            and saved.get("linkedin_industry_map_version") == MAPPING_VERSION):
         icp["linkedin_industry_ids"] = list(saved["linkedin_industry_ids"])
+        icp["linkedin_industry_map_version"] = MAPPING_VERSION
         return icp
     try:
-        from nexus.prospecting.industries import map_industries
-
         icp["linkedin_industry_ids"] = await map_industries(industries)
+        icp["linkedin_industry_map_version"] = MAPPING_VERSION
     except Exception:
         logger.warning("could not map ICP industries to LinkedIn codes", exc_info=True)
     return icp

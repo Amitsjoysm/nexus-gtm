@@ -49,7 +49,19 @@ async def test_discovery_ranks_own_data_by_icp_fit():
 
 
 @pytest.mark.asyncio
-async def test_discovery_web_gapfill_creates_discovery_accounts():
+async def test_discovery_web_gapfill_creates_discovery_accounts(monkeypatch):
+    # The industry comes from enrichment reading the company, never from the ICP the search was
+    # asked with (`test_web_hit_labels.py`): a hit carries no industry of its own.
+    from nexus.core.config import get_settings
+    from nexus.discovery import auto
+
+    async def enrich(ts, accounts, *, concurrency):
+        for account in accounts:
+            account.industry = account.industry or "Fintech"
+            account.country = account.country or "United States"
+
+    monkeypatch.setattr(auto, "_enrich_candidates", enrich)
+    monkeypatch.setattr(get_settings(), "icp_discovery_enrich_candidates", True)
     tid = await make_tenant("t-disc2")
     icp = {"industries": ["Fintech"], "geo": ["United States"],
            "company_size": {"min": 200, "max": 5000}}
