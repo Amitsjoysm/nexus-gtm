@@ -8,6 +8,7 @@ import {
   Card,
   EmptyState,
   Field,
+  IconButton,
   Icons,
   Input,
   Modal,
@@ -27,6 +28,12 @@ import {
   lookalikeFromAdded,
 } from "@/components/AddSimilarPerson";
 import { CallConsole } from "@/components/CallConsole";
+import {
+  commonSource,
+  ContactSources,
+  sameSource,
+  SourceNote,
+} from "@/components/provenance/SourceNote";
 import { EmailComposer } from "@/components/EmailComposer";
 import { AccountConversations } from "@/components/engagement/AccountConversations";
 import { useEngineOn } from "@/app/EngagementContext";
@@ -50,12 +57,14 @@ import type {
   CallTask,
   Contact,
   ContactLookalike,
+  FieldSource,
   LookalikeMode,
   Lookalike,
   OutcomeStage,
   Role,
   SignalEvent,
   SimilarPersonAdded,
+  SourcedContacts,
   TitleRecommendation,
 } from "@/lib/types";
 import styles from "./AccountDetailPage.module.css";
@@ -115,6 +124,9 @@ export function AccountDetailPage() {
   const engineOn = useEngineOn() === true;
   const [running, setRunning] = useState(false);
   const [findingContacts, setFindingContacts] = useState(false);
+  // The last Find contacts' own sentence, kept on screen: a toast is gone before a rep has read
+  // why nobody was found, and "why" is what decides the next move.
+  const [lastFind, setLastFind] = useState<SourcedContacts | null>(null);
   const [addingLookalike, setAddingLookalike] = useState<string | null>(null);
   const [enrichingAcct, setEnrichingAcct] = useState(false);
   const [launching, setLaunching] = useState(false);
@@ -439,6 +451,7 @@ export function AccountDetailPage() {
       const result = await api.sourceContacts(id, 5);
       // The server's sentence says which step stopped and what to do about it; the generic
       // "couldn't source" it replaced sent reps changing titles when titles were not the problem.
+      setLastFind(result);
       if (result.contacts.length > 0) {
         toast.success("Contacts found", result.message);
         contacts.refetch();
@@ -656,23 +669,55 @@ export function AccountDetailPage() {
           >
             {(acc) => {
               const hq = [acc.city, acc.region].filter(Boolean).join(", ");
+              const all = acc.field_sources ?? {};
+              // Facts from one source say so once, under the heading; a fact names its own source
+              // only when it differs. Repeating the same line under every value was noise.
+              const shared = commonSource([
+                all.industry, all.sub_industry, all.employee_count, all.revenue, all.country,
+                all.city ?? all.region, all.domain, all.linkedin_url,
+              ]);
+              const own = (entry: FieldSource | undefined) =>
+                sameSource(entry, shared) ? undefined : entry;
+              const src = {
+                industry: own(all.industry), sub_industry: own(all.sub_industry),
+                employee_count: own(all.employee_count), revenue: own(all.revenue),
+                country: own(all.country), city: own(all.city), region: own(all.region),
+                domain: own(all.domain), linkedin_url: own(all.linkedin_url),
+                description: all.description, tech_stack: own(all.tech_stack),
+              };
               return (
                 <Card padding="lg">
                   {acc.description && (
-                    <p style={{ marginBottom: "var(--space-5)", color: "var(--text)" }}>
-                      {acc.description}
-                    </p>
+                    <div className={styles.description}>
+                      <p>{acc.description}</p>
+                      <SourceNote source={src.description} field="Description" />
+                    </div>
                   )}
                   <div className={styles.factLabel}>Firmographics</div>
+                  {shared && (
+                    <div className={styles.sharedSource}>
+                      Source: <SourceNote source={shared} field="Firmographics" />
+                    </div>
+                  )}
                   <div style={{ height: "var(--space-2)" }} />
                   <div className={styles.facts}>
-                    <Fact label="Industry" value={acc.industry ?? "—"} />
-                    {acc.sub_industry && <Fact label="Sub-industry" value={acc.sub_industry} />}
-                    <Fact label="Employees" value={formatNumber(acc.employee_count)} />
-                    {acc.revenue && <Fact label="Est. revenue" value={acc.revenue} />}
-                    <Fact label="Country" value={acc.country ?? "—"} />
-                    {hq && <Fact label="Headquarters" value={hq} />}
-                    <Fact label="Domain" value={acc.domain ?? "—"} />
+                    <Fact label="Industry" value={acc.industry ?? "—"} source={src.industry} />
+                    {acc.sub_industry && (
+                      <Fact label="Sub-industry" value={acc.sub_industry} source={src.sub_industry} />
+                    )}
+                    <Fact
+                      label="Employees"
+                      value={formatNumber(acc.employee_count)}
+                      source={src.employee_count}
+                    />
+                    {acc.revenue && (
+                      <Fact label="Est. revenue" value={acc.revenue} source={src.revenue} />
+                    )}
+                    <Fact label="Country" value={acc.country ?? "—"} source={src.country} />
+                    {hq && (
+                      <Fact label="Headquarters" value={hq} source={src.city ?? src.region} />
+                    )}
+                    <Fact label="Domain" value={acc.domain ?? "—"} source={src.domain} />
                     {typeof acc.fit_score === "number" && (
                       <Fact label="ICP fit" value={String(acc.fit_score)} />
                     )}
@@ -684,6 +729,7 @@ export function AccountDetailPage() {
                             View profile ↗
                           </a>
                         }
+                        source={src.linkedin_url}
                       />
                     )}
                   </div>
@@ -691,6 +737,7 @@ export function AccountDetailPage() {
                     <>
                       <div style={{ height: "var(--space-5)" }} />
                       <div className={styles.factLabel}>Tech stack</div>
+                      <SourceNote source={src.tech_stack} field="Tech stack" />
                       <div className={styles.tech}>
                         {acc.tech_stack.map((t) => (
                           <Badge key={t} tone="neutral">
@@ -753,6 +800,23 @@ export function AccountDetailPage() {
               hint="Searches the web for people at this company, then finds and verifies each work email, one at a time."
               slowAfter={60}
             />
+          )}
+          {lastFind && !findingContacts && (
+            <div
+              className={lastFind.contacts.length > 0 ? styles.findOutcome : styles.findOutcomeNone}
+              role="status"
+            >
+              <span className={styles.findOutcomeIcon} aria-hidden="true">
+                {lastFind.contacts.length > 0 ? <Icons.CheckIcon /> : <Icons.HelpCircleIcon />}
+              </span>
+              <p className={styles.findOutcomeText}>{lastFind.message}</p>
+              <IconButton
+                size="sm"
+                label="Dismiss"
+                icon={<Icons.XIcon />}
+                onClick={() => setLastFind(null)}
+              />
+            </div>
           )}
           {titleRecs && titleRecs.length > 0 && (
             <Card padding="md" className={styles.titleRecCard}>
@@ -819,6 +883,7 @@ export function AccountDetailPage() {
                         <div className={styles.contactMeta}>
                           {[c.title, c.seniority].filter(Boolean).join(" · ") || "—"}
                         </div>
+                        <ContactSources contact={c} />
                       </div>
                       <div className={styles.contactRight}>
                         {c.email ? (
@@ -1200,11 +1265,21 @@ export function AccountDetailPage() {
   );
 }
 
-function Fact({ label, value }: { label: string; value: React.ReactNode }) {
+function Fact({
+  label,
+  value,
+  source,
+}: {
+  label: string;
+  value: React.ReactNode;
+  /** Where the value came from (`field_sources`), shown under it so a rep can check it. */
+  source?: FieldSource;
+}) {
   return (
     <div className={styles.fact}>
       <span className={styles.factLabel}>{label}</span>
       <span className={styles.factValue}>{value}</span>
+      <SourceNote source={source} field={label} />
     </div>
   );
 }

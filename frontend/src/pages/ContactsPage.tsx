@@ -25,6 +25,7 @@ import { CallConsole } from "@/components/CallConsole";
 import { EmailComposer } from "@/components/EmailComposer";
 import { DncBadge, useDoNotContact } from "@/components/engagement/DncBadge";
 import { AddToListModal } from "@/components/lists/AddToListModal";
+import { SourceNote, sourceLabel } from "@/components/provenance/SourceNote";
 import { useApi } from "@/hooks/useApi";
 import { useSelection } from "@/hooks/useSelection";
 import { useApiClient } from "@/app/AuthContext";
@@ -40,6 +41,12 @@ import type {
   WorkspaceContact,
 } from "@/lib/types";
 import styles from "./ContactsPage.module.css";
+
+/** The person's source as text, for sorting the Found via column. */
+function sourceLabelOf(c: WorkspaceContact): string {
+  const person = c.field_sources?.person;
+  return person ? sourceLabel(person) : "";
+}
 
 /** What Email and Call need: a table row, or a similar-people result already in the workspace. */
 type Reachable = Pick<
@@ -399,6 +406,18 @@ export function ContactsPage() {
             {c.account_name}
           </span>
         ),
+      },
+      {
+        // Where the person was found, so a rep can check them before reaching out.
+        key: "found_via",
+        header: "Found via",
+        sortValue: (c) => sourceLabelOf(c),
+        render: (c) =>
+          c.field_sources?.person ? (
+            <SourceNote source={c.field_sources.person} field={`${c.full_name}`} />
+          ) : (
+            <span className={styles.muted}>—</span>
+          ),
       },
       {
         key: "email",
