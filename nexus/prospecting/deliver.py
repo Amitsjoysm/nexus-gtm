@@ -29,9 +29,10 @@ SCREENED_SOURCES = frozenset({"web", "shared"})
 
 
 def _account_for(ts_tenant_id, cand: Candidate, *, source: str, owner_user_id=None):
+    from nexus.integrations.provenance import record, record_present
     from nexus.models.account import Account
 
-    return Account(
+    account = Account(
         tenant_id=ts_tenant_id, name=(cand.name or cand.domain).strip(), domain=cand.domain,
         # Only what a source reported. Never the ICP's own values: a stamped industry is
         # permanent (enrichment fills blanks only) and the fit score would then credit the ICP
@@ -39,6 +40,16 @@ def _account_for(ts_tenant_id, cand: Candidate, *, source: str, owner_user_id=No
         industry=cand.industry, country=cand.country, employee_count=cand.employee_count,
         source=source, owner_user_id=owner_user_id, company_id=cand.company_id,
     )
+    # Where each value came from, so an SDR can check it (2026-10-26).
+    if cand.source in ("linkedin", "database"):
+        record_present(account, "linkedin", ref=cand.linkedin_url or None)
+    elif cand.source == "shared":
+        record_present(account, "shared_record",
+                       detail="found by another workspace; labels read off its own text")
+    else:
+        # A web hit says only where it was: what the company does is enrichment's to read.
+        record(account, ["name", "domain"], "web_search", ref=cand.url or None)
+    return account
 
 
 def fit_screen(profile, min_fit: int):

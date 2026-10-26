@@ -111,6 +111,8 @@ class Candidate:
     country: str | None = None
     employee_count: int | None = None
     linkedin_url: str = ""
+    #: The page a web search hit was, so the account can say where it was found.
+    url: str = ""
 
 
 @dataclass
@@ -545,7 +547,7 @@ async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainRes
             result.candidates.append(Candidate(
                 domain=domain, name=(cand.name or domain).strip(), source="web",
                 industry=cand.industry, country=cand.country,
-                employee_count=cand.employee_count))
+                employee_count=cand.employee_count, url=cand.url or ""))
 
 
 # ---- the chain ---------------------------------------------------------------------------------

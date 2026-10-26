@@ -22,6 +22,7 @@ from __future__ import annotations
 import csv as _csv
 import io
 
+from nexus.integrations.provenance import record_present
 from nexus.models.account import Account, Contact
 
 # A row cap rather than a byte cap, because the byte cap belongs at the HTTP layer where the file
@@ -323,6 +324,7 @@ async def import_accounts_csv(
                         owner_user_id=owner_user_id,
                     )
                     _apply_account(account, fields, extras)
+                    record_present(account, "csv_import")
                     ts.add(account)
                     await ts.flush()
                     created += 1
@@ -422,6 +424,7 @@ async def import_contacts_csv(
                     extras = _custom_values(row, custom, _extras(row, mapped_columns))
                     if extras:
                         contact.custom_fields = extras
+                    record_present(contact, "csv_import")
                     ts.add(contact)
                     await ts.flush()
                     created += 1

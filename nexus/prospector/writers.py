@@ -46,6 +46,9 @@ async def upsert_account(ts, *, name: str, url: str, country: str = "", state: s
         country=(country or None), region=(state or None), industry=(industry or None),
         source="prospector", owner_user_id=owner_user_id, custom_fields=custom,
     )
+    from nexus.integrations.provenance import record_present
+
+    record_present(account, "infojoy", detail="InfoJoy company record")
     ts.add(account)
     await ts.flush()
     return account, True, bool(linkedin_url) and page is None
@@ -86,6 +89,12 @@ async def upsert_contact(ts, account: Account, record: VendorContact, *,
         linkedin_url=(profile[:255] if profile else None),
         enrichment_source=SOURCE, email_status=None, custom_fields=custom,
     )
+    from nexus.integrations.provenance import record, record_present
+
+    record_present(contact, "infojoy", detail="InfoJoy contact record")
+    if contact.email:
+        # The vendor's address as delivered: held out of campaigns until a verifier checks it.
+        record(contact, "email", "infojoy", detail="as delivered by InfoJoy, unverified")
     ts.add(contact)
     await ts.flush()
     return contact, True

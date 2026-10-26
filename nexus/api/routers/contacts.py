@@ -13,6 +13,7 @@ from nexus.api.schemas import ReverifyResult, WorkspaceContactOut
 from nexus.billing.meter import metered
 from nexus.core.rbac import Permission
 from nexus.core.tenancy import TenantSession
+from nexus.integrations.provenance import display_sources
 from nexus.models.account import Account, Contact
 
 logger = logging.getLogger("nexus.api.routers.contacts")
@@ -137,6 +138,7 @@ async def _query_contacts(
             phone_confidence=contact.phone_confidence,
             linkedin_url=contact.linkedin_url,
             enrichment_source=contact.enrichment_source,
+            field_sources=display_sources(contact),
         )
         for (contact, acc_name, acc_domain) in rows
     ]

@@ -245,6 +245,10 @@ class DiscoveryAgent(BaseAgent):
                         email=cand.email,
                         enrichment_source=f"sourcing:{cand.source}",
                     )
+                    from nexus.integrations.provenance import record_present
+
+                    record_present(person, "web_search", ref=getattr(cand, "linkedin_url", None),
+                                   detail=f"people search ({cand.source})")
                     ctx.ts.add(person)
                     await ctx.ts.flush()
                     candidates.append(

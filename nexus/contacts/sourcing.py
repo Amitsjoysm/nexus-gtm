@@ -201,6 +201,10 @@ async def source_account_contacts(
             linkedin_url=cand.linkedin_url,
             enrichment_source=f"sourcing:{cand.source}",
         )
+        from nexus.integrations.provenance import record_present
+
+        record_present(person, "web_search", ref=cand.linkedin_url or getattr(cand, "url", None),
+                       detail=f"people search ({cand.source})")
         ts.add(person)
         await ts.flush()
         # Guess + verify the work email (the waterfall enricher patterns first.last@domain and
@@ -223,6 +227,7 @@ async def _persist_linkedin_people(ts: TenantSession, account: Account, people,
     waterfall enricher, which also charges for it). Already deduped by the caller. ``pooled`` are
     the profiles the shared pool supplied rather than a LinkedIn read now."""
     from nexus.enrichment.waterfall import get_enricher
+    from nexus.integrations.provenance import record_present
     from nexus.people.store import normalise_linkedin
 
     enricher = get_enricher()
@@ -234,6 +239,9 @@ async def _persist_linkedin_people(ts: TenantSession, account: Account, people,
             title=person.title or None, linkedin_url=person.linkedin_url,
             enrichment_source="sourcing:pool" if from_pool else "sourcing:linkedin",
         )
+        # The profile is the evidence: it names the person, the title and the company.
+        record_present(contact, "pool" if from_pool else "linkedin", ref=person.linkedin_url,
+                       detail="found earlier by a LinkedIn read" if from_pool else None)
         ts.add(contact)
         await ts.flush()
         try:

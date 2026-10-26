@@ -285,10 +285,25 @@ class SearchBackedAccountEnricher:
         data = _parse_obj(resp.text)
         if isinstance(data, dict) and data.get("linkedin_url"):
             data["linkedin_url"] = proven_company_page(data["linkedin_url"], hits, account) or ""
+        if isinstance(data, dict) and data:
+            # The pages the model read, so a filled field can say where it was read from.
+            data["_refs"] = [h.url for h in hits if getattr(h, "url", None)]
         return data
 
-    def apply(self, account: Account, data: dict) -> list[str]:
-        """Fill BLANK fields only — never overwrite existing CRM/user data. Returns filled keys."""
+    def apply(self, account: Account, data: dict, *, source: str = "enrichment_web",
+              detail: str | None = None) -> list[str]:
+        """Fill BLANK fields only — never overwrite existing CRM/user data. Returns filled keys.
+
+        Records ``source`` against each field it filled (`integrations/provenance.py`), with the
+        pages the web path read (``data["_refs"]``); a field it left alone keeps its own source."""
+        filled = self._fill(account, data)
+        from nexus.integrations.provenance import record
+
+        record(account, filled, source, refs=data.get("_refs") if isinstance(data, dict) else None,
+               detail=detail)
+        return filled
+
+    def _fill(self, account: Account, data: dict) -> list[str]:
         filled: list[str] = []
         industry = (data.get("industry") or "").strip()
         if industry and not account.industry:
@@ -384,7 +399,7 @@ class SearchBackedAccountEnricher:
             # Parsed by the hit, not by `apply`: a source column may hold "250", 250, or a band
             # like "51-200" that is not one number, and `apply` only accepts a real int.
             "employee_count": hit.employee_count(),
-        })
+        }, source="source_database", detail=getattr(hit, "source_name", "") or None)
         return filled, hit
 
     async def from_b2b_actor(self, account: Account) -> list[str]:
@@ -408,7 +423,7 @@ class SearchBackedAccountEnricher:
         except Exception as exc:  # provider isolation, same as every other provider here
             logger.warning("b2b actor account enrich failed: %r", exc)
             return []
-        return self.apply(account, data) if data else []
+        return self.apply(account, data, source="b2b_actor") if data else []
 
     async def enrich(
         self, ts, account: Account, *, user_id: str | None = None,

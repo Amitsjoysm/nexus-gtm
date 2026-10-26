@@ -94,6 +94,8 @@ class EnrichmentResult:
     phone: str | None = None
     phone_confidence: float = 0.0
     source: str | None = None
+    #: Which provider supplied the phone, when it is not the one that supplied the email.
+    phone_source: str | None = None
     # Deliverability verdict that travels back with a found email (verifying finder).
     email_status: str | None = None
     provider_type: str | None = None

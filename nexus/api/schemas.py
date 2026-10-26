@@ -258,6 +258,9 @@ class AccountOut(AccountIn):
     # without being allowed to list the workspace's members.
     owner_user_id: str | None = None
     owner_name: str | None = None
+    # Where each value came from: {field: {source, ref?, refs?, detail?, at}}. A value written
+    # before sources were kept reads {"source": "not_recorded", "arrived_via": <how the row came>}.
+    field_sources: dict = Field(default_factory=dict)
 
 
 class ContactIn(BaseModel):
@@ -278,6 +281,8 @@ class ContactOut(ContactIn):
     email_provider: str | None = None    # detected ESP: gsuite|office365|outlook|yahoo|custom|…
     phone_confidence: float
     enrichment_source: str | None = None
+    # Per field: the person, title, email, phone and profile (see AccountOut.field_sources).
+    field_sources: dict = Field(default_factory=dict)
 
 
 class WorkspaceContactOut(BaseModel):
@@ -300,6 +305,7 @@ class WorkspaceContactOut(BaseModel):
     phone_confidence: float = 0.0
     linkedin_url: str | None = None
     enrichment_source: str | None = None
+    field_sources: dict = Field(default_factory=dict)
 
 
 class ReverifyResult(BaseModel):

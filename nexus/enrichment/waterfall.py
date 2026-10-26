@@ -46,6 +46,15 @@ logger = logging.getLogger("nexus.enrichment.waterfall")
 CONTACT_CAPABILITY = "enrich.contact"
 
 
+def _verdict_detail(status: str | None, check: str) -> str:
+    """How an address was checked, as a person reads it: "valid, checked at the mailbox"."""
+    if not status:
+        return "not checked"
+    where = {"mailbox": "checked at the mailbox", "domain": "checked at the domain only"}.get(
+        check or "", "no verifier configured")
+    return f"{status.replace('_', '-')}, {where}"
+
+
 class WaterfallEnricher:
     def __init__(
         self,
@@ -124,6 +133,7 @@ class WaterfallEnricher:
             if r.phone and r.phone_confidence > merged.phone_confidence:
                 merged.phone, merged.phone_confidence = r.phone, r.phone_confidence
                 merged.source = merged.source or r.source
+                merged.phone_source = r.source
             merged.found = merged.found or bool(r.email or merged.phone)
             if self._satisfied(merged, candidates):
                 break
@@ -254,6 +264,8 @@ class WaterfallEnricher:
             merged.source = choice.source
         merged.found = bool(merged.email or merged.phone)
 
+        from nexus.integrations.provenance import record
+
         if merged.email and merged.email_confidence >= contact.email_confidence:
             contact.email, contact.email_confidence = merged.email, merged.email_confidence
             # Persist the deliverability verdict too — without this the verified status was
@@ -267,9 +279,16 @@ class WaterfallEnricher:
                     cf = dict(contact.custom_fields or {})
                     cf["email_provider"] = merged.provider_type
                     contact.custom_fields = cf
+            record(contact, "email", merged.source or "email_finder",
+                   detail=_verdict_detail(merged.email_status, merged.email_check))
         if merged.phone and merged.phone_confidence >= contact.phone_confidence:
             contact.phone, contact.phone_confidence = merged.phone, merged.phone_confidence
-        if merged.found:
+            record(contact, "phone", merged.phone_source or merged.source or "phone_finder")
+        # Where the PERSON came from is kept (2026-10-26). It used to be overwritten here with
+        # whichever finder supplied the email, so a person found on LinkedIn, in a CRM or in an
+        # upload read `pattern_verified` the moment they had an address; the email's own source
+        # is in `field_sources` now. A contact that had no source takes the finder's, as before.
+        if merged.found and not contact.enrichment_source:
             contact.enrichment_source = merged.source
         await ts.flush()
         if (merged.email and merged.email_status == STATUS_VALID and merged.email_check == "mailbox"

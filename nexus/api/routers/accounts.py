@@ -25,6 +25,7 @@ from nexus.api.schemas import (
 )
 from nexus.core.rbac import Permission, has_permission
 from nexus.core.tenancy import TenantSession
+from nexus.integrations.provenance import display_sources
 from nexus.enrichment.waterfall import get_enricher
 from nexus.integrations.company_search import domain_from_url
 from nexus.lookalike import get_lookalike_service
@@ -71,6 +72,7 @@ def _account_out(
         owner_user_id=a.owner_user_id,
         # Only beside an owner id: a name with no owner behind it would be a stale label.
         owner_name=owner_name if a.owner_user_id else None,
+        field_sources=display_sources(a),
     )
 
 
@@ -120,6 +122,7 @@ def _contact_out(c: Contact) -> ContactOut:
         email_provider=(c.custom_fields or {}).get("email_provider"),
         phone_confidence=c.phone_confidence,
         enrichment_source=c.enrichment_source,
+        field_sources=display_sources(c),
     )
 
 
@@ -163,6 +166,9 @@ async def create_account(
         # first signal, rather than after somebody remembers to claim it.
         owner_user_id=principal.user_id,
     )
+    from nexus.integrations.provenance import record_present
+
+    record_present(account, "manual", detail="typed by a person in this workspace")
     ts.add(account)
     await ts.flush()
     # Collect signals for it now rather than waiting up to 6 hours for the refresh sweep. Adding an
@@ -456,6 +462,9 @@ async def create_contact(
         phone=body.phone,
         linkedin_url=_profile_or_422(body.linkedin_url),
     )
+    from nexus.integrations.provenance import record_present
+
+    record_present(contact, "manual", detail="typed by a person in this workspace")
     ts.add(contact)
     await ts.flush()
     return _contact_out(contact)

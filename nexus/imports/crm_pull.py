@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 
 from nexus.imports.csv_ingest import _apply_account, normalise_domain, normalise_email
+from nexus.integrations.provenance import record_present
 from nexus.models.account import Account, Contact
 
 logger = logging.getLogger("nexus.imports.crm_pull")
@@ -86,6 +87,7 @@ async def import_accounts_from_crm(ts, connector, *, limit: int | None = None) -
             _apply_account(account, fields, {})
             account.crm_id = str(external_id) if external_id else None
             account.crm_source = source
+            record_present(account, "crm", detail=source)
             ts.add(account)
             created += 1
         else:
@@ -169,6 +171,7 @@ async def import_contacts_from_crm(ts, connector, *, limit: int | None = None) -
             contact.title = getattr(record, "title", None) or None
             contact.phone = getattr(record, "phone", None) or None
             contact.enrichment_source = f"crm:{source}"
+            record_present(contact, "crm", detail=source)
             ts.add(contact)
             created += 1
         else:
