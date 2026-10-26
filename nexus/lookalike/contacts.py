@@ -242,6 +242,9 @@ class IcpTitleTargets:
     #: a title itself. Its level codes ("head", "c_level") used to sit in ``wanted``, so LinkedIn
     #: was asked for people titled "head" and any title containing "vp" counted as a buyer title.
     spec: dict = field(default_factory=dict)
+    #: Job titles are a mandatory ICP field (`relevance/gate.py`): a title must be one of the
+    #: ICP's in meaning, never a loose overlap of one word ("Land Manager" for "Operations Manager").
+    strict: bool = False
 
     @property
     def is_empty(self) -> bool:
@@ -338,6 +341,7 @@ def icp_title_targets(icp: dict | None) -> IcpTitleTargets:
         wanted_tokens=frozenset(tokens),
         excluded=tuple(dict.fromkeys(excluded)),
         spec=spec_from_icp(icp),
+        strict="titles" in {str(v) for v in (icp.get("mandatory") or [])},
     )
 
 
@@ -373,7 +377,13 @@ def title_fits(title: str, targets: IcpTitleTargets) -> bool:
 
     if _is_excluded(title, targets) or not matches_title(title, targets.spec):
         return False
-    return not targets.wanted or icp_title_fit(title, targets)[0] > 0
+    if not targets.wanted:
+        return True
+    if targets.strict:
+        from nexus.relevance.gate import same_meaning_title
+
+        return same_meaning_title(title, targets.wanted)
+    return icp_title_fit(title, targets)[0] > 0
 
 
 def _is_excluded(title: str, targets: IcpTitleTargets) -> bool:

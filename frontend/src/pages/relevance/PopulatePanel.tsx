@@ -35,6 +35,8 @@ const DISCARD_LABEL: Record<string, (n: number) => string> = {
   duplicate: (n) => `${n} came up twice`,
   outside_icp: (n) => `${n} fell outside the ICP's size or countries`,
   low_fit: (n) => `${n} scored below the fit threshold`,
+  fails_mandatory: (n) => `${n} didn't match a field you marked mandatory`,
+  wrong_industry: (n) => `${n} turned out to work in another industry, by their own website`,
 };
 
 const NOTE_LABEL: Record<string, string> = {

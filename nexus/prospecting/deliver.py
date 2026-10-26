@@ -9,6 +9,8 @@
 * **Shared candidates are not either** (2026-10-02): their codes were read off the row's own words.
   The chain only offered the ones ``fit_screen`` passed, and they face the same gates and threshold
   here, without the enrichment, since the shared row already carries what it knows.
+* **Mandatory ICP fields bind every source** (`relevance.gate`, 2026-10-26), LinkedIn included:
+  a row with no data on one is enriched first and, still without it, not delivered.
 * **The workspace check runs again at insert** (``find_existing_account``), the backstop for account
   domains stored before domains were normalised, which the chain's SQL anti-join compares exactly.
 
@@ -121,6 +123,7 @@ async def deliver(
     from nexus.models.account import Account
     from nexus.models.intelligence import AccountScore
     from nexus.relevance import get_relevance_engine
+    from nexus.relevance.gate import icp_gate, mandatory_fields
 
     icp = profile.icp or {}
     relevance = get_relevance_engine()
@@ -135,12 +138,18 @@ async def deliver(
     # verdict is never overwritten by enrichment's looser guess (it fills blanks only).
     wrong_industry = await _industry_from_evidence(built, icp, settings)
 
-    web = [account for cand, account in built if cand.source == "web"]
+    # Web rows are always enriched. Any other row is enriched only when a MANDATORY field has no
+    # data on it, because no data is no match (D3): a LinkedIn company with no tech stack would
+    # otherwise be dropped for something one lookup could answer.
+    to_enrich = [account for cand, account in built if cand.source == "web"]
+    if mandatory_fields(icp):
+        to_enrich += [account for cand, account in built
+                      if cand.source != "web" and icp_gate(icp, account).unknown]
     enrich = settings.icp_discovery_enrich_candidates
     if enrich is None:
         enrich = settings.account_enrich_enabled
-    if enrich and web:
-        await _enrich_candidates(ts, web[: settings.icp_discovery_enrich_max],
+    if enrich and to_enrich:
+        await _enrich_candidates(ts, to_enrich[: settings.icp_discovery_enrich_max],
                                  concurrency=settings.icp_discovery_enrich_concurrency)
 
     # The persist loop: the size and geography gates run here, beside the fit threshold, on the
@@ -152,6 +161,11 @@ async def deliver(
             break
         if cand.domain in wrong_industry:
             discarded["wrong_industry"] += 1
+            continue
+        # Mandatory fields hold for EVERY source: LinkedIn's filter is on its own labels, and
+        # those are what the SDRs found wrong.
+        if not icp_gate(icp, account).passed:
+            discarded["fails_mandatory"] += 1
             continue
         if cand.source in SCREENED_SOURCES and not (
             _within_size_band(account.employee_count, icp) and _within_geo(account.country, icp)
