@@ -16,9 +16,9 @@ import logging
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from nexus.mcp import credentials, protocol, urls
+from nexus.mcp import credentials, guide, protocol, urls
 from nexus.mcp.brand import PRODUCT_NAME
 
 logger = logging.getLogger("nexus.api.routers.mcp")
@@ -187,6 +187,13 @@ async def openai_apps_challenge() -> Response:
     if not token:
         return Response(status_code=404)
     return PlainTextResponse(token)
+
+
+@router.get(guide.PATH)
+async def ai_apps_guide() -> HTMLResponse:
+    """The public setup guide every directory listing links to, as documentation and support.
+    Rendered here, because the SPA answers this address with an empty shell (``mcp/guide.py``)."""
+    return HTMLResponse(guide.ai_apps_page(), headers={"Cache-Control": "public, max-age=300"})
 
 
 # ---- OAuth discovery and the authorization server --------------------------------------------

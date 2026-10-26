@@ -35,7 +35,7 @@ from jose import JWTError, jwt
 from sqlalchemy import select, update
 
 from nexus.core.db import get_sessionmaker, utcnow
-from nexus.mcp import credentials
+from nexus.mcp import credentials, guide
 from nexus.mcp.credentials import ACCESS_PREFIX, OAUTH_SCOPE, REFRESH_PREFIX, SCOPE_FROM_OAUTH
 from nexus.models.mcp import McpConnection, OAuthClient, OAuthCode, OAuthToken
 from nexus.mcp.brand import PRODUCT_NAME
@@ -191,7 +191,7 @@ def authorization_server_metadata(base: str) -> dict:
         "scopes_supported": [OAUTH_SCOPE[s] for s in credentials.SCOPES] + ["offline_access"],
         "client_id_metadata_document_supported": True,
         "authorization_response_iss_parameter_supported": True,
-        "service_documentation": f"{base}/settings/ai-apps",
+        "service_documentation": f"{base}{guide.PATH}",
     }
 
 
@@ -202,7 +202,7 @@ def protected_resource_metadata(base: str) -> dict:
         "scopes_supported": [OAUTH_SCOPE[s] for s in credentials.SCOPES],
         "bearer_methods_supported": ["header"],
         "resource_name": PRODUCT_NAME,
-        "resource_documentation": f"{base}/settings/ai-apps",
+        "resource_documentation": f"{base}{guide.PATH}",
     }
 
 

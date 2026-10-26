@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "infojoy-gtm",
-      "source": "./infojoy-gtm",
+      "source": "./plugins/infojoy-gtm",
       "description": "Work your B2B pipeline from Claude with InfoJoy GTM."
     }
   ]

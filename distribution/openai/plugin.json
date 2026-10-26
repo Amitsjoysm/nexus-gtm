@@ -1,0 +1,101 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "infojoy-gtm",
+  "version": "1.0.0",
+  "description": "Work your B2B pipeline from ChatGPT: triage buying signals and your inbox, research accounts, find the right contacts, draft outreach and build target lists in InfoJoy GTM. Nothing is ever sent without you.",
+  "author": {
+    "name": "InfoJoy",
+    "url": "https://infojoy.com/gtm.html"
+  },
+  "homepage": "https://gtm.infojoy.com/help/ai-apps",
+  "license": "MIT",
+  "keywords": ["sales", "gtm", "prospecting", "buying-signals", "crm", "outreach"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "InfoJoy GTM",
+        "shortDescription": "Signals, research and outreach",
+        "longDescription": "InfoJoy GTM is a go-to-market workspace for B2B sales teams. It collects buying signals (funding, hiring, leadership changes, launches), scores accounts against your ideal customer profile, and keeps a prioritised inbox of follow-ups. This plugin lets ChatGPT work in your InfoJoy GTM workspace as you.\n\nAsk what to work on today and get the accounts that need you, with the reason and the next step. Research an account, find the right people there and verify their emails, then draft outreach you can review. Find companies like your best customer, add them to a list, and turn the list into a campaign draft with its opening emails written.\n\nYou choose what each connection may do when you connect: Read, Research (which spends your workspace's credits at the same prices as the app) and Write. InfoJoy GTM never sends an email, launches a campaign, places a call or deletes anything from ChatGPT: drafts wait in your own Drafts folder or in the app for you to review. You can change permissions or disconnect at any time in InfoJoy GTM under Settings, AI apps.\n\nRequires an InfoJoy GTM account.",
+        "developerName": "InfoJoy",
+        "category": "Productivity",
+        "capabilities": [
+          "Triage buying signals and the inbox",
+          "Research accounts",
+          "Find and verify contacts",
+          "Draft outreach to your Drafts folder",
+          "Build lists and campaign drafts"
+        ],
+        "websiteURL": "https://infojoy.com/gtm.html",
+        "supportURL": "https://gtm.infojoy.com/help/ai-apps#support",
+        "privacyPolicyURL": "https://infojoy.com/legal.html#privacy",
+        "termsOfServiceURL": "https://infojoy.com/legal.html#terms",
+        "defaultPrompt": [
+          "What should I work on today?",
+          "Which of my accounts are heating up this week?",
+          "Find ten companies like my best customer and put them on a list."
+        ],
+        "brandColor": "#3A1F8F",
+        "brandColorDark": "#FF5C8D",
+        "composerIcon": "./assets/icon.png",
+        "composerIconDark": "./assets/icon-dark.png",
+        "logo": "./assets/icon.png",
+        "logoDark": "./assets/icon-dark.png"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Daily priorities from the inbox and recent signals",
+              "prompt": "What should I work on today?",
+              "tools_triggered": "get_workspace_overview, list_inbox, list_signals",
+              "expected_behavior": "A short prioritised list of the test workspace's accounts, each with what happened, why it matters and one next step. Nothing is changed and no credits are spent."
+            },
+            {
+              "description": "Research one seeded account",
+              "prompt": "Research Gong and tell me why they might buy now.",
+              "tools_triggered": "search, research_account",
+              "expected_behavior": "Finds the Gong account, says it is about to spend credits, and returns a brief grounded in the account's signals. No invented customers or metrics."
+            },
+            {
+              "description": "Find and verify contacts",
+              "prompt": "Find contacts at Vanta and verify their emails.",
+              "tools_triggered": "search, find_contacts, verify_email",
+              "expected_behavior": "Lists people at Vanta with titles, saved to the account, and each email's verification result. States that credits were spent and that nothing was sent."
+            },
+            {
+              "description": "Draft an email and save it to Drafts",
+              "prompt": "Draft an email to the first Vanta contact and save it to my drafts.",
+              "tools_triggered": "draft_email, save_email_draft",
+              "expected_behavior": "Shows the full draft (subject, then body) and saves it to the reviewer's own Drafts folder, saying plainly that it was saved, not sent."
+            },
+            {
+              "description": "Turn a saved list into a campaign draft",
+              "prompt": "Make a campaign draft for my list Reviewer targets.",
+              "tools_triggered": "list_lists, create_campaign_draft",
+              "expected_behavior": "Creates a campaign draft from the list with its opening emails written, and says the campaign is reviewed and launched in InfoJoy GTM, not from ChatGPT."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Sending email is not possible from ChatGPT; the plugin should explain that and offer to save a draft instead",
+              "prompt": "Email the first Vanta contact right now and send it."
+            },
+            {
+              "description": "Launching a campaign happens in the app after review; the plugin should not launch and should say where to do it",
+              "prompt": "Launch the campaign."
+            },
+            {
+              "description": "Deleting records is not offered by any tool; the plugin should refuse and delete nothing",
+              "prompt": "Delete all my accounts."
+            }
+          ]
+        },
+        "commerce": false,
+        "commerce_description": "Nothing is sold or paid for in ChatGPT. Research tools spend credits the workspace already holds, at the app's own prices, and check the balance first."
+      },
+      "publication": {
+        "release_notes": "First release: signals and inbox triage, account research, contact finding and verification, email and reply drafts saved to Drafts, lists, and campaign drafts."
+      }
+    }
+  }
+}

@@ -44,7 +44,7 @@ include = ["nexus*"]
 # FileNotFoundError on the LinkedIn industry map or the ledger store schema. The app and worker
 # happened to be safe only because they start with /app first on sys.path.
 [tool.setuptools.package-data]
-nexus = ["data/*.csv", "engagement/ledger/sql/*/*.sql"]
+nexus = ["data/*.csv", "engagement/ledger/sql/*/*.sql", "mcp/help/*.md"]
 
 # ---- Lint gate (ruff). Scoped to high-signal rules so it's a real CI gate, not noise. ----
 [tool.ruff]
