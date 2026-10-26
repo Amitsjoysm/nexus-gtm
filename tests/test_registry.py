@@ -208,7 +208,8 @@ async def test_search_backed_company_search_derives_domains():
     provider = SearchBackedCompanySearchProvider(search)
     out = await provider.search({"industries": ["Fintech"], "geo": ["US"]}, limit=10)
     assert [c.domain for c in out] == ["newbank.com"]
-    assert out[0].industry == "Fintech" and out[0].country == "US"
+    # What the search was asked for is not a fact about the hit (`test_web_hit_labels.py`).
+    assert out[0].industry is None and out[0].country is None
 
 
 # --------------------------------------------------------- stubs stay offline

@@ -298,8 +298,11 @@ class SearchBackedCompanySearchProvider(CompanySearchProvider):
             logger.warning("company search via %s failed: %r", self.name, exc)
             return []
 
-        industry = (icp.get("industries") or [None])[0]
-        country = (icp.get("geo") or [None])[0]
+        # A hit carries no industry or country: the page did not state one, the search was merely
+        # ASKED for it (2026-10-26). This used to write the ICP's first industry and first country
+        # onto every hit, so an "Oil & Gas, Manufacturing" search filed equipment makers as Oil &
+        # Gas in the United States, permanently (enrichment fills blanks only), and the fit score
+        # and the geography gate then compared the ICP with itself. `tests/test_web_hit_labels.py`.
         out: list[CompanyCandidate] = []
         for hit in hits:
             domain = domain_from_url(getattr(hit, "url", None))
@@ -316,8 +319,6 @@ class SearchBackedCompanySearchProvider(CompanySearchProvider):
                     name=(name or domain).strip(),
                     domain=domain,
                     url=getattr(hit, "url", None),
-                    industry=industry,
-                    country=country,
                     snippet=getattr(hit, "snippet", "") or "",
                     source=self.name,
                     confidence=self.confidence,
