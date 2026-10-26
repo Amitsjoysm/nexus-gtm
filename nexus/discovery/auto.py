@@ -296,6 +296,7 @@ _DISCARD_TEXT = {
     "outside_icp": "{n} outside your size or countries",
     "fails_mandatory": "{n} missing a field you marked mandatory",
     "wrong_industry": "{n} whose own website shows another industry",
+    "no_buyer": "{n} where nobody in your buyer titles is on record yet",
     "already_held": "{n} you already have",
     "no_website": "{n} without a company website",
     "duplicate": None,

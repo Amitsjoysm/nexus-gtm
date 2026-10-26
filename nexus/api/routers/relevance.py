@@ -79,8 +79,9 @@ def _gate_options(icp: dict) -> dict:
         icp["mandatory"] = fields
     else:
         icp.pop("mandatory", None)
-    if not isinstance(icp.get("include_suppliers"), bool):
-        icp.pop("include_suppliers", None)
+    for switch in ("include_suppliers", "require_buyer"):
+        if not isinstance(icp.get(switch), bool):
+            icp.pop(switch, None)
     if icp.get("tech_match") not in ("any", "all"):
         icp.pop("tech_match", None)
     return icp

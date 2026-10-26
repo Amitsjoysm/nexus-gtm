@@ -40,6 +40,7 @@ const ARRIVED_LABELS: Record<string, string> = {
   similar_people: "Similar people",
   "sourcing:linkedin": "LinkedIn",
   "sourcing:pool": "LinkedIn",
+  "sourcing:infojoy": "InfoJoy",
   "sourcing:search": "web search",
   "sourcing:prospector": "Prospector",
   pattern_verified: "the email finder",

@@ -11,7 +11,7 @@ offline, never clear the send bar — so they cannot leak into real outreach.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from nexus.core.tenancy import TenantSession
 from nexus.models.account import Account, Contact
@@ -145,6 +145,9 @@ class FindContactsResult:
     web: dict
     #: The account's domain, which the sentence names.
     domain: str = ""
+    #: {"status": not_needed | found | nobody_fits | not_configured | unavailable | no_titles |
+    #:  no_domain, "found", "discarded"}. Asked after the shared pool, before a LinkedIn read.
+    infojoy: dict = field(default_factory=lambda: {"status": "not_needed", "found": 0})
 
     @property
     def message(self) -> str:
@@ -155,7 +158,8 @@ class FindContactsResult:
         verified = sum(1 for c in self.contacts if c.email and c.email_status == "valid")
         unconfirmed = sum(1 for c in self.contacts
                           if c.email and c.email_status in ("catch_all", "risky"))
-        return {"linkedin": dict(self.linkedin), "web": dict(self.web),
+        return {"linkedin": dict(self.linkedin), "infojoy": dict(self.infojoy),
+                "web": dict(self.web),
                 "emails": {"verified": verified, "unconfirmed": unconfirmed,
                            "none": sum(1 for c in self.contacts if not c.email)}}
 
@@ -164,7 +168,11 @@ class FindContactsResult:
 
     def _sentence(self, domain: str) -> str:
         if self.contacts:
-            where = "LinkedIn" if self.linkedin.get("status") == "found" else "web search"
+            sources = [label for label, step in (("InfoJoy", self.infojoy),
+                                                 ("LinkedIn", self.linkedin),
+                                                 ("web search", self.web))
+                       if step.get("status") == "found"]
+            where = " and ".join(sources) or "web search"
             n = len(self.contacts)
             emails = self.outcome["emails"]
             people = "person" if n == 1 else "people"
@@ -185,6 +193,12 @@ class FindContactsResult:
                       + (f" ({other} named another company)" if other else "") + ".")
         else:
             reason = _LINKEDIN_REASONS.get(status, "LinkedIn found nobody.").format(domain=domain)
+        # InfoJoy is named only when it was asked: a deployment without it has nothing to say.
+        infojoy = self.infojoy.get("status")
+        if infojoy == "nobody_fits":
+            reason += f" InfoJoy had nobody in your buyer titles at {domain}."
+        elif infojoy == "unavailable":
+            reason += " InfoJoy is unavailable right now."
         web = self.web.get("status")
         if web == "unavailable":
             tail = "Web search is unavailable right now too."
@@ -210,37 +224,71 @@ async def find_contacts(
     was created and why each step found what it found. Used by the account "Find contacts" action
     and the manual Run-pipeline button (not the automated sweep, which stays cheap).
 
-    LinkedIn first (``nexus/prospecting/contacts.py``): people at the account's own page with the
-    ICP's titles. The contact-search registry (web search) only when that finds nobody.
+    The chain (owner decision, 2026-10-26): the shared pool, then InfoJoy, then a LinkedIn read of
+    the account's own page, each with the ICP's titles and asked only for what the one before left
+    short; the contact-search registry (web search) only when all of them found nobody.
     """
     from nexus.relevance.engine import get_profile
 
     profile = await get_profile(ts)
     icp = (getattr(profile, "icp", None) or {}) if profile else {}
 
-    from nexus.prospecting.contacts import linkedin_contacts
+    from nexus.people.store import normalise_linkedin
+    from nexus.prospecting.contacts import _name_key, linkedin_contacts
+    from nexus.prospecting.infojoy_contacts import infojoy_people, persist_infojoy_people
 
-    found = await linkedin_contacts(ts, account, icp, limit=limit, client=linkedin_client)
+    pooled = await linkedin_contacts(ts, account, icp, limit=limit, client=linkedin_client,
+                                     read=False)
+    seen_urls = {normalise_linkedin(p.linkedin_url) for p in pooled.people} - {""}
+    seen_names = {_name_key(p.full_name) for p in pooled.people} - {""}
+    infojoy = {"status": "not_needed", "found": 0}
+    from_infojoy: list = []
+    if len(pooled.people) < limit and "no_titles" not in pooled.notes.values():
+        held = await ts.list(Contact, Contact.account_id == account.id)
+        seen_urls |= {normalise_linkedin(c.linkedin_url) for c in held} - {""}
+        seen_names |= {_name_key(c.full_name) for c in held} - {""}
+        asked = await infojoy_people(
+            ts, account, icp, want=limit - len(pooled.people), seen_urls=seen_urls,
+            seen_names=seen_names,
+            seen_emails={(c.email or "").strip().lower() for c in held} - {""})
+        from_infojoy = asked.people
+        infojoy = {"status": "found" if asked.people else asked.note, "found": len(asked.people),
+                   "discarded": dict(asked.discarded)}
+        if asked.discarded or asked.note:
+            logger.info("InfoJoy contacts for %s: note=%s discarded=%s", account.id, asked.note,
+                        dict(asked.discarded))
+
+    found = pooled
+    if len(pooled.people) + len(from_infojoy) < limit and "no_titles" not in pooled.notes.values():
+        read = await linkedin_contacts(
+            ts, account, icp, limit=limit - len(pooled.people) - len(from_infojoy),
+            client=linkedin_client, pool=False, seen=(seen_urls, seen_names))
+        read.people[:0] = pooled.people
+        read.pooled |= pooled.pooled
+        found = read
     if found.notes or found.discarded:
         logger.info("LinkedIn contacts for %s: notes=%s discarded=%s", account.id,
                     found.notes, dict(found.discarded))
     note = found.notes.get("linkedin", "")
     linkedin = {
         "status": "found" if found.people else (
-            "unavailable" if note in ("failed", "not_configured") else note or "nobody_fits"),
+            "unavailable" if note in ("failed", "not_configured") else note or (
+                "not_needed" if from_infojoy else "nobody_fits")),
         "found": len(found.people), "pooled": len(found.pooled),
         "discarded": dict(found.discarded),
     }
-    if found.people:
-        created = await _persist_linkedin_people(ts, account, found.people, pooled=found.pooled)
+    if found.people or from_infojoy:
+        created = await persist_infojoy_people(ts, account, from_infojoy)
+        created += await _persist_linkedin_people(ts, account, found.people, pooled=found.pooled)
         return FindContactsResult(created, linkedin, {"status": "not_needed", "found": 0},
-                                  domain=account.domain or "")
+                                  domain=account.domain or "", infojoy=infojoy)
 
     created = await _from_web_search(ts, account, icp, limit=limit)
     web = {"status": "found" if created else "none", "found": len(created or [])}
     if created is None:
         web, created = {"status": "unavailable", "found": 0}, []
-    return FindContactsResult(created, linkedin, web, domain=account.domain or "")
+    return FindContactsResult(created, linkedin, web, domain=account.domain or "",
+                              infojoy=infojoy)
 
 
 async def _from_web_search(ts: TenantSession, account: Account, icp: dict, *,

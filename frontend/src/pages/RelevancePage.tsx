@@ -61,6 +61,7 @@ interface Draft {
   mandatory: MandatoryField[];
   include_suppliers: boolean;
   tech_match: "any" | "all";
+  require_buyer: boolean;
 }
 
 const MANDATORY_ORDER: MandatoryField[] = ["industry", "size", "country", "region", "tech", "titles"];
@@ -162,6 +163,7 @@ function toDraft(p: RelevanceProfile): Draft {
     mandatory: (p.icp.mandatory ?? []).filter((f) => MANDATORY_ORDER.includes(f)),
     include_suppliers: p.icp.include_suppliers === true,
     tech_match: p.icp.tech_match === "all" ? "all" : "any",
+    require_buyer: p.icp.require_buyer === true,
   };
 }
 
@@ -370,6 +372,7 @@ export function RelevancePage() {
         ),
         include_suppliers: draft.include_suppliers,
         tech_match: draft.tech_match,
+        require_buyer: draft.require_buyer && splitCsv(draft.buyer_titles).length > 0,
       };
       const value_props: ValueProp[] = draft.value_props
         .filter((vp) => vp.name.trim())
@@ -1039,6 +1042,27 @@ function MustMatch({
             <span className={styles.mustMatchHint}>
               For example an equipment maker that calls itself Oil &amp; Gas. Without this, what a
               company does on its own website decides its industry.
+            </span>
+          </span>
+        </label>
+      )}
+
+      {hasCriterion(draft, "titles") && (
+        <label className={styles.mustMatchOption}>
+          <Checkbox
+            label="Only add companies where someone in your buyer titles is on record"
+            checked={draft.require_buyer}
+            disabled={!canEdit}
+            onChange={(e) => setField("require_buyer", e.target.checked)}
+          />
+          <span>
+            <span className={styles.mustMatchOptionLabel}>
+              Only add companies where someone in your buyer titles is on record
+            </span>
+            <span className={styles.mustMatchHint}>
+              Checked in our shared people records, then InfoJoy, before a company is added. One
+              InfoJoy read per company checked, shared with Find contacts that day. A company with
+              nobody yet is offered again on a later day.
             </span>
           </span>
         </label>

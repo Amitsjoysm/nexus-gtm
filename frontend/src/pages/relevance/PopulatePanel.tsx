@@ -37,6 +37,7 @@ const DISCARD_LABEL: Record<string, (n: number) => string> = {
   low_fit: (n) => `${n} scored below the fit threshold`,
   fails_mandatory: (n) => `${n} didn't match a field you marked mandatory`,
   wrong_industry: (n) => `${n} turned out to work in another industry, by their own website`,
+  no_buyer: (n) => `${n} had nobody in your buyer titles on record yet (offered again later)`,
 };
 
 const NOTE_LABEL: Record<string, string> = {

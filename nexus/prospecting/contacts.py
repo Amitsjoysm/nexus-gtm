@@ -94,9 +94,15 @@ def linkedin_search_titles(icp: dict) -> list[str]:
     return titles[:MAX_TITLES]
 
 
-async def linkedin_contacts(ts, account, icp: dict, *, limit: int, client=None) -> ContactsResult:
+async def linkedin_contacts(ts, account, icp: dict, *, limit: int, client=None,
+                            pool: bool = True, read: bool = True,
+                            seen: tuple[set[str], set[str]] | None = None) -> ContactsResult:
     """Up to ``limit`` people at the account who fit the ICP's titles. Never raises for LinkedIn
-    being unavailable; that is a note, and the caller falls back to web search."""
+    being unavailable; that is a note, and the caller falls back to web search.
+
+    ``pool`` asks the shared pool, ``read`` buys a LinkedIn read for what is left; Find contacts
+    asks InfoJoy between the two (2026-10-26). ``seen`` is ``(profile urls, name keys)`` already
+    taken by an earlier step, added to what the account holds."""
     from nexus.integrations.apify import ApifyError, ApifyNotConfigured
     from nexus.lookalike.contacts import icp_title_targets
     from nexus.models.account import Contact
@@ -114,6 +120,9 @@ async def linkedin_contacts(ts, account, icp: dict, *, limit: int, client=None) 
     existing = await ts.list(Contact, Contact.account_id == account.id)
     urls = {normalise_linkedin(c.linkedin_url) for c in existing} - {""}
     names = {_name_key(c.full_name) for c in existing} - {""}
+    if seen is not None:
+        urls |= seen[0] - {""}
+        names |= seen[1] - {""}
 
     # People another workspace's LinkedIn read already found here, before buying a run
     # (`nexus/people/pool.py`, 2026-10-02). Same title gates, same duplicate rules.
@@ -121,18 +130,19 @@ async def linkedin_contacts(ts, account, icp: dict, *, limit: int, client=None) 
     from nexus.people.pool import enqueue_pool, linkedin_fact, pooled_people_at
 
     domain = normalise_domain(account.domain)
-    for person in await pooled_people_at(domain, targets, limit=limit * 2,
-                                         company_name=account.name or domain):
-        url, name = normalise_linkedin(person.linkedin_url), _name_key(person.full_name)
-        if (url and url in urls) or (name and name in names):
-            continue
-        if len(result.people) >= limit:
-            break
-        urls.add(url)
-        names.add(name)
-        result.people.append(person)
-        result.pooled.add(url)
-    if len(result.people) >= limit:
+    if pool:
+        for person in await pooled_people_at(domain, targets, limit=limit * 2,
+                                             company_name=account.name or domain):
+            url, name = normalise_linkedin(person.linkedin_url), _name_key(person.full_name)
+            if (url and url in urls) or (name and name in names):
+                continue
+            if len(result.people) >= limit:
+                break
+            urls.add(url)
+            names.add(name)
+            result.people.append(person)
+            result.pooled.add(url)
+    if len(result.people) >= limit or not read:
         return result
 
     want = limit - len(result.people)

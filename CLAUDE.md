@@ -2095,6 +2095,29 @@ size, Country, State/province, Tech stack and Job titles can each be `icp["manda
   Zoho)" is one entry, read by `tech_terms` as any of three. Splitting at every comma had stored
   "CRM (Salesforce" and "Zoho)", which matched nothing.
 
+## Find contacts: pool, then InfoJoy, then LinkedIn, then web (2026-10-26)
+
+Owner decision D2: "pool, then InfoJoy, but add others as well for fallback". `find_contacts`
+asks each step only for what the one before left short (`prospecting/infojoy_contacts.py`,
+`tests/test_find_contacts_infojoy.py`).
+
+- **InfoJoy is asked for the account's own website with the ICP's titles**, through Prospector's
+  shared page cache (`fetch_page`, one page of `PAGE_ROWS`), and every row must prove itself: its
+  `CompanyUrl` normalises to the account's domain, its title passes `title_fits`, nobody held has
+  its profile, name or email. Rows bought are recorded as `prospector.search_rows` (COGS, never
+  charged).
+- **Its email is checked before it is kept**: the live verifier, then `keep_address`. Kept is one
+  `enrich.contact`, as every Find contacts email is; anything else goes to the waterfall, which
+  finds and charges for itself; an invalid one is remembered as rejected. Saved as
+  `sourcing:infojoy`, so the Prospector campaign hold does not apply (it is verified here).
+- **"Not configured" is silent** in the sentence the rep reads; "unavailable" and "nobody fits"
+  are said.
+- **`icp.require_buyer` makes discovery contact-first** (off by default): `deliver` adds a company
+  that passed every other gate only once the pool or InfoJoy has someone in the buyer titles there
+  (`buyers_at`, the same page size, so a Find contacts that day re-reads it from the cache).
+  Checked a batch at a time until `limit` are confirmed; the rest are `no_buyer`, not added, and a
+  LinkedIn-read company is offered again on a later day.
+
 ## Orchestrator intake (`nexus/orchestration/intake.py`)
 
 **A question is not a launch instruction.** `advance` used to launch on `is_first_turn` alone once

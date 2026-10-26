@@ -11,6 +11,9 @@
   here, without the enrichment, since the shared row already carries what it knows.
 * **Mandatory ICP fields bind every source** (`relevance.gate`, 2026-10-26), LinkedIn included:
   a row with no data on one is enriched first and, still without it, not delivered.
+* **``require_buyer`` makes discovery contact-first** (D2): a company that passed everything else is
+  added only once the shared pool or InfoJoy has someone in the ICP's buyer titles there
+  (`infojoy_contacts.buyers_at`), checked a batch at a time until ``limit`` are confirmed.
 * **The workspace check runs again at insert** (``find_existing_account``), the backstop for account
   domains stored before domains were normalised, which the chain's SQL anti-join compares exactly.
 
@@ -152,9 +155,24 @@ async def deliver(
         await _enrich_candidates(ts, to_enrich[: settings.icp_discovery_enrich_max],
                                  concurrency=settings.icp_discovery_enrich_concurrency)
 
+    # Contact-first (D2, 2026-10-26): with ``require_buyer`` a company is added only once someone in
+    # the ICP's buyer titles is found there. Every other gate runs first, so no buyer check is
+    # bought for a company that would have been discarded anyway.
+    require_buyer = bool(icp.get("require_buyer")) and bool(icp.get("buyer_titles"))
+
+    account_ids: list[str] = []
+    eligible: list[tuple[Account, object]] = []
+
+    async def insert(account, fit) -> None:
+        ts.add(account)
+        await ts.flush()
+        ts.add(AccountScore(tenant_id=ts.tenant_id, account_id=account.id,
+                            composite=round(fit.score)))
+        await ts.flush()
+        account_ids.append(account.id)
+
     # The persist loop: the size and geography gates run here, beside the fit threshold, on the
     # enriched values.
-    account_ids: list[str] = []
     screened = 0
     for cand, account in built:
         if len(account_ids) >= limit:
@@ -180,10 +198,29 @@ async def deliver(
         if await find_existing_account(ts, domain=account.domain) is not None:
             discarded["already_held"] += 1
             continue
-        ts.add(account)
-        await ts.flush()
-        ts.add(AccountScore(tenant_id=ts.tenant_id, account_id=account.id,
-                            composite=round(fit.score)))
-        await ts.flush()
-        account_ids.append(account.id)
+        if require_buyer:
+            eligible.append((account, fit))
+            continue
+        await insert(account, fit)
+
+    if eligible:
+        from nexus.companies.resolution import normalise_domain
+        from nexus.prospecting.infojoy_contacts import buyers_at
+        from nexus.prospector.fetch import record_browse_cost
+
+        bought = 0
+        rest = eligible
+        while rest and len(account_ids) < limit:
+            want = limit - len(account_ids)
+            batch, rest = rest[:want], rest[want:]
+            found, rows = await buyers_at([(a.domain, a.name) for a, _ in batch], icp)
+            bought += rows
+            for account, fit in batch:
+                if found.get(normalise_domain(account.domain)):
+                    await insert(account, fit)
+                else:
+                    # Not added, and not lost: a company read from LinkedIn stays in the shared
+                    # store and is offered again on a later day, when a buyer may be on record.
+                    discarded["no_buyer"] += 1
+        await record_browse_cost(ts, rows=bought, user_id=None, view="discovery_buyer_check")
     return account_ids, screened

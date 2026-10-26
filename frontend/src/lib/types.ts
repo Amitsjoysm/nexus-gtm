@@ -633,6 +633,8 @@ export interface IcpDefinition {
   include_suppliers?: boolean;
   /** With Tech mandatory: uses any of the listed products (default) or all of them. */
   tech_match?: "any" | "all";
+  /** Discovery adds a company only once someone in the buyer titles is on record there. */
+  require_buyer?: boolean;
 }
 
 // Mirrors FIELDS and LABELS in nexus/relevance/gate.py.
