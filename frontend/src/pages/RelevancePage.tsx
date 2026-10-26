@@ -5,6 +5,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Field,
   Icons,
   IconButton,
@@ -17,11 +18,12 @@ import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import { JOB_LEVELS } from "@/lib/types";
+import { JOB_LEVELS, MANDATORY_LABELS } from "@/lib/types";
 import type {
   IcpDefinition,
   LastWebsiteAnalysis,
   LearnedWeights,
+  MandatoryField,
   RelevanceProfile,
   RelevanceProfileInput,
   Role,
@@ -56,14 +58,52 @@ interface Draft {
   product_context: string;
   value_props: ValuePropDraft[];
   weights: Record<WeightKey, number>;
+  mandatory: MandatoryField[];
+  include_suppliers: boolean;
+  tech_match: "any" | "all";
+}
+
+const MANDATORY_ORDER: MandatoryField[] = ["industry", "size", "country", "region", "tech", "titles"];
+
+/** Can this field be required at all? Only once it has something to match against. */
+function hasCriterion(d: Draft, f: MandatoryField): boolean {
+  switch (f) {
+    case "industry":
+      return splitCsv(d.industries).length > 0;
+    case "size":
+      return d.employee_min.trim() !== "" || d.employee_max.trim() !== "";
+    case "country":
+      return splitCsv(d.countries).length > 0;
+    case "region":
+      return splitCsv(d.regions).length > 0;
+    case "tech":
+      return splitCsv(d.required_tech).length > 0;
+    case "titles":
+      return splitCsv(d.buyer_titles).length > 0;
+  }
 }
 
 const csv = (xs?: string[] | null) => (xs ?? []).join(", ");
-const splitCsv = (s: string) =>
-  s
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
+/** Comma-separated, except inside brackets: "CRM (Salesforce, HubSpot, Zoho)" is ONE entry
+ *  meaning any of three. Splitting at every comma stored "CRM (Salesforce" and "Zoho)", which
+ *  could never match anything. */
+const splitCsv = (s: string) => {
+  const out: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of s) {
+    if (ch === "(") depth += 1;
+    if (ch === ")") depth = Math.max(0, depth - 1);
+    if (ch === "," && depth === 0) {
+      out.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  out.push(current);
+  return out.map((x) => x.trim()).filter(Boolean);
+};
 const numOrNull = (s: string) => (s.trim() === "" ? null : Number(s));
 
 // The four firmographic dimensions the relevance engine blends into a fit score.
@@ -119,6 +159,9 @@ function toDraft(p: RelevanceProfile): Draft {
           }))
         : [{ name: "", description: "", pains_solved: "" }],
     weights: weightsToPct(p.icp.weights),
+    mandatory: (p.icp.mandatory ?? []).filter((f) => MANDATORY_ORDER.includes(f)),
+    include_suppliers: p.icp.include_suppliers === true,
+    tech_match: p.icp.tech_match === "all" ? "all" : "any",
   };
 }
 
@@ -321,6 +364,12 @@ export function RelevancePage() {
         employee_min: numOrNull(draft.employee_min),
         employee_max: numOrNull(draft.employee_max),
         weights,
+        // Only fields with something to match: a must-match on an empty field means nothing.
+        mandatory: MANDATORY_ORDER.filter(
+          (f) => draft.mandatory.includes(f) && hasCriterion(draft, f),
+        ),
+        include_suppliers: draft.include_suppliers,
+        tech_match: draft.tech_match,
       };
       const value_props: ValueProp[] = draft.value_props
         .filter((vp) => vp.name.trim())
@@ -547,11 +596,14 @@ export function RelevancePage() {
                       />
                     </Field>
                   </div>
-                  <Field label="Required tech" hint="Accounts must use these. Comma-separated.">
+                  <Field
+                    label="Required tech"
+                    hint="Comma-separated. Brackets group alternatives: CRM (Salesforce, HubSpot) means either."
+                  >
                     <Input
                       value={draft.required_tech}
                       onChange={(e) => setField("required_tech", e.target.value)}
-                      placeholder="Snowflake, Segment"
+                      placeholder="Snowflake, CRM (Salesforce, HubSpot)"
                       disabled={!canEdit}
                     />
                   </Field>
@@ -651,6 +703,7 @@ export function RelevancePage() {
                     </div>
                   )}
                 </div>
+                <MustMatch draft={draft} canEdit={canEdit} setField={setField} />
               </Card>
 
               <Card padding="lg">
@@ -907,6 +960,112 @@ function LearnedWeightsCard() {
         }}
       </DataState>
     </Card>
+  );
+}
+
+/**
+ * Which ICP fields a company must match exactly (SDR feedback, 2026-10-26: accounts scored 60-70%
+ * fit while failing the industry the campaign was for). A company that misses one, or that we
+ * have no data for, is never added and reads "Fails Industry" in Accounts instead of a score.
+ */
+function MustMatch({
+  draft,
+  canEdit,
+  setField,
+}: {
+  draft: Draft;
+  canEdit: boolean;
+  setField: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+}) {
+  const on = (f: MandatoryField) => draft.mandatory.includes(f) && hasCriterion(draft, f);
+  const toggle = (f: MandatoryField) =>
+    setField(
+      "mandatory",
+      draft.mandatory.includes(f)
+        ? draft.mandatory.filter((x) => x !== f)
+        : [...draft.mandatory, f],
+    );
+  const empty = MANDATORY_ORDER.filter((f) => !hasCriterion(draft, f));
+
+  return (
+    <div className={styles.mustMatch}>
+      <h3 className={styles.mustMatchTitle} id="must-match-title">
+        Must match
+      </h3>
+      <p className={styles.mustMatchDesc} id="must-match-desc">
+        A company that misses a field you pick here, or that we have no data for, is never added
+        and shows as <strong>Fails</strong> in Accounts. The other fields only weigh in the fit
+        score.
+      </p>
+      <div
+        className={styles.levelRow}
+        role="group"
+        aria-labelledby="must-match-title"
+        aria-describedby="must-match-desc"
+      >
+        {MANDATORY_ORDER.map((f) => (
+          <button
+            key={f}
+            type="button"
+            className={on(f) ? styles.levelChipOn : styles.levelChip}
+            aria-pressed={on(f)}
+            disabled={!canEdit || !hasCriterion(draft, f)}
+            onClick={() => toggle(f)}
+          >
+            {on(f) && <Icons.CheckIcon aria-hidden="true" />}
+            {MANDATORY_LABELS[f]}
+          </button>
+        ))}
+      </div>
+      {empty.length > 0 && (
+        <p className={styles.mustMatchHint}>
+          Fill in {empty.map((f) => MANDATORY_LABELS[f]).join(", ")} above to make{" "}
+          {empty.length === 1 ? "it" : "them"} a must-match.
+        </p>
+      )}
+
+      {on("industry") && (
+        <label className={styles.mustMatchOption}>
+          <Checkbox
+            label="Also take companies that supply these industries"
+            checked={draft.include_suppliers}
+            disabled={!canEdit}
+            onChange={(e) => setField("include_suppliers", e.target.checked)}
+          />
+          <span>
+            <span className={styles.mustMatchOptionLabel}>
+              Also take companies that supply these industries
+            </span>
+            <span className={styles.mustMatchHint}>
+              For example an equipment maker that calls itself Oil &amp; Gas. Without this, what a
+              company does on its own website decides its industry.
+            </span>
+          </span>
+        </label>
+      )}
+
+      {on("tech") && (
+        <div className={styles.mustMatchOption}>
+          <span className={styles.mustMatchOptionLabel} id="tech-match-label">
+            Tech stack must include
+          </span>
+          <div className={styles.levelRow} role="group" aria-labelledby="tech-match-label">
+            {(["any", "all"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={draft.tech_match === m ? styles.levelChipOn : styles.levelChip}
+                aria-pressed={draft.tech_match === m}
+                disabled={!canEdit}
+                onClick={() => setField("tech_match", m)}
+              >
+                {m === "any" ? "Any one of them" : "All of them"}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -252,8 +252,67 @@
   gap: var(--space-2);
 }
 
+/* Must match: a sub-section of the ICP card, set apart by a rule rather than another card. */
+.mustMatch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+.mustMatchTitle {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+.mustMatchDesc {
+  margin-top: calc(var(--space-2) * -1);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: var(--leading);
+  max-width: 65ch;
+}
+.mustMatchDesc strong {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+.mustMatchHint {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+  line-height: var(--leading);
+  max-width: 65ch;
+}
+.mustMatchOption {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+label.mustMatchOption {
+  flex-wrap: nowrap;
+  cursor: pointer;
+}
+div.mustMatchOption {
+  flex-direction: column;
+}
+.mustMatchOptionLabel {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
 .levelChip,
 .levelChipOn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-full, 999px);
   border: 1px solid var(--border);
@@ -290,4 +349,10 @@
 @media (prefers-reduced-motion: reduce) {
   .levelChip,
   .levelChipOn { transition: none; }
+}
+
+/* A finger needs the full 44px target; a mouse keeps the denser row. */
+@media (pointer: coarse) {
+  .levelChip,
+  .levelChipOn { min-height: 44px; }
 }

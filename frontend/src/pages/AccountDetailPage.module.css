@@ -34,6 +34,11 @@
   font-weight: var(--weight-semibold);
   color: var(--text);
 }
+/* Which must-match field the account misses: a sentence, in the danger colour, not a score. */
+.gateMiss {
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
 .tech {
   display: flex;
   flex-wrap: wrap;

@@ -718,8 +718,16 @@ export function AccountDetailPage() {
                       <Fact label="Headquarters" value={hq} source={src.city ?? src.region} />
                     )}
                     <Fact label="Domain" value={acc.domain ?? "—"} source={src.domain} />
-                    {typeof acc.fit_score === "number" && (
-                      <Fact label="ICP fit" value={String(acc.fit_score)} />
+                    {acc.icp_gate && !acc.icp_gate.passed ? (
+                      // A must-match miss is stated, never scored (SDR feedback, 2026-10-26).
+                      <Fact
+                        label="ICP fit"
+                        value={<span className={styles.gateMiss}>{acc.icp_gate.reason}</span>}
+                      />
+                    ) : (
+                      typeof acc.fit_score === "number" && (
+                        <Fact label="ICP fit" value={String(acc.fit_score)} />
+                      )
                     )}
                     {acc.linkedin_url && (
                       <Fact

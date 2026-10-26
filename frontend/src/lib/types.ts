@@ -68,6 +68,8 @@ export interface Account {
   owner_name?: string | null;
   /** Where each value came from, so a rep can check it against the evidence. */
   field_sources?: FieldSources;
+  /** The ICP's mandatory fields, checked. `null` when the ICP marks nothing mandatory. */
+  icp_gate?: IcpGate | null;
 }
 
 /** Where one stored value came from (`field_sources`). */
@@ -625,6 +627,31 @@ export interface IcpDefinition {
   title_keywords?: string[];
   exclude_title_keywords?: string[];
   weights?: Record<string, number>;
+  /** Fields an account (or, for job titles, a contact) must match exactly. No data is no match. */
+  mandatory?: MandatoryField[];
+  /** With Industry mandatory: also take companies that supply those industries. */
+  include_suppliers?: boolean;
+  /** With Tech mandatory: uses any of the listed products (default) or all of them. */
+  tech_match?: "any" | "all";
+}
+
+// Mirrors FIELDS and LABELS in nexus/relevance/gate.py.
+export type MandatoryField = "industry" | "size" | "country" | "region" | "tech" | "titles";
+export const MANDATORY_LABELS: Record<MandatoryField, string> = {
+  industry: "Industry",
+  size: "Company size",
+  country: "Country",
+  region: "State / province",
+  tech: "Tech stack",
+  titles: "Job titles",
+};
+
+/** How an account fares on the ICP's mandatory fields (`AccountOut.icp_gate`). */
+export interface IcpGate {
+  passed: boolean;
+  failed: MandatoryField[];
+  unknown: MandatoryField[];
+  reason: string;
 }
 
 // Mirrors LEVELS in nexus/relevance/job_levels.py. Stable strings: renaming one silently drops
@@ -2586,7 +2613,7 @@ export interface EnrollResult {
   added: string[];
   /**
    * reason: not_found | already_enrolled | no_email | unverified_prospector_email |
-   * do_not_contact:<why>
+   * outside_icp | title_outside_icp | do_not_contact:<why>
    */
   skipped: { contact_id: string; reason: string }[];
   /** The person is already in a colleague's (or another) live campaign. Added anyway. */

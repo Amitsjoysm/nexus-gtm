@@ -261,6 +261,9 @@ class AccountOut(AccountIn):
     # Where each value came from: {field: {source, ref?, refs?, detail?, at}}. A value written
     # before sources were kept reads {"source": "not_recorded", "arrived_via": <how the row came>}.
     field_sources: dict = Field(default_factory=dict)
+    # How the account fares on the ICP's MANDATORY fields: {passed, failed, unknown, reason}.
+    # None when the ICP marks nothing mandatory, so the screen keeps showing the fit score alone.
+    icp_gate: dict | None = None
 
 
 class ContactIn(BaseModel):

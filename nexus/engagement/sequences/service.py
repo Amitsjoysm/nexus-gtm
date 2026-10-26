@@ -185,6 +185,16 @@ async def enroll(ts, campaign, contact_ids: list[str]) -> EnrollResult:
     accounts = {a.id: a for a in await ts.list(
         Account, Account.id.in_({c.account_id for c in contacts.values()}))} if contacts else {}
     blocked = await active_reasons(ts, [c.email or "" for c in contacts.values()])
+    # The ICP's must-match fields hold here too (SDR feedback, 2026-10-26): a list built before a
+    # field was made mandatory, or by hand, still holds companies outside it.
+    from nexus.lookalike.contacts import icp_title_targets, title_fits
+    from nexus.relevance.engine import get_profile
+    from nexus.relevance.gate import icp_gate, mandatory_fields
+
+    profile = await get_profile(ts)
+    icp = dict(profile.icp or {}) if profile else {}
+    mandatory = mandatory_fields(icp)
+    titles = icp_title_targets(icp) if "titles" in mandatory and icp.get("buyer_titles") else None
 
     for contact_id in wanted:
         contact = contacts.get(contact_id)
@@ -207,6 +217,12 @@ async def enroll(ts, campaign, contact_ids: list[str]) -> EnrollResult:
             result.skipped.append({"contact_id": contact_id, "reason": f"do_not_contact:{reason}"})
             continue
         account = accounts.get(contact.account_id)
+        if mandatory and account is not None and not icp_gate(icp, account).passed:
+            result.skipped.append({"contact_id": contact_id, "reason": "outside_icp"})
+            continue
+        if titles is not None and not title_fits(contact.title or "", titles):
+            result.skipped.append({"contact_id": contact_id, "reason": "title_outside_icp"})
+            continue
         zone = resolve_zone(
             contact_tz=(contact.custom_fields or {}).get("timezone"),
             account_country=getattr(account, "country", None),

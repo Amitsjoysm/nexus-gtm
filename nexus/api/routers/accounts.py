@@ -39,8 +39,11 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 
 def _account_out(
-    a: Account, *, fit_score: int | None = None, owner_name: str | None = None
+    a: Account, *, fit_score: int | None = None, owner_name: str | None = None,
+    icp: dict | None = None,
 ) -> AccountOut:
+    from nexus.relevance.gate import icp_gate, mandatory_fields
+
     cf = a.custom_fields or {}
     return AccountOut(
         id=a.id,
@@ -74,7 +77,16 @@ def _account_out(
         # Only beside an owner id: a name with no owner behind it would be a stale label.
         owner_name=owner_name if a.owner_user_id else None,
         field_sources=display_sources(a),
+        icp_gate=icp_gate(icp, a).as_dict() if mandatory_fields(icp) else None,
     )
+
+
+async def _workspace_icp(ts: TenantSession) -> dict:
+    """The ICP the mandatory-field gate reads, once per request."""
+    from nexus.relevance.engine import get_profile
+
+    profile = await get_profile(ts)
+    return dict(profile.icp or {}) if profile else {}
 
 
 async def _owner_names(ts: TenantSession, accounts) -> dict[str, str]:
@@ -103,7 +115,7 @@ async def _one_out(ts: TenantSession, account: Account, *, with_score: bool = Tr
     names = await _owner_names(ts, [account])
     return _account_out(
         account, fit_score=scores.get(account.id),
-        owner_name=names.get(account.owner_user_id or ""),
+        owner_name=names.get(account.owner_user_id or ""), icp=await _workspace_icp(ts),
     )
 
 
@@ -253,8 +265,10 @@ async def list_accounts(
     rows = list((await ts.session.scalars(stmt)).all())
     scores = await _latest_fit_scores(ts, [a.id for a in rows])
     names = await _owner_names(ts, rows)
+    icp = await _workspace_icp(ts)
     return [
-        _account_out(a, fit_score=scores.get(a.id), owner_name=names.get(a.owner_user_id or ""))
+        _account_out(a, fit_score=scores.get(a.id), owner_name=names.get(a.owner_user_id or ""),
+                     icp=icp)
         for a in rows
     ]
 

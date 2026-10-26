@@ -3,7 +3,6 @@ import type { FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
-  Badge,
   Button,
   Card,
   Checkbox,
@@ -24,21 +23,17 @@ import { useCurrentUserId } from "@/app/useCurrentUserId";
 import { ApiError } from "@/lib/api";
 import { RecordImportModal } from "@/components/imports/RecordImportModal";
 import { AddToListModal } from "@/components/lists/AddToListModal";
+import { FitBadge, fitSortValue } from "@/components/icp/FitBadge";
 import { useSelection } from "@/hooks/useSelection";
 import { formatNumber } from "@/lib/format";
 import type { Account, AccountInput } from "@/lib/types";
 import styles from "./AccountsPage.module.css";
 
-function fitTone(score: number | null | undefined): "success" | "warning" | "danger" | "neutral" {
-  if (score == null) return "neutral";
-  if (score >= 70) return "success";
-  if (score >= 40) return "warning";
-  return "danger";
-}
-
 const ALL = "__all__";
 const MINE = "__mine__";
 const UNOWNED = "__unowned__";
+const MEETS = "__meets__";
+const MISSES = "__misses__";
 
 /**
  * Where an account came from, in the words a rep uses. The stored `source` is a code per write path
@@ -88,6 +83,7 @@ export function AccountsPage() {
   const [listOpen, setListOpen] = useState(false);
   const [minFit, setMinFit] = useState(0);
   const [ownerFilter, setOwnerFilter] = useState(ALL);
+  const [gateFilter, setGateFilter] = useState(ALL);
   const me = useCurrentUserId();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -178,7 +174,7 @@ export function AccountsPage() {
   const visible = useMemo(
     () => filtered(accounts.data ?? []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [accounts.data, query, industry, country, source, minFit, ownerFilter, me],
+    [accounts.data, query, industry, country, source, minFit, ownerFilter, gateFilter, me],
   );
   const visibleIds = useMemo(() => visible.map((a) => a.id), [visible]);
   const selection = useSelection(visibleIds);
@@ -216,10 +212,10 @@ export function AccountsPage() {
         key: "fit_score",
         header: "Fit",
         align: "right",
-        sortValue: (a) => a.fit_score ?? null,
+        sortValue: (a) => fitSortValue(a.fit_score, a.icp_gate),
         render: (a) =>
-          a.fit_score != null ? (
-            <Badge tone={fitTone(a.fit_score)}>{a.fit_score}</Badge>
+          a.fit_score != null || (a.icp_gate && !a.icp_gate.passed) ? (
+            <FitBadge score={a.fit_score} gate={a.icp_gate} />
           ) : (
             <span className={styles.muted}>—</span>
           ),
@@ -329,7 +325,11 @@ export function AccountsPage() {
       if (industry !== ALL && a.industry !== industry) return false;
       if (country !== ALL && a.country !== country) return false;
       if (source !== ALL && sourceGroup(a) !== source) return false;
-      if (minFit > 0 && (a.fit_score ?? -1) < minFit) return false;
+      // A minimum fit means "matches the ICP at least this well": missing a must-match field is
+      // not a match at any score.
+      if (minFit > 0 && ((a.fit_score ?? -1) < minFit || a.icp_gate?.passed === false)) return false;
+      if (gateFilter === MEETS && a.icp_gate?.passed === false) return false;
+      if (gateFilter === MISSES && a.icp_gate?.passed !== false) return false;
       if (ownerFilter === MINE && (me === null || a.owner_user_id !== me)) return false;
       if (ownerFilter === UNOWNED && a.owner_user_id) return false;
       return true;
@@ -477,6 +477,20 @@ export function AccountsPage() {
                       { value: "80", label: "Fit ≥ 80" },
                     ]}
                   />
+                  {/* Only once the ICP marks a field must-match: before that every account
+                      "meets" nothing and the filter would be noise. */}
+                  {rows.some((a) => a.icp_gate) && (
+                    <Select
+                      aria-label="Must-match fields"
+                      value={gateFilter}
+                      onChange={(e) => setGateFilter(e.target.value)}
+                      options={[
+                        { value: ALL, label: "Any must-match result" },
+                        { value: MEETS, label: "Meets must-match fields" },
+                        { value: MISSES, label: "Misses a must-match field" },
+                      ]}
+                    />
+                  )}
                   <Select
                     aria-label="Owner"
                     value={ownerFilter}

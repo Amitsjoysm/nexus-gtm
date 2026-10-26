@@ -276,6 +276,8 @@ function AddResult({ result, people }: { result: EnrollResult; people: Engagemen
     no_email: "has no email address",
     unverified_prospector_email:
       "has a Prospector email nobody has verified yet (verify it in Prospector first)",
+    outside_icp: "works at a company that misses a must-match field in your ICP",
+    title_outside_icp: "has a job title outside your must-match titles",
   };
   return (
     <div className={styles.addResult} role="status">

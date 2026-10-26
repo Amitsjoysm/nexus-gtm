@@ -2071,6 +2071,30 @@ refused and swallowed the same way.
 - `mode=existing` is never asked: it reads the workspace's own contacts, spends nothing, and is not
   metered.
 
+## Must-match ICP fields (`nexus/relevance/gate.py`, 2026-10-26)
+
+SDR feedback: accounts scored 60-70% fit while failing the industry and tech the campaign was for.
+`score_icp_fit` is a weighted mean, so a miss on the field that matters most was outvoted (industry
+0, size 1, geo 1, tech unknown 0.5, revenue 1 is 65). Decided with the owner (D3): Industry, Company
+size, Country, State/province, Tech stack and Job titles can each be `icp["mandatory"]`.
+`tests/test_icp_gate.py`.
+
+- **Exact means the same meaning**: a child LinkedIn code counts for its parent, USA is the United
+  States, "HubSpot CRM" and "SFDC" are products by alias (`canonical_product`), "VP Sales" is
+  "Vice President of Sales" (every word of the wanted title is in the title, after
+  `expand_title`). Never a loose keyword overlap. **No data is no match**, reported as `unknown`
+  ("no data for Tech stack") rather than "fails". Country is the HQ (`Account.country`).
+- **One gate, every path**: `deliver` for every source, LinkedIn and database included (a row
+  missing a mandatory field is enriched first, then discarded as `fails_mandatory`); `AccountOut.
+  icp_gate` (the list and Account 360 show "Fails Industry", never a percentage); campaign
+  `enroll` (`outside_icp`, `title_outside_icp`); and mandatory titles tighten `title_fits` for
+  every contact search. Deterministic, no I/O.
+- **Stored options are normalised on save** (`routers/relevance._gate_options`): known fields only,
+  `include_suppliers` a real boolean (the JSON string "false" is truthy), `tech_match` any/all.
+- The Relevance form splits comma lists **outside brackets only**: "CRM (Salesforce, HubSpot,
+  Zoho)" is one entry, read by `tech_terms` as any of three. Splitting at every comma had stored
+  "CRM (Salesforce" and "Zoho)", which matched nothing.
+
 ## Orchestrator intake (`nexus/orchestration/intake.py`)
 
 **A question is not a launch instruction.** `advance` used to launch on `is_first_turn` alone once

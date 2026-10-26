@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 FIELDS = ("industry", "size", "country", "region", "tech", "titles")
 LABELS = {"industry": "Industry", "size": "Company size", "country": "Country",
-          "region": "Region", "tech": "Tech stack", "titles": "Job titles"}
+          "region": "State / province", "tech": "Tech stack", "titles": "Job titles"}
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,8 @@ class GateResult:
             parts.append("Fails " + ", ".join(LABELS[f] for f in self.failed))
         if self.unknown:
             parts.append("no data for " + ", ".join(LABELS[f] for f in self.unknown))
-        return "; ".join(parts)
+        text = "; ".join(parts)
+        return text[:1].upper() + text[1:]
 
     def as_dict(self) -> dict:
         return {"passed": self.passed, "failed": list(self.failed), "unknown": list(self.unknown),

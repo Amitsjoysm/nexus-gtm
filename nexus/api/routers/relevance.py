@@ -46,7 +46,7 @@ async def update_profile(
 ) -> RelevanceProfileOut:
     profile = await get_or_create_profile(ts)
     saved = dict(profile.icp or {})
-    icp = await _with_linkedin_codes(dict(body.icp or {}), saved)
+    icp = await _with_linkedin_codes(_gate_options(dict(body.icp or {})), saved)
     icp_changed = _without_codes(saved) != _without_codes(icp)
     profile.icp = icp
     profile.value_props = body.value_props
@@ -65,6 +65,25 @@ async def update_profile(
 
 
 _DERIVED_KEYS = ("linkedin_industry_ids", "linkedin_industry_map_version")
+
+
+def _gate_options(icp: dict) -> dict:
+    """The mandatory-field options as the gate reads them (`relevance.gate`): known field names
+    only, once each; ``include_suppliers`` a real boolean (the JSON string "false" is truthy in
+    Python and would switch it on); ``tech_match`` "any" or "all". Anything else is dropped, so a
+    malformed value means the default rather than something nobody chose."""
+    from nexus.relevance.gate import mandatory_fields
+
+    fields = mandatory_fields(icp)
+    if fields:
+        icp["mandatory"] = fields
+    else:
+        icp.pop("mandatory", None)
+    if not isinstance(icp.get("include_suppliers"), bool):
+        icp.pop("include_suppliers", None)
+    if icp.get("tech_match") not in ("any", "all"):
+        icp.pop("tech_match", None)
+    return icp
 
 
 def _without_codes(icp: dict) -> dict:

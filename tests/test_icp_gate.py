@@ -215,3 +215,132 @@ async def test_nothing_mandatory_delivers_as_before(monkeypatch):
 
     assert domains == ["a.io", "b.io"] and not discarded["fails_mandatory"]
     assert enriched == [], "LinkedIn rows are not enriched unless a mandatory field needs it"
+
+
+# ---- the API: saving the options, and every account saying how it fares -------------------------
+
+async def _owner(client, slug):
+    from tests.conftest import auth, signup
+
+    token = await signup(client, slug=slug, email=f"o@{slug}.com", company=slug.title())
+    return auth(token)
+
+
+async def test_saving_keeps_only_known_fields_and_real_switches(client):
+    h = await _owner(client, "gate-api1")
+    r = await client.put("/api/relevance/profile", headers=h, json={"icp": {
+        "industries": ["Oil & Gas"], "required_tech": ["HubSpot"],
+        "mandatory": ["industry", "tech", "revenue", "industry"],
+        "include_suppliers": "false", "tech_match": "most"}})
+    assert r.status_code == 200, r.text
+    icp = r.json()["icp"]
+
+    assert icp["mandatory"] == ["industry", "tech"]
+    # A JSON string "false" is truthy in Python: anything not a real boolean is dropped.
+    assert "include_suppliers" not in icp and "tech_match" not in icp
+
+    r = await client.put("/api/relevance/profile", headers=h, json={"icp": {
+        **icp, "include_suppliers": True, "tech_match": "all"}})
+    assert r.json()["icp"]["include_suppliers"] is True
+    assert r.json()["icp"]["tech_match"] == "all"
+
+
+async def test_an_account_says_which_mandatory_field_it_fails(client):
+    h = await _owner(client, "gate-api2")
+    await client.put("/api/relevance/profile", headers=h, json={"icp": {
+        "industries": ["Oil & Gas"], "required_tech": ["HubSpot"],
+        "mandatory": ["industry", "tech"]}})
+    made = await client.post("/api/accounts", headers=h, json={
+        "name": "Valve Co", "domain": "valveco.io", "industry": "Machinery Manufacturing"})
+    assert made.status_code in (200, 201), made.text
+    assert made.json()["icp_gate"] == {
+        "passed": False, "failed": ["industry"], "unknown": ["tech"],
+        "reason": "Fails Industry; no data for Tech stack"}
+
+    listed = (await client.get("/api/accounts", headers=h)).json()
+    rows = listed if isinstance(listed, list) else listed["items"]
+    assert rows[0]["icp_gate"]["reason"] == "Fails Industry; no data for Tech stack"
+    one = (await client.get(f"/api/accounts/{made.json()['id']}", headers=h)).json()
+    assert one["icp_gate"]["passed"] is False
+
+
+async def test_no_mandatory_field_means_no_gate_on_the_account(client):
+    h = await _owner(client, "gate-api3")
+    made = await client.post("/api/accounts", headers=h, json={"name": "Any", "domain": "any.io"})
+    assert made.json()["icp_gate"] is None
+
+
+# ---- the screens (no frontend test runner: these read the source) --------------------------------
+
+def _src(path):
+    from pathlib import Path
+
+    return (Path(__file__).resolve().parent.parent / "frontend" / "src" / path).read_text("utf-8")
+
+
+def test_the_browser_names_the_fields_as_the_server_does():
+    import re
+
+    from nexus.relevance.gate import FIELDS, LABELS
+
+    block = _src("lib/types.ts").split("MANDATORY_LABELS", 1)[1].split("};", 1)[0]
+    labels = dict(re.findall(r'(\w+): "([^"]+)"', block))
+    assert labels == LABELS and tuple(labels) == FIELDS
+
+
+def test_a_miss_is_shown_as_the_field_never_as_a_score():
+    accounts = _src("pages/AccountsPage.tsx")
+    assert "<FitBadge score={a.fit_score} gate={a.icp_gate} />" in accounts
+    assert "fitSortValue(a.fit_score, a.icp_gate)" in accounts
+    detail = _src("pages/AccountDetailPage.tsx")
+    assert "acc.icp_gate.reason" in detail
+
+
+def test_the_form_keeps_a_bracketed_group_as_one_entry():
+    page = _src("pages/RelevancePage.tsx")
+    split = page.split("const splitCsv", 1)[1].split("};", 1)[0]
+    assert 'ch === "("' in split and "depth === 0" in split
+
+
+# ---- campaigns: a must-match field holds when people are added ----------------------------------
+
+async def _enroll_with(slug, icp):
+    from nexus.engagement.sequences.service import create_campaign, enroll
+    from nexus.relevance.engine import get_profile
+    from tests.conftest import tenant_session
+    from tests.test_engagement_sequences import STEPS, _world
+
+    tid, user_id, mailbox_id, ids = await _world(slug, contacts=2)
+    async with tenant_session(tid) as ts:
+        (await get_profile(ts)).icp = icp
+        await ts.flush()
+    async with tenant_session(tid) as ts:
+        campaign = await create_campaign(ts, name="Q4", owner_user_id=user_id,
+                                         mailbox_id=mailbox_id, steps=STEPS)
+        return ids, await enroll(ts, campaign, ids)
+
+
+async def test_people_at_a_company_outside_a_must_match_field_are_not_added():
+    # The world's account is in Germany with no industry on record: no data is no match.
+    ids, result = await _enroll_with("gate-enr1", {
+        "industries": ["Software Development"], "countries": ["Germany"],
+        "mandatory": ["industry", "country"]})
+
+    assert result.added == []
+    assert {s["reason"] for s in result.skipped} == {"outside_icp"}
+
+
+async def test_a_mandatory_title_holds_for_the_person():
+    ids, result = await _enroll_with("gate-enr2", {
+        "buyer_titles": ["Chief Revenue Officer"], "mandatory": ["titles"]})
+    assert result.added == [] and {s["reason"] for s in result.skipped} == {"title_outside_icp"}
+
+    ids, result = await _enroll_with("gate-enr3", {
+        "buyer_titles": ["VP Engineering"], "countries": ["Germany"],
+        "mandatory": ["titles", "country"]})
+    assert result.added == ids
+
+
+async def test_nothing_mandatory_adds_as_before():
+    ids, result = await _enroll_with("gate-enr4", {"industries": ["Software Development"]})
+    assert result.added == ids
