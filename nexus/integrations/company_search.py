@@ -86,6 +86,11 @@ _NON_COMPANY_HOSTS: frozenset[str] = frozenset({
     "growjo.com", "tracxn.com", "dnb.com", "bloomberg.com", "indexed.vc",
     "apps.apple.com", "play.google.com", "appstore.com", "producthunt.com",
     "wellfound.com", "angel.co", "rocketreach.co", "leadiq.com", "datanyze.com",
+    # The search backends this product queries (2026-10-26). Exa's company search sometimes
+    # answers with its OWN profile page: measured, three accounts in three workspaces were filed
+    # under exa.ai (Waystar, Intuit Mailchimp, Eyelit Technologies), so domain dedupe would merge
+    # them and the email finder would guess @exa.ai addresses for their staff.
+    "exa.ai", "search.brave.com", "serper.dev", "firecrawl.dev",
 })
 
 # Title shapes that betray a listicle / job page / news headline rather than a company name.

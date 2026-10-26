@@ -130,3 +130,24 @@ async def test_a_foreign_headquarters_is_no_longer_hidden_by_a_stamped_country(m
         domains = [(await ts.get(Account, i)).domain for i in ids]
     assert domains == ["lincolnmanufacturing.com"]
     assert discarded["outside_icp"] == 1
+
+
+@pytest.mark.parametrize("url", [
+    "https://exa.ai/company/waystar", "https://exa.ai/", "https://search.brave.com/search?q=acme",
+    "https://serper.dev/", "https://www.firecrawl.dev/app",
+])
+async def test_a_search_vendors_own_page_is_never_a_company(url):
+    """Measured: three accounts in three workspaces were filed under `exa.ai` (Waystar, Intuit
+    Mailchimp, Eyelit Technologies), so domain dedupe would merge them and the email finder would
+    guess `@exa.ai` addresses for their staff."""
+    from nexus.prospecting.linkedin import company_domain
+
+    provider = SearchBackedCompanySearchProvider(_Search([
+        SearchHit(title="Waystar", url=url, snippet="Waystar is a Software Development company."),
+        SearchHit(title="Waystar", url="https://www.waystar.com/", snippet="Healthcare payments."),
+    ]))
+
+    found = await provider.search({"industries": ["Healthcare"]})
+
+    assert [c.domain for c in found] == ["waystar.com"]
+    assert company_domain(url) == ""
