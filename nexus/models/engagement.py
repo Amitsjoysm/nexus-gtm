@@ -148,6 +148,10 @@ class EngagementCampaign(IdMixin, TimestampMixin, TenantScoped, Base):
     launched_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     legacy_campaign_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # The team's own call script for this campaign, verbatim (migration 0075, D10), and where it
+    # came from: {filename, uploaded_at, uploaded_by, suggestion, original}.
+    call_script: Mapped[str | None] = mapped_column(Text, nullable=True)
+    call_script_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class EngagementStep(IdMixin, TimestampMixin, TenantScoped, Base):

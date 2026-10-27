@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -693,3 +693,128 @@ async def enrollment_action(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown action")
     except service.CampaignError as exc:
         raise _refuse(exc) from exc
+
+
+# ---- the campaign's own call script (D10, 2026-10-26) --------------------------------------------
+
+class CallScriptOut(BaseModel):
+    """The team's script as written, where it came from, and an Enhance suggestion if one waits.
+    ``text`` is None when the campaign has no script of its own (calls then use the AI script)."""
+    text: str | None = None
+    filename: str | None = None
+    uploaded_at: str | None = None
+    suggestion: str | None = None
+    original: str | None = None
+
+
+def _script_out(campaign) -> CallScriptOut:
+    meta = dict(campaign.call_script_meta or {})
+    return CallScriptOut(text=campaign.call_script, filename=meta.get("filename"),
+                         uploaded_at=meta.get("uploaded_at"), suggestion=meta.get("suggestion"),
+                         original=meta.get("original"))
+
+
+@router.get("/campaigns/{campaign_id}/call-script", response_model=CallScriptOut)
+async def get_call_script(
+    campaign_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> CallScriptOut:
+    return _script_out(await _campaign(ts, campaign_id, principal))
+
+
+@router.post("/campaigns/{campaign_id}/call-script/file", response_model=CallScriptOut)
+async def put_call_script(
+    campaign_id: str,
+    file: UploadFile = File(...),
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> CallScriptOut:
+    """Upload the script (.docx or .txt). Stored exactly as written; replacing it clears any
+    suggestion waiting on the old one."""
+    from nexus.calling.scripts import MAX_BYTES, UnreadableScript, read_document
+    from nexus.core.db import utcnow
+
+    campaign = await _campaign(ts, campaign_id, principal)
+    data = await file.read(MAX_BYTES + 1)
+    try:
+        text = read_document(file.filename or "", data)
+    except UnreadableScript as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    campaign.call_script = text
+    campaign.call_script_meta = {"filename": (file.filename or "")[:200],
+                                 "uploaded_at": utcnow().isoformat(),
+                                 "uploaded_by": principal.user_id}
+    await ts.flush()
+    return _script_out(campaign)
+
+
+@router.delete("/campaigns/{campaign_id}/call-script", status_code=204, response_model=None)
+async def delete_call_script(
+    campaign_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> None:
+    """Back to the AI script for this campaign's calls."""
+    campaign = await _campaign(ts, campaign_id, principal)
+    campaign.call_script = None
+    campaign.call_script_meta = None
+    await ts.flush()
+
+
+@router.post("/campaigns/{campaign_id}/call-script/enhance", response_model=CallScriptOut)
+async def enhance_call_script(
+    campaign_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> CallScriptOut:
+    """A suggested revision, kept beside the script until the rep accepts or rejects it. Charged
+    as one AI call script (`ai.call_script`), the price of generating one."""
+    from nexus.agents.llm import LLMMessage, get_llm_provider
+    from nexus.billing.meter import metered
+    from nexus.relevance.engine import get_profile
+    from nexus.calling.scripts import enhance_prompt
+
+    campaign = await _campaign(ts, campaign_id, principal)
+    if not (campaign.call_script or "").strip():
+        raise HTTPException(status.HTTP_409_CONFLICT, "Upload a script first.")
+    profile = await get_profile(ts)
+    prompt = enhance_prompt(campaign.call_script, getattr(profile, "product_context", "") or "")
+    async with metered(ts, "ai.call_script", user_id=principal.user_id, source="calling",
+                       attrs={"enhance": True}):
+        response = await get_llm_provider().complete(
+            [LLMMessage(role="user", content=prompt)], purpose="call_script",
+            max_tokens=1500, temperature=0.3)
+    suggestion = (response.text or "").strip().strip('"').strip()
+    if getattr(response, "is_stub", False) or not suggestion:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "No AI model is available to suggest a revision right now.")
+    meta = dict(campaign.call_script_meta or {})
+    meta["suggestion"] = suggestion[:20_000]
+    campaign.call_script_meta = meta
+    await ts.flush()
+    return _script_out(campaign)
+
+
+@router.post("/campaigns/{campaign_id}/call-script/suggestion/{verdict}",
+             response_model=CallScriptOut)
+async def decide_call_script_suggestion(
+    campaign_id: str, verdict: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> CallScriptOut:
+    """Accept (the suggestion becomes the script, the script before it kept as the original) or
+    reject (the suggestion is dropped)."""
+    if verdict not in ("accept", "reject"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    campaign = await _campaign(ts, campaign_id, principal)
+    meta = dict(campaign.call_script_meta or {})
+    suggestion = meta.pop("suggestion", None)
+    if suggestion is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "There is no suggestion to decide on.")
+    if verdict == "accept":
+        meta.setdefault("original", campaign.call_script)
+        campaign.call_script = suggestion
+    campaign.call_script_meta = meta
+    await ts.flush()
+    return _script_out(campaign)

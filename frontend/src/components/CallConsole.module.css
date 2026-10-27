@@ -117,6 +117,23 @@
   color: var(--text-subtle);
 }
 
+/* The team's script exactly as written: its own line breaks, in the reading face. */
+.ownScript {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-family: inherit;
+  font-size: var(--text-base);
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Category, then Disposition, side by side where there is room; the date joins them when needed. */
 .dispoPick {
   display: grid;

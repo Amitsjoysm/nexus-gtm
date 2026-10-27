@@ -436,6 +436,25 @@ export interface DispositionCategory {
   dispositions: DispositionOption[];
 }
 
+/** A campaign's own call script (D10). `text` null: calls use the AI talk track. */
+export interface CampaignCallScript {
+  text: string | null;
+  filename: string | null;
+  uploaded_at: string | null;
+  /** An Enhance revision waiting for accept or reject; the script is unchanged until then. */
+  suggestion: string | null;
+  /** The script before an accepted suggestion replaced it. */
+  original: string | null;
+}
+
+export interface CallTaskCampaignScript {
+  campaign_id: string;
+  campaign_name: string;
+  filename: string | null;
+  /** As written, with only its {{placeholders}} filled for this call. */
+  text: string;
+}
+
 export interface TriageSummary {
   signal_kind: string | null;
   signal_strength: number | null;

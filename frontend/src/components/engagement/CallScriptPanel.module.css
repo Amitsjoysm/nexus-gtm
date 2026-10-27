@@ -1,0 +1,83 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+.lead,
+.empty,
+.meta {
+  margin: var(--space-1) 0 0;
+  max-width: 70ch;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-muted);
+}
+.meta {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+/* The real input stays in the page for keyboard and screen readers; the button opens it. */
+.file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+/* The script exactly as written: its own line breaks, readable width, no monospace costume. */
+.script {
+  margin: 0;
+  padding: var(--space-4);
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Original and suggestion side by side where there is room, stacked on a phone. */
+.compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+.subhead {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+.decide {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.footer {
+  display: flex;
+  justify-content: flex-end;
+}

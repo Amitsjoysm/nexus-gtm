@@ -8,6 +8,7 @@ import {
 import type { Column } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import { BestTimeHint } from "@/components/engagement/BestTimeHint";
+import { CallScriptPanel } from "@/components/engagement/CallScriptPanel";
 import { ContactPicker } from "@/components/engagement/ContactPicker";
 import { ListChooser } from "@/components/engagement/ListChooser";
 import { useContactInsights } from "@/components/engagement/InsightBadge";
@@ -251,7 +252,10 @@ export function CampaignDetailPage() {
       )}
 
       <TabPanel id="campaign-panel-steps" active={tab === "steps"}>
-        <StepsPanel campaign={c} editable={settingUp} onSaved={refresh} />
+        <div className={styles.stack}>
+          <StepsPanel campaign={c} editable={settingUp} onSaved={refresh} />
+          <CallScriptPanel campaignId={c.id} />
+        </div>
       </TabPanel>
     </div>
   );

@@ -246,8 +246,9 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0072_prospector` (branch `feat/prospect-engine`; on
-master the head is still `0071_ledger_erasures`). The chain is
+Alembic under `migrations/versions/`. Head: `0075_call_scripts` on branch `fix/sdr-data-accuracy`
+(`0073_field_provenance`, `0074_draft_facts`, `0075_call_scripts`, none applied anywhere but a DB
+copy); `0072_prospector` before it. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -271,8 +272,10 @@ fields on `companies`, `company_countries` and `prospect_cursors`, all platform-
 `.auto_send_replies`, `reply_classifications.auto_reply` and `.auto_reply_note`) -> `0070`
 (`payment_credentials.payment_method_configuration`, platform-global) -> `0071` (`ledger_erasures`,
 platform-global) -> `0072` (`prospector_pages` platform-global; `prospector_purchases`,
-`prospector_daily_rows` tenant-scoped). Every tenant-scoped table gets RLS via
-`scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
+`prospector_daily_rows` tenant-scoped) -> `0073` (`field_sources` on accounts, contacts and
+companies; `companies.labels_quarantined_at`) -> `0074` (`engagement_messages.draft_facts`) ->
+`0075` (`engagement_campaigns.call_script`, `.call_script_meta`). Every tenant-scoped table gets
+RLS via `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
 `upgrade head` refuses to run against. Both had branched from `0043_signal_subtype`. Resolved by
@@ -2639,6 +2642,42 @@ Re-adding either is one line plus a consumer. Doing it on a guess is the part th
 therefore delivers nothing in production right now. Key rotation cannot fix either half — approval
 is per account and needs a click in the console; a revoked key needs replacing. Until both are
 cleared, `--run` cannot pass and no new actor can be validated against real output.
+
+## What a draft may say (`nexus/agents/facts.py`, 2026-10-26, D8)
+
+SDR feedback: personalization generic and sometimes wrong. Measured: stamped industries and
+countries, "Known tech: DMARC, Let's Encrypt", 57% of accounts with signals had only generic news
+among the eight a draft read, and the job title counted as "a fact used". One module for the
+composer, call scripts and campaign drafts (`tests/test_draft_facts.py`):
+- **`citable_signals`**: events only (`signal_alert_floor`, 0.5) inside the AI window.
+- **`account_facts(account, icp)`** leaves out website plumbing (`INFRASTRUCTURE_TECH`) and an
+  industry or country `looks_stamped`: a web find from before the fix, no recorded source, equal
+  to the ICP's FIRST industry or country (what the stamp wrote). `RelevanceContext.icp` carries it.
+- **The title is a fact only when nothing else is known** (`build_context`).
+- **What a draft rests on is saved and shown** (`ContextPack.sources` → `Draft.sources` →
+  `engagement_messages.draft_facts`, migration 0074; Review lists it as "Built on" with links).
+- **`personalization_before_campaign_draft`** (default OFF, one paid actor run per person): reads
+  the person's LinkedIn before their campaign email, at most every 30 days (`_fresh_insights`).
+
+## Dispositions and call scripts (`nexus/calling/dispositions.py`, `scripts.py`, D10, D11)
+
+- **The team's list**: 10 categories, 28 dispositions, one vocabulary for calls and email
+  (`GET /calling/dispositions?channel=`). Bounce is email-only; the call attempts and Gatekeeper
+  call-only. The 8 old codes stay valid (`LEGACY`); `models.calling.ALL_DISPOSITIONS` and
+  `REQUEUE_DISPOSITIONS` are derived from the list. The console picks Category, then Disposition.
+- **Safe actions, never a delete** (`service._safe_action`): DNC → do-not-contact + `do_not_call`;
+  Bad Number / Number Disconnected → `phone_status: bad`; Bounce → address removed and remembered;
+  Callback / Follow-Up Required → task stays open, due at `follow_up_at`; Outside ICP / Existing
+  Customer / Duplicate Lead → `account.custom_fields.flags`; Wrong Person / Reference Shared → an
+  Inbox task to find the right contact. A failing action is logged; the outcome is still recorded.
+- **The reply desk names each reply in the same list** (`REPLY_TO_DISPOSITION`).
+- **A campaign's own call script** (migration 0075): `.docx` / `.txt` read with the standard
+  library (a DOCTYPE is refused before parsing), stored verbatim, shown in the console as "Your
+  script" above the AI talk track with only marked `{{placeholders}}` filled
+  (`GET /calling/tasks/{id}/campaign-script`). Enhance (`ai.call_script`) is a suggestion kept
+  beside it until accepted (the original kept) or rejected. **PDF waits on adding a PDF reader.**
+  Upload is `POST .../call-script/file`: a one-segment POST under a campaign is the catch-all
+  action route's.
 
 ## Drafted copy (`nexus/agents/copy.py`)
 

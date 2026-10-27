@@ -13,6 +13,7 @@ import {
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import type {
+  CallTaskCampaignScript,
   DispositionCategory,
   CallBrief,
   CallBriefSignal,
@@ -80,6 +81,15 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
   const [followUpAt, setFollowUpAt] = useState("");
   const inCategory = catalog.find((c) => c.key === category)?.dispositions ?? [];
   const chosen = inCategory.find((d) => d.code === dispositionCode) ?? null;
+  // The campaign's own script for this call, when it has one (404 otherwise: the AI one is used).
+  const [ownScript, setOwnScript] = useState<CallTaskCampaignScript | null>(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setOwnScript(null);
+    api.callTaskCampaignScript(task.id, ctrl.signal).then(setOwnScript).catch(() => {});
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id]);
   // Telephony is manual (click-to-dial) until the server says otherwise, so the default
   // workflow renders immediately instead of waiting on a status round-trip.
   const [telephony, setTelephony] = useState<TelephonyStatus | null>(null);
@@ -280,9 +290,20 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
 
       <BriefPanel brief={brief} busy={briefBusy} error={briefError} />
 
+      {/* The team's own script, read out as written (D10); the brief above is its side panel. */}
+      {ownScript && (
+        <div className={styles.scriptBlock}>
+          <div className={styles.scriptHead}>
+            <h4>Your script</h4>
+            <span className={styles.scriptWhen}>{ownScript.campaign_name}</span>
+          </div>
+          <pre className={styles.ownScript}>{ownScript.text}</pre>
+        </div>
+      )}
+
       <div className={styles.scriptBlock}>
         <div className={styles.scriptHead}>
-          <h4>AI call script</h4>
+          <h4>{ownScript ? "AI talk track (for reference)" : "AI call script"}</h4>
           {script?.generated_at && (
             <span className={styles.scriptWhen}>
               Written{" "}

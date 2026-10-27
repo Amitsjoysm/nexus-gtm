@@ -138,6 +138,48 @@ async def generate_call_script(
     return CallScriptOut(**{k: script.get(k) for k in CallScriptOut.model_fields if script.get(k) is not None})
 
 
+@router.get("/tasks/{task_id}/campaign-script")
+async def campaign_script(
+    task_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """The team's own script for this call's campaign, as written, with only its marked
+    placeholders filled (`nexus/calling/scripts.py`). 404 when the call has no campaign or the
+    campaign no script, so the console shows the AI talk track instead."""
+    from nexus.agents.facts import citable_signals
+    from nexus.calling.scripts import fill_placeholders
+    from nexus.models.engagement import EngagementCampaign, EngagementEnrollment
+    from nexus.models.identity import User
+    from nexus.models.signal import SignalEvent
+
+    task = await ts.get(CallTask, task_id)
+    enrollment = await ts.get(EngagementEnrollment, task.engagement_enrollment_id) \
+        if task is not None and task.engagement_enrollment_id else None
+    campaign = await ts.get(EngagementCampaign, enrollment.campaign_id) if enrollment else None
+    if campaign is None or not (campaign.call_script or "").strip():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This call has no campaign script")
+    contact = await ts.get(Contact, task.contact_id) if task.contact_id else None
+    account = await ts.get(Account, task.account_id)
+    signals = citable_signals(list((await ts.session.scalars(
+        ts.select(SignalEvent, SignalEvent.account_id == task.account_id)
+        .order_by(SignalEvent.occurred_at.desc()).limit(30))).all()))
+    trigger = max(signals, key=lambda s: s.strength or 0, default=None)
+    me = await ts.session.get(User, principal.user_id)
+    full_name = getattr(contact, "full_name", "") or ""
+    values = {
+        "first_name": full_name.split()[0] if full_name.split() else "",
+        "full_name": full_name, "title": getattr(contact, "title", "") or "",
+        "company": getattr(account, "name", "") or "",
+        "my_name": ((getattr(me, "full_name", "") or "").split() or [""])[0],
+        "trigger": getattr(trigger, "title", "") or "",
+    }
+    meta = dict(campaign.call_script_meta or {})
+    return {"campaign_id": campaign.id, "campaign_name": campaign.name,
+            "filename": meta.get("filename"),
+            "text": fill_placeholders(campaign.call_script, values)}
+
+
 @router.get("/tasks/{task_id}/brief", response_model=CallBriefOut)
 async def call_brief(
     task_id: str,

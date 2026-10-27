@@ -152,6 +152,8 @@ import type {
   CallTask,
   CallScript,
   CallActivity,
+  CallTaskCampaignScript,
+  CampaignCallScript,
   DispositionCategory,
   TelephonyStatus,
   DialResult,
@@ -1542,6 +1544,32 @@ export class ApiClient {
     return this.request<EngagementCampaign>(`/engagement/campaigns/${id}/steps`, {
       method: "PUT", body: steps,
     });
+  }
+  /** The campaign's own call script (D10): as written, its file, and any Enhance suggestion. */
+  campaignCallScript(id: string, signal?: AbortSignal) {
+    return this.request<CampaignCallScript>(`/engagement/campaigns/${id}/call-script`, { signal });
+  }
+  uploadCampaignCallScript(id: string, file: File) {
+    const form = new FormData();
+    form.set("file", file);
+    return this.requestForm<CampaignCallScript>(`/engagement/campaigns/${id}/call-script/file`, form);
+  }
+  removeCampaignCallScript(id: string) {
+    return this.request<null>(`/engagement/campaigns/${id}/call-script`, { method: "DELETE" });
+  }
+  enhanceCampaignCallScript(id: string) {
+    return this.request<CampaignCallScript>(`/engagement/campaigns/${id}/call-script/enhance`, {
+      method: "POST",
+    });
+  }
+  decideCallScriptSuggestion(id: string, verdict: "accept" | "reject") {
+    return this.request<CampaignCallScript>(
+      `/engagement/campaigns/${id}/call-script/suggestion/${verdict}`, { method: "POST" });
+  }
+  /** This call's campaign script with its placeholders filled; 404 when it has none. */
+  callTaskCampaignScript(taskId: string, signal?: AbortSignal) {
+    return this.request<CallTaskCampaignScript>(`/calling/tasks/${taskId}/campaign-script`,
+                                                { signal });
   }
   engagementCandidates(
     params: { list_id?: string; q?: string; title?: string; seniority?: string },
