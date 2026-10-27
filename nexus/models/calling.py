@@ -45,14 +45,19 @@ DISP_NOT_INTERESTED = "not_interested"
 DISP_BAD_NUMBER = "bad_number"
 DISP_GATEKEEPER = "gatekeeper"
 
-ALL_DISPOSITIONS = frozenset({
-    DISP_CONNECTED, DISP_VOICEMAIL, DISP_NO_ANSWER, DISP_CALLBACK,
-    DISP_MEETING_BOOKED, DISP_NOT_INTERESTED, DISP_BAD_NUMBER, DISP_GATEKEEPER,
-})
-# These keep the rep working the contact -> the task is re-queued (kept open / bumped), and a
-# cadence is NOT advanced (the attempt didn't reach a real outcome). Everything else is terminal:
-# the task closes and any linked cadence advances.
-REQUEUE_DISPOSITIONS = frozenset({DISP_NO_ANSWER, DISP_CALLBACK, DISP_GATEKEEPER})
+def _dispositions():
+    from nexus.calling.dispositions import BY_CODE, LEGACY
+
+    every = {**LEGACY, **BY_CODE}
+    return (frozenset(every),
+            frozenset(code for code, d in every.items() if d.requeue))
+
+
+# The team's list (`nexus/calling/dispositions.py`, 2026-10-26) plus the eight that existed before,
+# still valid for the rows holding them. Re-queue dispositions keep the rep working the contact:
+# the task stays open (due when the rep said) and a cadence is NOT advanced. Everything else is
+# terminal: the task closes and any linked cadence advances.
+ALL_DISPOSITIONS, REQUEUE_DISPOSITIONS = _dispositions()
 
 
 class CallTask(IdMixin, TimestampMixin, TenantScoped, Base):

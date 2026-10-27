@@ -152,6 +152,7 @@ import type {
   CallTask,
   CallScript,
   CallActivity,
+  DispositionCategory,
   TelephonyStatus,
   DialResult,
   CallBrief,
@@ -548,6 +549,8 @@ export class ApiClient {
       duration_s?: number | null;
       next_step?: string | null;
       provider_call_id?: string | null;
+      /** ISO time a Callback or Follow-Up Required is due. */
+      follow_up_at?: string | null;
     },
     signal?: AbortSignal,
   ) {
@@ -556,6 +559,10 @@ export class ApiClient {
       body,
       signal,
     });
+  }
+  callDispositions(channel: "call" | "email" = "call", signal?: AbortSignal) {
+    return this.request<DispositionCategory[]>(`/calling/dispositions?channel=${channel}`,
+                                               { signal });
   }
   telephonyStatus(signal?: AbortSignal) {
     return this.request<TelephonyStatus>("/calling/telephony", { signal });

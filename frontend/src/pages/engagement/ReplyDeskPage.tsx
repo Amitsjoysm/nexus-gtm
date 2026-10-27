@@ -294,6 +294,12 @@ function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () => void
           {!d.corrected_category && (
             <span className={styles.muted}>{Math.round(d.confidence * 100)}% sure</span>
           )}
+          {d.disposition_label && (
+            // The same list the calling reps log against, so both channels report alike.
+            <span className={styles.muted}>
+              Disposition: {d.disposition_category} · {d.disposition_label}
+            </span>
+          )}
         </div>
       </header>
 

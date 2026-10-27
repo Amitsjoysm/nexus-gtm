@@ -227,6 +227,20 @@ async def dial_call_task(
     )
 
 
+@router.get("/dispositions")
+async def list_dispositions(
+    channel: str = "call",
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> list[dict]:
+    """The team's categories and dispositions for one channel, for the Category -> Disposition
+    dropdowns (`nexus/calling/dispositions.py`)."""
+    from nexus.calling.dispositions import CALL, EMAIL, for_channel
+
+    if channel not in (CALL, EMAIL):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "channel is call or email")
+    return for_channel(channel)
+
+
 @router.post("/tasks/{task_id}/disposition", response_model=CallActivityOut)
 async def log_disposition(
     task_id: str,
@@ -234,12 +248,19 @@ async def log_disposition(
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.manage_accounts)),
 ) -> CallActivityOut:
-    if body.disposition not in ALL_DISPOSITIONS:
+    from nexus.calling.dispositions import CALL, lookup
+
+    chosen = lookup(body.disposition)
+    if body.disposition not in ALL_DISPOSITIONS or chosen is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown disposition '{body.disposition}'")
+    if CALL not in chosen.channels:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"'{chosen.label}' is not a call outcome.")
     activity = await get_call_queue_service().log_disposition(
         ts, task_id, disposition=body.disposition, notes=body.notes,
         duration_s=body.duration_s, next_step=body.next_step,
         provider_call_id=body.provider_call_id, user_id=principal.user_id,
+        follow_up_at=body.follow_up_at,
     )
     if activity is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Call task not found")

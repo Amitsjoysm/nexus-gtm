@@ -388,6 +388,8 @@ class DispositionIn(BaseModel):
     # Set when the call was placed live: pulls the provider's real duration, recording, and
     # transcript onto the activity. Absent for click-to-dial, which logs manually.
     provider_call_id: str | None = None
+    # When a Callback or Follow-Up Required is due: the call stays open, due then.
+    follow_up_at: datetime | None = None
 
 
 class CallActivityOut(BaseModel):

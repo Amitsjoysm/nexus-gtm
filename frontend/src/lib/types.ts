@@ -421,16 +421,20 @@ export interface DialResult {
   provider_call_id: string | null;
 }
 
-export const CALL_DISPOSITIONS = [
-  "connected",
-  "voicemail",
-  "no_answer",
-  "callback",
-  "meeting_booked",
-  "not_interested",
-  "bad_number",
-  "gatekeeper",
-] as const;
+/** One of the team's dispositions (`GET /calling/dispositions`, nexus/calling/dispositions.py). */
+export interface DispositionOption {
+  code: string;
+  label: string;
+  /** record | do_not_contact | phone_bad | email_bad | dated_task | flag_account | find_right_contact */
+  action: string;
+  needs_date: boolean;
+}
+
+export interface DispositionCategory {
+  key: string;
+  label: string;
+  dispositions: DispositionOption[];
+}
 
 export interface TriageSummary {
   signal_kind: string | null;
@@ -2747,6 +2751,10 @@ export interface DeskQueueItem {
   /** The automatic answer where the mailbox allows one: pending, sent, or held with the reason. */
   auto_reply: "pending" | "sent" | "held" | null;
   auto_reply_note: string | null;
+  /** The reply in the team's disposition list, shared with calling ("Follow-Up", "Callback"). */
+  disposition?: string | null;
+  disposition_label?: string | null;
+  disposition_category?: string | null;
 }
 
 export interface DeskConversationMessage {

@@ -369,9 +369,12 @@ class CallQueueService:
         next_step: str | None = None,
         provider_call_id: str | None = None,
         user_id: str | None = None,
+        follow_up_at=None,
     ) -> CallActivity | None:
         """Log a call outcome. Terminal dispositions close the task; re-queue dispositions
-        (no_answer/callback/gatekeeper) keep it open so the SDR can try again.
+        (no_answer/callback/gatekeeper...) keep it open so the SDR can try again, due at
+        ``follow_up_at`` when one is given. The team's safe actions run here
+        (`nexus/calling/dispositions.py`): nothing is ever deleted.
 
         When the call was placed live, ``provider_call_id`` pulls the provider's own record of
         it — real duration, recording URL, transcript — onto the activity. That lookup is
@@ -428,7 +431,10 @@ class CallQueueService:
         ts.add(activity)
         if disposition not in REQUEUE_DISPOSITIONS:
             task.status = CALL_DONE
+        elif follow_up_at is not None:
+            task.due_at = follow_up_at
         await ts.flush()
+        await _safe_action(ts, task, disposition, notes=notes or "", user_id=user_id)
         from nexus.engagement.ledger.emit import emit
 
         await emit(ts, "call.disposition",
@@ -456,6 +462,62 @@ class CallQueueService:
             .limit(limit)
         )
         return list((await ts.session.scalars(stmt)).all())
+
+
+async def _safe_action(ts: TenantSession, task, code: str, *, notes: str,
+                       user_id: str | None) -> None:
+    """What a disposition does besides being recorded (D11). Each action marks, never deletes, and
+    a failure in one is logged, never the reason the outcome is not recorded."""
+    from nexus.calling import dispositions as dispo
+    from nexus.core.db import utcnow
+    from nexus.models.account import Account, Contact
+
+    chosen = dispo.lookup(code)
+    if chosen is None or chosen.action == dispo.RECORD:
+        return
+    contact = await ts.get(Contact, task.contact_id) if task.contact_id else None
+    account = await ts.get(Account, task.account_id)
+    when = utcnow().isoformat()
+    try:
+        if chosen.action == dispo.DO_NOT_CONTACT and contact is not None:
+            cf = dict(contact.custom_fields or {})
+            cf["do_not_call"] = True
+            contact.custom_fields = cf
+            if contact.email:
+                from nexus.engagement.suppression.service import suppress
+
+                await suppress(ts, email=contact.email, reason="manual", contact_id=contact.id,
+                               created_by_user_id=user_id)
+        elif chosen.action == dispo.PHONE_BAD and contact is not None:
+            cf = dict(contact.custom_fields or {})
+            cf["phone_status"] = "bad"
+            cf["phone_bad_reason"] = chosen.label
+            contact.custom_fields = cf
+        elif chosen.action == dispo.EMAIL_BAD and contact is not None and contact.email:
+            from nexus.enrichment.policy import forget_email, remember_rejected
+
+            remember_rejected(contact, [contact.email])
+            forget_email(contact)
+        elif chosen.action == dispo.FLAG_ACCOUNT and account is not None:
+            cf = dict(account.custom_fields or {})
+            flags = list(cf.get("flags") or [])
+            flags.insert(0, {"code": chosen.code, "label": chosen.label, "note": notes,
+                             "by": user_id, "at": when})
+            cf["flags"] = flags[:20]
+            account.custom_fields = cf
+        elif chosen.action == dispo.FIND_RIGHT_CONTACT and account is not None:
+            from nexus.models.workflow import InboxTask
+
+            who = contact.full_name if contact is not None else "the person called"
+            ts.add(InboxTask(
+                tenant_id=ts.tenant_id, owner_user_id=user_id, account_id=account.id,
+                contact_id=getattr(contact, "id", None),
+                title=f"Find the right contact at {account.name}",
+                reason=f"{chosen.label} on a call with {who}." + (f" {notes}" if notes else ""),
+                priority=60, suggested_action={"type": "find_contacts"}))
+        await ts.flush()
+    except Exception:
+        logger.warning("disposition action %s failed for task %s", code, task.id, exc_info=True)
 
 
 def _account_source_label(account) -> str:

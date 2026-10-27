@@ -117,10 +117,17 @@
   color: var(--text-subtle);
 }
 
-.dispoGrid {
+/* Category, then Disposition, side by side where there is room; the date joins them when needed. */
+.dispoPick {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+}
+/* What the chosen disposition will do, said before Log is pressed. */
+.dispoHint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 
 /* ---- Pre-call research brief ---- */

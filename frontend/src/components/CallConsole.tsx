@@ -5,14 +5,15 @@ import {
   Field,
   Icons,
   Input,
+  Select,
   Skeleton,
   Textarea,
   useToast,
 } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import { CALL_DISPOSITIONS } from "@/lib/types";
 import type {
+  DispositionCategory,
   CallBrief,
   CallBriefSignal,
   CallScript,
@@ -23,15 +24,14 @@ import { formatNumber, humanize, signalWhen, signalWhenTitle } from "@/lib/forma
 import { emailStatusMeta, strengthMeta } from "@/lib/display";
 import styles from "./CallConsole.module.css";
 
-const DISPO_LABEL: Record<string, string> = {
-  connected: "Connected",
-  voicemail: "Voicemail",
-  no_answer: "No answer",
-  callback: "Callback",
-  meeting_booked: "Meeting booked",
-  not_interested: "Not interested",
-  bad_number: "Bad number",
-  gatekeeper: "Gatekeeper",
+/** What logging a disposition does besides recording it, said before the rep presses Log (D11). */
+const ACTION_HINT: Record<string, string> = {
+  do_not_contact: "Adds them to do-not-contact: no more emails or calls.",
+  phone_bad: "Marks this number bad. It stays on the contact.",
+  email_bad: "Removes this email address and remembers it as bad.",
+  dated_task: "Keeps this call open, due when you say.",
+  flag_account: "Flags the account. Nothing is deleted.",
+  find_right_contact: "Adds an Inbox task to find the right contact.",
 };
 
 function telHref(phone: string | null): string | null {
@@ -73,6 +73,13 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
   const [notes, setNotes] = useState("");
   const [nextStep, setNextStep] = useState("");
   const [logging, setLogging] = useState<string | null>(null);
+  // The team's Category -> Disposition list, from the server so both channels read one vocabulary.
+  const [catalog, setCatalog] = useState<DispositionCategory[]>([]);
+  const [category, setCategory] = useState("");
+  const [dispositionCode, setDispositionCode] = useState("");
+  const [followUpAt, setFollowUpAt] = useState("");
+  const inCategory = catalog.find((c) => c.key === category)?.dispositions ?? [];
+  const chosen = inCategory.find((d) => d.code === dispositionCode) ?? null;
   // Telephony is manual (click-to-dial) until the server says otherwise, so the default
   // workflow renders immediately instead of waiting on a status round-trip.
   const [telephony, setTelephony] = useState<TelephonyStatus | null>(null);
@@ -100,11 +107,29 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
     }
   }
 
+  useEffect(() => {
+    const ctrl = new AbortController();
+    api.callDispositions("call", ctrl.signal).then(setCatalog).catch(() => setCatalog([]));
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** A category with one disposition (Gatekeeper, Other) needs no second choice. */
+  function pickCategory(key: string) {
+    setCategory(key);
+    const only = catalog.find((c) => c.key === key)?.dispositions ?? [];
+    setDispositionCode(only.length === 1 ? only[0].code : "");
+    setFollowUpAt("");
+  }
+
   // Reset + (optionally) pre-generate whenever the call changes.
   useEffect(() => {
     setScript(null);
     setNotes("");
     setNextStep("");
+    setCategory("");
+    setDispositionCode("");
+    setFollowUpAt("");
     setLiveCallId(null);
     if (autoGenerate) void generate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -176,8 +201,9 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
         notes: notes.trim() || undefined,
         next_step: nextStep.trim() || undefined,
         provider_call_id: liveCallId,
+        follow_up_at: followUpAt ? new Date(followUpAt).toISOString() : undefined,
       });
-      toast.success("Logged", `${DISPO_LABEL[disposition] ?? disposition} — ${task.contact_name ?? "contact"}.`);
+      toast.success("Logged", `${chosen?.label ?? disposition} — ${task.contact_name ?? "contact"}.`);
       onLogged?.(disposition);
     } catch (err) {
       toast.error("Couldn't log call", err instanceof ApiError ? err.detail : "Try again.");
@@ -319,20 +345,49 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
           placeholder="Next step (e.g. demo Tue 2pm)"
           aria-label="Next step"
         />
-        <div className={styles.dispoGrid}>
-          {CALL_DISPOSITIONS.map((d) => (
-            <Button
-              key={d}
-              size="sm"
-              variant={d === "meeting_booked" ? "primary" : "secondary"}
-              loading={logging === d}
-              disabled={!!logging}
-              onClick={() => logDisposition(d)}
-            >
-              {DISPO_LABEL[d] ?? d}
-            </Button>
-          ))}
+        <div className={styles.dispoPick}>
+          <Field label="Category">
+            <Select
+              value={category}
+              onChange={(e) => pickCategory(e.target.value)}
+              placeholder="Choose a category"
+              options={catalog.map((c) => ({ value: c.key, label: c.label }))}
+              disabled={!catalog.length || !!logging}
+            />
+          </Field>
+          <Field label="Disposition">
+            <Select
+              value={dispositionCode}
+              onChange={(e) => {
+                setDispositionCode(e.target.value);
+                setFollowUpAt("");
+              }}
+              placeholder={category ? "Choose an outcome" : "Choose a category first"}
+              options={inCategory.map((d) => ({ value: d.code, label: d.label }))}
+              disabled={!category || !!logging}
+            />
+          </Field>
+          {chosen?.needs_date && (
+            <Field label="Follow up on" hint="Optional. The call stays in your queue either way.">
+              <Input
+                type="datetime-local"
+                value={followUpAt}
+                onChange={(e) => setFollowUpAt(e.target.value)}
+              />
+            </Field>
+          )}
         </div>
+        {chosen && ACTION_HINT[chosen.action] && (
+          <p className={styles.dispoHint}>{ACTION_HINT[chosen.action]}</p>
+        )}
+        <Button
+          variant="primary"
+          loading={!!logging}
+          disabled={!chosen || !!logging}
+          onClick={() => chosen && logDisposition(chosen.code)}
+        >
+          Log outcome
+        </Button>
       </div>
     </div>
   );

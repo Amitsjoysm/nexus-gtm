@@ -43,6 +43,11 @@ class QueueItemOut(BaseModel):
     # sentence saying why a held one waits for a person (`replies/auto_reply.py`).
     auto_reply: str | None = None
     auto_reply_note: str | None = None
+    # The reply as the team's disposition list reads it ("Follow-Up: Callback"), so email and
+    # calling reps share one vocabulary (`calling/dispositions.REPLY_TO_DISPOSITION`).
+    disposition: str | None = None
+    disposition_label: str | None = None
+    disposition_category: str | None = None
 
 
 class ScheduledOut(BaseModel):
@@ -133,8 +138,12 @@ async def _names(ts: TenantSession, contact_ids, account_ids) -> _Names:
 
 
 def _row(classification, message, names: _Names) -> dict:
+    from nexus.calling.dispositions import REPLY_TO_DISPOSITION, category_label, lookup
+
     body = (getattr(message, "body_text", "") or "")
     contact = names.contact(classification.contact_id)
+    code = REPLY_TO_DISPOSITION.get(classification.corrected_category or classification.category)
+    disposition = lookup(code)
     account = names.account(classification.account_id
                             or getattr(contact, "account_id", None))
     return {
@@ -155,6 +164,9 @@ def _row(classification, message, names: _Names) -> dict:
         "responded_at": classification.responded_at,
         "auto_reply": classification.auto_reply,
         "auto_reply_note": classification.auto_reply_note,
+        "disposition": code,
+        "disposition_label": disposition.label if disposition else None,
+        "disposition_category": category_label(code) or None,
     }
 
 
