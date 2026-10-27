@@ -45,6 +45,8 @@
 }
 /* The script exactly as written: its own line breaks, readable width, no monospace costume. */
 .script {
+  /* A scroller is a containing block, or an absolutely placed child escapes it. */
+  position: relative;
   margin: 0;
   padding: var(--space-4);
   max-height: 420px;

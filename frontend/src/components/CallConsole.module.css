@@ -119,6 +119,8 @@
 
 /* The team's script exactly as written: its own line breaks, in the reading face. */
 .ownScript {
+  /* A scroller is a containing block, or an absolutely placed child escapes it. */
+  position: relative;
   margin: 0;
   padding: var(--space-3) var(--space-4);
   max-height: 360px;
