@@ -240,12 +240,48 @@ _SPECS: tuple[SettingSpec, ...] = (
         key="llm_provider", label="LLM provider", group=AI, kind="str",
         effect="Which model provider writes every email draft, call script, research brief and "
                "summary.",
-        warning="Leave on 'auto' unless you have a reason. 'auto' is the ONLY choice that uses Groq "
-                "keys added under Provider keys; 'groq', 'anthropic' and 'openai_compat' need their "
-                "key in the deployment environment, and without it every completion falls through "
-                "to the offline stub, whose fluent, canned text is then sent to real prospects "
-                "with nothing reporting a problem.",
+        warning="Leave on 'auto' unless you have a reason. 'auto' uses every provider keyed under "
+                "Provider keys, Claude first, and is the only choice where 'Writes emails' and "
+                "'Writes call scripts' apply. 'groq' needs its key in the deployment environment; "
+                "with no key for the chosen provider every completion falls through to the "
+                "offline stub, whose fluent, canned text is then sent to real prospects with "
+                "nothing reporting a problem.",
         risk="high", options=("auto", "anthropic", "groq", "openai_compat"),
+    ),
+    SettingSpec(
+        key="llm_email_provider", label="Writes emails", group=AI, kind="str",
+        effect="Which model provider writes every email draft (the composer, campaign emails and "
+               "suggested replies). When it has no key or fails, the next provider answers.",
+        warning="Only applies with LLM provider 'auto'. A provider with no key is skipped, so "
+                "choosing one nobody has keyed changes nothing.",
+        risk="medium", options=("anthropic", "groq", "openai_compat"),
+        option_labels=(("anthropic", "Claude (Anthropic)"), ("groq", "Groq"),
+                       ("openai_compat", "OpenAI-compatible")),
+    ),
+    SettingSpec(
+        key="llm_email_model", label="Email model", group=AI, kind="str",
+        effect="The model the email provider uses for emails. Empty uses that provider's model "
+               "under Provider keys.",
+        warning="A model the provider does not offer fails every email draft over to the next "
+                "provider. Check the name in Provider keys > Models.",
+        risk="medium", placeholder="claude-opus-5-5",
+    ),
+    SettingSpec(
+        key="llm_call_script_provider", label="Writes call scripts", group=AI, kind="str",
+        effect="Which model provider writes call scripts. When it has no key or fails, the next "
+               "provider answers.",
+        warning="Only applies with LLM provider 'auto'. A provider with no key is skipped.",
+        risk="medium", options=("anthropic", "groq", "openai_compat"),
+        option_labels=(("anthropic", "Claude (Anthropic)"), ("groq", "Groq"),
+                       ("openai_compat", "OpenAI-compatible")),
+    ),
+    SettingSpec(
+        key="llm_call_script_model", label="Call script model", group=AI, kind="str",
+        effect="The model the call script provider uses. Empty uses that provider's model under "
+               "Provider keys.",
+        warning="A model the provider does not offer fails every call script over to the next "
+                "provider.",
+        risk="medium", placeholder="claude-sonnet-5-5",
     ),
     SettingSpec(
         key="research_provider", label="Research brief source", group=AI, kind="str",

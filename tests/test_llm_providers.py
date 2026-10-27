@@ -66,7 +66,8 @@ def test_auto_chain_prefers_anthropic_then_groq_then_stub():
     chain = _build_llm_chain(_settings(anthropic_api_key="a", groq_api_key="g"))
     assert isinstance(chain, FallbackLLMProvider)
     kinds = [type(p).__name__ for p in chain.providers]
-    assert kinds == ["AnthropicLLMProvider", "GroqLLMProvider", "StubLLMProvider"]
+    # Managed since 2026-10-26: it also reads a key saved under Provider keys.
+    assert kinds == ["ManagedAnthropicProvider", "GroqLLMProvider", "StubLLMProvider"]
 
 
 def test_auto_chain_groq_only():

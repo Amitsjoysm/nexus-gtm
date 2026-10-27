@@ -277,7 +277,18 @@ def _validate_mail_name(value) -> None:
                          "< > or quotes")
 
 
+def _validate_model_name(value) -> None:
+    """Empty, or one model id as providers spell them ("claude-opus-5-5", "openai/gpt-oss-120b")."""
+    import re
+
+    text = str(value or "")
+    if text and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@-]{0,119}", text):
+        raise ValueError("a model name is one word of at most 120 letters, digits and . _ : / @ -")
+
+
 _VALIDATORS = {
+    "llm_email_model": _validate_model_name,
+    "llm_call_script_model": _validate_model_name,
     "system_smtp_host": _validate_mail_host,
     "alert_smtp_host": _validate_mail_host,
     "system_smtp_username": _validate_mail_username,

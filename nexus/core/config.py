@@ -294,6 +294,13 @@ class Settings(BaseSettings):
     # Anthropic (preferred when keyed) — native /v1/messages API.
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
+    # Which provider writes emails and call scripts, chosen in Superadmin (owner decision,
+    # 2026-10-26): Claude first, then the rest of the chain as keys allow. A model left empty is
+    # that provider's own model under Provider keys. Read per call by `agents.llm.PurposeRouter`.
+    llm_email_provider: Literal["anthropic", "groq", "openai_compat"] = "anthropic"
+    llm_email_model: str = ""
+    llm_call_script_provider: Literal["anthropic", "groq", "openai_compat"] = "anthropic"
+    llm_call_script_model: str = ""
     # Groq (OpenAI-compatible) — the fast secondary LLM, used after Anthropic.
     groq_api_key: str = ""
     # Optional rotation pool (comma-separated). On a 429 the provider switches to the next key,

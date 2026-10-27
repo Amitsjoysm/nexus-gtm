@@ -2521,8 +2521,18 @@ did nothing.
   on. It is in the chain whenever `llm_provider` is `auto` or `openai_compat`, like Groq, or a
   panel-only key could never be used. A 401/403 marks the key red (`record_rejection_from_response`).
 - Probe, verify and the model list ask the chosen endpoint (`testing._endpoint`), never the env URL.
-- **Anthropic has the same gap and is not fixed yet**: `AnthropicLLMProvider` is built only from
-  `NEXUS_ANTHROPIC_API_KEY` and the env model, so an Anthropic key or model saved here is unused.
+- **Anthropic had the same gap, closed 2026-10-26** (`ManagedAnthropicProvider`, first in the
+  `auto` chain whatever the environment holds): key and model re-read before every call, managed
+  pool first, per call rather than on the shared instance. A provider with no key anywhere raises
+  `NotConfigured` before sending, which the chain skips with no warning and no fallback metric (it
+  had counted as a fallback on every call).
+- **Emails and call scripts take a provider and model a superadmin chose** (owner decision,
+  2026-10-26; `PurposeRouter`, `purpose_choice`, `tests/test_llm_purpose_models.py`). Runtime
+  settings `llm_email_provider` / `llm_email_model` (`outreach_message`: composer, campaign emails,
+  suggested replies) and `llm_call_script_provider` / `llm_call_script_model`, Claude by default.
+  The chosen provider goes first under the chosen model (a context variable, `using_model`, read
+  where each provider builds its payload), then the rest of the chain in its order, the stub last.
+  `llm_provider` must be `auto`.
 
 `GET /admin/billing/overview` is the platform-wide counter beside it: users, workspaces, requests
 this period and all-time, credits granted vs spent. **`requests_with_a_user` is reported separately

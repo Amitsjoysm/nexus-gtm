@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import abc
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 import httpx
@@ -20,6 +22,30 @@ import httpx
 from nexus.core.config import get_settings
 
 logger = logging.getLogger("nexus.agents.llm")
+
+
+class NotConfigured(RuntimeError):
+    """A provider with no key from any source. Raised before anything is sent, and skipped by the
+    chain without counting as a fallback: no key is a setting, not an outage, and counting it
+    fired the fallback alert on every call."""
+
+
+#: The model a purpose asked for, for the provider serving it (`PurposeRouter`). Context-local, so
+#: concurrent completions each keep their own; a provider reads it when it builds its payload.
+_MODEL: ContextVar[str] = ContextVar("llm_model_override", default="")
+
+
+def model_override() -> str:
+    return _MODEL.get()
+
+
+@contextmanager
+def using_model(model: str):
+    token = _MODEL.set(model or "")
+    try:
+        yield
+    finally:
+        _MODEL.reset(token)
 
 
 @dataclass(slots=True)
@@ -257,7 +283,7 @@ class OpenAICompatProvider(LLMProvider):
         variables: dict | None = None,
     ) -> LLMResponse:
         payload = {
-            "model": self.model,
+            "model": model_override() or self.model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -317,7 +343,7 @@ class ManagedOpenAICompatProvider(OpenAICompatProvider):
     ) -> LLMResponse:
         await self._refresh()
         if not self.api_key:
-            raise RuntimeError("no OpenAI-compatible key is configured; add one under Provider keys")
+            raise NotConfigured("no OpenAI-compatible key is configured; add one under Provider keys")
         try:
             return await super().complete(
                 messages, temperature=temperature, max_tokens=max_tokens,
@@ -460,7 +486,7 @@ class GroqLLMProvider(OpenAICompatProvider):
             logger.info("prompt trimmed to fit %d tokens for %s", budget, purpose or "completion")
 
         payload = {
-            "model": self.model,
+            "model": model_override() or self.model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -591,14 +617,15 @@ class AnthropicLLMProvider(LLMProvider):
     ENDPOINT = "https://api.anthropic.com/v1/messages"
     VERSION = "2023-06-01"
 
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, transport=None):
         self.api_key = api_key
         self.model = model
+        self._transport = transport  # test seam (httpx.MockTransport); None = real network
         self._client: httpx.AsyncClient | None = None
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=60)
+            self._client = httpx.AsyncClient(timeout=60, transport=self._transport)
         return self._client
 
     async def complete(
@@ -615,7 +642,7 @@ class AnthropicLLMProvider(LLMProvider):
             {"role": m.role, "content": m.content} for m in messages if m.role != "system"
         ] or [{"role": "user", "content": ""}]
         payload: dict = {
-            "model": self.model,
+            "model": model_override() or self.model,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "messages": turns,
@@ -637,6 +664,53 @@ class AnthropicLLMProvider(LLMProvider):
         return LLMResponse(text=text, tokens=tokens)
 
 
+class ManagedAnthropicProvider(AnthropicLLMProvider):
+    """Anthropic as the Superadmin panel configures it: the key and model under Provider keys.
+
+    The plain provider was built once from ``NEXUS_ANTHROPIC_API_KEY`` and the env model, so a key
+    or model saved in the panel did nothing (the gap CLAUDE.md recorded on 2026-09-29 for
+    OpenAI-compatible). This one re-reads both before every call (the resolver's 30 s TTL), managed
+    pool first, then the environment, so a change reaches a running worker without a restart. With
+    no key anywhere it raises `NotConfigured` before sending, and the chain moves on.
+    """
+
+    def __init__(self, api_key: str = "", model: str = "", transport=None):
+        super().__init__(api_key, model, transport=transport)
+        self._env_key = api_key
+        self._env_model = model
+
+    async def _resolve(self) -> tuple[str, str]:
+        try:
+            from nexus.providers.resolver import managed_pool, model_for
+
+            pool = await managed_pool("anthropic")
+            model = await model_for("anthropic")
+        except Exception:  # key management must never break the call it serves
+            pool, model = [], ""
+        env_key = self._env_key or (getattr(get_settings(), "anthropic_api_key", "") or "")
+        return (pool[0] if pool else env_key), (model or self._env_model)
+
+    async def complete(self, messages, *, temperature=0.2, max_tokens=800, purpose=None,
+                       variables=None) -> LLMResponse:
+        key, model = await self._resolve()
+        if not key:
+            raise NotConfigured("no Anthropic key is configured; add one under Provider keys")
+        # Per call, never stored on the shared instance: two completions in flight must not
+        # trade keys or models.
+        worker = AnthropicLLMProvider(key, model, transport=self._transport)
+        worker._client = self._http()
+        try:
+            return await worker.complete(messages, temperature=temperature,
+                                         max_tokens=max_tokens, purpose=purpose,
+                                         variables=variables)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (401, 403):
+                from nexus.providers.service import record_rejection_from_response
+
+                await record_rejection_from_response("anthropic", key, exc.response)
+            raise
+
+
 class FallbackLLMProvider(LLMProvider):
     """Try providers in order; on any error fall through to the next. The last provider should be
     the stub so completion never fails — a transient Anthropic/Groq outage degrades to deterministic
@@ -649,15 +723,28 @@ class FallbackLLMProvider(LLMProvider):
 
     async def complete(self, messages, *, temperature=0.2, max_tokens=800,
                        purpose=None, variables=None) -> LLMResponse:
+        return await self._over(self.providers, [""] * len(self.providers), messages,
+                                temperature=temperature, max_tokens=max_tokens,
+                                purpose=purpose, variables=variables)
+
+    async def _over(self, providers, models, messages, *, temperature, max_tokens, purpose,
+                    variables) -> LLMResponse:
+        """Try ``providers`` in order, each under its model override (`using_model`)."""
         last_exc: Exception | None = None
         failed_from = ""
-        for i, provider in enumerate(self.providers):
+        for i, (provider, model) in enumerate(zip(providers, models)):
             name = type(provider).__name__
             try:
-                result = await provider.complete(
-                    messages, temperature=temperature, max_tokens=max_tokens,
-                    purpose=purpose, variables=variables,
-                )
+                with using_model(model):
+                    result = await provider.complete(
+                        messages, temperature=temperature, max_tokens=max_tokens,
+                        purpose=purpose, variables=variables,
+                    )
+            except NotConfigured as exc:
+                # A provider nobody has keyed: skipped, not a failure (no warning, no metric).
+                last_exc = exc
+                logger.debug("LLM provider %s not configured; skipped", name)
+                continue
             except Exception as exc:  # noqa: BLE001 — fall through to the next provider
                 last_exc = exc
                 failed_from = name
@@ -673,7 +760,7 @@ class FallbackLLMProvider(LLMProvider):
                 result.provider = name
             except Exception:      # a provider returning something exotic must still work
                 return result
-            if i > 0:
+            if failed_from:   # a provider that FAILED, not one that was merely unkeyed
                 from nexus.core import metrics
 
                 try:
@@ -684,6 +771,48 @@ class FallbackLLMProvider(LLMProvider):
                     logger.debug("llm fallback metric failed", exc_info=True)
             return result
         raise last_exc  # only reached if every provider raised (i.e. no stub at the tail)
+
+
+def purpose_choice(purpose: str | None) -> tuple[str, str]:
+    """``(provider, model)`` a Superadmin chose for this purpose (owner decision, 2026-10-26), or
+    ``("", "")`` for a purpose nobody routes. Every email draft (composer, campaigns, replies) is
+    `outreach_message`; every call script is `call_script`. Read now, so a change in the panel
+    applies to the next completion."""
+    s = get_settings()
+    if purpose == "outreach_message":
+        return (getattr(s, "llm_email_provider", "") or "", getattr(s, "llm_email_model", "") or "")
+    if purpose == "call_script":
+        return (getattr(s, "llm_call_script_provider", "") or "",
+                getattr(s, "llm_call_script_model", "") or "")
+    return "", ""
+
+
+class PurposeRouter(FallbackLLMProvider):
+    """The chain, reordered for a purpose a Superadmin configured: the chosen provider first, under
+    the chosen model when one is set, then the rest in the deployment's order, the stub last.
+    "Claude first, then the next best available": a provider with no key is skipped, so with no
+    Anthropic key an email falls to Groq exactly as before. Read per call, so a change in the
+    panel applies to the next completion. ``providers`` stays the default order, for every other
+    purpose and for anything inspecting the chain."""
+
+    def __init__(self, providers: list[LLMProvider], names: list[str]):
+        super().__init__(providers)
+        self.names = list(names)
+
+    def _order(self, purpose: str | None) -> tuple[list[LLMProvider], list[str]]:
+        chosen, model = (part.strip() for part in purpose_choice(purpose))
+        if chosen not in self.names:
+            return self.providers, [""] * len(self.providers)
+        first = self.names.index(chosen)
+        order = [first] + [i for i in range(len(self.providers)) if i != first]
+        return ([self.providers[i] for i in order],
+                [model if i == first else "" for i in order])
+
+    async def complete(self, messages, *, temperature=0.2, max_tokens=800,
+                       purpose=None, variables=None) -> LLMResponse:
+        providers, models = self._order(purpose)
+        return await self._over(providers, models, messages, temperature=temperature,
+                                max_tokens=max_tokens, purpose=purpose, variables=variables)
 
 
 class CostTrackingProvider(LLMProvider):
@@ -720,8 +849,14 @@ def _build_llm_chain(s) -> LLMProvider:
     """Assemble the provider (chain). ``auto`` prefers Anthropic, then Groq, then any configured
     OpenAI-compatible endpoint, always tailed by the stub so completion can't hard-fail."""
     chain: list[LLMProvider] = []
-    if s.anthropic_api_key:
-        chain.append(AnthropicLLMProvider(s.anthropic_api_key, s.anthropic_model))
+    names: list[str] = []
+    _selected = (getattr(s, "llm_provider", "") or "").lstrip("=").lower()
+    # Claude first (owner decision, 2026-10-26), and in the chain whenever the deployment might use
+    # it, like Groq below: a key saved under Provider keys is read at call time, and with none it
+    # is skipped without a fallback alarm.
+    if s.anthropic_api_key or _selected in ("auto", "anthropic"):
+        chain.append(ManagedAnthropicProvider(s.anthropic_api_key, s.anthropic_model))
+        names.append("anthropic")
     # Groq is included whenever the deployment might use it, NOT only when the environment already
     # holds a key. It refreshes from the managed pool on every call (`_refresh_keys`), so this is
     # the one provider that can pick up a Control-plane key without a restart — but it only got the
@@ -737,14 +872,17 @@ def _build_llm_chain(s) -> LLMProvider:
     # SimpleNamespace with only the key fields). Defaulting to "" rather than "auto" keeps such a
     # caller on the old env-only behaviour: an object that does not mention a provider has not
     # selected one, and inventing a selection for it would build a Groq provider nobody asked for.
-    _selected = (getattr(s, "llm_provider", "") or "").lstrip("=").lower()
     if s.groq_api_key_list or _selected in ("auto", "groq"):
         chain.append(GroqLLMProvider(s.groq_api_key_list, s.groq_model, s.groq_base_url))
+        names.append("groq")
     # Same argument as Groq: it must be in the chain for a panel-only key to ever be used.
     if s.llm_api_key or _selected in ("auto", "openai_compat"):
         chain.append(ManagedOpenAICompatProvider(s.llm_base_url, s.llm_api_key, s.llm_model))
+        names.append("openai_compat")
     chain.append(StubLLMProvider())
-    return chain[0] if len(chain) == 1 else FallbackLLMProvider(chain)
+    names.append("stub")
+    # Routed by purpose: emails and call scripts take the provider a Superadmin chose.
+    return chain[0] if len(chain) == 1 else PurposeRouter(chain, names)
 
 
 _provider: LLMProvider | None = None
@@ -756,9 +894,11 @@ def get_llm_provider() -> LLMProvider:
         s = get_settings()
         if s.llm_provider == "auto":
             _provider = _build_llm_chain(s)
-        elif s.llm_provider == "anthropic" and s.anthropic_api_key:
+        elif s.llm_provider == "anthropic":
+            # Built whether or not the environment holds a key: the panel may.
             _provider = FallbackLLMProvider(
-                [AnthropicLLMProvider(s.anthropic_api_key, s.anthropic_model), StubLLMProvider()]
+                [ManagedAnthropicProvider(s.anthropic_api_key, s.anthropic_model),
+                 StubLLMProvider()]
             )
         elif s.llm_provider == "groq" and s.groq_api_key_list:
             _provider = FallbackLLMProvider(
