@@ -16,8 +16,9 @@ from nexus.models.signal import SignalEvent
 router = APIRouter(prefix="/signals", tags=["signals"])
 
 
-def _signal_out(s: SignalEvent) -> SignalOut:
+def _signal_out(s: SignalEvent, account_name: str | None = None) -> SignalOut:
     return SignalOut(
+        account_name=account_name,
         id=s.id,
         account_id=s.account_id,
         contact_id=s.contact_id,
@@ -78,7 +79,17 @@ async def list_signals(
         .offset(offset)
     )
     rows = (await ts.session.scalars(stmt)).all()
-    return [_signal_out(s) for s in rows]
+    # Whose signal each is, in one read.
+    from sqlalchemy import select
+
+    from nexus.models.account import Account
+
+    ids = {s.account_id for s in rows if s.account_id}
+    names = dict((await ts.session.execute(
+        select(Account.id, Account.name).where(Account.tenant_id == ts.tenant_id,
+                                                Account.id.in_(ids))
+    )).all()) if ids else {}
+    return [_signal_out(s, names.get(s.account_id or "")) for s in rows]
 
 
 class WindowOptionOut(BaseModel):

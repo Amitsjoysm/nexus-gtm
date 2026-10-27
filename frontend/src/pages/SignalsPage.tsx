@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
@@ -162,6 +163,11 @@ export function SignalsPage() {
                             {meta.label}
                           </Badge>
                           <div className={styles.body}>
+                            {sig.account_id && sig.account_name && (
+                              <Link to={`/accounts/${sig.account_id}`} className={styles.account}>
+                                {sig.account_name}
+                              </Link>
+                            )}
                             <div className={styles.title}>{sig.title}</div>
                             {sig.body && <div className={styles.text}>{sig.body}</div>}
                             <div className={styles.meta}>

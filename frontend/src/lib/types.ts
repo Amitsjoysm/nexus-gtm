@@ -70,6 +70,8 @@ export interface Account {
   field_sources?: FieldSources;
   /** The ICP's mandatory fields, checked. `null` when the ICP marks nothing mandatory. */
   icp_gate?: IcpGate | null;
+  /** The newest event of each signal kind (strength 0.5 and up), on the Accounts list only. */
+  recent_signals?: { kind: string; days_ago: number }[];
 }
 
 /** Where one stored value came from (`field_sources`). */
@@ -477,6 +479,8 @@ export interface SignalEvent {
   /** "event": occurred_at is when it happened. "found": only when we collected it, because the
    *  source gave no date. Rendered by `signalWhen` so the two never look alike. */
   dated?: "event" | "found";
+  /** Whose signal it is, for the link to the account. */
+  account_name?: string | null;
 }
 
 /** One choice in the signal window picker. `days: null` is all time. */

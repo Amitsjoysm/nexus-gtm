@@ -264,6 +264,9 @@ class AccountOut(AccountIn):
     # How the account fares on the ICP's MANDATORY fields: {passed, failed, unknown, reason}.
     # None when the ICP marks nothing mandatory, so the screen keeps showing the fit score alone.
     icp_gate: dict | None = None
+    # The account's events by kind, newest of each: [{kind, days_ago}]. Events only (strength 0.5,
+    # the Signals page's own floor), so the Accounts list can filter on them. Filled by the list.
+    recent_signals: list[dict] = Field(default_factory=list)
 
 
 class ContactIn(BaseModel):
@@ -947,6 +950,8 @@ class SignalOut(BaseModel):
     # source gave no date. The screens label the second so a rep can tell an old event found today
     # from a new one. Rows written before the column existed read "found", which is what they were.
     dated: str = "found"
+    # Whose signal it is, so the list can name the account and link to it (2026-10-26).
+    account_name: str | None = None
 
 
 # ---- integrations: CRM ----

@@ -36,6 +36,23 @@
   font-weight: var(--weight-semibold);
   color: var(--text);
 }
+/* Whose signal it is: the way into the account, so it reads as a link at once. */
+.account {
+  display: inline-block;
+  margin-bottom: 2px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+.account:hover {
+  text-decoration: underline;
+}
+.account:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
 .text {
   margin-top: 2px;
   font-size: var(--text-sm);

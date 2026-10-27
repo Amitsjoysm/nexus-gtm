@@ -266,11 +266,47 @@ async def list_accounts(
     scores = await _latest_fit_scores(ts, [a.id for a in rows])
     names = await _owner_names(ts, rows)
     icp = await _workspace_icp(ts)
-    return [
-        _account_out(a, fit_score=scores.get(a.id), owner_name=names.get(a.owner_user_id or ""),
-                     icp=icp)
-        for a in rows
-    ]
+    events = await _recent_signals(ts, [a.id for a in rows])
+    out = []
+    for a in rows:
+        shown = _account_out(a, fit_score=scores.get(a.id),
+                             owner_name=names.get(a.owner_user_id or ""), icp=icp)
+        shown.recent_signals = events.get(a.id, [])
+        out.append(shown)
+    return out
+
+
+async def _recent_signals(ts: TenantSession, ids: list[str]) -> dict[str, list[dict]]:
+    """``{account_id: [{kind, days_ago}]}``, the newest EVENT of each kind, in one grouped read.
+
+    Events only (strength 0.5, the Signals page's floor and the alert floor): a 0.4 blog mention is
+    not a reason to filter an account in."""
+    if not ids:
+        return {}
+    from datetime import timezone
+
+    from nexus.core.db import utcnow
+    from nexus.models.signal import SignalEvent
+
+    rows = (await ts.session.execute(
+        select(SignalEvent.account_id, SignalEvent.kind,
+               func.max(SignalEvent.occurred_at).label("last"))
+        .where(SignalEvent.tenant_id == ts.tenant_id, SignalEvent.account_id.in_(ids),
+               SignalEvent.strength >= 0.5)
+        .group_by(SignalEvent.account_id, SignalEvent.kind)
+    )).all()
+    now = utcnow()
+    out: dict[str, list[dict]] = {}
+    for account_id, kind, last in rows:
+        if last is None:
+            continue
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        out.setdefault(account_id, []).append(
+            {"kind": kind, "days_ago": max(0, (now - last).days)})
+    for events in out.values():
+        events.sort(key=lambda e: e["days_ago"])
+    return out
 
 
 @router.get("/company-domain", response_model=CompanyDomainOut)

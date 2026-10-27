@@ -25,7 +25,7 @@ import { RecordImportModal } from "@/components/imports/RecordImportModal";
 import { AddToListModal } from "@/components/lists/AddToListModal";
 import { FitBadge, fitSortValue } from "@/components/icp/FitBadge";
 import { useSelection } from "@/hooks/useSelection";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, humanize } from "@/lib/format";
 import type { Account, AccountInput } from "@/lib/types";
 import styles from "./AccountsPage.module.css";
 
@@ -34,6 +34,7 @@ const MINE = "__mine__";
 const UNOWNED = "__unowned__";
 const MEETS = "__meets__";
 const MISSES = "__misses__";
+const ANY_SIGNAL = "__any_signal__";
 
 /**
  * Where an account came from, in the words a rep uses. The stored `source` is a code per write path
@@ -84,6 +85,8 @@ export function AccountsPage() {
   const [minFit, setMinFit] = useState(0);
   const [ownerFilter, setOwnerFilter] = useState(ALL);
   const [gateFilter, setGateFilter] = useState(ALL);
+  const [signalKind, setSignalKind] = useState(ALL);
+  const [signalDays, setSignalDays] = useState(90);
   const me = useCurrentUserId();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -174,7 +177,8 @@ export function AccountsPage() {
   const visible = useMemo(
     () => filtered(accounts.data ?? []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [accounts.data, query, industry, country, source, minFit, ownerFilter, gateFilter, me],
+    [accounts.data, query, industry, country, source, minFit, ownerFilter, gateFilter,
+      signalKind, signalDays, me],
   );
   const visibleIds = useMemo(() => visible.map((a) => a.id), [visible]);
   const selection = useSelection(visibleIds);
@@ -330,6 +334,12 @@ export function AccountsPage() {
       if (minFit > 0 && ((a.fit_score ?? -1) < minFit || a.icp_gate?.passed === false)) return false;
       if (gateFilter === MEETS && a.icp_gate?.passed === false) return false;
       if (gateFilter === MISSES && a.icp_gate?.passed !== false) return false;
+      if (signalKind !== ALL) {
+        const hit = (a.recent_signals ?? []).some(
+          (s) => (signalKind === ANY_SIGNAL || s.kind === signalKind) && s.days_ago <= signalDays,
+        );
+        if (!hit) return false;
+      }
       if (ownerFilter === MINE && (me === null || a.owner_user_id !== me)) return false;
       if (ownerFilter === UNOWNED && a.owner_user_id) return false;
       return true;
@@ -477,6 +487,35 @@ export function AccountsPage() {
                       { value: "80", label: "Fit ≥ 80" },
                     ]}
                   />
+                  {/* Events only (strength 0.5 and up), the Signals page's own floor. */}
+                  <Select
+                    aria-label="Signal"
+                    value={signalKind}
+                    onChange={(e) => setSignalKind(e.target.value)}
+                    options={[
+                      { value: ALL, label: "Any or no signal" },
+                      { value: ANY_SIGNAL, label: "Has a recent signal" },
+                      ...Array.from(
+                        new Set(rows.flatMap((a) => (a.recent_signals ?? []).map((s) => s.kind))),
+                      )
+                        .sort()
+                        .map((k) => ({ value: k, label: `Signal: ${humanize(k)}` })),
+                    ]}
+                  />
+                  {signalKind !== ALL && (
+                    <Select
+                      aria-label="Signal within"
+                      value={String(signalDays)}
+                      onChange={(e) => setSignalDays(Number(e.target.value))}
+                      options={[
+                        { value: "30", label: "In the last 30 days" },
+                        { value: "90", label: "In the last 90 days" },
+                        { value: "180", label: "In the last 180 days" },
+                        { value: "365", label: "In the last year" },
+                        { value: "100000", label: "Any time" },
+                      ]}
+                    />
+                  )}
                   {/* Only once the ICP marks a field must-match: before that every account
                       "meets" nothing and the filter would be noise. */}
                   {rows.some((a) => a.icp_gate) && (
