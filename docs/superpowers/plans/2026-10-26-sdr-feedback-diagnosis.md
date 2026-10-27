@@ -585,6 +585,23 @@ each company still needs its own domain from the article, by the existing web-ca
 
 ---
 
+## 11. What is built on `fix/sdr-data-accuracy` (2026-10-27), and what waits
+
+Twenty commits on `de3d2fd`, nothing pushed, merged, deployed or applied to the live database.
+Migrations `0073`-`0075` are additive and replay from empty (`tests/test_migrations_replay.py`).
+
+| Point | Built | Waits on |
+|---|---|---|
+| 1 Data accuracy | No stamped labels on web finds; vendor domains refused; stamped shared rows quarantined; LinkedIn read replaces derived labels; 60 industry terms mapped and stale mappings re-mapped; per-field provenance on accounts and contacts, shown in the UI; Find contacts says why it found nobody; real titles to LinkedIn | Industry-from-website reader is built and **off**: its measurement could not finish (Groq rate-limited every run). Needs an Anthropic key, then a re-run against the 95% / 80% bar before `industry_evidence_mode` goes on |
+| 2 Mandatory ICP | Must-match Industry, Size, Country, State, Tech, Titles; same-meaning matching; no data is no match; every discovery source, the Accounts list and Account 360 ("Fails Industry"), a must-match filter, campaign enrolment; tech groups in brackets; include suppliers; any/all tech | |
+| 1/2 Contacts | Find contacts: pool, then InfoJoy, then LinkedIn, then web, each row proven; contact-first discovery (`require_buyer`, off by default) | InfoJoy answers 500 and both Apify keys are refused locally: replace keys, check InfoJoy |
+| 3 Signals | Each signal names and links its account; Accounts filters by recent signal kind and window | **Section 10 (S1-S4) awaits approval** |
+| 4 Personalization | Events only, no plumbing tech, no stamped labels, title a last-resort fact; facts shown under each draft on Review; Superadmin chooses provider and model for emails and call scripts, Claude first; Anthropic reads Provider keys | `personalization_before_campaign_draft` is **off**: one paid actor run per person |
+| 5 Workspaces | Verified end to end on the preview: create, list, switch both ways, each on its own Free plan. No change needed | |
+| 6 Scripts, dispositions | The team's 10 categories / 28 dispositions, Category then Disposition, safe actions; reply desk in the same list; campaign script upload (.docx, .txt) shown as written with placeholders, plus Enhance | PDF needs a PDF reader added (`pypdf`, pure Python) |
+
+---
+
 ## Appendix: how it was measured (read-only)
 
 ```sql
