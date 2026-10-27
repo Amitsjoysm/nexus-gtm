@@ -540,6 +540,51 @@ accounts in "SDR Demo" with an Oil & Gas ICP. Drop it when no longer needed.
 
 ---
 
+## 10. Signal changes awaiting approval (2026-10-27)
+
+Built without approval because they change no collection: each signal names and links its account,
+and the Accounts list filters on "has a recent signal" or one kind within a window (`845e491`).
+What follows changes what we collect or pay for, so it waits for the owner.
+
+**S1. Expansion as its own signal (new facility, plant, office or location).**
+- *Today*: "expands", "expansion" and "opens new" make a generic `news` signal at 0.6, and the
+  `expansion` dork is **never run**: `select_dorks` takes the first `signal_dork_max_queries` (4)
+  of 9 in declaration order, and it is eighth. For an account with a domain the four that run are
+  `funding_press`, `funding_wire`, `hiring_ats` and `hiring_careers`; `hiring_linkedin`,
+  `exec_change`, `tech_adoption`, `expansion` and `newsroom` never do.
+- *Proposal*: subtype `expansion` on `news` (no new kind, so intent weights, plays and alert rules
+  keep working), with the needles "opens new facility", "new plant", "new manufacturing facility",
+  "new distribution center", "new headquarters", "opens office", "new location", "breaks ground",
+  "expands into"; and run the `expansion` dork.
+- *Cost, two ways to run it*:
+  - **(a) Fifth query** (`signal_dork_max_queries` 5, `expansion` moved to fifth): one more search
+    per hot account per 6 h (a `news` dork, so the fast cache TTL), about $0.026 a day, $0.77 a
+    month per hot account at Firecrawl's $0.0064. Nothing else changes.
+  - **(b) Swap** `expansion` in for `hiring_careers`: no extra spend; hiring then rests on the ATS
+    board dork and the keyless ATS source, which already reads every open role.
+  Classification itself is free (headlines already fetched).
+- *Recall trade-off*: "breaks ground" and "new location" also match a company's customer projects
+  and store openings; the title-only classification and the name-in-title rule limit that, but the
+  first week should be read by hand.
+
+**S2. Hiring for the ICP's buyer roles.** The ATS source already reads every open role (keyless,
+free). Proposal: subtype `buyer_role` on `hiring` when an open role's title passes `title_fits`
+for the ICP's buyer titles, carrying the matched titles. Cost $0; recall is the ATS coverage.
+
+**S3. Signal criteria in the ICP.** A "Recent signal" must-match field (kinds plus a window). It can
+only judge companies we hold, because signals are collected for held accounts alone; applied to
+the Accounts list's must-match filter and to campaign enrolment. At discovery it needs S4.
+
+**S4. Discover by signal.** One search per ICP industry per day by the daily sweep, results through
+the same gates as every web candidate. Exact queries, for an ICP of "Oil & Gas":
+`"Oil & Gas" ("raises" OR "funding round" OR "secures $") {year}` (funding) and
+`"Oil & Gas" ("opens new facility" OR "new plant" OR "expands into") {year}` (expansion).
+Cost: 2 searches per industry per day, about $0.39 a month per industry per workspace, plus
+enrichment of what they find (the sweep's existing cap). Risk: news search returns articles, so
+each company still needs its own domain from the article, by the existing web-candidate rules.
+
+---
+
 ## Appendix: how it was measured (read-only)
 
 ```sql
