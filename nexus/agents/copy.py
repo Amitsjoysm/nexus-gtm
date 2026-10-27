@@ -379,12 +379,17 @@ def _employee_band(count: int | None) -> str:
     return "5,000+ employees"
 
 
-def account_facts(account) -> str:
-    """What we know about the company, as prompt lines. Empty when we know nothing but the name."""
+def account_facts(account, icp: dict | None = None) -> str:
+    """What we know about the company, as prompt lines. Empty when we know nothing but the name.
+
+    Minus what is likely wrong (`agents.facts`, 2026-10-26): an industry or country that is the
+    ICP's own word stamped on an old web find, and website plumbing listed as tech."""
+    from nexus.agents.facts import looks_stamped, useful_tech
+
     lines: list[str] = [f"Company: {getattr(account, 'name', '') or 'the company'}"]
 
     industry = (getattr(account, "industry", "") or "").strip()
-    if industry:
+    if industry and not looks_stamped(account, "industry", icp):
         lines.append(f"Industry: {industry}")
 
     band = _employee_band(getattr(account, "employee_count", None))
@@ -397,13 +402,14 @@ def account_facts(account) -> str:
 
     # Region before country: "California" tells a rep more than "United States", and both together
     # read as a database dump.
-    where = (getattr(account, "region", "") or "").strip() or (
-        getattr(account, "country", "") or ""
-    ).strip()
+    country = (getattr(account, "country", "") or "").strip()
+    if looks_stamped(account, "country", icp):
+        country = ""
+    where = (getattr(account, "region", "") or "").strip() or country
     if where:
         lines.append(f"Location: {where}")
 
-    stack = [str(t).strip() for t in (getattr(account, "tech_stack", None) or []) if str(t).strip()]
+    stack = useful_tech(getattr(account, "tech_stack", None))
     if stack:
         lines.append(f"Known tech: {', '.join(stack[:MAX_TECH_IN_PROMPT])}")
 

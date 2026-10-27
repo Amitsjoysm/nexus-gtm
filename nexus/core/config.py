@@ -491,6 +491,11 @@ class Settings(BaseSettings):
     # posts need a separate actor and separate money. Default off: the profile half is the cheap
     # half and works alone, and doubling a per-contact cost is a decision somebody should take.
     personalization_posts_enabled: bool = False
+    # Fetch a person's LinkedIn profile (and posts, with the switch above) before their campaign
+    # email is written, at most once every 30 days. Until this, insights were fetched only when a
+    # rep pressed Enrich on a contact, so a campaign draft almost never had them (2026-10-26, D8).
+    # Default off: one paid actor run per person a campaign drafts for, decided by the owner.
+    personalization_before_campaign_draft: bool = False
     # How far back a post still counts as "recent". One of the activity actor's own windows.
     # "I saw your post" about something from eight months ago reads worse than saying nothing.
     personalization_posts_window: str = "3months"

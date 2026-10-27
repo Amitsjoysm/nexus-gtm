@@ -2641,6 +2641,15 @@ export interface ReviewItem {
   quality_problems: string[];
   /** undrafted | draft | approved | ... */
   status: string;
+  /** What the AI draft was given to rest on, with links where a fact has one. */
+  draft_facts?: DraftFact[];
+}
+
+export interface DraftFact {
+  label: string;
+  url: string;
+  /** signal | company | referral | title */
+  kind: string;
 }
 
 export type EngagementEnrollmentStatus =

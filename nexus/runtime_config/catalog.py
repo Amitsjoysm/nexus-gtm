@@ -226,6 +226,16 @@ _SPECS: tuple[SettingSpec, ...] = (
         risk="high",
     ),
     SettingSpec(
+        key="personalization_before_campaign_draft",
+        label="Read LinkedIn before each campaign email", group=PERSONALIZATION, kind="bool",
+        effect="Fetches the person's LinkedIn profile (and recent posts, when on) just before their "
+               "campaign email is written, at most once every 30 days, so campaign drafts can use "
+               "it as the composer does.",
+        warning="One paid actor run per person a campaign drafts for (two with recent posts). Does "
+                "nothing while Person-level personalization is Off.",
+        risk="high",
+    ),
+    SettingSpec(
         key="personalization_max_posts", label="Posts referenced per contact",
         group=PERSONALIZATION, kind="int", minimum=1, maximum=10,
         effect="How many of a contact's recent posts are fetched and offered to a draft or call "

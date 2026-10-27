@@ -101,6 +101,9 @@ class ReviewItemOut(BaseModel):
     body: str
     quality_problems: list[str]
     status: str
+    # What the draft was given to rest on ({label, url, kind}), so a rep can check it. Empty for a
+    # draft written before these were kept.
+    draft_facts: list[dict] = []
 
 
 class ApproveIn(BaseModel):
@@ -494,6 +497,7 @@ async def get_review(
         **_named(contacts.get(e.contact_id), accounts.get(e.account_id)),
         subject=getattr(m, "subject", "") or "", body=getattr(m, "body_text", "") or "",
         quality_problems=list(getattr(m, "quality_problems", None) or []),
+        draft_facts=list(getattr(m, "draft_facts", None) or []),
         status=getattr(m, "status", "undrafted")) for e, m in rows]
 
 
@@ -542,6 +546,7 @@ async def regenerate_message(
                          **_named(contact, accounts.get(getattr(contact, "account_id", None))),
                          message_id=message.id, subject=message.subject, body=message.body_text,
                          quality_problems=list(message.quality_problems or []),
+                         draft_facts=list(message.draft_facts or []),
                          status=message.status)
 
 

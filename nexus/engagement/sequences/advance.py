@@ -218,7 +218,8 @@ async def _email_step(ts, campaign, enrollment, steps, step, mailbox, contact, a
                 contact_id=contact.id, thread_id=getattr(thread, "id", None), direction="out",
                 kind="step", status="draft", step_index=index, from_addr=mailbox.email,
                 to_addrs=[contact.email], subject=subject, body_text=body,
-                ai_subject=ai_subject, ai_body=ai_body, quality_problems=problems))
+                ai_subject=ai_subject, ai_body=ai_body, quality_problems=problems,
+                draft_facts=written.sources))
             await ts.flush()
             await set_status(ts, enrollment, "awaiting_review",
                              "needs_decision" if problems else None)

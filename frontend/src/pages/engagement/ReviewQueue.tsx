@@ -217,6 +217,28 @@ function ReviewCard({ item, insight, onChanged }: {
         </ul>
       )}
 
+      {/* What the draft rests on, so a rep can check a claim before approving it (D8). */}
+      {item.status === "draft" && (item.draft_facts?.length ?? 0) > 0 && (
+        <div className={styles.draftFacts}>
+          <span className={styles.draftFactsLabel}>Built on</span>
+          <ul aria-label="What this draft was given to rest on">
+            {item.draft_facts!.map((f) => (
+              <li key={`${f.kind}-${f.label}`}>
+                {f.label}
+                {f.url && (
+                  <>
+                    {" "}
+                    <a href={f.url} target="_blank" rel="noreferrer noopener">
+                      source ↗
+                    </a>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {busy === "regenerate" ? (
         <WorkingIndicator label={`Rewriting the email to ${item.contact_name || "this person"}`} hint="Usually under 15 seconds." slowAfter={20} />
       ) : item.status === "undrafted" ? (

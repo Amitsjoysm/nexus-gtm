@@ -36,6 +36,9 @@ class ContextPack:
     text: str
     facts: list[str] = field(default_factory=list)
     zone_name: str = "UTC"
+    #: The facts offered, each with its link where it has one ({label, url, kind}), shown beside
+    #: the draft so a rep can check what it rests on (D8, 2026-10-26).
+    sources: list[dict] = field(default_factory=list)
 
 
 async def _rows(ts, stmt) -> list:
@@ -205,14 +208,26 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
             lines.append(detail)
         parts.append("\n".join(lines) + "\n")
 
-    signals = await _rows(ts, ts.select(
+    # Events only, inside the AI window (`agents.facts.citable_signals`, 2026-10-26): the eight
+    # newest rows were mostly 0.4 mentions, so a draft opened on a blog post or on nothing.
+    from nexus.agents.facts import citable_signals
+
+    signals = citable_signals(await _rows(ts, ts.select(
         SignalEvent, SignalEvent.account_id == account.id,
-    ).order_by(SignalEvent.occurred_at.desc()).limit(8))
+    ).order_by(SignalEvent.occurred_at.desc()).limit(30)))[:8]
     facts: list[str] = [s.title for s in signals if (s.title or "").strip()][:5]
+    sources: list[dict] = [{"label": s.title, "url": s.url or "", "kind": "signal"}
+                           for s in signals if (s.title or "").strip()][:5]
+    description = (account.custom_fields or {}).get("description") \
+        if isinstance(account.custom_fields, dict) else None
+    if description:
+        ref = ((account.field_sources or {}).get("description") or {}).get("ref") \
+            if isinstance(account.field_sources, dict) else ""
+        sources.append({"label": str(description).strip()[:160], "url": ref or "",
+                        "kind": "company"})
     person = [f"- Name: {contact.full_name}"]
     if contact.title:
         person.append(f"- Title: {contact.title}")
-        facts.append(contact.title)
     if contact.seniority:
         person.append(f"- Seniority: {contact.seniority}")
     parts.append("THE PERSON\n" + "\n".join(person) + "\n")
@@ -225,7 +240,17 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
         parts.append("REFERRAL\n- " + referrer + (f" ({title})" if title else "")
                      + f" at {account.name} suggested we speak with this person.\n")
         facts.append(f"{referrer.split()[0]} suggested we talk")
-    parts.append("THE COMPANY\n" + account_facts(account) + "\n")
+        sources.append({"label": f"{referrer} suggested we speak", "url": "", "kind": "referral"})
+    # The job title is the fact of last resort: naming someone's title is not an observation about
+    # them, and counting it let a draft with nothing specific pass the personalisation check.
+    if contact.title and not facts:
+        facts.append(contact.title)
+        sources.append({"label": contact.title, "url": "", "kind": "title"})
+    from nexus.relevance.engine import get_profile
+
+    profile = await get_profile(ts)
+    icp = dict(profile.icp or {}) if profile is not None else {}
+    parts.append("THE COMPANY\n" + account_facts(account, icp) + "\n")
     rendered_signals = signal_facts(signals)
     if rendered_signals:
         parts.append("LIVE SIGNALS (strongest first)\n" + rendered_signals + "\n")
@@ -260,4 +285,5 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
     if angle:
         block.append(f"- The angle for this step (follow this over the suggestion above): {angle}")
     parts.append("\n".join(block) + "\n")
-    return ContextPack(text="\n".join(parts).strip(), facts=facts, zone_name=zone_name)
+    return ContextPack(text="\n".join(parts).strip(), facts=facts, zone_name=zone_name,
+                       sources=sources)

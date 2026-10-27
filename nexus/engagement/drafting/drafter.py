@@ -11,7 +11,10 @@ is `ai.reply_draft`: it reads the whole conversation as well as writing one.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+
+logger = logging.getLogger("nexus.engagement.drafting.drafter")
 
 #: What a draft is charged as. Named here, beside the meter, so the capability a caller passes and
 #: the call that charges it are one module (``tests/test_billing_metering_coverage.py``).
@@ -26,11 +29,48 @@ class Draft:
     problems: list[str] = field(default_factory=list)
     context_pack: str = ""
     facts: list[str] = field(default_factory=list)
+    #: The facts offered with their links ({label, url, kind}), saved as the message's draft_facts.
+    sources: list[dict] = field(default_factory=list)
     error: str = ""
 
     @property
     def ok(self) -> bool:
         return not self.error and bool(self.body.strip())
+
+
+#: A person's LinkedIn insights are re-read before a draft only when older than this.
+INSIGHTS_MAX_AGE_DAYS = 30
+
+
+async def _fresh_insights(ts, contact) -> None:
+    """The person's LinkedIn profile and posts, read before their email is written, when the
+    workspace turned that on (`personalization_before_campaign_draft`) and what is stored is
+    missing or older than `INSIGHTS_MAX_AGE_DAYS`. The messaging agent folds them in as it does for
+    the composer. Never raises: a fetch that fails leaves the draft to role and signals."""
+    from datetime import datetime, timedelta, timezone
+
+    from nexus.core.config import get_settings
+
+    if not getattr(get_settings(), "personalization_before_campaign_draft", False):
+        return
+    if not (getattr(contact, "linkedin_url", "") or "").strip():
+        return
+    stored = ((contact.custom_fields or {}).get("personalization") or {}) \
+        if isinstance(contact.custom_fields, dict) else {}
+    try:
+        fetched = datetime.fromisoformat(str(stored.get("fetched_at") or ""))
+        if fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - fetched < timedelta(days=INSIGHTS_MAX_AGE_DAYS):
+            return
+    except ValueError:
+        pass
+    from nexus.personalization.provider import refresh_person_insights
+
+    try:
+        await refresh_person_insights(ts, contact)
+    except Exception:
+        logger.info("LinkedIn insights before a draft failed", exc_info=True)
 
 
 async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: str = "first",
@@ -51,6 +91,7 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
     from nexus.engagement.drafting.context import build_context
     from nexus.engagement.subjects import reply_subject
 
+    await _fresh_insights(ts, contact)
     pack = await build_context(ts, enrollment=enrollment, contact=contact, account=account,
                                mailbox=mailbox, step=step, kind=kind, now=now, thread=thread)
     try:
@@ -88,4 +129,4 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
                            facts=pack.facts, company_name=account.name or "", touch=kind,
                            **options)
     return Draft(subject=subject, body=body, problems=problems, context_pack=pack.text,
-                 facts=pack.facts)
+                 facts=pack.facts, sources=pack.sources)

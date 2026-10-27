@@ -89,10 +89,11 @@ class MessagingAgent(BaseAgent):
     async def run(self, ctx: AgentContext) -> dict:
         if ctx.account is None:
             return {"error": "messaging requires an account"}
-        # Only signals inside the platform window may be cited (nexus/ingestion/window.py).
-        from nexus.ingestion.window import within_ai_window
+        # Only events inside the platform window may be cited (`agents.facts.citable_signals`):
+        # a 0.4 mention is a company's own blog post, not a reason to write.
+        from nexus.agents.facts import citable_signals
 
-        signals = within_ai_window(ctx.signals)
+        signals = citable_signals(ctx.signals)
 
         # REFUSE TO PITCH A PRODUCT WE HAVE NOT BEEN TOLD ABOUT.
         #
@@ -157,7 +158,7 @@ class MessagingAgent(BaseAgent):
         # Everything we already know about the company. Until this existed the prompt carried
         # `account.name` and nothing else, so the model could not tell a 40-person fintech from a
         # 6,000-person manufacturer and wrote copy that fitted neither.
-        facts = account_facts(ctx.account)
+        facts = account_facts(ctx.account, ctx.relevance_context.icp)
         # The signals WITH their bodies. Only `title` used to reach the model: we crawl "raised
         # $40M led by Sequoia to expand European operations", store it, bill for it, and then sent
         # the headline "Acme raises Series B". The specifics a rep opens on were being discarded.

@@ -274,6 +274,9 @@ class EngagementMessage(IdMixin, TimestampMixin, TenantScoped, Base):
     ai_subject: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_body: Mapped[str | None] = mapped_column(Text, nullable=True)
     quality_problems: Mapped[list] = mapped_column(JSON, default=list)
+    # What the AI draft was given to rest on ({label, url, kind}), shown beside it on Review
+    # (migration 0074). None for a draft written before, or for a message no AI wrote.
+    draft_facts: Mapped[list | None] = mapped_column(JSON, nullable=True)
     inbound_kind: Mapped[str | None] = mapped_column(String(12), nullable=True)
     approved_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)

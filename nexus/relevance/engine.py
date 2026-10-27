@@ -40,6 +40,8 @@ class RelevanceContext:
     value_props: list[dict]
     product_context: str
     account_fit: IcpFit | None = None
+    #: The ICP itself, so a draft can leave out labels the ICP stamped (`agents.facts`).
+    icp: dict = field(default_factory=dict)
 
     @property
     def is_configured(self) -> bool:
@@ -285,6 +287,7 @@ class RelevanceEngine:
             value_props=value_props,
             product_context=product_context,
             account_fit=fit,
+            icp=dict(profile.icp or {}) if profile is not None else {},
         )
 
 

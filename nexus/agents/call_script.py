@@ -67,10 +67,11 @@ class CallScriptAgent(BaseAgent):
     async def run(self, ctx: AgentContext) -> dict:
         if ctx.account is None:
             return {"error": "call_script requires an account"}
-        # Only signals inside the platform window may be cited (nexus/ingestion/window.py).
-        from nexus.ingestion.window import within_ai_window
+        # Only events inside the platform window may be cited (`agents.facts.citable_signals`),
+        # which matters most here: a weak mention read out loud is the worst opener there is.
+        from nexus.agents.facts import citable_signals
 
-        signals = within_ai_window(ctx.signals)
+        signals = citable_signals(ctx.signals)
 
         # Same guard as the messaging agent, and it matters MORE here: a call script is SPOKEN,
         # so a rep reads placeholder framing out loud to a person who can hear the hesitation.
@@ -119,7 +120,7 @@ class CallScriptAgent(BaseAgent):
         # The firmographics and the signal BODIES. A talk track is spoken live, so the rep needs the
         # specifics — the amount raised, the roles being hired — not a headline they then have to
         # bluff around the moment the buyer asks a follow-up question.
-        facts = account_facts(ctx.account)
+        facts = account_facts(ctx.account, ctx.relevance_context.icp)
         recent = signal_facts(signals)
         signals_block = f"\nRECENT SIGNALS (strongest first):\n{recent}\n" if recent else ""
 

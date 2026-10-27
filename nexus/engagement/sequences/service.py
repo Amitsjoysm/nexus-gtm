@@ -348,7 +348,7 @@ async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
             direction="out", kind="step", status="draft", step_index=0,
             from_addr=mailbox.email, to_addrs=[contact.email], subject=result.subject,
             body_text=result.body, ai_subject=result.subject, ai_body=result.body,
-            quality_problems=result.problems)
+            quality_problems=result.problems, draft_facts=result.sources)
         ts.add(row)
         await ts.flush()
         await _emit_draft(ts, "draft.created", row, enrollment, result, user_id)
@@ -459,6 +459,7 @@ async def regenerate(ts, message, *, user_id: str | None = None):
     message.subject = message.ai_subject = result.subject
     message.body_text = message.ai_body = result.body
     message.quality_problems = result.problems
+    message.draft_facts = result.sources
     message.status = "draft"
     message.approved_at = None
     await ts.flush()
