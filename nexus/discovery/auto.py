@@ -297,6 +297,8 @@ _DISCARD_TEXT = {
     "fails_mandatory": "{n} missing a field you marked mandatory",
     "wrong_industry": "{n} whose own website shows another industry",
     "no_buyer": "{n} where nobody in your buyer titles is on record yet",
+    "domain_not_theirs": "{n} whose LinkedIn website belongs to another company",
+    "association": "{n} associations or institutes",
     "already_held": "{n} you already have",
     "no_website": "{n} without a company website",
     "duplicate": None,

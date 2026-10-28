@@ -1949,6 +1949,32 @@ Chauffeurs* (vantaexec.co.uk); Vanta the security company is `vanta-security`. A
 first, the employees actor returned a fleet coordinator at a leasing firm, which is what an
 unproven page does to a contact list.
 
+**A LinkedIn page's website must be that company's own** (`prospecting/vetting.py`, owner decision
+2026-10-28, `tests/test_company_vetting.py`). An acquired or subsidiary company's page lists its
+owner's site: on a DB copy, 6 of 16 accounts a Populate added carried another company's domain
+(Hess Corporation as chevron.com, Marathon as conocophillips.com, Pioneer as pxd.com, which lands on
+ExxonMobil), each passing every ICP gate on the acquired company's own size and HQ, and the shared
+store kept chevron.com as "Hess Corporation", 4,337 staff, for every workspace.
+- `names_company`: a domain naming the company (a distinctive word, the name run together, its
+  initials; generic words such as energy, group, solutions never count) is kept with no request.
+  94% of the copy's 261 LinkedIn rows across about forty industries.
+- Otherwise `homepage_names`: the homepage title or `og:site_name` must hold the name's FIRST
+  distinctive word or the whole name run together, or the site must land on a domain naming it.
+  One later word is not enough: Nabors' title sells "Wellbore Services". Honest user agent, every
+  redirect hop through the SSRF guard, 300 KB read, verdicts kept a day. A site that refuses or does
+  not load is refused (missing beats wrong; global-foodsafety.com, a real company, answers 403).
+- `store_companies` vets by default, so nothing refused reaches the shared store; `_take`, Find
+  similar and the employer prefill count it as `domain_not_theirs`.
+- Discovery (chain, Find similar) leaves out names with the whole word association, institute,
+  society, council or federation (`is_association`), knowing it also drops a firm called "Council
+  Oak". They are still stored: real organisations under their own domains.
+- `scripts/vet_linkedin_companies.py` (dry run by default) quarantines rows stored before and
+  DETACHES the wrong page, since `store_companies` attaches a page only to a row that has none: left
+  in place, Hess's page keeps Chevron's own out for good. On the copy it held back 15 of 261.
+- Measured after: Populate of 10 gave 10 real companies under their own domains (before: 2 of 6,
+  then 6 of 10). Three were suppliers (training, equipment), which only `industry_evidence_mode`
+  reclassifies.
+
 **ICP companies** (`companies.find_icp_companies`), used by populate and by the daily sweep:
 
 1. The shared store, on the ICP's LinkedIn industry codes (a parent code covers its children), any

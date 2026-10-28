@@ -45,6 +45,7 @@ from sqlalchemy.exc import IntegrityError
 from nexus.core.db import get_platform_sessionmaker, utcnow
 from nexus.prospecting import linkedin as li
 from nexus.prospecting.industries import descendants, map_industries
+from nexus.prospecting.vetting import is_association
 
 logger = logging.getLogger("nexus.prospecting.companies")
 
@@ -177,18 +178,24 @@ async def query_for_icp(icp: dict) -> ProspectQuery:
 
 # ---- the shared store --------------------------------------------------------------------------
 
-async def store_companies(companies) -> dict[str, str]:
+async def store_companies(companies, *, vetted: bool = False) -> dict[str, str]:
     """Write LinkedIn companies into the shared store. Returns ``{domain: company_id}``.
 
-    Only rows with a domain are stored. An existing row keeps what it has: a blank is filled, and a
-    LinkedIn page is attached only to a row that has none, so a subsidiary's page on its parent's
-    domain never replaces the parent's. The domain is the identity; the page is a fact about it.
+    Only rows with a domain are stored, and only when that website is the company's own
+    (`vetting.vet`; ``vetted`` says the caller has already asked): an acquired company's page lists
+    its owner's site, and stored, chevron.com was "Hess Corporation" for every workspace. An
+    existing row keeps what it has: a blank is filled, and a LinkedIn page is attached only to a row
+    that has none, so a subsidiary's page on its parent's domain never replaces the parent's. The
+    domain is the identity; the page is a fact about it.
     """
     from nexus.companies.resolution import company_id_for, resolve_company
     from nexus.models.company import CompanyCountry
+    from nexus.prospecting.vetting import vet
 
     wanted = [c for c in companies if c is not None and c.domain]
     ids: dict[str, str] = {}
+    if wanted and not vetted:
+        wanted, _ = await vet(wanted)
     if not wanted:
         return ids
     now = utcnow()
@@ -333,6 +340,10 @@ async def _from_database(ts, q: ProspectQuery, limit: int, taken: set[str],
     out: list[Candidate] = []
     for row in (await ts.session.scalars(stmt)).all():
         cand = _candidate(row, "database")
+        if is_association(cand.name):
+            if result is not None:
+                result.discarded["association"] += 1
+            continue
         if gated and _fails_mandatory(icp, cand):
             if result is not None:
                 result.discarded["fails_mandatory"] += 1
@@ -368,9 +379,11 @@ async def _from_shared(ts, q: ProspectQuery, limit: int, taken: set[str],
     out: list[Candidate] = []
     for row in (await ts.session.scalars(stmt)).all():
         cand = _candidate(row, "shared")
-        if icp and _fails_mandatory(icp, cand):
+        why = "association" if is_association(cand.name) else (
+            "fails_mandatory" if icp and _fails_mandatory(icp, cand) else "")
+        if why:
             if result is not None:
-                result.discarded["fails_mandatory"] += 1
+                result.discarded[why] += 1
             continue
         if screen(cand):
             out.append(cand)
@@ -510,16 +523,21 @@ async def _from_linkedin(ts, q: ProspectQuery, need: int, result: ChainResult,
 
 async def _take(ts, companies, want: int, result: ChainResult, taken: set[str],
                 icp: dict | None = None) -> int:
-    """Store a page, then deliver up to ``want`` of it that this workspace does not hold. Every row
-    is stored, a must-match refusal included: it is a fact about the company, and another
-    workspace's ICP may want it."""
+    """Store a page, then deliver up to ``want`` of it that this workspace does not hold. A row whose
+    website is not its own is neither stored nor delivered; every other row is stored, a must-match
+    refusal included: it is a fact about the company, and another workspace's ICP may want it."""
+    from nexus.prospecting.vetting import vet
+
     usable = []
     for c in companies:
         if not c.domain:
             result.discarded["no_website"] += 1
         else:
             usable.append(c)
-    ids = await store_companies(usable)
+    usable, refused = await vet(usable)
+    if refused:
+        result.discarded["domain_not_theirs"] += len(refused)
+    ids = await store_companies(usable, vetted=True)
     held = await _held(ts, [c.domain for c in usable])
     delivered = 0
     for c in usable:
@@ -532,6 +550,8 @@ async def _take(ts, companies, want: int, result: ChainResult, taken: set[str],
             result.discarded["already_held"] += 1
         elif c.domain in taken:
             result.discarded["duplicate"] += 1
+        elif delivered < want and is_association(cand.name):
+            result.discarded["association"] += 1
         elif delivered < want and icp and _fails_mandatory(icp, cand):
             result.discarded["fails_mandatory"] += 1
         elif delivered < want:
@@ -582,6 +602,8 @@ async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainRes
         domain = li.company_domain(cand.domain or cand.url)
         if not domain:
             result.discarded["no_website"] += 1
+        elif is_association(cand.name):
+            result.discarded["association"] += 1
         elif not (_within_size_band(cand.employee_count, icp) and _within_geo(cand.country, icp)):
             result.discarded["outside_icp"] += 1
         else:

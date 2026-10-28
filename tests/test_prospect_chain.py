@@ -38,7 +38,8 @@ def _row(n: int, *, website: str | None = "default", countries=("GB",), hq=None,
     return {
         "id": str(1000 + n), "universalName": f"co{n}",
         "linkedinUrl": f"https://www.linkedin.com/company/co{n}/",
-        "name": f"Company {n}", "website": website,
+        # A name its website names, as a real company's does (`vetting.names_company`).
+        "name": f"Example Co {n}", "website": website,
         "employeeCount": employees, "employeeCountRange": {"start": band[0], "end": band[1]},
         "locations": [{"headquarter": (c == (hq or countries[0])), "parsed": {"countryCode": c}}
                       for c in countries],
@@ -344,7 +345,8 @@ async def test_storing_fills_blanks_and_the_domain_wins_over_a_second_page():
 
     await chain.store_companies([parse_company(_row(1))])
     sub = _row(1)
-    sub.update(linkedinUrl="https://www.linkedin.com/company/co1-subsidiary/", name="Sub")
+    sub.update(linkedinUrl="https://www.linkedin.com/company/co1-subsidiary/",
+               name="Example Co Subsidiary")
     await chain.store_companies([parse_company(sub)])
 
     async with get_platform_sessionmaker()() as s:
@@ -353,7 +355,7 @@ async def test_storing_fills_blanks_and_the_domain_wins_over_a_second_page():
         count = await s.scalar(select(func.count()).select_from(Company))
     assert count == 1
     assert company.linkedin_url == "https://www.linkedin.com/company/co1/"
-    assert company.name == "Company 1"
+    assert company.name == "Example Co 1"
     assert company.linkedin_industry_id == 4 and company.hq_country_code == "GB"
     assert (company.employee_range_min, company.employee_range_max) == (51, 200)
     assert codes == ["GB"]

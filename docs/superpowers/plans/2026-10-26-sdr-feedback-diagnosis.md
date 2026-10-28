@@ -602,6 +602,47 @@ Migrations `0073`-`0075` are additive and replay from empty (`tests/test_migrati
 
 ---
 
+## 12. New-account accuracy, measured on the DB copy (2026-10-27/28)
+
+Workspace `sdrdemo1096` (Oil & Gas, United States, 51-5,000 staff) on `nexus_sdrprobe`, with
+Industry, Company size and Country set as must-match fields through `PUT /api/relevance/profile`,
+then `POST /api/discovery/populate` for 10 and the job run as the worker runs it. The workspace was
+moved from Free to Launch **on the copy only**: Free has no `module.discovery`, so with the local
+deploy's `NEXUS_BILLING_ENFORCEMENT=on` the endpoint answered 402 `dependency`, which is correct.
+
+| Run | Code | Delivered | Right company, own domain, inside the ICP |
+|---|---|---|---|
+| 1 | branch as it was | 6 of 10 | 2 (Plains, Murphy Oil); 4 acquired companies under the buyer's domain |
+| 2 | + chain skips must-match failures | 10 of 10 | 6; 2 under another's domain (Intermoor, Pioneer), S&P Global Energy, API |
+| 3 | + domain guard, associations, cleanup | 10 of 10 | 10; 3 of them suppliers (training, equipment) |
+
+What was wrong, and what was done (owner decisions 2026-10-28):
+- **The request ended short** while the page already bought held 25 that passed: the chain counted
+  rows delivery then refused. Fixed in `companies._fails_mandatory` (commit 69d3c77).
+- **An acquired or subsidiary company's LinkedIn page lists its owner's website**, and the shared
+  store kept it for every workspace (chevron.com as "Hess Corporation"). Across the copy's 261
+  LinkedIn-read companies the same check found link shorteners and pages that are not companies.
+  Fixed by `prospecting/vetting.py` (name check, homepage check for the 6% that need it) and
+  `scripts/vet_linkedin_companies.py` for rows stored before (15 of 261 held back on the copy).
+- **Associations and institutes** (API, SPE) are left out of discovery.
+- Existing accounts honour the gate: 0 of 36 pass; 16 fail on industry, and 20 real oil and gas
+  companies stored with no industry or size read "No data for Industry, Company size" (D3). They
+  pass once enriched. Campaign enrolment skipped both kinds as `outside_icp` (checked in a
+  rolled-back transaction).
+
+Still open, not built:
+- Suppliers labelled with their customers' industry (PetroSkills, SPM, Oil States, S&P Global
+  Energy) wait on `industry_evidence_mode`, i.e. an Anthropic key and the re-measurement.
+- The Apify B2B enrichment actor `teodor_banea/b2b-lead-enrichment-free` answers 404: the actor
+  is gone, so that enrichment step finds nothing.
+- Web enrichment stored LinkedIn's band "1001-5000" as exactly 5,000 staff (S&P Global Energy),
+  which passes a 5,000 cap by construction.
+- A vanity domain that redirects to the company's real one (figma.bot, world-kinect.com) is kept
+  under the vanity domain: canonicalising would need a homepage fetch for every row.
+- One shared row is named the string "None" (normansmilecenter.com).
+
+---
+
 ## Appendix: how it was measured (read-only)
 
 ```sql

@@ -38,6 +38,8 @@ const DISCARD_LABEL: Record<string, (n: number) => string> = {
   fails_mandatory: (n) => `${n} didn't match a field you marked mandatory`,
   wrong_industry: (n) => `${n} turned out to work in another industry, by their own website`,
   no_buyer: (n) => `${n} had nobody in your buyer titles on record yet (offered again later)`,
+  domain_not_theirs: (n) => `${n} listed another company's website on LinkedIn (often a buyer after an acquisition)`,
+  association: (n) => `${n} were associations or institutes, not companies`,
 };
 
 const NOTE_LABEL: Record<string, string> = {

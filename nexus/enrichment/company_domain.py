@@ -132,10 +132,17 @@ async def resolve_from_linkedin_page(url: str, *, client=None) -> CompanyDomain 
         details = (await li.company_details([page], client=client)).get(page)
         if details is None:
             return None
-        await store_companies([details])
         if not details.domain:
             await _remember_without_website(page)
             return None
+        from nexus.prospecting.vetting import vet
+
+        # An acquired company's page names its owner's site (2026-10-28): prefilling chevron.com
+        # for someone at Hess files them under a company they do not work for.
+        kept, _ = await vet([details])
+        if not kept:
+            return None
+        await store_companies(kept, vetted=True)
         return CompanyDomain(domain=details.domain, url=page, title=details.name or "")
     except Exception as exc:  # a lookup that fails costs the prefill, never the form
         logger.info("company page lookup failed for %s: %r", page, exc)

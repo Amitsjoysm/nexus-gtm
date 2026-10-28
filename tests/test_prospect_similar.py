@@ -120,6 +120,30 @@ async def test_unknown_peers_are_bought_in_one_run_stored_and_gated():
     assert [c.domain for c in again.companies] == ["drata.com", "secureframe.com"], "stored"
 
 
+async def test_a_peer_listing_its_owners_website_is_not_offered_as_the_owner(monkeypatch):
+    # An acquired company's page lists its buyer's site (2026-10-28): Hess's page says chevron.com.
+    # Offered, Find similar would hand the rep Chevron as "a company like Vanta".
+    from nexus.prospecting import vetting
+
+    async def chevron_homepage(domain):
+        return "www.chevron.com", 200, "Chevron Corporation - Human Energy"
+
+    vetting.forget()
+    monkeypatch.setattr(vetting, "_fetch_homepage", chevron_homepage)
+    seed = _page("vanta-security", "https://vanta.com", name="Vanta",
+                 similar_to=("drata", "hess-corporation"))
+    hess = _page("hess-corporation", "https://www.chevron.com", name="Hess Corporation")
+    tid = await make_tenant("sim-acq")
+    await store_companies([parse_company(seed)])
+    aid = await _seed_account(tid)
+
+    result = await _similar(tid, aid, DetailsClient({_url("drata"): DRATA,
+                                                     _url("hess-corporation"): hess}))
+
+    assert [c.domain for c in result.companies] == ["drata.com"]
+    assert result.discarded == {"domain_not_theirs": 1}
+
+
 async def test_a_seed_page_found_by_name_is_used_only_when_it_is_the_accounts_own():
     tid = await make_tenant("sim3")
     aid = await _seed_account(tid)

@@ -27,6 +27,7 @@ from nexus.companies.resolution import normalise_domain
 from nexus.core.db import get_platform_sessionmaker
 from nexus.prospecting import linkedin as li
 from nexus.prospecting.companies import store_companies
+from nexus.prospecting.vetting import is_association
 
 logger = logging.getLogger("nexus.prospecting.similar")
 
@@ -155,13 +156,21 @@ async def similar_companies(ts, account, *, limit: int, client=None) -> SimilarR
         known_empty = await _known_without_website([u for u in urls if u not in domains])
         missing = [u for u in urls if u not in domains and u not in known_empty]
         fetched: dict = {}
+        not_theirs: set[str] = set()
         if missing:
+            from nexus.prospecting.vetting import vet
+
             fetched = await li.company_details(missing, client=client)
-            await store_companies(list(fetched.values()))
+            # An acquired company's page names its owner's website (2026-10-28): that page is not
+            # the owner, so it resolves to no domain rather than to a different company.
+            _, refused = await vet([c for c in fetched.values() if c.domain])
+            not_theirs = {c.linkedin_url for c in refused}
+            await store_companies([c for c in fetched.values() if c.linkedin_url not in not_theirs],
+                                  vetted=True)
             for url, c in fetched.items():
-                if c.domain:
+                if c.domain and c.linkedin_url not in not_theirs:
                     domains[url] = c.domain
-                else:
+                elif not c.domain:
                     await _remember_without_website(url)
         rows = await _companies_for(sorted(set(domains.values())))
 
@@ -169,12 +178,19 @@ async def similar_companies(ts, account, *, limit: int, client=None) -> SimilarR
         for url in urls:
             peer = domains.get(url)
             if not peer:
-                # No website of its own (looked up now, or remembered), or the lookup returned
-                # nothing for this page.
-                reason = "no_website" if url in fetched or url in known_empty else "not_found"
+                # No website of its own (looked up now, or remembered), a website that is another
+                # company's, or the lookup returned nothing for this page.
+                if url in fetched and fetched[url].linkedin_url in not_theirs:
+                    reason = "domain_not_theirs"
+                elif url in fetched or url in known_empty:
+                    reason = "no_website"
+                else:
+                    reason = "not_found"
                 result.discarded[reason] += 1
             elif peer == domain or peer in seen:
                 continue                 # the seed itself, or a second page on one domain
+            elif peer in rows and is_association(rows[peer].name):
+                result.discarded["association"] += 1
             elif peer in rows and len(result.companies) < limit:
                 seen.add(peer)
                 result.companies.append(rows[peer])
