@@ -33,13 +33,13 @@ ICP = {"industries": ["Software Development"], "linkedin_industry_ids": [4],
 
 
 def _row(n: int, *, website: str | None = "default", countries=("GB",), hq=None,
-         band=(51, 200), industry=4, total=120, page=1) -> dict:
+         band=(51, 200), industry=4, total=120, page=1, employees: int | None = 100) -> dict:
     website = f"https://co{n}.example-co.io" if website == "default" else website
     return {
         "id": str(1000 + n), "universalName": f"co{n}",
         "linkedinUrl": f"https://www.linkedin.com/company/co{n}/",
         "name": f"Company {n}", "website": website,
-        "employeeCount": 100, "employeeCountRange": {"start": band[0], "end": band[1]},
+        "employeeCount": employees, "employeeCountRange": {"start": band[0], "end": band[1]},
         "locations": [{"headquarter": (c == (hq or countries[0])), "parsed": {"countryCode": c}}
                       for c in countries],
         "industries": [{"id": str(industry), "name": "Software Development"}],
@@ -276,6 +276,65 @@ async def test_web_results_pass_the_same_gates():
     assert [c.domain for c in result.candidates] == ["fine.io"]
     assert result.discarded == {"already_held": 1, "no_website": 1, "outside_icp": 2,
                                 "duplicate": 1}
+
+
+# ---- must-match fields (2026-10-27) ------------------------------------------------------------
+# Measured on a copy of the local database: a Populate of 10 with size as a must-match field read one
+# LinkedIn page, counted 10 candidates, and delivered 6, because delivery then refused 4 over the
+# size cap (ExxonMobil at 73,381 among them). The same page held 25 companies that passed. A row
+# that already fails a must-match field must not count toward the number asked for.
+
+MUST_SIZE = {**ICP, "mandatory": ["size"]}
+
+
+async def test_a_linkedin_row_failing_a_must_match_field_does_not_use_up_the_request():
+    tid = await make_tenant("mm1")
+    client = PagedClient({1: [_row(1, employees=9000), _row(2, employees=7000), _row(3),
+                              _row(4), _row(5)]})
+
+    result = await _run(tid, 3, client=client, icp=MUST_SIZE)
+
+    assert [c.domain for c in result.candidates] == [
+        "co3.example-co.io", "co4.example-co.io", "co5.example-co.io"]
+    assert result.discarded == {"fails_mandatory": 2}
+    async with get_platform_sessionmaker()() as s:
+        stored = set((await s.scalars(select(Company.domain))).all())
+    assert "co1.example-co.io" in stored, "a refused row is still stored for other workspaces"
+
+
+async def test_a_database_row_failing_a_must_match_field_gives_way_to_the_next():
+    tid = await make_tenant("mm2")
+    # The band overlaps the ICP's 50-250, which is all the SQL can see; the count does not. Stored
+    # last, so it is the newest and offered first.
+    await _store(_row(2))
+    await _store(_row(1, band=(201, 500), employees=400))
+    client = PagedClient()
+
+    result = await _run(tid, 1, client=client, icp=MUST_SIZE)
+
+    assert [(c.domain, c.source) for c in result.candidates] == [("co2.example-co.io", "database")]
+    assert result.discarded == {"fails_mandatory": 1}
+    assert client.calls == [], "the database answered, so nothing was bought"
+
+
+async def test_a_row_with_no_data_is_left_for_delivery_to_enrich():
+    tid = await make_tenant("mm3")
+    client = PagedClient({1: [_row(1, employees=None)]})
+
+    result = await _run(tid, 1, client=client, icp=MUST_SIZE)
+
+    assert [c.domain for c in result.candidates] == ["co1.example-co.io"]
+    assert not result.discarded, "no data is for delivery to look up, not a refusal here"
+
+
+async def test_without_must_match_fields_the_chain_is_unchanged():
+    tid = await make_tenant("mm4")
+    client = PagedClient({1: [_row(1, employees=9000), _row(2)]})
+
+    result = await _run(tid, 1, client=client)
+
+    assert [c.domain for c in result.candidates] == ["co1.example-co.io"]
+    assert not result.discarded
 
 
 # ---- the shared store --------------------------------------------------------------------------

@@ -292,15 +292,55 @@ def _candidate(row, source: str) -> Candidate:
                      employee_count=row.employee_count, linkedin_url=row.linkedin_url or "")
 
 
-async def _from_database(ts, q: ProspectQuery, limit: int, taken: set[str]) -> list[Candidate]:
-    """Companies a LinkedIn search stored: ICP matches by construction."""
+def _fails_mandatory(icp: dict, cand: Candidate) -> bool:
+    """Does ``cand`` already miss one of the ICP's must-match fields on what it says (2026-10-27)?
+
+    Delivery refuses such a row (`deliver`), so counting it toward the number asked for ended a
+    Populate of 10 at 6 while the page it had bought held 25 that passed. Only a definite miss
+    counts: a field with no data is for delivery to look up (D3), not a reason to skip it here.
+    """
+    from types import SimpleNamespace
+
+    from nexus.relevance.gate import icp_gate, mandatory_fields
+
+    if not mandatory_fields(icp):
+        return False
+    view = SimpleNamespace(industry=cand.industry, country=cand.country,
+                           employee_count=cand.employee_count, region=None, tech_stack=None,
+                           custom_fields={})
+    return bool(icp_gate(icp, view).failed)
+
+
+#: Rows the database step reads per company wanted when must-match fields may refuse some. The SQL
+#: filters on LinkedIn's size BAND; a must-match size is checked against the count.
+MANDATORY_POOL_FACTOR = 4
+
+
+async def _from_database(ts, q: ProspectQuery, limit: int, taken: set[str],
+                         icp: dict | None = None, result: ChainResult | None = None,
+                         ) -> list[Candidate]:
+    """Companies a LinkedIn search stored: ICP matches by construction, but for must-match
+    fields checked on their exact values."""
     from nexus.models.company import Company
+    from nexus.relevance.gate import mandatory_fields
 
     if not q.industry_ids or limit <= 0:
         return []
+    gated = bool(mandatory_fields(icp))
     stmt = (_matching(ts, q, taken).where(Company.linkedin_fetched_at.isnot(None))
-            .order_by(Company.linkedin_fetched_at.desc(), Company.id).limit(limit))
-    return [_candidate(r, "database") for r in (await ts.session.scalars(stmt)).all()]
+            .order_by(Company.linkedin_fetched_at.desc(), Company.id)
+            .limit(limit * MANDATORY_POOL_FACTOR if gated else limit))
+    out: list[Candidate] = []
+    for row in (await ts.session.scalars(stmt)).all():
+        cand = _candidate(row, "database")
+        if gated and _fails_mandatory(icp, cand):
+            if result is not None:
+                result.discarded["fails_mandatory"] += 1
+            continue
+        out.append(cand)
+        if len(out) >= limit:
+            break
+    return out
 
 
 #: How many derived rows one request may screen. Each is a deterministic score, no request.
@@ -309,7 +349,8 @@ SHARED_POOL_MAX = 200
 
 
 async def _from_shared(ts, q: ProspectQuery, limit: int, taken: set[str],
-                       screen: Screen | None) -> list[Candidate]:
+                       screen: Screen | None, icp: dict | None = None,
+                       result: ChainResult | None = None) -> list[Candidate]:
     """Companies another workspace added (an upload, a CRM pull, a hand-add, a web find), matched on
     codes derived from their own text (`companies.resolution.derive_codes`).
 
@@ -327,6 +368,10 @@ async def _from_shared(ts, q: ProspectQuery, limit: int, taken: set[str],
     out: list[Candidate] = []
     for row in (await ts.session.scalars(stmt)).all():
         cand = _candidate(row, "shared")
+        if icp and _fails_mandatory(icp, cand):
+            if result is not None:
+                result.discarded["fails_mandatory"] += 1
+            continue
         if screen(cand):
             out.append(cand)
             if len(out) >= limit:
@@ -430,7 +475,7 @@ def _over_ceiling(total: int | None) -> bool:
 
 
 async def _from_linkedin(ts, q: ProspectQuery, need: int, result: ChainResult,
-                         taken: set[str], client) -> int:
+                         taken: set[str], client, icp: dict | None = None) -> int:
     """Read pages until ``need`` companies are found or the page budget is spent. Returns how many
     were delivered. Raises the Apify errors; the caller turns them into a note."""
     pages_left = min(MAX_PAGES_PER_RUN, 1 + math.ceil(need / 10))
@@ -456,15 +501,18 @@ async def _from_linkedin(ts, q: ProspectQuery, need: int, result: ChainResult,
                 raise
             pages_left -= 1
             await _record_page(current, page, info, len(companies))
-            delivered += await _take(ts, companies, need - delivered, result, taken)
+            delivered += await _take(ts, companies, need - delivered, result, taken, icp)
             if _over_ceiling(info.total_results) and kids:
                 queue[0:0] = [(k, depth + 1) for k in kids]
                 break
     return delivered
 
 
-async def _take(ts, companies, want: int, result: ChainResult, taken: set[str]) -> int:
-    """Store a page, then deliver up to ``want`` of it that this workspace does not hold."""
+async def _take(ts, companies, want: int, result: ChainResult, taken: set[str],
+                icp: dict | None = None) -> int:
+    """Store a page, then deliver up to ``want`` of it that this workspace does not hold. Every row
+    is stored, a must-match refusal included: it is a fact about the company, and another
+    workspace's ICP may want it."""
     usable = []
     for c in companies:
         if not c.domain:
@@ -475,18 +523,21 @@ async def _take(ts, companies, want: int, result: ChainResult, taken: set[str]) 
     held = await _held(ts, [c.domain for c in usable])
     delivered = 0
     for c in usable:
+        cand = Candidate(
+            domain=c.domain, name=c.name or c.domain, source="linkedin",
+            company_id=ids.get(c.domain), industry=c.industry_name or None,
+            country=country_label(c.hq_country), employee_count=c.employee_count,
+            linkedin_url=c.linkedin_url)
         if c.domain in held:
             result.discarded["already_held"] += 1
         elif c.domain in taken:
             result.discarded["duplicate"] += 1
+        elif delivered < want and icp and _fails_mandatory(icp, cand):
+            result.discarded["fails_mandatory"] += 1
         elif delivered < want:
             taken.add(c.domain)
             delivered += 1
-            result.candidates.append(Candidate(
-                domain=c.domain, name=c.name or c.domain, source="linkedin",
-                company_id=ids.get(c.domain), industry=c.industry_name or None,
-                country=country_label(c.hq_country), employee_count=c.employee_count,
-                linkedin_url=c.linkedin_url))
+            result.candidates.append(cand)
         else:
             result.stored += 1
     return delivered
@@ -581,10 +632,10 @@ async def find_icp_companies(
     q = await query_for_icp(icp or {})
     taken: set[str] = set()
 
-    for cand in await _from_database(ts, q, n, taken):
+    for cand in await _from_database(ts, q, n, taken, icp, result):
         taken.add(cand.domain)
         result.candidates.append(cand)
-    for cand in await _from_shared(ts, q, n - len(result.candidates), taken, screen):
+    for cand in await _from_shared(ts, q, n - len(result.candidates), taken, screen, icp, result):
         taken.add(cand.domain)
         result.candidates.append(cand)
 
@@ -596,7 +647,7 @@ async def find_icp_companies(
         else:
             before = len(result.candidates)
             try:
-                read = _from_linkedin(ts, q, need, result, taken, client)
+                read = _from_linkedin(ts, q, need, result, taken, client, icp)
                 linkedin_delivered = await (run_with_timeout(read, linkedin_budget_s)
                                             if linkedin_budget_s else read)
                 if not linkedin_delivered:

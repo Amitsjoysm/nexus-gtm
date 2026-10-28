@@ -2092,6 +2092,12 @@ size, Country, State/province, Tech stack and Job titles can each be `icp["manda
   icp_gate` (the list and Account 360 show "Fails Industry", never a percentage); campaign
   `enroll` (`outside_icp`, `title_outside_icp`); and mandatory titles tighten `title_fits` for
   every contact search. Deterministic, no I/O.
+- **The chain skips a row that already fails, so it does not use up the request**
+  (`companies._fails_mandatory`, 2026-10-27, `tests/test_prospect_chain.py`). Measured on a DB copy:
+  Populate of 10 counted 10 LinkedIn rows, delivery refused 4 over the size cap, and it ended at 6
+  while the page it had bought held 25 that passed. Database, shared and LinkedIn rows are checked
+  on what they already say (a refused LinkedIn row is still stored); a field with NO data still goes
+  to delivery to be looked up. After the fix: 10 of 10, from the store, nothing bought.
 - **Stored options are normalised on save** (`routers/relevance._gate_options`): known fields only,
   `include_suppliers` a real boolean (the JSON string "false" is truthy), `tech_match` any/all.
 - The Relevance form splits comma lists **outside brackets only**: "CRM (Salesforce, HubSpot,
