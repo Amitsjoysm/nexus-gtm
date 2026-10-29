@@ -43,13 +43,18 @@ REUSE_WITHIN = timedelta(days=180)
 EMAIL_REUSE_WITHIN = timedelta(days=90)
 #: `Person.source` for someone a LinkedIn employees run returned.
 SOURCE_LINKEDIN = "linkedin_employees"
+#: For someone Parallel's people search returned and Find contacts proved (2026-10-29): the
+#: description named the company, the title fit, the link was their own profile. Weaker evidence
+#: than a LinkedIn read, so it never replaces one.
+SOURCE_PARALLEL = "parallel_people"
+_FOUND_SOURCES = (SOURCE_LINKEDIN, SOURCE_PARALLEL)
 JOB = "pool_found_people"
 
 
-def linkedin_fact(person, domain: str) -> dict:
-    """What a LinkedIn employees row says about someone: business-card facts, nothing sealed."""
+def linkedin_fact(person, domain: str, *, source: str = SOURCE_LINKEDIN) -> dict:
+    """What a found row says about someone: business-card facts, nothing sealed."""
     return {"linkedin": person.linkedin_url, "name": person.full_name, "title": person.title or "",
-            "domain": domain}
+            "domain": domain, "source": source}
 
 
 async def enqueue_pool(tenant_id: str, *, people=(), verified=()) -> None:
@@ -97,9 +102,11 @@ async def pool_found_people(tenant_id: str, *, people=(), verified=()) -> dict:
     for fact in people:
         if (isinstance(fact, dict) and normalise_linkedin(fact.get("linkedin"))
                 and normalise_domain(fact.get("domain"))):
+            source = fact.get("source") if fact.get("source") in _FOUND_SOURCES else SOURCE_LINKEDIN
             facts.append(("found", {"linkedin": fact["linkedin"], "name": fact.get("name") or "",
                                     "title": fact.get("title") or "",
-                                    "domain": normalise_domain(fact["domain"])}))
+                                    "domain": normalise_domain(fact["domain"]),
+                                    "source": source}))
     if verified and verification_configured():  # a stub "valid" proves nothing
         try:
             async with tenant_session(tenant_id) as ts:
@@ -137,12 +144,16 @@ async def pool_found_people(tenant_id: str, *, people=(), verified=()) -> dict:
                 if person is None:
                     continue
                 if kind == "found":
-                    # A LinkedIn read of their CURRENT role. Unlike a tenant's edit (which only
-                    # fills blanks, so one workspace cannot rewrite another's view), this is newer
+                    if fact["source"] == SOURCE_PARALLEL and person.source == SOURCE_LINKEDIN:
+                        # A LinkedIn read is the stronger evidence; a search hit never replaces
+                        # it, nor refreshes when it was seen.
+                        continue
+                    # A read of their CURRENT role. Unlike a tenant's edit (which only fills
+                    # blanks, so one workspace cannot rewrite another's view), this is newer
                     # evidence than whatever the row holds: a job change moves them.
                     person.company_domain = fact["domain"]
                     person.title = fact["title"] or person.title
-                    person.source = SOURCE_LINKEDIN
+                    person.source = fact["source"]
                     person.updated_at = now
                     report["people"] += 1
                 elif await _store_verified_email(session, person, fact["email"]):
@@ -198,7 +209,7 @@ async def pooled_people_at(domain: str, targets, *, company_name: str, limit: in
             rows = (await session.scalars(
                 select(Person)
                 .where(Person.company_domain == domain)
-                .where(Person.source == SOURCE_LINKEDIN)
+                .where(Person.source.in_(_FOUND_SOURCES))
                 .where(Person.linkedin_url.isnot(None))
                 .where(Person.updated_at >= utcnow() - REUSE_WITHIN)
                 .order_by(Person.updated_at.desc(), Person.id)

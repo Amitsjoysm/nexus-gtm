@@ -630,6 +630,32 @@ What was wrong, and what was done (owner decisions 2026-10-28):
   pass once enriched. Campaign enrolment skipped both kinds as `outside_icp` (checked in a
   rolled-back transaction).
 
+**Find contacts, old chain against new (2026-10-28).** Two byte-identical clones of the copy
+(1,000 test credits granted first), the same 8 correct accounts with no contacts, the screen's own
+request (`POST /api/accounts/{id}/source-contacts?limit=5`): master `de3d2fd` on one clone, this
+branch on the other.
+
+| | Old (pool, LinkedIn, web) | New (pool, InfoJoy, LinkedIn, web) |
+|---|---|---|
+| Contacts | 34 | 34 |
+| At the right company (the proven page's own employees) | 34 | 34 |
+| Email on the company's own domain, kept by the verifier | 23 (18 valid, 5 catch-all) | 23 (18 valid, 5 catch-all) |
+| Title passes `title_fits` | 34 | 34 |
+| Title is the buyer persona, judged by hand | 26 | 20 |
+
+- **No more contacts, because InfoJoy answered HTTP 500 on all 8 calls**, so the new chain fell
+  through to LinkedIn exactly as the old one did. Probed the same day with the product's own client:
+  500 for one job title, for one domain, for the Find contacts request, and for a companies search.
+  The provider is failing, not our request. The extra contacts InfoJoy was chosen for are unmeasured
+  until it answers.
+- **About one title in three is a loose match in both chains**: "Operations Accounting Manager",
+  "Datacenter Operations Manager", "Manager - Total Rewards & HR Operations", "Maintenance
+  Technician". `title_fits` accepts a title holding the words of a wanted one, and "Operations
+  Manager" is inside "Operations Accounting Manager"; marking Job titles must-match does not tighten
+  that (`same_meaning_title` asks for the same words). The difference between the two runs (26 vs
+  20) is which people the LinkedIn actor returned, not the code.
+- DuckDuckGo HTML answered 403 to the web fallback in both runs.
+
 Still open, not built:
 - Suppliers labelled with their customers' industry (PetroSkills, SPM, Oil States, S&P Global
   Energy) wait on `industry_evidence_mode`, i.e. an Anthropic key and the re-measurement.

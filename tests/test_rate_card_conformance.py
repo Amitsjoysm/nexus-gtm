@@ -61,6 +61,9 @@ def _priced_actions() -> list[tuple[str, float]]:
 # pinned rather than trusted.
 OBSERVE_ONLY = {
     "search.web": "inside the capability that issued the search",
+    "search.entity": "inside the capability that issued the search, like search.web "
+                     "(Parallel, owner decision 2026-10-29: same credits as Exa)",
+    "verify.decision": "inside the capability whose candidate it checked",
     "signal.news_scan": "inside the account refresh that ran it; a scan asked for through "
                         "POST /ingest is recorded, not charged (decided 2026-10-15)",
     "signal.rss_scan": "inside the account refresh that ran it",

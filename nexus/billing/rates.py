@@ -124,6 +124,10 @@ RATE_SEED: list[dict] = [
     # recorded $0.004 was a blend that no longer matches what we are configured to call
     # (NEXUS_SEARCH_PROVIDER=exa). At 1 credit it sat at 30% margin — below the floor.
     _r("search.web", 2, 0.007, "exa standard search @ $7/1k (measured 2026-08)"),
+    # Parallel list prices (docs.parallel.ai/getting-started/pricing, read 2026-10-28): Entity
+    # Search $5/1k requests with 100 results included (we ask 100), Decisions $1/1k requests.
+    _r("search.entity", 1, 0.005, "parallel entity search @ $5/1k, 100 results included"),
+    _r("verify.decision", 0.25, 0.001, "parallel decisions @ $1/1k, one company per request"),
     # Signal search runs on Firecrawl (NEXUS_SIGNAL_SEARCH_PROVIDER=firecrawl): ~2 credits per
     # search, $0.0032/credit on the Hobby tier. Was 36% margin at 1 credit.
     _r("signal.news_scan", 2, 0.0064, "firecrawl search, 2 credits @ Hobby tier"),

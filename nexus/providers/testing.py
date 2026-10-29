@@ -163,6 +163,14 @@ async def probe(provider: str, key: str, *, transport=None) -> TestResult:
                            "Filters": {"Titles": ["manager"]}},
                 transport=transport,
             )
+        elif provider == "parallel":
+            # Reading a run that cannot exist is free (GETs are not billed or rate limited) and
+            # authenticates: a good key gets 404, a bad one 401.
+            resp = await _call("GET", f"{s.parallel_base_url.rstrip('/')}"
+                                      "/v1beta/findall/runs/findall_nexus_key_check",
+                               headers={"x-api-key": key}, transport=transport)
+            if resp.status_code == 404:
+                return TestResult(True, "probe_ok", "authenticated", 404)
         elif provider == "twilio":
             from nexus.calling.twilio import parse_credential
 
@@ -244,6 +252,14 @@ async def verify(provider: str, key: str, *, transport=None) -> TestResult:
                 account_sid=sid, auth_token=token, transport=transport,
             ).check_account(caller_id=(s.telephony_from_number or "").strip() or None)
             return TestResult(ok, "verified" if ok else "failed", detail, 200 if ok else None)
+        elif provider == "parallel":
+            # One Entity Search at the smallest size: the real call discovery makes, $0.005.
+            resp = await _call("POST", f"{s.parallel_base_url.rstrip('/')}"
+                                       "/v1beta/findall/entity-search",
+                               headers={"x-api-key": key},
+                               json_body={"entity_type": "companies", "match_limit": 5,
+                                          "objective": "Oil and gas companies in Texas"},
+                               transport=transport)
         elif provider == "apify":
             # Listing actors exercises the token against a real, authorised resource without
             # starting a billed actor run.

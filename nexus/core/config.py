@@ -707,6 +707,14 @@ class Settings(BaseSettings):
     # more than a search call and free-tier credit is consumed quickly, so a pool matters more here.
     apify_api_keys: str = ""
 
+    # Parallel (nexus/integrations/parallel.py): Entity Search finds companies and people,
+    # Decisions checks them (owner decision 2026-10-29). Inert until keyed; keys are managed in
+    # Provider keys (`parallel`), these are the environment fallback, same pool semantics as Exa.
+    parallel_api_key: str = ""
+    parallel_api_keys: str = ""
+    # Fixed by configuration, never by a request: the client only ever calls this host.
+    parallel_base_url: str = "https://api.parallel.ai"
+
     # Prospector (nexus/prospector/): the InfoJoy Search API, a B2B database of contacts and
     # companies billed per record returned. Inert until keyed: with no key the feature answers a
     # clear 400 ("not set up"), never a fake result. Keys are managed in Provider keys
@@ -839,6 +847,10 @@ class Settings(BaseSettings):
     @property
     def infojoy_search_api_key_list(self) -> list[str]:
         return self._key_pool(self.infojoy_search_api_key, self.infojoy_search_api_keys)
+
+    @property
+    def parallel_api_key_list(self) -> list[str]:
+        return self._key_pool(self.parallel_api_key, self.parallel_api_keys)
 
     @model_validator(mode="after")
     def _reject_insecure_prod(self) -> "Settings":

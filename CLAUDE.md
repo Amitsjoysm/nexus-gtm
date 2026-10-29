@@ -2153,6 +2153,42 @@ asks each step only for what the one before left short (`prospecting/infojoy_con
   Checked a batch at a time until `limit` are confirmed; the rest are `no_buyer`, not added, and a
   LinkedIn-read company is offered again on a later day.
 
+## Parallel: company and people search (`nexus/integrations/parallel.py`, 2026-10-29)
+
+Owner decisions after reading every FindAll, Entity Search and Decisions page
+(`docs/superpowers/specs/2026-10-29-parallel-provider-design.md`): **Entity Search finds, Decisions
+checks**; companies go shared store, LinkedIn, **Parallel**, then Exa as the fallback; contacts go
+pool, InfoJoy, LinkedIn, **Parallel people search**, then web. Charged exactly as Exa's finds are
+(`discovery.account_added`, `enrich.contact`); what each call cost us is recorded on the
+observe-only `search.entity` ($0.005) and `verify.decision` ($0.001). Key: Provider keys
+`parallel`, probed free (an unknown run id answers 404 to a good key), verified by one 5-row search.
+
+- **Not FindAll**: $0.25 a run + $0.03 a match is $0.035-0.055 a company against 5 credits ($0.05),
+  under the 50% floor and a loss on small runs, and it is asynchronous (10 s to 2 h).
+- **Every call counts** (`prospecting/parallel_companies.py`): one search asks for the 100 results
+  its price includes, objective = the ICP's industries and countries only (Entity Search ranks, it
+  does not verify, and a narrow objective loses relevance down the list). Free gates first
+  (`company_domain`, held, taken, associations, `vetting.vet`); every vetted survivor is kept in the
+  shared store (source `parallel`, its own description) checked or not; then ONE Decisions request
+  per company carries every check (`identity`: the site is its own and it was not acquired;
+  `industry` by what the company itself does, with `supplier`; `hq_country`; `size_band`), a batch
+  at a time and only until the shortfall is met. A choice under 50% is unknown; no data on a
+  must-match field is no match.
+- **The verdict is the account's evidence**: industry and country cite the page (`field_sources`,
+  source `parallel`), and `custom_fields.employee_band` answers a must-match size with no number
+  invented (`gate._size` reads it when there is no count).
+- **People** (`prospecting/parallel_contacts.py`): one request per account for 100 people; each
+  must name THIS company in its description, have a title there that passes `title_fits`, and link
+  to their own profile or a page on the company's site. Every proven person with a profile goes to
+  the pool under `SOURCE_PARALLEL`, which `pooled_people_at` offers and which never replaces a
+  LinkedIn read (`SOURCE_LINKEDIN`).
+- **Total and frugal client**: answers cached in `web_cache` (searches 24 h, verdicts 90 days),
+  failures never; 401/403 marks the key and tries the next; 402 is `out_of_credit` (Parallel's own
+  balance); 429/5xx retried once. Unkeyed is silent in what a customer reads, as InfoJoy's is, and
+  Exa answers as before. Customers read it as "company research".
+- The Populate panel reads each step's note by its step (`STEP_NOTE_LABEL`): it used to read every
+  note through LinkedIn's table, so a web search failure showed as LinkedIn's.
+
 ## Orchestrator intake (`nexus/orchestration/intake.py`)
 
 **A question is not a launch instruction.** `advance` used to launch on `is_first_turn` alone once

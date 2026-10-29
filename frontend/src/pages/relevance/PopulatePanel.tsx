@@ -26,6 +26,8 @@ type Choice = (typeof PRESETS)[number] | "custom";
 const SOURCE_LABEL: Record<string, string> = {
   database: "already in our company database",
   linkedin: "found on LinkedIn",
+  parallel: "found and checked by company research",
+  shared: "added by other workspaces and matched to your ICP",
   web: "found by web search",
 };
 
@@ -48,6 +50,19 @@ const NOTE_LABEL: Record<string, string> = {
   no_industry_codes:
     "None of the ICP's industries matched a LinkedIn industry, so web search was used.",
   nothing_new: "LinkedIn has no more companies matching this ICP right now.",
+};
+
+/** Notes from the other steps, keyed by the step that wrote them (2026-10-29). Reading every
+ *  note through the LinkedIn table showed a web search failure as LinkedIn's. */
+const STEP_NOTE_LABEL: Record<string, Record<string, string>> = {
+  linkedin: NOTE_LABEL,
+  parallel: {
+    failed: "Company research didn't respond, so web search was used.",
+    out_of_credit: "Company research is out of credit, so web search was used.",
+    rejected: "Company research isn't set up correctly, so web search was used.",
+    nothing_new: "Company research had no new companies for this ICP.",
+  },
+  web: { failed: "Web search didn't respond." },
 };
 
 function plural(n: number, one: string, many = `${one}s`) {
@@ -256,8 +271,8 @@ export function PopulatePanel({ asking, onClose }: PopulatePanelProps) {
   if (run && run.status === "done") {
     const sources = sourceLine(run.sources);
     const shortfall = run.delivered < run.requested ? shortfallLine(run.discarded) : "";
-    const notes = Object.values(run.notes)
-      .map((n) => NOTE_LABEL[n])
+    const notes = Object.entries(run.notes)
+      .map(([step, n]) => STEP_NOTE_LABEL[step]?.[n])
       .filter(Boolean);
     return (
       <Card padding="lg" className={styles.panel} aria-labelledby="populate-title">

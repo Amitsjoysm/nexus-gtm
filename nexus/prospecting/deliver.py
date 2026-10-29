@@ -51,6 +51,18 @@ def _account_for(ts_tenant_id, cand: Candidate, *, source: str, owner_user_id=No
     elif cand.source == "shared":
         record_present(account, "shared_record",
                        detail="found by another workspace; labels read off its own text")
+    elif cand.source == "parallel":
+        # Checked with cited evidence (2026-10-29): the industry and country cite the page that
+        # showed them, and the employee band answers a size question with no number invented.
+        evidence = cand.evidence or {}
+        record(account, ["name", "domain"], "parallel_search")
+        record(account, [f for f in ("industry", "country") if getattr(account, f, None)],
+               "parallel", ref=evidence.get("ref") or None, detail=evidence.get("detail"))
+        band = evidence.get("band")
+        if band:
+            account.custom_fields = {**(account.custom_fields or {}), "employee_band": {
+                "min": band[0], "max": band[1], "source": "parallel",
+                "ref": evidence.get("ref") or None}}
     else:
         # A web hit says only where it was: what the company does is enrichment's to read.
         record(account, ["name", "domain"], "web_search", ref=cand.url or None)

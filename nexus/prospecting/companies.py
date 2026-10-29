@@ -114,6 +114,9 @@ class Candidate:
     linkedin_url: str = ""
     #: The page a web search hit was, so the account can say where it was found.
     url: str = ""
+    #: What a check established, for a Parallel candidate: the citation (`ref`), the employee
+    #: band the ICP asked about (`band`), and a sentence (`detail`). Written onto the account.
+    evidence: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -628,7 +631,7 @@ async def _from_web(ts, icp: dict, q: ProspectQuery, need: int, result: ChainRes
 async def find_icp_companies(
     ts, icp: dict, n: int, *, client=None, web_search: WebSearch | None = None,
     product_context: str = "", web_pool: int | None = None,
-    linkedin_budget_s: float | None = None, screen: Screen | None = None,
+    linkedin_budget_s: float | None = None, screen: Screen | None = None, parallel=None,
 ) -> ChainResult:
     """Up to ``n`` companies matching the ICP that this workspace does not hold. Never raises for
     a source failing: that source is noted and the next one is asked.
@@ -685,6 +688,23 @@ async def find_icp_companies(
             except Exception as exc:
                 logger.warning("LinkedIn company search failed: %r", exc)
                 result.notes["linkedin"] = "failed"
+
+    # Parallel for what LinkedIn left short (owner decision 2026-10-29): Entity Search finds,
+    # Decisions checks, every vetted company is kept in the shared store. Exa is the fallback.
+    need = n - len(result.candidates)
+    if need > 0:
+        from nexus.prospecting.parallel_companies import find_parallel_companies, record_costs
+
+        step = await find_parallel_companies(ts, icp or {}, need, taken=taken, client=parallel)
+        result.candidates.extend(step.candidates)
+        result.discarded.update(step.discarded)
+        # Not configured is silent, as InfoJoy's is: a deployment without a Parallel key has
+        # nothing to tell a customer, and Exa answers exactly as it did before.
+        if step.note and step.note != "not_configured":
+            result.notes["parallel"] = step.note
+        elif step.note:
+            logger.debug("Parallel is not configured; web search fills in")
+        await record_costs(ts, searches=step.searches, decisions=step.decisions)
 
     # Web search for whatever is still missing, including after a PARTIAL LinkedIn delivery. It
     # used to run only when LinkedIn delivered nothing, so a day where LinkedIn found 2 of 10 ended

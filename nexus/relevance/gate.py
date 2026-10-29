@@ -105,6 +105,20 @@ def _size(icp: dict, account) -> str | None:
         return None
     count = account.employee_count
     if count is None:
+        # A checked band (`custom_fields.employee_band`, 2026-10-29) answers without a number:
+        # inside the ICP's range is a match, wholly outside it a miss, straddling it unknown.
+        custom = account.custom_fields if isinstance(account.custom_fields, dict) else {}
+        band = custom.get("employee_band")
+        if isinstance(band, dict):
+            bmin, bmax = band.get("min"), band.get("max")
+            inside = ((lo is None or (bmin is not None and bmin >= lo))
+                      and (hi is None or (bmax is not None and bmax <= hi)))
+            outside = ((lo is not None and bmax is not None and bmax < lo)
+                       or (hi is not None and bmin is not None and bmin > hi))
+            if inside:
+                return "ok"
+            if outside:
+                return "fail"
         return "unknown"
     if (lo is not None and count < lo) or (hi is not None and count > hi):
         return "fail"

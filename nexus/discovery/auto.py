@@ -289,6 +289,10 @@ _NOTE_TEXT = {
     ("linkedin", "nothing_new"): "LinkedIn had no new companies",
     ("linkedin", "timed_out"): "LinkedIn took too long, so web search filled in",
     ("web", "failed"): "web search failed",
+    ("parallel", "failed"): "company research did not respond",
+    ("parallel", "out_of_credit"): "company research is out of credit",
+    ("parallel", "rejected"): "company research rejected its key",
+    ("parallel", "nothing_new"): "company research had no new companies",
 }
 
 _DISCARD_TEXT = {

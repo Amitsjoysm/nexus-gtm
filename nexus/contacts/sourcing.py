@@ -148,6 +148,10 @@ class FindContactsResult:
     #: {"status": not_needed | found | nobody_fits | not_configured | unavailable | no_titles |
     #:  no_domain, "found", "discarded"}. Asked after the shared pool, before a LinkedIn read.
     infojoy: dict = field(default_factory=lambda: {"status": "not_needed", "found": 0})
+    #: Parallel's people search, asked after the LinkedIn read for what it left short (2026-10-29):
+    #: {"status": not_needed | found | nobody_fits | not_configured | out_of_credit | unavailable |
+    #:  no_titles | no_domain | rejected, "found", "discarded"}.
+    parallel: dict = field(default_factory=lambda: {"status": "not_needed", "found": 0})
 
     @property
     def message(self) -> str:
@@ -159,7 +163,7 @@ class FindContactsResult:
         unconfirmed = sum(1 for c in self.contacts
                           if c.email and c.email_status in ("catch_all", "risky"))
         return {"linkedin": dict(self.linkedin), "infojoy": dict(self.infojoy),
-                "web": dict(self.web),
+                "parallel": dict(self.parallel), "web": dict(self.web),
                 "emails": {"verified": verified, "unconfirmed": unconfirmed,
                            "none": sum(1 for c in self.contacts if not c.email)}}
 
@@ -170,6 +174,7 @@ class FindContactsResult:
         if self.contacts:
             sources = [label for label, step in (("InfoJoy", self.infojoy),
                                                  ("LinkedIn", self.linkedin),
+                                                 ("company research", self.parallel),
                                                  ("web search", self.web))
                        if step.get("status") == "found"]
             where = " and ".join(sources) or "web search"
@@ -199,6 +204,13 @@ class FindContactsResult:
             reason += f" InfoJoy had nobody in your buyer titles at {domain}."
         elif infojoy == "unavailable":
             reason += " InfoJoy is unavailable right now."
+        # Company research is named only when it was asked and had something to say; a
+        # deployment without a Parallel key says nothing about it.
+        parallel = self.parallel.get("status")
+        if parallel == "nobody_fits":
+            reason += f" Company research had nobody in your buyer titles at {domain}."
+        elif parallel in ("unavailable", "out_of_credit", "rejected"):
+            reason += " Company research is unavailable right now."
         web = self.web.get("status")
         if web == "unavailable":
             tail = "Web search is unavailable right now too."
@@ -218,6 +230,7 @@ async def source_account_contacts(
 
 async def find_contacts(
     ts: TenantSession, account: Account, *, limit: int = 5, linkedin_client=None,
+    parallel_client=None,
 ) -> FindContactsResult:
     """Source the buying committee for one account: net-new people, deduped against existing
     contacts, persisted, and email-verified. Never raises for a provider being down; returns what
@@ -277,18 +290,40 @@ async def find_contacts(
         "found": len(found.people), "pooled": len(found.pooled),
         "discarded": dict(found.discarded),
     }
-    if found.people or from_infojoy:
+
+    # Parallel's people search for what the LinkedIn read left short (owner decision 2026-10-29).
+    parallel = {"status": "not_needed", "found": 0}
+    from_parallel: list = []
+    parallel_refs: dict = {}
+    short = limit - len(found.people) - len(from_infojoy)
+    if short > 0 and "no_titles" not in pooled.notes.values():
+        from nexus.prospecting.parallel_companies import record_costs
+        from nexus.prospecting.parallel_contacts import parallel_people
+
+        seen_urls |= {normalise_linkedin(p.linkedin_url) for p in found.people} - {""}
+        seen_names |= {_name_key(p.full_name) for p in found.people} - {""}
+        step = await parallel_people(ts, account, icp, want=short, seen_urls=seen_urls,
+                                     seen_names=seen_names, client=parallel_client)
+        from_parallel, parallel_refs = step.people, step.sources
+        parallel = {"status": step.note, "found": len(step.people),
+                    "discarded": dict(step.discarded)}
+        await record_costs(ts, searches=step.searches, decisions=0)
+
+    if found.people or from_infojoy or from_parallel:
         created = await persist_infojoy_people(ts, account, from_infojoy)
         created += await _persist_linkedin_people(ts, account, found.people, pooled=found.pooled)
+        created += await _persist_linkedin_people(ts, account, from_parallel, origin="parallel",
+                                                  refs=parallel_refs)
         return FindContactsResult(created, linkedin, {"status": "not_needed", "found": 0},
-                                  domain=account.domain or "", infojoy=infojoy)
+                                  domain=account.domain or "", infojoy=infojoy,
+                                  parallel=parallel)
 
     created = await _from_web_search(ts, account, icp, limit=limit)
     web = {"status": "found" if created else "none", "found": len(created or [])}
     if created is None:
         web, created = {"status": "unavailable", "found": 0}, []
     return FindContactsResult(created, linkedin, web, domain=account.domain or "",
-                              infojoy=infojoy)
+                              infojoy=infojoy, parallel=parallel)
 
 
 async def _from_web_search(ts: TenantSession, account: Account, icp: dict, *,
@@ -370,10 +405,12 @@ async def _from_web_search(ts: TenantSession, account: Account, icp: dict, *,
 
 
 async def _persist_linkedin_people(ts: TenantSession, account: Account, people,
-                                   pooled=frozenset()) -> list[Contact]:
-    """LinkedIn people as contacts, each then given a work email by the verified finder (the
+                                   pooled=frozenset(), *, origin: str = "linkedin",
+                                   refs: dict | None = None) -> list[Contact]:
+    """Found people as contacts, each then given a work email by the verified finder (the
     waterfall enricher, which also charges for it). Already deduped by the caller. ``pooled`` are
-    the profiles the shared pool supplied rather than a LinkedIn read now."""
+    the profiles the shared pool supplied rather than a read now; ``origin`` names the step that
+    found the rest (``linkedin`` or ``parallel``), ``refs`` the page each was found on."""
     from nexus.enrichment.waterfall import get_enricher
     from nexus.integrations.provenance import record_present
     from nexus.people.store import normalise_linkedin
@@ -381,14 +418,15 @@ async def _persist_linkedin_people(ts: TenantSession, account: Account, people,
     enricher = get_enricher()
     created: list[Contact] = []
     for person in people:
-        from_pool = normalise_linkedin(person.linkedin_url) in pooled
+        from_pool = bool(person.linkedin_url) and normalise_linkedin(person.linkedin_url) in pooled
         contact = Contact(
             tenant_id=ts.tenant_id, account_id=account.id, full_name=person.full_name,
-            title=person.title or None, linkedin_url=person.linkedin_url,
-            enrichment_source="sourcing:pool" if from_pool else "sourcing:linkedin",
+            title=person.title or None, linkedin_url=person.linkedin_url or None,
+            enrichment_source="sourcing:pool" if from_pool else f"sourcing:{origin}",
         )
-        # The profile is the evidence: it names the person, the title and the company.
-        record_present(contact, "pool" if from_pool else "linkedin", ref=person.linkedin_url,
+        # The page is the evidence: it names the person, the title and the company.
+        ref = (refs or {}).get(person.full_name) or person.linkedin_url or None
+        record_present(contact, "pool" if from_pool else origin, ref=ref,
                        detail="found earlier by a LinkedIn read" if from_pool else None)
         ts.add(contact)
         await ts.flush()

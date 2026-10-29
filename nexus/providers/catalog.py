@@ -48,6 +48,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "infojoy_search": ProviderSpec(
         "infojoy_search", "InfoJoy Search (prospect database)", "infojoy_search_api_key_list",
     ),
+    # Parallel's Entity Search and Decisions (nexus/integrations/parallel.py): new companies and
+    # people, checked against the ICP with cited evidence. Probed free; verified with one search.
+    "parallel": ProviderSpec(
+        "parallel", "Parallel (company and people search)", "parallel_api_key_list",
+    ),
     # Engagement engine (spec §12, §18). One secret each, not rotation pools: the resolver's
     # first key is the one in use. Tested by nexus/engagement/credential_checks.py.
     "google_oauth": ProviderSpec(

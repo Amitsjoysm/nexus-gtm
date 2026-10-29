@@ -65,7 +65,7 @@ def test_every_catalogued_provider_names_a_real_env_fallback():
     from nexus.providers.catalog import PROVIDERS
 
     settings = get_settings()
-    assert len(PROVIDERS) == 19
+    assert len(PROVIDERS) == 20
     for spec in PROVIDERS.values():
         assert hasattr(settings, spec.env_attr), f"{spec.id}: no Settings.{spec.env_attr}"
 
@@ -84,6 +84,8 @@ def test_the_catalog_covers_exactly_the_pooled_providers():
         "system_smtp", "alert_smtp",
         # Prospector's B2B database (2026-10-16), billed per record returned.
         "infojoy_search",
+        # Parallel's Entity Search and Decisions (2026-10-29), priced per request.
+        "parallel",
     }
 
 

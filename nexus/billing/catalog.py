@@ -176,6 +176,12 @@ _AI = [
 _DISCOVERY = [
     _cap("search.web", "search", "Web search", unit="search",
          description="Exa/Brave/Serper/DuckDuckGo call."),
+    # Parallel (2026-10-29): what a company or person found there cost us, recorded per call and
+    # paid for by the action that asked (discovery.account_added, enrich.contact), as Exa's are.
+    _cap("search.entity", "search", "Company and people search", unit="search",
+         description="Parallel Entity Search call: up to 100 companies or people."),
+    _cap("verify.decision", "search", "Evidence check", unit="check",
+         description="Parallel Decisions call: one company's ICP facts checked with citations."),
     _cap("discovery.icp_daily", "discovery", "Daily ICP discovery run", unit="job",
          default_mode="metered", depends_on=["module.discovery"]),
     _cap("discovery.account_added", "discovery", "Net-new ICP account", default_mode="metered",
