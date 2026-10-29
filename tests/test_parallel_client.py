@@ -165,3 +165,17 @@ async def test_an_unreadable_answer_is_not_an_empty_one():
     rec = Recorder((200, {"unexpected": True}))
     outcome = await _client(rec).entity_search("companies", "Odd answer")
     assert outcome.status == "bad_response"
+
+
+def test_a_description_record_is_read_field_by_field():
+    """The shape of the first real answers (2026-10-29), with synthetic values: ``Key: value``
+    pairs joined by `` | ``, sometimes by a newline, and prose for a few entities."""
+    record = ("Name: Example Oil | Website Url: http://exampleoil.com | Stage: Deadpooled | "
+              "Location Country: United States | Acquisition Details: [{\"type\":\"x\"}]\n"
+              "Primary Sector: Energy | Short Description: Drills wells: oil and gas")
+    assert pl.record_fields(record) == {
+        "Name": "Example Oil", "Website Url": "http://exampleoil.com", "Stage": "Deadpooled",
+        "Location Country": "United States", "Acquisition Details": "[{\"type\":\"x\"}]",
+        "Primary Sector": "Energy", "Short Description": "Drills wells: oil and gas"}
+    assert pl.record_fields("Example Oil is an independent producer based in Texas.") == {}
+    assert pl.record_fields("") == {}

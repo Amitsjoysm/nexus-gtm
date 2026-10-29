@@ -42,6 +42,12 @@ const DISCARD_LABEL: Record<string, (n: number) => string> = {
   no_buyer: (n) => `${n} had nobody in your buyer titles on record yet (offered again later)`,
   domain_not_theirs: (n) => `${n} listed another company's website on LinkedIn (often a buyer after an acquisition)`,
   association: (n) => `${n} were associations or institutes, not companies`,
+  defunct: (n) => `${n} have stopped operating`,
+  acquired: (n) => `${n} were acquired by or merged into another company`,
+  not_its_own: (n) => `${n} gave a website that isn't their own`,
+  lands_elsewhere: (n) => `${n} have a website that now leads to another company (usually an acquirer)`,
+  unconfirmed: (n) => `${n} couldn't be confirmed to still operate under their own name`,
+  industry_unclear: (n) => `${n} couldn't be confirmed to work in your industries`,
 };
 
 const NOTE_LABEL: Record<string, string> = {

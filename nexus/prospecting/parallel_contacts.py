@@ -4,9 +4,20 @@ Find contacts asks the shared pool, InfoJoy, a LinkedIn read, then this step, th
 (owner decision 2026-10-29). Entity Search is ranked, not verified, so nothing it says is taken on
 trust. A person is kept only when:
 
-* their description names THIS company (its name, its name's distinctive word, or its domain),
-* the title read from that description passes the ICP's `title_fits`, and
+* the company their record names is THIS company (its name, its name's distinctive word, or its
+  domain),
+* the title their record gives passes the ICP's `title_fits` AND is one of its buyer titles in
+  meaning (`gate.same_meaning_title`, every word of a wanted title present). `title_fits` alone
+  accepts one shared word, and measured (2026-10-29) for buyer titles Operations / Procurement /
+  Supply Chain / HSE Manager it kept "Manager", "Manager - Tax", "Revenue Manager" and "Office
+  Manager & Executive Assistant": a search returning 100 people at a company can afford the exact
+  ones, and
 * their link is their own LinkedIn profile, or a page on the company's own website.
+
+Measured on the first real answers (2026-10-29): a person's description is a record
+(`record_fields`) naming ``Company Name`` and ``Title``, and a ``Position`` (their current role, as
+text or as a small JSON object); every link was a LinkedIn profile. A prose description is read
+for "<title> at <company>" instead.
 
 Every call counts: one request per account asks for the 100 people its price includes, and every
 proven person with a profile goes to the shared pool (`people.pool`, source ``parallel_people``),
@@ -15,6 +26,7 @@ come from our verified finder afterwards, charged as every Find contacts email i
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import Counter
@@ -82,6 +94,37 @@ def _names_company(description: str, terms: list[str]) -> bool:
     return any(re.search(rf"\b{re.escape(t.lower())}\b", text) for t in terms)
 
 
+def _position(value: str) -> dict:
+    """A ``Position`` given as JSON (``{"company_name": ..., "title": ...}``), else ``{}``."""
+    value = (value or "").strip()
+    if not value.startswith("{"):
+        return {}
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def company_and_title(entity, terms: list[str]) -> tuple[str, str]:
+    """The company a person works at and their title there, from their record; for prose, the
+    whole description and the title it gives at this company."""
+    from nexus.integrations.parallel import record_fields
+
+    fields = record_fields(entity.description)
+    if not fields:
+        return entity.description or "", title_from(entity.description, entity.name, terms)
+    position = _position(fields.get("Position", ""))
+    headline = fields.get("Headline", "")
+    # A headline ("<title> at <company>") answers only what the record's own fields do not.
+    company = (fields.get("Company Name") or str(position.get("company_name") or "")
+               or (headline if title_from(headline, entity.name, terms) else ""))
+    title = (fields.get("Title") or str(position.get("title") or "")).strip()
+    if not title and headline:
+        title = title_from(headline, entity.name, terms)
+    return company, title
+
+
 def _proof(url: str, domain: str) -> str | None:
     """The person's own profile URL, "" for a page on the company's own site, None for neither."""
     from nexus.companies.resolution import normalise_domain
@@ -108,6 +151,7 @@ async def parallel_people(ts, account, icp: dict, *, want: int, seen_urls: set[s
     from nexus.people.store import normalise_linkedin
     from nexus.prospecting.contacts import _name_key
     from nexus.prospecting.linkedin import LinkedInPerson
+    from nexus.relevance.gate import same_meaning_title
 
     step = PeopleStep()
     domain = normalise_domain(account.domain)
@@ -137,11 +181,12 @@ async def parallel_people(ts, account, icp: dict, *, want: int, seen_urls: set[s
     terms = _company_terms(account)
     proven = []
     for entity in found.entities:
-        if not _names_company(entity.description, terms):
+        company, title = company_and_title(entity, terms)
+        if not _names_company(company, terms):
             step.discarded["wrong_company"] += 1
             continue
-        title = title_from(entity.description, entity.name, terms)
-        if not title or not title_fits(title, targets):
+        if (not title or not title_fits(title, targets)
+                or not same_meaning_title(title, targets.wanted)):
             step.discarded["wrong_title"] += 1
             continue
         profile = _proof(entity.url, domain)

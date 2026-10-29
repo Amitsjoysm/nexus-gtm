@@ -244,7 +244,12 @@ def _title_tokens(title: str) -> frozenset[str]:
     from nexus.lookalike.contacts import expand_title
 
     words = re.split(r"[^a-z0-9]+", expand_title(title or ""))
-    return frozenset(w for w in words if w and w not in _TITLE_STOP)
+    return frozenset(_singular(w) for w in words if w and w not in _TITLE_STOP)
+
+
+def _singular(word: str) -> str:
+    """"Operation Mgr" is an Operations Manager: a plural s is dropped on both sides."""
+    return word[:-1] if len(word) > 4 and word.endswith("s") and not word.endswith("ss") else word
 
 
 def same_meaning_title(title: str, wanted) -> bool:

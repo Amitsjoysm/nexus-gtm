@@ -9,6 +9,9 @@
 * **Shared candidates are not either** (2026-10-02): their codes were read off the row's own words.
   The chain only offered the ones ``fit_screen`` passed, and they face the same gates and threshold
   here, without the enrichment, since the shared row already carries what it knows.
+* **Parallel candidates were checked** (industry, identity, and the size and country it could
+  answer), so no fit threshold; a size or country the check could not answer is enriched and
+  screened as a web find's is (2026-10-29).
 * **Mandatory ICP fields bind every source** (`relevance.gate`, 2026-10-26), LinkedIn included:
   a row with no data on one is enriched first and, still without it, not delivered.
 * **``require_buyer`` makes discovery contact-first** (D2): a company that passed everything else is
@@ -31,6 +34,12 @@ logger = logging.getLogger("nexus.prospecting.deliver")
 
 #: Candidates whose ICP match is a claim to check rather than a filter LinkedIn applied.
 SCREENED_SOURCES = frozenset({"web", "shared"})
+
+
+def _unchecked(cand: Candidate) -> bool:
+    """A Parallel candidate whose check could not answer its size or country (2026-10-29): those
+    are looked up and screened like a web find's. Its industry was checked, so no fit threshold."""
+    return cand.source == "parallel" and bool((cand.evidence or {}).get("unchecked"))
 
 
 def _account_for(ts_tenant_id, cand: Candidate, *, source: str, owner_user_id=None):
@@ -58,6 +67,9 @@ def _account_for(ts_tenant_id, cand: Candidate, *, source: str, owner_user_id=No
         record(account, ["name", "domain"], "parallel_search")
         record(account, [f for f in ("industry", "country") if getattr(account, f, None)],
                "parallel", ref=evidence.get("ref") or None, detail=evidence.get("detail"))
+        if account.employee_count is not None:
+            record(account, ["employee_count"], "parallel",
+                   detail="headcount from the company record the search returned")
         band = evidence.get("band")
         if band:
             account.custom_fields = {**(account.custom_fields or {}), "employee_band": {
@@ -156,10 +168,11 @@ async def deliver(
     # Web rows are always enriched. Any other row is enriched only when a MANDATORY field has no
     # data on it, because no data is no match (D3): a LinkedIn company with no tech stack would
     # otherwise be dropped for something one lookup could answer.
-    to_enrich = [account for cand, account in built if cand.source == "web"]
+    to_enrich = [account for cand, account in built if cand.source == "web" or _unchecked(cand)]
     if mandatory_fields(icp):
         to_enrich += [account for cand, account in built
-                      if cand.source != "web" and icp_gate(icp, account).unknown]
+                      if cand.source != "web" and not _unchecked(cand)
+                      and icp_gate(icp, account).unknown]
     enrich = settings.icp_discovery_enrich_candidates
     if enrich is None:
         enrich = settings.account_enrich_enabled
@@ -197,7 +210,7 @@ async def deliver(
         if not icp_gate(icp, account).passed:
             discarded["fails_mandatory"] += 1
             continue
-        if cand.source in SCREENED_SOURCES and not (
+        if (cand.source in SCREENED_SOURCES or _unchecked(cand)) and not (
             _within_size_band(account.employee_count, icp) and _within_geo(account.country, icp)
         ):
             discarded["outside_icp"] += 1

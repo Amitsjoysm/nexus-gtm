@@ -2165,23 +2165,49 @@ observe-only `search.entity` ($0.005) and `verify.decision` ($0.001). Key: Provi
 
 - **Not FindAll**: $0.25 a run + $0.03 a match is $0.035-0.055 a company against 5 credits ($0.05),
   under the 50% floor and a loss on small runs, and it is asynchronous (10 s to 2 h).
+- **What Parallel actually sends** (first real calls, 2026-10-29): an entity is only `name`, `url`,
+  `description`. A company's `url` is its LinkedIn or Tracxn page; its website, HQ, stage and
+  headcount are fields of the description, `Key: value | Key: value` (`record_fields`). A person's
+  record names `Company Name`, `Title` and a `Position` (text, or JSON). The first parser read the
+  website from `url` and found none of 100.
+- **The record is a lead, not proof.** Of 100 US oil and gas companies: 25 `Deadpooled`, 13
+  `Acquired` (Chevron and Murphy Oil wrongly: their records describe deals they made), bankrupt or
+  merged ones still `Public` (Cobalt, Cabot), Delek's headcount 6. So only `Deadpooled` is refused
+  for free; the check is never told the stage or headcount.
 - **Every call counts** (`prospecting/parallel_companies.py`): one search asks for the 100 results
   its price includes, objective = the ICP's industries and countries only (Entity Search ranks, it
-  does not verify, and a narrow objective loses relevance down the list). Free gates first
-  (`company_domain`, held, taken, associations, `vetting.vet`); every vetted survivor is kept in the
-  shared store (source `parallel`, its own description) checked or not; then ONE Decisions request
-  per company carries every check (`identity`: the site is its own and it was not acquired;
-  `industry` by what the company itself does, with `supplier`; `hq_country`; `size_band`), a batch
-  at a time and only until the shortfall is met. A choice under 50% is unknown; no data on a
-  must-match field is no match.
+  does not verify). Free gates first: the record's website, not `Deadpooled`, HQ in the ICP's
+  countries, held, taken, associations, `vetting.vet`; then **the homepage** (`vetting.
+  lands_elsewhere`: cabotog.com lands on coterra.com, marathonoil.com on conocophillips.com,
+  pxd.com on exxonmobil.com); then ONE Decisions request per company carries every check
+  (`identity`: operates today under its own name with its own site, else acquired / defunct /
+  parent; `industry` with `supplier`; `hq_country`; `size_band`), a batch at a time, only until
+  the shortfall is met. Identity and industry need 0.7 (Midstates, merged, read 0.56; SPM, a
+  supplier, 0.51 as an operator), identity 0.95 when the record says Acquired (Bison 0.90, Chevron
+  0.998). Only a company the check says operates under its own name is kept in the shared store.
+- **A size or country the check cannot answer is passed on, not refused** (it could not size 38
+  of 79, Diamondback, EOG and Devon among them): the record's headcount fills a size where the check
+  is silent, and what is still unanswered goes to delivery as `evidence.unchecked`, which enriches
+  and screens it as a web find's (`deliver._unchecked`); a must-match field still without data
+  there is no match.
+- **`vetting.names_company`'s initials need three letters to be a prefix** (2026-10-29): "Cabot
+  Oil" is "co", the start of coterra.com, its acquirer.
+- **Measured on a DB copy after the fixes**: 10 asked, 9 delivered, 8 right (Diamondback, Murphy,
+  Magnolia, Gulfport, Ring, Delek, Mewbourne, EOG); Cobalt (bankrupt 2018, site still up) is the
+  miss nothing free catches. About $0.10 of Parallel for 7 searches and 65 checks.
 - **The verdict is the account's evidence**: industry and country cite the page (`field_sources`,
   source `parallel`), and `custom_fields.employee_band` answers a must-match size with no number
-  invented (`gate._size` reads it when there is no count).
-- **People** (`prospecting/parallel_contacts.py`): one request per account for 100 people; each
-  must name THIS company in its description, have a title there that passes `title_fits`, and link
-  to their own profile or a page on the company's site. Every proven person with a profile goes to
-  the pool under `SOURCE_PARALLEL`, which `pooled_people_at` offers and which never replaces a
-  LinkedIn read (`SOURCE_LINKEDIN`).
+  invented (`gate._size` reads it when there is no count); a record headcount is stored with its
+  source.
+- **People** (`prospecting/parallel_contacts.py`): one request per account for 100 people; the
+  company their record names must be THIS one, the title must pass `title_fits` AND
+  `same_meaning_title` (every word of a buyer title; `title_fits` alone kept "Manager - Tax" and
+  "Revenue Manager" for an Operations / HSE Manager ICP), and the link must be their own profile or
+  a page on the company's site. `expand_title` now reads HSE / EHS / QHSE, and `same_meaning_title`
+  drops a plural s ("Operation Mgr"). Measured: EOG 17 of 100 kept, all ops or supply-chain
+  managers; Devon 6; Magnolia and Ring 1 each, the rest of their results at other companies.
+  Every proven person with a profile goes to the pool under `SOURCE_PARALLEL`, which
+  `pooled_people_at` offers and which never replaces a LinkedIn read (`SOURCE_LINKEDIN`).
 - **Total and frugal client**: answers cached in `web_cache` (searches 24 h, verdicts 90 days),
   failures never; 401/403 marks the key and tries the next; 402 is `out_of_credit` (Parallel's own
   balance); 429/5xx retried once. Unkeyed is silent in what a customer reads, as InfoJoy's is, and

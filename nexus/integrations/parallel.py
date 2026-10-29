@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -90,6 +91,27 @@ class DecisionOutcome:
     @property
     def ok(self) -> bool:
         return self.status == "ok"
+
+
+#: A field label in an entity's description: Title Case words, then a colon.
+_FIELD = re.compile(r"(?:^|\s\|\s|\n)([A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*){0,5}):\s")
+
+
+def record_fields(description: str) -> dict[str, str]:
+    """The fields of an entity's description, ``{}`` for prose.
+
+    Measured on the first real answers (2026-10-29): an entity is only ``name``, ``url`` and
+    ``description``, and the description is usually a record, ``Key: value | Key: value``. A
+    company's ``url`` is its LinkedIn or Tracxn page, so its website, HQ and stage are in here
+    (``Website Url``, ``Location Country``, ``Stage``); a person's company and title too
+    (``Company Name``, ``Title``, ``Position``). The first label wins when one repeats."""
+    text = str(description or "")
+    marks = list(_FIELD.finditer(text))
+    out: dict[str, str] = {}
+    for i, mark in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        out.setdefault(mark.group(1), text[mark.end():end].strip())
+    return out
 
 
 def _words(resp: httpx.Response) -> str:

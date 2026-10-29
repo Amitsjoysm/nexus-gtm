@@ -99,8 +99,12 @@ def names_company(domain: str, name: str) -> bool:
         return True
     for initials in ("".join(w[0] for w in words if w not in _STOP),
                      "".join(w[0] for w in distinctive if w not in _STOP)):
-        if len(initials) >= 2 and len(label) >= 2 and (
-                initials.startswith(label) or label.startswith(initials)):
+        if len(initials) < 2 or len(label) < 2:
+            continue
+        # Two letters match only exactly: "co" (Cabot Oil) is the start of coterra.com, the
+        # company that bought it (2026-10-29).
+        if label == initials or (len(initials) >= 3 and len(label) >= 3 and (
+                initials.startswith(label) or label.startswith(initials))):
             return True
     return False
 
@@ -175,6 +179,39 @@ async def homepage_names(domain: str, name: str, *, fetch=None) -> bool:
         logger.info("homepage of %s could not be read: %r", domain, exc)
         return False
     verdict = status < 400 and (_page_names(text, name) or names_company(final_host, name))
+    if len(_cache) >= _CACHE_MAX:
+        _cache.pop(next(iter(_cache)))
+    _cache[key] = (verdict, time.monotonic())
+    return verdict
+
+
+def _same_site(host: str, domain: str) -> bool:
+    host = normalise_domain(host) or (host or "").lower()
+    domain = normalise_domain(domain) or (domain or "").lower()
+    return bool(host and domain) and (
+        host == domain or host.endswith("." + domain) or domain.endswith("." + host))
+
+
+async def lands_elsewhere(domain: str, name: str, *, fetch=None) -> bool:
+    """Does the homepage at ``domain`` now land on another site, one whose domain does not name
+    ``name``? Never raises.
+
+    Measured on Parallel's first real search (2026-10-29): cabotog.com lands on coterra.com,
+    marathonoil.com on conocophillips.com, swn.com on expandenergy.com, pxd.com on exxonmobil.com,
+    trianglepetroleum.com on a gambling site. The clearest free sign a company was bought or is
+    gone, and one Parallel's own check missed for Cabot. A site that does not answer is no evidence
+    either way (Devon's and Diamondback's did not answer from here), so it is a no."""
+    key = ("elsewhere:" + domain, " ".join(_words(name)))
+    hit = _cache.get(key)
+    if hit is not None and time.monotonic() - hit[1] < _CACHE_TTL_S:
+        return hit[0]
+    try:
+        final_host, _status, _text = await (fetch or _fetch_homepage)(domain)
+    except Exception as exc:
+        logger.info("homepage of %s could not be read: %r", domain, exc)
+        return False
+    verdict = (bool(final_host) and not _same_site(final_host, domain)
+               and not names_company(final_host, name))
     if len(_cache) >= _CACHE_MAX:
         _cache.pop(next(iter(_cache)))
     _cache[key] = (verdict, time.monotonic())

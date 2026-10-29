@@ -281,6 +281,12 @@ _TITLE_ABBREVIATIONS: tuple[tuple[str, str], ...] = (
     (r"\bae\b", "account executive"),
     (r"\bhr\b", "human resources"),
     (r"\bta\b", "talent acquisition"),
+    # Safety roles are written every way (2026-10-29: an ICP asked for "HSE Manager" and the
+    # people found were "EHS Manager" and "Environment, Health and Safety Manager").
+    (r"\bqhse\b", "quality health safety environment"),
+    (r"\bhs&e\b", "health safety environment"),
+    (r"\bhse\b", "health safety environment"),
+    (r"\behs\b", "environment health safety"),
 )
 
 

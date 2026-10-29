@@ -84,3 +84,22 @@ with backoff, then `failed`. Never raises into Populate, the sweep or Find conta
 
 FindAll (async, under the margin floor), webhooks (polling-free design needs none), Parallel
 memory (never changes results), Monitor, Task API enrichments.
+
+## Measured on the first real calls (2026-10-29, DB copy `nexus_sdr_parallel`)
+
+One companies search (US oil and gas, 51-5,000 staff), people searches for EOG, Devon, Magnolia and
+Ring, and 65 Decisions; about $0.10 in all. What it changed:
+
+| Found | What was done |
+|---|---|
+| An entity is `name`, `url`, `description` only; a company's `url` is its LinkedIn or Tracxn page and its website is a field of the description (`Key: value \| ...`). The first parser found no website in 100. | `record_fields`; the website, HQ, stage and headcount come from the record. |
+| 25 of 100 `Deadpooled`; 13 `Acquired`, Chevron and Murphy Oil wrongly; bankrupt Cobalt and merged Cabot still `Public`; Delek's headcount 6. | Only `Deadpooled` is refused for free. The check is never told the stage or headcount. |
+| The check called four dead or merged companies operating (Cabot, Cobalt, Midstates, Triangle), two of them at 0.56 and 0.58. | Identity and industry need 0.7; identity 0.95 when the record says Acquired; a homepage landing on another company's domain is refused before the check (cabotog.com lands on coterra.com). Catches all but Cobalt, plus Bison and Clayton Williams. |
+| The check could not size 38 of 79, Diamondback, EOG and Devon among them; refusing those as "no data" lost most good companies. | An unanswered size or country is passed on: the record's headcount fills a size where the check is silent, and delivery enriches and screens whatever is still open. |
+| "Cabot Oil" read as named by coterra.com: its initials "co" start the domain. | Two-letter initials must equal the label. |
+| People: the company field was right, but `title_fits` kept "Manager", "Manager - Tax", "Revenue Manager" for an Operations / HSE Manager ICP. | Parallel people must also pass `same_meaning_title`; HSE / EHS / QHSE and plurals read. EOG 17 of 100 kept, all buyer titles. |
+| For smaller companies most people results are at other companies (Magnolia 28 of 29, Ring 34 of 81). | Refused by the company check; one or two real buyers each. |
+
+Result after the fixes: 10 companies asked, 9 delivered, 8 right. The miss is Cobalt International
+Energy (bankrupt 2018, website still up), which nothing free catches; an SEC filing-recency check
+for public companies would.
