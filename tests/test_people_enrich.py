@@ -81,6 +81,43 @@ async def test_a_recorded_miss_is_not_re_purchased():
         set_apify_client(None)
 
 
+async def test_a_miss_is_never_charged_and_a_number_always_is():
+    """Owner decision 2026-10-29: the customer pays for a number, bought or cached, never for
+    "not found"."""
+    from sqlalchemy import select
+
+    from nexus.models.billing import BillingUsageEvent
+
+    await _seed_billing()
+
+    async def charges(tid):
+        async with get_platform_sessionmaker()() as s:
+            return len((await s.scalars(select(BillingUsageEvent).where(
+                BillingUsageEvent.tenant_id == tid,
+                BillingUsageEvent.capability_id == "enrich.phone"))).all())
+
+    set_apify_client(_StubApify(items=[]))
+    try:
+        miss = await make_tenant(slug="pe3b", name="PE Three B")
+        async with tenant_session(miss) as ts:
+            await find_phone(ts, linkedin_url=LINKEDIN)
+            await find_phone(ts, linkedin_url=LINKEDIN)
+        assert await charges(miss) == 0
+    finally:
+        set_apify_client(None)
+
+    set_apify_client(_StubApify())
+    try:
+        hit = await make_tenant(slug="pe3c", name="PE Three C")
+        other = "https://www.linkedin.com/in/someone-else-123/"
+        async with tenant_session(hit) as ts:
+            await find_phone(ts, linkedin_url=other)
+            await find_phone(ts, linkedin_url=other)
+        assert await charges(hit) == 2, "bought, then served from the shared record"
+    finally:
+        set_apify_client(None)
+
+
 async def test_a_stale_record_is_refreshed():
     """People do change numbers. The cache is a saving, not a freeze."""
     await _seed_billing()

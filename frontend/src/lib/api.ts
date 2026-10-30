@@ -149,6 +149,7 @@ import type {
   SourcedContacts,
   ReverifyResult,
   ContactReverifyResult,
+  FindEmailOnDomainResult,
   CallTask,
   CallScript,
   CallActivity,
@@ -515,6 +516,14 @@ export class ApiClient {
   reverifyContact(contactId: string, signal?: AbortSignal) {
     return this.request<ContactReverifyResult>(`/accounts/contacts/${contactId}/reverify`, {
       method: "POST",
+      signal,
+    });
+  }
+  /** Search ONE contact's email on a domain the rep typed. Charged only when one is kept. */
+  findEmailOnDomain(contactId: string, domain: string, signal?: AbortSignal) {
+    return this.request<FindEmailOnDomainResult>(`/accounts/contacts/${contactId}/find-email`, {
+      method: "POST",
+      body: { domain },
       signal,
     });
   }

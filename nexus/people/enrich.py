@@ -15,6 +15,10 @@ to ask second, which is arbitrary, and would make revenue depend on crawl orderi
 learn there is nothing there. Re-asking on every crawl is the difference between a bounded monthly
 bill and an unbounded one.
 
+**The customer pays for a number, never for "not found"** (owner decision 2026-10-29, after SDRs
+reported credits spent on lookups that returned nothing). A miss, bought now or replayed from the
+shared record, is not metered; what the actor cost us for it is COGS.
+
 **Order of attempts**: the shared person record, then a registered source database
 (``nexus/sources/``), then the paid actor. Each step is cheaper than the one after it, and each is
 an optimisation rather than a dependency — a source database that is down falls through to the
@@ -262,12 +266,12 @@ async def find_phone(
             view = await read_person(session, person_id)
 
         if view is not None and _fresh(view.last_enriched_at, ttl_days):
-            # Already bought, including a recorded miss — no actor run. Still METERED: the customer
-            # received an answer and is charged for the answer, not for our infrastructure. What the
-            # shared store improves is COGS, not price. Billing only on a miss would hand the saving
-            # to whichever customer happened to ask second, which is arbitrary, and would make
-            # revenue depend on crawl ordering.
-            await _meter_lookup(ts, user_id=user_id, cached=True)
+            # Already bought, including a recorded miss — no actor run. A number is still METERED:
+            # the customer received an answer and is charged for the answer, not for our
+            # infrastructure; billing only on a miss would hand the saving to whichever customer
+            # asked second. A recorded miss is not charged: it is no number (2026-10-29).
+            if view.phone:
+                await _meter_lookup(ts, user_id=user_id, cached=True)
             return PhoneResult(
                 phone=view.phone, raw=view.phone_raw, source="shared_person",
                 cached=True, status=view.phone_status,
@@ -310,10 +314,9 @@ async def find_phone(
                 )
                 await session.commit()
 
-        # 5. Only now touch the tenant session. Charged for the lookup, not the result — a
-        #    `not_found` is an answer we paid an actor to obtain. Not charged when the integration
-        #    was never configured, because nothing was bought.
-        if result.status in ("found", "not_found"):
+        # 5. Only now touch the tenant session. Charged for a number only (2026-10-29): a
+        #    `not_found` is recorded so it is never bought again, and costs the customer nothing.
+        if result.status == "found":
             await _meter_lookup(ts, user_id=user_id, cached=False)
         return result
     except Exception:

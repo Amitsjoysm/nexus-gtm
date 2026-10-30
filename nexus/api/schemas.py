@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 # ---- auth ----
@@ -339,6 +339,25 @@ class ContactReverifyOut(BaseModel):
     action: str
     previous_email: str | None = None
     previous_status: str | None = None
+    contact: ContactOut
+
+
+class FindEmailOnDomainIn(BaseModel):
+    """A domain the rep knows this person receives mail on ("Search another domain")."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str = Field(min_length=3, max_length=253)
+
+
+class FindEmailOnDomainOut(BaseModel):
+    """What searching one typed domain found. ``charged`` is true only when an address was kept
+    (charged for a result, 2026-10-29)."""
+
+    domain: str
+    found: bool
+    charged: bool
+    message: str
     contact: ContactOut
 
 

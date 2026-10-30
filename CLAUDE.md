@@ -1792,6 +1792,20 @@ five call sites remembering to agree.
   request, so it is not billed — the rule that also keeps an unconfigured phone lookup off the bill.
 - On today's default `NEXUS_BILLING_ENFORCEMENT=shadow` this records and never blocks, so the
   `would_block` counter is what says what flipping enforcement on would cost each tenant.
+- **A contact is charged for a result, never for "not found"** (owner decision 2026-10-29, SDRs
+  reported credits spent on contacts that came back empty; `tests/test_enrichment_billing.py`,
+  `tests/test_people_enrich.py`). `WaterfallEnricher.enrich_contact` asks `preflight` before the
+  paid providers (a blocked tenant is still stopped before anything is spent, and a person still
+  gets the 402) and records `enrich.contact` only once an email survived the save policy or a phone
+  was found (`_charge`). `find_phone` charges `enrich.phone` only for a number, bought or replayed
+  from the shared record; a recorded miss is still never re-bought, and now costs nothing. Find
+  contacts' sentence says when nothing was charged.
+- **"Search another domain"** (`POST /accounts/contacts/{id}/find-email`, the contact's "Other
+  domain" button, `tests/test_find_email_on_domain.py`): a rep types where this person receives mail
+  (a parent group's or a regional brand's domain); the finders guess and verify there through
+  `enrich_contact(mail_domain=...)` (`_OnDomain` overrides only the mail domain the finders read),
+  the account's own mail domain is left alone, and the same charge-on-result rule applies. Free
+  mail, reserved names, IP addresses and domains with no MX are refused before any lookup.
 - **The B2B actor is spaced like the paid web path** (2026-10-14, `_enrich`). It ran on every
   enrichment, ignoring the 30-day `due` check, and the pipeline enriches any account still missing
   industry OR headcount, which the actor rarely supplies: 82 runs in three hours locally, and the

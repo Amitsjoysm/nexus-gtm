@@ -18,6 +18,8 @@ from nexus.api.schemas import (
     ContactLookalikeResponse,
     ContactOut,
     ContactReverifyOut,
+    FindEmailOnDomainIn,
+    FindEmailOnDomainOut,
     LookalikeOut,
     LookalikeResponse,
     SimilarPersonAddedOut,
@@ -953,6 +955,59 @@ async def reverify_one_contact(
         previous_status=outcome.previous_status,
         contact=_contact_out(contact),
     )
+
+
+@router.post("/contacts/{contact_id}/find-email", response_model=FindEmailOnDomainOut)
+async def find_email_on_domain(
+    contact_id: str,
+    body: FindEmailOnDomainIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> FindEmailOnDomainOut:
+    """Search this person's email on a domain the rep typed ("Search another domain",
+    2026-10-29): for a company whose people receive mail somewhere other than its website. The
+    finders guess and verify there; the account's own mail domain is left as it was.
+
+    Charged one ``enrich.contact`` only when an address is kept, like every enrichment now; over
+    quota it is a 402 before anything is spent. A free-mail or reserved name, an IP address, or a
+    domain with no mail server is refused before any lookup."""
+    import re
+
+    from nexus.companies.resolution import normalise_domain
+    from nexus.enrichment.mail_domain import has_mx
+    from nexus.integrations.provenance import record
+
+    contact = await ts.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    domain = normalise_domain(body.domain)
+    if not domain or re.fullmatch(r"[\d.]+", domain):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Type a company domain, like acme.com. Free mail and reserved names "
+                            "cannot be searched.")
+    if not await has_mx(domain):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"{domain} cannot receive email: it has no mail server.")
+    before = (contact.email or "").strip().lower()
+    result = await get_enricher().enrich_contact(
+        ts, contact, user_id=principal.user_id, raise_on_block=True, mail_domain=domain)
+    now = (contact.email or "").strip().lower()
+    found = bool(result.email) and now == result.email.strip().lower() and now.endswith(
+        "@" + domain)
+    if found and now != before:
+        record(contact, "email", result.source or "email_finder",
+               detail=f"found on {domain}, a domain typed by a rep")
+        await ts.flush()
+    if found:
+        message = f"Found {now} on {domain}."
+    elif result.found:
+        # A free source answered with an address elsewhere: kept and charged, so say so.
+        message = f"Found {now or 'a phone number'}, not on {domain}."
+    else:
+        message = (f"No address we could keep for {contact.full_name or 'this person'} on "
+                   f"{domain}. Nothing was charged.")
+    return FindEmailOnDomainOut(domain=domain, found=found, charged=bool(result.found),
+                                message=message, contact=_contact_out(contact))
 
 
 @router.post("/{account_id}/enrich", response_model=AccountOut)

@@ -55,6 +55,24 @@ def _verdict_detail(status: str | None, check: str) -> str:
     return f"{status.replace('_', '-')}, {where}"
 
 
+class _OnDomain:
+    """An account seen through a mail domain a person typed: every finder reads the mail domain
+    from ``custom_fields`` (`mail_domain.mail_domain_of`), so overriding that one key moves the
+    search and nothing is written to the real account."""
+
+    def __init__(self, account: Account, domain: str) -> None:
+        from nexus.enrichment.mail_domain import CACHE_KEY
+
+        self._account = account
+        fields = dict(account.custom_fields or {})
+        fields[CACHE_KEY] = {"domain": domain, "source": "typed", "published": [],
+                             "format_index": None, "checked_at": utcnow().isoformat()}
+        self.custom_fields = fields
+
+    def __getattr__(self, name: str):
+        return getattr(self._account, name)
+
+
 class WaterfallEnricher:
     def __init__(
         self,
@@ -173,6 +191,7 @@ class WaterfallEnricher:
     async def enrich_contact(
         self, ts: TenantSession, contact: Contact, account: Account | None = None,
         *, user_id: str | None = None, raise_on_block: bool = False,
+        mail_domain: str | None = None,
     ) -> EnrichmentResult:
         """Enrich a contact through the waterfall, billing ``enrich.contact`` for what it spends.
 
@@ -185,8 +204,18 @@ class WaterfallEnricher:
         Either way the customer is charged once for one enriched contact. What a source database
         changes is our COGS, not the price — `cached` on the usage row is what makes that visible.
 
+        **Charged for a result, never for "not found"** (owner decision 2026-10-29, after SDRs
+        reported credits spent on contacts that came back empty). The paid lookup is asked
+        ``preflight`` first, so a blocked tenant is still stopped before anything is spent, and the
+        charge is recorded only once an email survived the save policy or a phone was found. A
+        lookup that keeps nothing costs the customer nothing; its provider cost is ours.
+
         ``raise_on_block`` separates a person pressing "Enrich" (who should get a 402 with the
         upsell) from a campaign sourcing sweep (which should skip the contact and keep going).
+
+        ``mail_domain`` is a domain a person typed for this one search ("Search another domain",
+        2026-10-29): the finders guess and verify there instead of the account's resolved mail
+        domain, which is left as it was. The caller validates it.
         """
         account = account or await ts.get(Account, contact.account_id)
         if account is None:
@@ -194,20 +223,24 @@ class WaterfallEnricher:
         # What the contact held before: an address found below that differs from it is ours.
         supplied = (contact.email or "").strip().lower()
 
-        # Where does this organisation actually receive email? Resolved once per account and cached
-        # for 30 days (`nexus/enrichment/mail_domain.py`), because every guess below is built on it.
-        #
-        # A contact that already has addresses proven dead is the "suspected wrong domain" case: the
-        # patterns were right and the place was not, so the ladder is walked again — reading the
-        # company's own site — instead of guessing at the same domain a second time.
-        try:
-            suspect = bool(rejected_emails(contact)) and (
-                (cached_mail_domain(account).source if cached_mail_domain(account) else "none")
-                in ("website_domain", "none")
-            )
-            await resolve_mail_domain(ts, account, force=suspect)
-        except Exception as exc:  # resolution must never break enrichment
-            logger.warning("mail domain resolution failed for %s: %r", account.id, exc)
+        if mail_domain:
+            account = _OnDomain(account, mail_domain)
+        else:
+            # Where does this organisation actually receive email? Resolved once per account and
+            # cached for 30 days (`nexus/enrichment/mail_domain.py`), because every guess below is
+            # built on it.
+            #
+            # A contact that already has addresses proven dead is the "suspected wrong domain"
+            # case: the patterns were right and the place was not, so the ladder is walked again —
+            # reading the company's own site — instead of guessing at the same domain a second time.
+            try:
+                suspect = bool(rejected_emails(contact)) and (
+                    (cached_mail_domain(account).source if cached_mail_domain(account) else "none")
+                    in ("website_domain", "none")
+                )
+                await resolve_mail_domain(ts, account, force=suspect)
+            except Exception as exc:  # resolution must never break enrichment
+                logger.warning("mail domain resolution failed for %s: %r", account.id, exc)
 
         merged = EnrichmentResult()
         candidates: list[EnrichmentResult] = []
@@ -216,31 +249,27 @@ class WaterfallEnricher:
 
         await self._consult(free, account, contact, merged, candidates)
 
+        #: How the answer was obtained, charged below only if there is one.
+        charge: str | None = None
         if free and self._satisfied(merged, candidates):
             # Answered without spending anything. Metered like the paid waterfall it replaced, and
             # deliberately never blocked — the same posture as a shared-record hit in
             # `nexus/people/enrich.py`, where the answer is already ours to give.
-            from nexus.sources.provider import meter_hit
-
-            await meter_hit(ts, CONTACT_CAPABILITY, user_id=user_id)
+            charge = "free"
         elif paid:
-            from nexus.billing.errors import QuotaExceeded
-            from nexus.billing.meter import metered
+            from nexus.billing.entitlements import preflight
 
-            try:
-                async with metered(
-                    ts, CONTACT_CAPABILITY, user_id=user_id, source="enrichment",
-                    attrs={"provider": "waterfall", "cached": False},
-                ):
-                    await self._consult(paid, account, contact, merged, candidates)
-            except QuotaExceeded:
+            decision = await preflight(ts, CONTACT_CAPABILITY)
+            if not decision.allowed:
                 if raise_on_block:
-                    raise
+                    decision.raise_if_blocked()
                 logger.info(
                     "contact enrichment skipped for %s: %s quota reached",
                     contact.id, CONTACT_CAPABILITY,
                 )
                 return merged
+            await self._consult(paid, account, contact, merged, candidates)
+            charge = "paid"
 
         # Final verification: every candidate found without a verdict (search, source database, the
         # blind guess) gets one, so the choice below is made on evidence rather than on who guessed.
@@ -291,6 +320,8 @@ class WaterfallEnricher:
         if merged.found and not contact.enrichment_source:
             contact.enrichment_source = merged.source
         await ts.flush()
+        if charge and merged.found:
+            await self._charge(ts, charge, user_id=user_id)
         if (merged.email and merged.email_status == STATUS_VALID and merged.email_check == "mailbox"
                 and (contact.email or "").strip().lower() == merged.email.strip().lower() != supplied
                 and (contact.linkedin_url or "").strip()):
@@ -310,6 +341,26 @@ class WaterfallEnricher:
                             "email_confidence": merged.email_confidence,
                             "phone_found": bool(merged.phone)})
         return merged
+
+    @staticmethod
+    async def _charge(ts: TenantSession, how: str, *, user_id: str | None) -> None:
+        """One ``enrich.contact`` for a result in hand. Never refuses it: the preflight above
+        already allowed the spend, and a concurrent spend in between is the one race left, so
+        the customer keeps what was found."""
+        if how == "free":
+            from nexus.sources.provider import meter_hit
+
+            await meter_hit(ts, CONTACT_CAPABILITY, user_id=user_id)
+            return
+        from nexus.billing.meter import metered
+
+        try:
+            async with metered(ts, CONTACT_CAPABILITY, user_id=user_id, source="enrichment",
+                               attrs={"provider": "waterfall", "cached": False}):
+                pass
+        except Exception:
+            logger.warning("metering %s failed; the result still stands", CONTACT_CAPABILITY,
+                           exc_info=True)
 
 
 _enricher: WaterfallEnricher | None = None

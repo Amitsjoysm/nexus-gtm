@@ -51,6 +51,7 @@ import {
 } from "@/lib/format";
 import { emailStatusMeta, signalSourceMeta, strengthMeta } from "@/lib/display";
 import { describeReverify } from "@/lib/reverify";
+import { FindEmailOnDomain } from "@/components/contacts/FindEmailOnDomain";
 import type {
   AgentRunResponse,
   Account,
@@ -953,6 +954,8 @@ export function AccountDetailPage() {
                           Re-verify
                         </Button>
                       )}
+                      <FindEmailOnDomain contact={c} onFound={(next) => contacts.setData((prev) => (prev ?? []).map((x) => (x.id === next.id ? next : x)))} />
+
                       <Button
                         size="sm"
                         variant="ghost"

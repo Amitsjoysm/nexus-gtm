@@ -188,7 +188,9 @@ class FindContactsResult:
                 parts.append(f"{emails['unconfirmed']} whose email cannot be confirmed (the "
                              "domain accepts every address)")
             if emails["none"]:
-                parts.append(f"{emails['none']} with no email we could verify")
+                # Charged only for a result (2026-10-29): a person with no address cost nothing.
+                parts.append(f"{emails['none']} with no email we could verify (no charge for "
+                             f"{'it' if emails['none'] == 1 else 'those'})")
             return f"Added {n} {people} from {where}: " + ", ".join(parts) + "."
         status = self.linkedin.get("status", "")
         if status == "nobody_fits":
@@ -218,7 +220,7 @@ class FindContactsResult:
             tail = f"Web search found nobody with your buyer titles at {domain} either."
         else:
             tail = ""
-        return " ".join(p for p in (reason, tail) if p)
+        return " ".join(p for p in (reason, tail, "Nothing was charged.") if p)
 
 
 async def source_account_contacts(

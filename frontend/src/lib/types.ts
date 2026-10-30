@@ -283,6 +283,16 @@ export interface ContactReverifyResult {
   contact: Contact;
 }
 
+/** Searching ONE contact's email on a domain the rep typed. `charged` is true only when an
+ *  address was kept (charged for a result, 2026-10-29). */
+export interface FindEmailOnDomainResult {
+  domain: string;
+  found: boolean;
+  charged: boolean;
+  message: string;
+  contact: Contact;
+}
+
 // ---- Cold calling --------------------------------------------------------------------------
 export interface CallTask {
   id: string;

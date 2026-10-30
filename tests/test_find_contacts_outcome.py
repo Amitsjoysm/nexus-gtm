@@ -103,6 +103,7 @@ async def test_nobody_found_says_which_step_stopped_and_why():
     assert result.outcome["web"]["status"] == "none"
     assert "LinkedIn search is unavailable right now" in result.message
     assert "Web search found nobody with your buyer titles at acme-ops.io" in result.message
+    assert result.message.endswith("Nothing was charged."), "charged only for a result"
 
 
 async def test_without_buyer_titles_it_says_to_add_them():
@@ -136,7 +137,8 @@ def test_the_message_counts_people_by_what_their_email_can_be_trusted_for():
     assert result.outcome["emails"] == {"verified": 1, "unconfirmed": 1, "none": 2}
     assert result.message_for(acc) == (
         "Added 4 people from LinkedIn: 1 with a verified email, 1 whose email cannot be "
-        "confirmed (the domain accepts every address), 2 with no email we could verify.")
+        "confirmed (the domain accepts every address), 2 with no email we could verify (no "
+        "charge for those).")
 
 
 async def test_the_endpoint_returns_the_contacts_the_outcome_and_the_sentence(client):

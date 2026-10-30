@@ -349,20 +349,25 @@ async def test_a_free_provider_that_only_half_answers_still_falls_through_to_the
     assert rows[0].attrs.get("cached") is False
 
 
+def _refuse_contact_preflight(monkeypatch):
+    """The paid lookup is asked first (2026-10-29: charged only for a result), so a block is the
+    preflight's answer, not the meter's."""
+    from nexus.billing import entitlements
+    from nexus.billing.entitlements import MeterResult
+
+    async def refuses(ts, capability_id, *, quantity=1):
+        return MeterResult(allowed=False, reason="quota_exhausted", used=1, quota=0)
+
+    monkeypatch.setattr(entitlements, "preflight", refuses)
+
+
 async def test_a_blocked_contact_enrichment_does_not_break_campaign_sourcing(monkeypatch):
     """`contacts/sourcing.py` enriches every sourced persona in a loop. A 402 escaping there
     would abort the whole sourcing run over one contact."""
-    from nexus.billing import meter
-    from nexus.billing.errors import QuotaExceeded
     from nexus.enrichment.waterfall import WaterfallEnricher
 
     await _seed_billing()
-
-    class _Refuses:
-        def __call__(self, ts, capability_id, **kw):
-            raise QuotaExceeded(CONTACT_CAPABILITY, reason="quota_exhausted", used=1, quota=0)
-
-    monkeypatch.setattr(meter, "metered", _Refuses())
+    _refuse_contact_preflight(monkeypatch)
     tid = await make_tenant(slug="ec4", name="EC Four")
     paid = _StubProvider("search", email="jane@acme.com")
 
@@ -375,6 +380,43 @@ async def test_a_blocked_contact_enrichment_does_not_break_campaign_sourcing(mon
     assert result.found is False
     assert paid.calls == 0, "blocked means the search was never issued"
     assert not contact.email
+
+
+async def test_a_lookup_that_finds_nothing_costs_nothing():
+    """Owner decision 2026-10-29, after SDRs reported credits spent on "contact not found": the
+    search ran (our cost), nothing was kept, the customer is not charged."""
+    from nexus.enrichment.waterfall import WaterfallEnricher
+
+    await _seed_billing()
+    tid = await make_tenant(slug="ec6", name="EC Six")
+    paid = _StubProvider("search")
+
+    async with tenant_session(tid) as ts:
+        account, contact = await _a_contact(ts, tid)
+        result = await WaterfallEnricher([paid], verify=_no_verify).enrich_contact(
+            ts, contact, account)
+        await ts.session.commit()
+
+    assert paid.calls == 1, "the lookup ran"
+    assert result.found is False
+    assert await _usage(tid, CONTACT_CAPABILITY) == []
+
+
+async def test_a_blocked_person_still_sees_the_upsell_before_anything_is_spent(monkeypatch):
+    from nexus.billing.errors import QuotaExceeded
+    from nexus.enrichment.waterfall import WaterfallEnricher
+
+    await _seed_billing()
+    _refuse_contact_preflight(monkeypatch)
+    tid = await make_tenant(slug="ec7", name="EC Seven")
+    paid = _StubProvider("search", email="jane@acme.com")
+
+    async with tenant_session(tid) as ts:
+        account, contact = await _a_contact(ts, tid)
+        with pytest.raises(QuotaExceeded):
+            await WaterfallEnricher([paid], verify=_no_verify).enrich_contact(
+                ts, contact, account, raise_on_block=True)
+    assert paid.calls == 0
 
 
 async def _no_verify(email):

@@ -184,8 +184,9 @@ async def enrich_contact_phone(
     off.
 
     Served from the shared people record when another workspace already bought this number, which is
-    invisible to the caller and the whole point — same answer, no second actor run. Metered either
-    way: the customer is charged for the answer, not for our infrastructure.
+    invisible to the caller and the whole point — same answer, no second actor run. Charged only
+    when a number comes back, cached or bought (2026-10-29); "not found" costs nothing, and
+    ``charged`` says which, so the screen can tell the rep.
     """
     from nexus.people.enrich import find_phone
 
@@ -239,6 +240,7 @@ async def enrich_contact_phone(
         "raw": result.raw,
         "status": result.status,
         "cached": result.cached,
+        "charged": bool(result.phone),
     }
 
 
