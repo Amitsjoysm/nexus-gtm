@@ -130,7 +130,7 @@ async def test_a_contacts_history_is_calls_and_emails_newest_first(client):
     assert reply["reply_category"] == "interested" and reply["status"] == "received"
     assert sent["campaign_name"] == "Q4 push" and sent["campaign_id"] == ids["campaign"]
     assert sent["preview"].startswith("Hi Jane, Saw the Series B news.")
-    assert sent["thread_link"] == f"/engagement/inbox?thread={ids['thread']}"
+    assert sent["thread_link"] == f"/engagement/mail?thread={ids['thread']}"
     assert all(i["contact_name"] == "Jane Buyer" for i in rows)
     assert "Never sent" not in {i["preview"] for i in rows}, "a draft is not history"
 

@@ -121,7 +121,7 @@ import type {
   CampaignReport,
   ResponseTimeRow,
   TodayItem,
-  ActivityItem,
+  HistoryItem,
   InboxFilters,
   InboxList,
   InboxThreadDetail,
@@ -1677,10 +1677,10 @@ export class ApiClient {
     return this.request<WorkspaceContact>(`/contacts/${contactId}`, { signal });
   }
   contactActivity(contactId: string, signal?: AbortSignal) {
-    return this.request<ActivityItem[]>(`/contacts/${contactId}/activity`, { signal });
+    return this.request<HistoryItem[]>(`/contacts/${contactId}/activity`, { signal });
   }
   accountActivity(accountId: string, signal?: AbortSignal) {
-    return this.request<ActivityItem[]>(`/accounts/${accountId}/activity`, { signal });
+    return this.request<HistoryItem[]>(`/accounts/${accountId}/activity`, { signal });
   }
   inboxThreads(filters: InboxFilters, signal?: AbortSignal) {
     return this.request<InboxList>("/engagement/inbox", {

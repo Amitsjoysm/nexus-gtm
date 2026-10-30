@@ -4,7 +4,7 @@ import { Badge, ErrorState, Icons, Skeleton } from "@/components/ui";
 import { CATEGORY, when } from "@/components/engagement/labels";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
-import type { ActivityItem, ReplyCategory } from "@/lib/types";
+import type { HistoryItem, ReplyCategory } from "@/lib/types";
 import styles from "./ActivityPanel.module.css";
 
 /**
@@ -43,7 +43,7 @@ export function duration(seconds: number | null): string {
 export function ActivityPanel({ contactId, accountId, compact = false }: ActivityPanelProps) {
   const api = useApiClient();
   const [show, setShow] = useState<Show>("all");
-  const history = useApi<ActivityItem[]>(
+  const history = useApi<HistoryItem[]>(
     (s) => (contactId ? api.contactActivity(contactId, s)
       : accountId ? api.accountActivity(accountId, s) : Promise.resolve([])),
     [contactId, accountId],
@@ -106,7 +106,7 @@ export function ActivityPanel({ contactId, accountId, compact = false }: Activit
   );
 }
 
-function CallEntry({ item, named }: { item: ActivityItem; named: boolean }) {
+function CallEntry({ item, named }: { item: HistoryItem; named: boolean }) {
   const length = duration(item.duration_s);
   const meta = [item.by && `by ${item.by}`, length, item.placed_live && "placed in the app"]
     .filter(Boolean).join(" · ");
@@ -129,7 +129,7 @@ function CallEntry({ item, named }: { item: ActivityItem; named: boolean }) {
   );
 }
 
-function EmailEntry({ item, named }: { item: ActivityItem; named: boolean }) {
+function EmailEntry({ item, named }: { item: HistoryItem; named: boolean }) {
   const inbound = item.direction === "in";
   const category = item.reply_category ? CATEGORY[item.reply_category as ReplyCategory] : null;
   const who = inbound

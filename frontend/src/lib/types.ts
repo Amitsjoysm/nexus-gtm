@@ -2886,7 +2886,7 @@ export interface TodayItem {
 // ---- activity history (SDR round 2, 5.2) --------------------------------------------------------
 
 /** One call logged or one email sent or received, for a contact or an account. */
-export interface ActivityItem {
+export interface HistoryItem {
   id: string;
   kind: "call" | "email";
   at: string | null;

@@ -16,7 +16,8 @@ which is the question a rep asks before every touch.
   drafts and queued rows are not history), with the first lines of what was said: an inbound reply
   quotes our own emails back underneath, so its first lines go through `parse.strip_quoted` first.
   The thread link is given only when the viewer may open that thread in the unified inbox: their
-  own mailbox, or any mailbox for a manager. Everyone at the account still sees that it happened.
+  own mailbox, or any mailbox for a manager, in Mail (`/engagement/mail`). Everyone at the account
+  still sees that it happened.
 
 Tenant-scoped through `TenantSession`, so another workspace's contact or account id finds nothing
 and the endpoint answers 404.
@@ -201,7 +202,7 @@ async def _emails(ts, contact_ids: set[str], limit: int, *, viewer_id: str,
             mailbox=getattr(mailbox, "email", "") or "",
             campaign_id=getattr(campaign, "id", None), campaign_name=getattr(campaign, "name", ""),
             thread_id=m.thread_id,
-            thread_link=f"/engagement/inbox?thread={m.thread_id}" if m.thread_id and may_open else "",
+            thread_link=f"/engagement/mail?thread={m.thread_id}" if m.thread_id and may_open else "",
             reply_category=(reading.corrected_category or reading.category) if reading else None))
     return out
 
