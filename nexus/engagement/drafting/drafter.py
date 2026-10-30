@@ -30,7 +30,14 @@ class Draft:
     context_pack: str = ""
     facts: list[str] = field(default_factory=list)
     #: The facts offered with their links ({label, url, kind}), saved as the message's draft_facts.
+    #: Two kinds are not facts and ride there for want of a column (2026-10-29): ``shape``, the
+    #: contact's seeded style, logged; ``ps``, the optional P.S. a rep must confirm on Review.
     sources: list[dict] = field(default_factory=list)
+    #: The optional P.S. (`copy.PS_RULE`). Never part of ``body``: it reaches a buyer only when a
+    #: person ticks "I confirm this is true" (`routers/engagement_campaigns.approve_message`).
+    ps: str = ""
+    #: This contact's seeded opener, ask and subject style (`copy.shape_for`).
+    shape: dict = field(default_factory=dict)
     error: str = ""
 
     @property
@@ -125,8 +132,29 @@ async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: s
 
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     options = draft_options(getattr(tenant, "email_settings", None) or {})
+    posts = ((contact.custom_fields or {}).get("personalization") or {}).get("recent_posts") \
+        if isinstance(contact.custom_fields, dict) else None
     problems = check_draft(subject=subject, body=body, first_name=_first_name(contact),
                            facts=pack.facts, company_name=account.name or "", touch=kind,
-                           **options)
+                           activity=posts if isinstance(posts, list) else None, **options)
+    # The fact verifier ran in the agent, against everything the model was given; a name or number
+    # still unfound holds the draft (an automatic follow-up waits for review, `advance.py`). The
+    # subject's misses count only where the model's subject is the one that is sent.
+    from nexus.agents.copy import shape_label
+    from nexus.agents.email_quality import unverified_problem
+
+    unverified = output.get("unverified") or {}
+    terms = list(unverified.get("body") or [])
+    if subject == (output.get("subject") or "").strip():
+        terms += [t for t in (unverified.get("subject") or []) if t not in terms]
+    if terms:
+        problems.append(unverified_problem(terms))
+    shape = dict(output.get("shape") or {})
+    ps = (output.get("ps") or "").strip()
+    sources = list(pack.sources)
+    if shape:
+        sources.append({"label": shape_label(shape), "url": "", "kind": "shape"})
+    if ps:
+        sources.append({"label": ps, "url": "", "kind": "ps"})
     return Draft(subject=subject, body=body, problems=problems, context_pack=pack.text,
-                 facts=pack.facts, sources=pack.sources)
+                 facts=pack.facts, sources=sources, ps=ps, shape=shape)

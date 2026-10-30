@@ -306,6 +306,9 @@ export interface CallScript {
   value_prop: string;
   discovery_questions: string[];
   objections: { objection: string; response: string }[];
+  /** Answers to "Who is this?", "Just send me an email." and "I'm busy." (scripts written
+   *  before 2026-10-29 have none). */
+  first_reactions?: { reaction: string; response: string }[];
   cta: string;
   voicemail: string;
   /** When this script was written; a script is reused only on that day. */
@@ -1270,6 +1273,8 @@ export interface EmailStyle {
   samples: string[];
   /** What a first email asks for: the playbook's interest question, or a short meeting. */
   first_ask?: "interest" | "meeting";
+  /** First emails may carry a P.S. the rep confirms on Review. Off by default. */
+  ps_line?: boolean;
 }
 
 /** Send-ready mailbox shown at the approval gate (no secrets, visible to approvers). */
@@ -2671,7 +2676,8 @@ export interface ReviewItem {
 export interface DraftFact {
   label: string;
   url: string;
-  /** signal | company | referral | title */
+  /** signal | company | referral | title, or two that are not facts: `ps` (the optional P.S., in
+   *  `label`, sent only when the rep confirms it) and `shape` (the contact's seeded style, logged). */
   kind: string;
 }
 

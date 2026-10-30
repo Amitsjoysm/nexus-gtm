@@ -134,14 +134,26 @@ class StubLLMProvider(LLMProvider):
             pain = v.get("pain") or DEFAULT_PAINS
             # The same shape the rules ask a real model for (`copy.email_rules`): a short subject,
             # the first name, one paragraph per idea, and an interest question rather than a
-            # meeting. This is what a deployment with a dead key sends, so it is held to them too.
+            # meeting. This is what a deployment with a dead key sends, so it is held to them too,
+            # and it follows the contact's seeded shape (`copy.shape_for`), or every buyer of
+            # every workspace on a dead key would get the identical email.
             first = (str(contact).split() or ["there"])[0]
+            shape = v.get("shape") or {}
+            subject = {"trigger": f"{account} news", "problem": "pipeline bottlenecks",
+                       "team": f"{account} team"}.get(shape.get("subject"), f"idea for {account}")
+            opener = {"question": f"Saw {trigger}. That usually raises a question about {pain}.",
+                      "pattern": f"Saw {trigger}. That kind of moment usually puts {pain} on the "
+                                 "table."}.get(shape.get("opener"), f"Noticed {trigger}.")
+            ask = {"priority": "On your list this quarter?",
+                   "how": "Want to see how?"}.get(shape.get("ask"), "Worth a look?")
+            what = (str(v.get("what") or "").strip().rstrip(".") + ".") if v.get("what") else ""
             return (
-                f"Subject: idea for {account}\n\n"
+                f"Subject: {subject.lower()}\n\n"
                 f"Hi {first},\n\n"
-                f"Noticed {trigger}.\n\n"
-                f"Teams like {account} use {vp} to get ahead of {pain}.\n\n"
-                f"Worth a look?\n\nBest,\nYour AE"
+                f"{opener}\n\n"
+                f"Teams like {account} use {vp} to get ahead of {pain}."
+                f"{f' {what}' if what else ''}\n\n"
+                f"{ask}\n\nBest,\nYour AE"
             )
         if purpose == "call_script":
             import json as _json
@@ -156,10 +168,20 @@ class StubLLMProvider(LLMProvider):
             # a script stops sounding like a person.
             pain = v.get("pain") or DEFAULT_PAINS
             one_pain = v.get("one_pain") or pain
+            # No placeholders (2026-10-29): it used to open "this is <your name> from <your
+            # company>", which a rep on a dead key read aloud. The caller and company come from the
+            # agent (`call_script._caller`); unknown, the line says less instead.
+            first = (str(contact).split() or ["there"])[0]
+            caller = (str(v.get("caller") or "").split() or [""])[0]
+            company = str(v.get("company") or "").strip()
+            who = (f"it's {caller} from {company}" if caller and company
+                   else f"it's {caller}" if caller else f"I'm calling from {company}" if company
+                   else "")
+            intro = f"Hi {first}, {who}." if who else f"Hi {first}."
             return _json.dumps({
-                "opener": f"Hi {contact}, this is <your name> from <your company>. "
-                          f"Did I catch you at an okay time for 30 seconds?",
-                "hook": f"I noticed {trigger} at {account} — that's usually when teams look at {vp}.",
+                "opener": f"{intro} This is a cold call. Can I take thirty seconds to say why I "
+                          "called?",
+                "hook": f"I saw {trigger} at {account}; that's usually when {one_pain} gets harder.",
                 "value_prop": f"{vp} helps teams get ahead of {pain}.",
                 "discovery_questions": [
                     f"How are you handling {one_pain} today?",
@@ -168,14 +190,27 @@ class StubLLMProvider(LLMProvider):
                 ],
                 "objections": [
                     {"objection": "We're not looking right now.",
-                     "response": f"Totally fair — most teams aren't until {trigger}. "
-                                 "Worth 15 minutes to benchmark?"},
+                     "response": f"Totally fair. Most teams aren't until {trigger}. "
+                                 "Worth 15 minutes to compare notes?"},
                     {"objection": "Send me an email.",
-                     "response": "Happy to — what's the best address, and what should I focus it on?"},
+                     "response": "Happy to. What's the best address, and what should I focus it "
+                                 "on?"},
                 ],
-                "cta": "Would you be open to a 15-minute call later this week?",
-                "voicemail": f"Hi {contact}, calling about {trigger} at {account}. "
-                             "I'll follow up by email — talk soon.",
+                "first_reactions": [
+                    {"reaction": "Who is this?",
+                     "response": f"{(who[:1].upper() + who[1:]) if who else 'A cold call'}, "
+                                 f"about {one_pain}. "
+                                 "Thirty seconds and you can tell me if it's worth more."},
+                    {"reaction": "Just send me an email.",
+                     "response": f"Happy to. So it's useful: is {one_pain} something you deal "
+                                 "with?"},
+                    {"reaction": "I'm busy.",
+                     "response": f"Understood. One question then: is {one_pain} on your list "
+                                 "this quarter?"},
+                ],
+                "cta": "Could we find 15 minutes later this week to see whether it fits?",
+                "voicemail": f"Hi {first}, {who + ', ' if who else ''}calling about {trigger} at "
+                             f"{account}. I'll send a short email so you have my details.",
             })
         if purpose == "contact_rationale":
             return (

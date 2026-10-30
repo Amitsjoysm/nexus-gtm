@@ -130,10 +130,84 @@ def sender_block(name: str) -> str:
 
 #: The subject line. A title-case pitch with urgency reads as marketing and is skimmed as
 #: marketing; two or three lowercase words read like a colleague's note.
+#:
+#: **No literal examples in any rule** (content writers, 2026-10-29). The examples this rule and the
+#: ask rule used to quote ('eu expansion', 'Worth a look?') came back word for word in thousands of
+#: drafts, and a phrase every vendor's AI writes is one buyers and spam filters learn to skip. The
+#: style is described instead; `shape_for` varies it per contact.
 SUBJECT_RULE = (
     "Subject line: 2 to 4 words, lowercase except names and acronyms, the way a colleague labels "
-    "an internal note (for example 'eu expansion' or 'new sdr pod'). No urgency, no clickbait, no "
-    "question or exclamation marks, and not the recipient's name."
+    "an internal note about one topic. No urgency, no clickbait, no question or exclamation "
+    "marks, and not the recipient's name."
+)
+
+#: Phrases that mark an email as automated, in the prompt AND in `email_quality.check_draft`, from
+#: one list so the two cannot drift. The second half are the AI tells the content writers listed
+#: (2026-10-29): a buyer who has read a hundred machine-written emails stops at the first of them.
+BANNED_PHRASES = (
+    "hope this finds you well",
+    "hope you're doing well",
+    "hope you are doing well",
+    "i wanted to reach out",
+    "i'm reaching out",
+    "i am reaching out",
+    "circling back",
+    "touching base",
+    "synergy",
+    "game-changer",
+    "game changer",
+    "revolutionary",
+    # A follow-up that adds nothing new (the 2026-10-01 playbook: every touch must earn its place).
+    "just following up",
+    "just bumping",
+    "bumping this",
+    "just checking in",
+    # AI tells.
+    "i came across",
+    "came across your",
+    "impressive",
+    "streamline",
+    "seamless",
+    "i'd love to",
+    "i would love to",
+    "delve",
+    "elevate",
+    "unlock",
+    "empower",
+    "cutting-edge",
+    "cutting edge",
+    "fast-paced",
+    "in today's",
+    "look no further",
+    "excited to share",
+    "thrilled",
+)
+
+#: Banned in the prompt only: "leverage" is also an ordinary noun ("negotiating leverage"), so a
+#: check on it would cost a regeneration on honest copy.
+PROMPT_ONLY_BANNED = ("leverage",)
+
+
+def banned_phrases_rule() -> str:
+    quoted = ", ".join(f"'{p}'" for p in (*BANNED_PHRASES, *PROMPT_ONLY_BANNED))
+    return f"Never write any of these: {quoted}."
+
+
+#: How a post, a talk or an article of theirs may be used, in the email rules and in the person
+#: brief alike. `brief.py` used to tell the call script "in their own words" while `SIGNAL_RULE`
+#: said never quote it, and a model given both followed whichever it read last.
+ACTIVITY_RULE = (
+    "Reference the idea, never the quote: say in your own words what their post or article was "
+    "about, and never repeat its wording back to them."
+)
+
+#: Size and revenue are for register, never for the page (content writers, 2026-10-29).
+#: `account_facts` gives the band so a draft to a 40-person firm reads differently from one to a
+#: 6,000-person one; "as a 50-200 employee company" in the email reads as a database lookup, and a
+#: revenue band is the least reliable figure any provider sells. Checked by `check_draft`.
+FIRMOGRAPHICS_RULE = (
+    "Never mention their headcount, company size, size band or revenue: those set how you write, "
+    "they are not something to say."
 )
 
 #: The shape of the body itself.
@@ -150,23 +224,33 @@ SUBJECT_RULE = (
 #: The sign-off is the NAME ONLY: the rep's signature block (title, company, phone) is appended by
 #: `nexus/outreach/signature.py` at send time, and a model inventing one would put a made-up title
 #: and number under a real person's name.
+#:
+#: Two parts added 2026-10-29 from the content writers:
+#: * **What we do.** The model was given the value prop's name and the pains it removes and never
+#:   asked what the product IS, so drafts described a problem and never said what was on offer. A
+#:   buyer cannot say yes to something unnamed; the value prop's description now reaches the prompt
+#:   and this rule asks for one plain sentence of it.
+#: * **The problem as a pattern, not a claim about them.** "Your team is struggling with X" is a
+#:   claim nobody in the context can support, and the pressure to write one is what produces an
+#:   invented fact. What teams in their situation usually find is true by construction.
 STRUCTURE_RULE = (
     "Lay the body out as short paragraphs of one or two sentences, separated by one blank line: "
-    "a greeting line addressing the recipient by first name ('Hi Sam,'); the reason you are "
-    "writing now; the problem that creates for someone in their role, stated as an observation, "
-    "and what we remove; one line of proof only if the context names a real customer result; the "
-    "ask, on its own line; then a sign-off line ('Best,') with your first name on the line below "
-    "it. Do not write a title, company, phone number or any other signature detail under the "
-    "sign-off — that is added automatically. Plain text only: no bullet points, bold, headings, "
-    "emoji or em dashes, and at most one link, only if the context gives it."
+    "a greeting line that addresses the recipient by first name; the reason you are writing now; "
+    "the problem that kind of moment usually creates for teams like theirs, stated as a pattern "
+    "you have seen rather than as a fact about them; one plain sentence saying what we do, in the "
+    "words a buyer would use; one line of proof only if the context names a real customer "
+    "result; the ask, on its own line; then a one-word sign-off line with your first name on the "
+    "line below it. Do not write a title, company, phone number or any other signature detail "
+    "under the sign-off; that is added automatically. Plain text only: no bullet points, bold, "
+    "headings, emoji or em dashes, and at most one link, only if the context gives it."
 )
 
 #: One signal, used rather than recited. Three signals in one email reads as a dossier, and quoting
 #: someone's post back to them reads as surveillance; the playbook's line is "reference the idea".
 SIGNAL_RULE = (
-    "Use ONE signal: the single fact that best explains why you are writing now, and connect it "
-    "to the problem we solve. Say what it means for them rather than reciting it, and never quote "
-    "their post or article back to them. Do not pretend to know them, and do not compliment them."
+    "Use ONE signal: the trigger named above, which explains why you are writing now, and "
+    "connect it to the problem we solve. Say what it means for them rather than reciting it. "
+    f"{ACTIVITY_RULE} Do not pretend to know them, and do not compliment them."
 )
 
 #: The ask in an email nobody has answered yet: one interest question, NOT a meeting.
@@ -176,12 +260,14 @@ SIGNAL_RULE = (
 #: request in a cold email: a stranger can say yes to a question in one word, and a calendar ask
 #: wants half an hour before they know why. What survives from the old rule is its reason: do not
 #: make the reader judge whether something is "valuable".
+#:
+#: It quoted two example questions until 2026-10-29, and those two questions closed most drafts
+#: (see `SUBJECT_RULE`). The form is described; `shape_for` picks one of a few per contact.
 EMAIL_CTA_RULE = (
-    "End with ONE short, interest-based question they can answer in a word, such as 'Worth a "
-    "look?' or 'Open to seeing how?'. Do not ask for a meeting, call or demo, and do not name a "
-    "duration, a day or a time: that comes after they reply. Do not offer to send anything the "
-    "context does not mention, and do not ask whether something would be 'valuable', 'helpful' "
-    "or 'of interest'."
+    "End with ONE short, interest-based question of a few words that they can answer yes or no. "
+    "Do not ask for a meeting, call or demo, and do not name a duration, a day or a time: that "
+    "comes after they reply. Do not offer to send anything the context does not mention, and do "
+    "not ask whether something would be 'valuable', 'helpful' or 'of interest'."
 )
 
 #: The ask for a workspace that chose "a short meeting" for its first emails (Settings → Email style,
@@ -244,14 +330,129 @@ AUTO_REPLY_CTA_RULE = (
 )
 
 
+# ---------------------------------------------------------------------------------------------
+# A seeded shape per contact (content writers, 2026-10-29).
+#
+# One rule set produces one email: the same opening move, the same ask, the same kind of subject,
+# for every buyer of every customer, which is what buyers and spam filters learn to recognise. The
+# contact's id picks one of a few DESCRIBED styles for each part: stable for that person (a
+# regenerated draft keeps its shape, so a rep comparing two attempts compares content), varied
+# across a list. A digest, not Python's `hash()`, which changes between processes.
+
+OPENER_STYLES = {
+    "trigger": "After the greeting, open on the trigger itself, in one short plain sentence.",
+    "question": "After the greeting, open with the one question that kind of trigger usually "
+                "raises for someone in their role.",
+    "pattern": "After the greeting, open on what that kind of trigger usually changes for teams "
+               "like theirs.",
+}
+ASK_STYLES = {
+    "look": "Phrase the ask as whether it is worth a short look, in five words or fewer.",
+    "priority": "Phrase the ask as whether this is on their list for this quarter, in eight "
+                "words or fewer.",
+    "how": "Phrase the ask as whether they would like to see how it works, in six words or fewer.",
+}
+SUBJECT_STYLES = {
+    "trigger": "Let the subject name the trigger.",
+    "problem": "Let the subject name the problem.",
+    "team": "Let the subject name their team or function and the topic.",
+}
+
+
+def shape_for(seed: str | None) -> dict:
+    """The opener, ask and subject style for one contact: ``{"opener", "ask", "subject"}``."""
+    import hashlib
+
+    digest = int(hashlib.sha256(str(seed or "").encode("utf-8")).hexdigest(), 16)
+    openers, asks, subjects = list(OPENER_STYLES), list(ASK_STYLES), list(SUBJECT_STYLES)
+    return {
+        "opener": openers[digest % len(openers)],
+        "ask": asks[(digest // len(openers)) % len(asks)],
+        "subject": subjects[(digest // (len(openers) * len(asks))) % len(subjects)],
+    }
+
+
+def shape_label(shape: dict | None) -> str:
+    """How the shape is logged on the message (`draft_facts`, kind ``shape``)."""
+    shape = shape or {}
+    return (f"Shape: opener {shape.get('opener', '?')}, ask {shape.get('ask', '?')}, "
+            f"subject {shape.get('subject', '?')}")
+
+
+def _shape_rules(shape: dict | None, touch: str, first_ask: str) -> str:
+    """The parts of the shape this touch uses. The opener and subject belong to a first email (a
+    follow-up's opening is its own instruction, its subject the thread's); the ask style to any
+    email nobody has answered, unless the workspace chose to ask for a meeting."""
+    if not shape:
+        return ""
+    parts = []
+    if touch not in THREADED_TOUCHES and touch not in WARM_TOUCHES:
+        parts += [OPENER_STYLES.get(shape.get("opener"), ""),
+                  SUBJECT_STYLES.get(shape.get("subject"), "")]
+    if touch not in WARM_TOUCHES and first_ask != "meeting":
+        parts.append(ASK_STYLES.get(shape.get("ask"), ""))
+    return " ".join(p for p in parts if p)
+
+
+# ---------------------------------------------------------------------------------------------
+# An optional P.S. a person confirms (content writers, 2026-10-29; off by default,
+# `email_style.ps_line_on`).
+#
+# A P.S. is the most-read line of a cold email after the subject, which is exactly why it must be
+# true: it is written as a separate field, never into the body, shown on Review with "I confirm
+# this is true", and added below the signature only when the rep ticks it. Never on an automatic
+# follow-up or reply, because nothing can know a human read it.
+
+PS_PREFIX = "P.S."
+
+PS_RULE = (
+    "After your first name, you may add one optional line starting 'P.S.' that restates one "
+    "specific fact from the context above (a signal, something they posted, a real customer "
+    "result) in one short sentence. Only a fact given above; if none fits, leave the P.S. out."
+)
+
+#: A trailing P.S. paragraph: "P.S." or "PS", with or without a colon, at the start of a line.
+_PS_LINE = re.compile(r"(?im)^\s*p\.?\s?s\.?\s*[:\-]?\s+(?=\S)")
+
+
+def split_ps(text: str) -> tuple[str, str]:
+    """``(body, ps)``: a P.S. at the end of the text, taken off it. ``ps`` is "" when there is none.
+
+    Every draft goes through this, whether a P.S. was asked for or not: a P.S. a model added on its
+    own would otherwise sit in the body and be sent without anyone confirming it."""
+    text = (text or "").replace("\r\n", "\n")
+    matches = list(_PS_LINE.finditer(text))
+    if not matches:
+        return text, ""
+    last = matches[-1]
+    # Its own paragraph only: a model that put the P.S. above the sign-off keeps its sign-off.
+    ps, _, after = text[last.end():].partition("\n\n")
+    body = text[: last.start()].rstrip()
+    if after.strip():
+        body = f"{body}\n\n{after.strip()}"
+    return body, " ".join(ps.split())
+
+
+def with_ps(body: str, ps: str) -> str:
+    """The body with a confirmed P.S. as its last paragraph. The send path moves it below the
+    signature (`engagement/sending/mime.compose_message_text`)."""
+    ps = " ".join((ps or "").split())
+    body = (body or "").rstrip()
+    return f"{body}\n\n{PS_PREFIX} {ps}" if ps else body
+
+
 def email_rules(touch: str = "first", *, first_ask: str = "interest",
-                word_cap: int | None = None, automatic: bool = False) -> str:
+                word_cap: int | None = None, automatic: bool = False,
+                shape: dict | None = None, ps: bool = False) -> str:
     """The rules for one email. ``touch`` is the engagement kind (`first`, `followup`, `signal`,
     `reengage`, `response`); anything else is read as a first email, which is what every caller
     outside the engagement engine (the composer, plays, the orchestrator) is writing.
 
     ``first_ask`` and ``word_cap`` are the workspace's own choices (`email_style.draft_options`).
-    Their defaults are the playbook's, so a workspace that set neither is unchanged."""
+    Their defaults are the playbook's, so a workspace that set neither is unchanged.
+
+    ``shape`` is this contact's seeded style (`shape_for`); ``ps`` asks for the optional P.S.,
+    which only a first email a person reviews may carry (`PS_RULE`)."""
     warm = touch in WARM_TOUCHES
     cap = word_cap or EMAIL_WORD_CAP
     if warm:
@@ -260,6 +461,8 @@ def email_rules(touch: str = "first", *, first_ask: str = "interest",
         ask = MEETING_CTA_RULE
     else:
         ask = EMAIL_CTA_RULE
+    styled = _shape_rules(shape, touch, first_ask)
+    with_ps_rule = ps and touch == "first" and not automatic
     return (
         f"Rules: Under {cap} words; a follow-up can be much shorter. Short sentences. "
         f"{STRUCTURE_RULE} "
@@ -267,11 +470,12 @@ def email_rules(touch: str = "first", *, first_ask: str = "interest",
         f"{'' if warm else SIGNAL_RULE + ' '}"
         "Never open with a pitch or with our company. "
         f"{TONE_RULE} "
-        "Do not write 'hope this finds you well', 'I wanted to reach out', 'circling back', "
-        "'just following up', 'just bumping', 'just checking in', 'synergy', 'leverage', "
-        "'game-changer', or 'revolutionary'. "
+        f"{banned_phrases_rule()} "
+        f"{FIRMOGRAPHICS_RULE} "
         "No more than one question. "
         f"{ask} "
+        f"{styled + ' ' if styled else ''}"
+        f"{PS_RULE + ' ' if with_ps_rule else ''}"
         "Use only facts given above — if a detail is missing, leave it out rather than inventing "
         "it. Never state a metric, customer name or case study that is not in the context."
     )
@@ -279,14 +483,71 @@ def email_rules(touch: str = "first", *, first_ask: str = "interest",
 
 EMAIL_RULES = email_rules()
 
+# ---- the call script, written for the ear (content writers, 2026-10-29) -------------------------
+#
+# A talk track is heard once, at speaking pace, by someone who did not expect the call. So the
+# opener is short and asks permission (a person who agreed to thirty seconds listens; one who was
+# ambushed waits for a gap to hang up), the voicemail fits the time people actually listen, and the
+# first three things a buyer says (who is this, send me an email, I'm busy) each have an answer that
+# names a real problem we remove. `email_quality.check_call_script` checks the parts a rep can point
+# at, and the agent regenerates once.
+
+#: About ten seconds spoken: past this a buyer has stopped listening to the opener.
+CALL_OPENER_WORDS = 30
+#: About twenty-five seconds: the length of voicemail people listen to the end of.
+CALL_VOICEMAIL_WORDS = 55
+
+#: Stock call lines, banned on top of `BANNED_PHRASES`: each one invites "no" or sounds read.
+CALL_BANNED_PHRASES = (
+    "how are you today",
+    "how are you doing today",
+    "did i catch you at a bad time",
+    "is this a bad time",
+    "i hope i'm not bothering you",
+)
+
+#: The three reactions every cold call meets first, in the order a buyer says them.
+FIRST_REACTIONS = ("Who is this?", "Just send me an email.", "I'm busy.")
+
 CALL_RULES = (
     "Rules: written to be SPOKEN, not read. Short sentences a person can say without pausing. "
     "No jargon, no buzzwords, no bullet-point phrasing. "
     f"{TONE_RULE} "
+    f"The `opener` field asks permission: your name and company, that this is a cold call in "
+    f"plain words, and a request for thirty seconds to say why you called, as a question; under "
+    f"{CALL_OPENER_WORDS} words. "
+    "The `hook` states the problem as a pattern teams in their situation usually hit, never as a "
+    "fact about them. "
+    "The `first_reactions` field answers exactly these three first reactions, in this order: "
+    + "; ".join(f"'{r}'" for r in FIRST_REACTIONS) + ". Each answer is one or two sentences "
+    "that come back to one of the problems we remove, named above. "
+    f"The `voicemail`: under {CALL_VOICEMAIL_WORDS} words, your name and company, the one reason "
+    "you called, and that you will follow up by email. "
     f"The `cta` field: {CALL_CTA_RULE} "
+    f"{ACTIVITY_RULE} {FIRMOGRAPHICS_RULE} "
+    "Never write a placeholder such as a bracketed name or company: use the names given above, "
+    "or leave the detail out. "
+    + "Never say any of these: "
+    + ", ".join(f"'{p}'" for p in (*CALL_BANNED_PHRASES, *BANNED_PHRASES)) + ". "
     "Use only facts given above — if a detail is missing, leave it out rather than inventing it. "
     "Never state a metric, customer name or case study that is not in the context."
 )
+
+
+def caller_block(name: str, company: str) -> str:
+    """Who is calling, for the call script prompt (the email's `sender_block`, spoken). Without it
+    the model wrote "this is <your name> from <your company>" and the rep read the brackets out
+    or stopped to edit them mid-dial. Empty when neither is known."""
+    name = " ".join((name or "").split())
+    company = " ".join((company or "").split())
+    if not name and not company:
+        return ""
+    lines = ["YOU (THE CALLER)"]
+    if name:
+        lines.append(f"- Name: {name}. Introduce yourself by your first name, {name.split()[0]}.")
+    if company:
+        lines.append(f"- Company: {company}")
+    return "\n".join(lines) + "\n"
 
 
 def _downcase_lead(text: str) -> str:
@@ -392,13 +653,15 @@ def account_facts(account, icp: dict | None = None) -> str:
     if industry and not looks_stamped(account, "industry", icp):
         lines.append(f"Industry: {industry}")
 
+    # Labelled as register, never content (`FIRMOGRAPHICS_RULE`): the band was quoted back in
+    # drafts ("as a 50-200 employee company"), which reads as a lookup. Checked by `check_draft`.
     band = _employee_band(getattr(account, "employee_count", None))
     if band:
-        lines.append(f"Size: {band}")
+        lines.append(f"Size (sets your register; never mention it): {band}")
 
     revenue = _revenue_band(getattr(account, "annual_revenue", None))
     if revenue:
-        lines.append(f"Scale: {revenue}")
+        lines.append(f"Scale (sets your register; never mention it): {revenue}")
 
     # Region before country: "California" tells a rep more than "United States", and both together
     # read as a database dump.
@@ -525,12 +788,61 @@ def signal_facts(signals, *, limit: int = MAX_SIGNALS_IN_PROMPT) -> str:
     return "\n".join(lines)
 
 
-def select_value_prop(value_props: list[dict] | None, signals) -> dict:
+def pick_anchor(signals, contact=None):
+    """The ONE signal a draft is about, picked once (content writers, 2026-10-29).
+
+    It used to be picked three times: the hook preferred a signal tied to the person, the value prop
+    was scored against every signal at once, and `trigger_signal_id` logged the strongest account
+    signal, so one email could open on a funding round, pitch the hiring value prop and record a
+    third event as its reason. Now the anchor drives all three. A signal about this person wins
+    (it is the most specific thing we know), else the strongest; ties keep the newest, which is the
+    order signals are loaded in. None when there are no signals."""
+    pool = [s for s in (signals or []) if getattr(s, "title", None)]
+    if not pool:
+        return None
+    contact_id = getattr(contact, "id", None)
+    personal = [s for s in pool if contact_id and getattr(s, "contact_id", None) == contact_id]
+    return max(personal or pool, key=lambda s: getattr(s, "strength", 0.0) or 0.0)
+
+
+#: What each signal kind is usually about, so a value prop can match the KIND of trigger and not
+#: only the words of one headline (a funding headline names investors, not the growth it pays for).
+_KIND_WORDS = {
+    "funding": "funding raised round investors growth scaling expansion capital budget",
+    "hiring": "hiring hires recruiting headcount onboarding ramping growing",
+    "job_posting": "hiring hires recruiting headcount onboarding ramping growing",
+    "job_switch": "leader leadership change priorities transition",
+    "tech_install": "stack tooling integration migration adoption platform",
+    "website_change": "pricing positioning launch strategy",
+    "g2_intent": "evaluating comparing vendors alternatives switching",
+    "web_visit": "evaluating interest",
+    "product_usage": "usage adoption limits",
+}
+
+#: Five-letter-or-longer words that appear in any value prop or headline and so match everything.
+_VP_STOPWORDS = frozenset("""
+about after again their there these those which while where would could should every other
+teams company companies business businesses platform solution solutions product products customer
+customers using without through across faster better easier simple simply quickly within before
+""".split())
+
+
+def _stems(text: str) -> set[str]:
+    words = (w.strip(".,;:()-'\"!?") for w in (text or "").lower().split())
+    return {w[:5] for w in words if len(w) > 4 and w not in _VP_STOPWORDS}
+
+
+def select_value_prop(value_props: list[dict] | None, signals, *, role: str = "") -> dict:
     """Pick the value prop that best matches what actually triggered the outreach.
 
     Pitching ``value_props[0]`` at every account regardless of the trigger IS the mail-merge
     failure -- a hiring signal should pull the value prop about ramping new hires, not whichever
     one happens to be first in the list.
+
+    ``signals`` is the anchor (`pick_anchor`) as a one-item list; the score reads its title, body
+    and what its KIND is usually about (`_KIND_WORDS`). ``role`` is the person's function words
+    (`personalization.brief.role_words`), a tie-breaker that also answers when the trigger matches
+    nothing, so fewer drafts fall back silently to the first value prop.
 
     Deterministic word overlap, not an LLM call: this runs on the copy path where an extra
     completion is latency and cost, and a rep asking "why did it pitch this?" deserves an answer.
@@ -543,29 +855,99 @@ def select_value_prop(value_props: list[dict] | None, signals) -> dict:
     if len(props) == 1:
         return props[0]
 
-    haystack = " ".join(
-        f"{getattr(s, 'title', '') or ''} {getattr(s, 'body', '') or ''}"
+    trigger = " ".join(
+        f"{getattr(s, 'title', '') or ''} {getattr(s, 'body', '') or ''} "
+        f"{_KIND_WORDS.get(getattr(s, 'kind', '') or '', '')}"
         for s in (signals or [])
-    ).lower()
-    if not haystack.strip():
+    )
+    # PREFIX match on a 5-character stem, not whole words. Measured: a hiring signal reading
+    # "hiring 12 engineers" scored ZERO against a value prop whose pain was "slow ramp for new
+    # engineering hires", because `engineers` != `engineering`. Exact matching fails on precisely
+    # the inflections GTM copy is written in.
+    hay, role_stems = _stems(trigger), _stems(role)
+    if not hay and not role_stems:
         return props[0]
 
     def score(vp: dict) -> int:
-        text = " ".join([
+        stems = _stems(" ".join([
             str(vp.get("name") or ""),
             str(vp.get("description") or ""),
             " ".join(str(p) for p in (vp.get("pains_solved") or [])),
-        ]).lower()
-        # Words shorter than five characters are almost all stopwords here ("the", "with", "for",
-        # "new"), and they match everything -- which would make the score meaningless.
-        # PREFIX match on a 5-character stem, not whole words. Measured while writing this: a
-        # hiring signal reading "hiring 12 engineers" scored ZERO against a value prop whose pain
-        # was "slow ramp for new engineering hires", because `engineers` != `engineering`. Exact
-        # matching fails on precisely the inflections GTM copy is written in, and the fallback then
-        # silently returns value_props[0] -- the mail-merge behaviour this function exists to end.
-        stems = {w.strip(".,;:()-")[:5] for w in text.split() if len(w.strip(".,;:()-")) > 4}
-        hay_stems = {w.strip(".,;:()-")[:5] for w in haystack.split() if len(w.strip(".,;:()-")) > 4}
-        return len(stems & hay_stems)
+        ]))
+        # The trigger counts double: it is why we are writing; the role is who we write to.
+        return 2 * len(stems & hay) + len(stems & role_stems)
 
     best = max(props, key=score)
     return best if score(best) > 0 else props[0]
+
+
+def product_line(vp: dict | None) -> str:
+    """What we do, from the value prop's description, for the one plain sentence the structure
+    rule asks for. "" when the value prop carries no description (the system message still has the
+    product context)."""
+    description = " ".join(str((vp or {}).get("description") or "").split())
+    return description[:300]
+
+
+# ---- what we already fetched about the account (content writers, 2026-10-29) --------------------
+#
+# The scoring agent's fit reasons and the research agent's highlights were computed, stored and
+# never shown to the writer. Both are capped (three lines between them) and filtered to text a
+# person could use: a fit reason is machine phrasing ("industry 'SaaS' is in ICP") and some carry a
+# raw headcount or revenue, which `FIRMOGRAPHICS_RULE` keeps out of an email; a research line can
+# be a raw search snippet, cut mid-word or a URL.
+
+MAX_EXTRA_FACT_LINES = 3
+
+
+def fit_lines(fit) -> list[str]:
+    """The ICP fit reasons worth telling the writer, as plain sentences. Negative and unknown
+    reasons, and any carrying a headcount or revenue figure, are left out."""
+    out: list[str] = []
+    for reason in (getattr(fit, "reasons", None) or []):
+        text = str(reason or "").strip()
+        lowered = text.lower()
+        if not text or "not in" in lowered or "unknown" in lowered or "without" in lowered:
+            continue
+        if lowered.startswith(("headcount", "revenue", "postal")):
+            continue
+        match = re.match(r"industry '(.+)' (?:is in|matches)", text)
+        if match:
+            out.append(f"Their industry, {match.group(1)}, is one we sell to.")
+            continue
+        match = re.match(r"(?:geo|region) '(.+)' in ICP", text)
+        if match:
+            out.append(f"They are in {match.group(1)}, a market we sell to.")
+            continue
+        if lowered.startswith("uses "):
+            # Only what the reason says: the ICP names these tools. Not "our customers run them",
+            # which nothing in the context supports.
+            out.append(f"They use {text[5:]}, tools our ideal customer profile names.")
+    return out
+
+
+def research_lines(facts) -> list[str]:
+    """Research highlights a writer could use: a sentence of 6 to 40 words, not a URL, not a snippet
+    cut off mid-thought, not a "no facts" placeholder."""
+    out: list[str] = []
+    for fact in (facts or []):
+        text = " ".join(str(fact or "").split())
+        words = text.split()
+        if not 6 <= len(words) <= 40:
+            continue
+        if "http://" in text or "https://" in text or "www." in text:
+            continue
+        if text.endswith(("...", "…")) or text.lower().startswith(("no external", "no facts")):
+            continue
+        out.append(text)
+    return out
+
+
+def extra_fact_lines(*, research=None, fit=None) -> str:
+    """At most `MAX_EXTRA_FACT_LINES`, research first (more specific), as a prompt block."""
+    lines = research_lines(research)[:MAX_EXTRA_FACT_LINES]
+    lines += fit_lines(fit)[: MAX_EXTRA_FACT_LINES - len(lines)]
+    if not lines:
+        return ""
+    return "MORE WE KNOW (use one only if it sharpens the email):\n" + "\n".join(
+        f"- {line}" for line in lines)

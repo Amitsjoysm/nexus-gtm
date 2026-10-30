@@ -1603,7 +1603,10 @@ export class ApiClient {
   campaignReview(id: string, signal?: AbortSignal) {
     return this.request<ReviewItem[]>(`/engagement/campaigns/${id}/review`, { signal });
   }
-  approveCampaignMessage(messageId: string, body: { subject?: string; body?: string } = {}) {
+  approveCampaignMessage(
+    messageId: string,
+    body: { subject?: string; body?: string; confirm_ps?: boolean } = {},
+  ) {
     return this.request<null>(`/engagement/messages/${messageId}/approve`, {
       method: "POST", body,
     });

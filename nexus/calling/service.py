@@ -182,9 +182,12 @@ class CallQueueService:
         if not refresh and cached and _written_today(cached.get("generated_at"), utcnow()):
             return cached
 
+        # The caller the task belongs to, so the script introduces a real person rather than
+        # "<your name>" (`call_script._caller`).
         result = await get_agent_runtime().run(
             "call_script", ts, account_id=task.account_id,
             contact_id=task.contact_id, persist=False,
+            caller_user_id=getattr(task, "owner_user_id", None),
         )
         script = dict((result.output or {}).get("script") or {})
         if script:

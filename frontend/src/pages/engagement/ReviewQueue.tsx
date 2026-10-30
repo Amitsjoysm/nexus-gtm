@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
-  Badge, Button, EmptyState, ErrorState, Field, Icons, Input, Skeleton, Textarea, WorkingIndicator,
+  Badge, Button, Checkbox, EmptyState, ErrorState, Field, Icons, Input, Skeleton, Textarea,
+  WorkingIndicator,
 } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import { useApi } from "@/hooks/useApi";
@@ -176,6 +177,11 @@ function ReviewCard({ item, insight, onChanged }: {
   const status = STATUS[item.status] ?? { label: item.status, tone: "neutral" as const };
   const editable = item.status === "draft" && item.message_id !== null;
   const edited = subject !== item.subject || body !== item.body;
+  // The optional P.S. travels beside the draft, never in it; it joins the email only when the rep
+  // ticks that it is true. The shape is logged on the message and is not a fact the draft rests on.
+  const ps = item.draft_facts?.find((f) => f.kind === "ps")?.label ?? "";
+  const builtOn = (item.draft_facts ?? []).filter((f) => f.kind !== "ps" && f.kind !== "shape");
+  const [psConfirmed, setPsConfirmed] = useState(false);
 
   async function run(kind: NonNullable<typeof busy>, action: () => Promise<unknown>, done?: string) {
     setBusy(kind);
@@ -218,11 +224,11 @@ function ReviewCard({ item, insight, onChanged }: {
       )}
 
       {/* What the draft rests on, so a rep can check a claim before approving it (D8). */}
-      {item.status === "draft" && (item.draft_facts?.length ?? 0) > 0 && (
+      {item.status === "draft" && builtOn.length > 0 && (
         <div className={styles.draftFacts}>
           <span className={styles.draftFactsLabel}>Built on</span>
           <ul aria-label="What this draft was given to rest on">
-            {item.draft_facts!.map((f) => (
+            {builtOn.map((f) => (
               <li key={`${f.kind}-${f.label}`}>
                 {f.label}
                 {f.url && (
@@ -251,6 +257,24 @@ function ReviewCard({ item, insight, onChanged }: {
           <Field label="Email">
             <Textarea rows={9} value={body} onChange={(e) => setBody(e.target.value)} />
           </Field>
+          {ps && (
+            <div className={styles.ps}>
+              <p className={styles.psText}>
+                <span className={styles.psLabel}>P.S.</span> {ps}
+              </p>
+              <label className={styles.psConfirm}>
+                <Checkbox
+                  label="I confirm this P.S. is true"
+                  checked={psConfirmed}
+                  onChange={(e) => setPsConfirmed(e.target.checked)}
+                />
+                <span>
+                  I confirm this is true
+                  <span className={styles.psHint}>Unticked, the email goes without the P.S.</span>
+                </span>
+              </label>
+            </div>
+          )}
         </div>
       ) : (
         <div className={styles.draftRead}>
@@ -265,7 +289,10 @@ function ReviewCard({ item, insight, onChanged }: {
             loading={busy === "approve"} disabled={busy !== null || !body.trim()}
             iconLeft={<Icons.CheckIcon />}
             onClick={() => run("approve", () => api.approveCampaignMessage(
-              item.message_id as string, edited ? { subject, body } : {}), edited ? "Approved with your edits" : "Approved")}
+              item.message_id as string, {
+                ...(edited ? { subject, body } : {}),
+                ...(ps && psConfirmed ? { confirm_ps: true } : {}),
+              }), edited ? "Approved with your edits" : "Approved")}
           >
             {edited ? "Approve with edits" : "Approve"}
           </Button>
@@ -277,6 +304,8 @@ function ReviewCard({ item, insight, onChanged }: {
               const fresh = await api.regenerateCampaignMessage(item.message_id as string);
               setSubject(fresh.subject);
               setBody(fresh.body);
+              // A new draft brings a new P.S.: the tick was for the old one.
+              setPsConfirmed(false);
             })}
           >
             Regenerate
