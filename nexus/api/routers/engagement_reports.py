@@ -57,6 +57,16 @@ class TodayItemOut(BaseModel):
     link: str
     at: datetime | None
     count: int
+    # The Inbox's task list (SDR round 2): its section, today or overdue, the one action that clears
+    # it, and who it is about, so a row opens the person and the account in place.
+    section: str = ""
+    due: str = "today"
+    action: str = ""
+    ref_id: str | None = None
+    contact_id: str | None = None
+    account_id: str | None = None
+    contact_name: str = ""
+    account_name: str = ""
 
 
 @router.get("/reports/campaigns/{campaign_id}", response_model=CampaignReportOut)

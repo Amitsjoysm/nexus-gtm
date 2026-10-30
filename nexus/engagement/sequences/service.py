@@ -13,8 +13,15 @@ The state machine an enrollment walks, and who moves it:
 Every transition goes through `set_status`, which records the ledger event for it, so "why did this
 person stop receiving email" has one answer and one place it is written.
 
-A first email is the step-0 outbound message row with status `draft`, then `approved`; `sending`
-adopts that row when the step is due, so the text the SDR approved is exactly the text that is sent.
+A first email is the opening email step's outbound message row with status `draft`, then
+`approved`; `sending` adopts that row when the step is due, so the text the SDR approved is exactly
+the text that is sent.
+
+**The opening email is the first EMAIL step, wherever it sits** (SDR round 2, W3.1, 2026-10-29).
+A call may be any step, the first included, so "step 0" and "the opening email" are no longer the
+same thing; `opener_index` is the one place that says which step it is. A campaign that opens with a
+call still has each person's opening email drafted and approved before anything starts, so approval
+stays the moment a person enters the sequence (D4), and the call is created the moment they do.
 """
 from __future__ import annotations
 
@@ -68,8 +75,6 @@ def validate_steps(specs: list[dict]) -> list[dict]:
         channel = (spec.get("channel") or "email").strip()
         if channel not in ("email", "call"):
             raise CampaignError(f"Step {index + 1}: channel must be email or call.")
-        if index == 0 and channel != "email":
-            raise CampaignError("The first step must be an email.")
         mode = (spec.get("timing_mode") or "auto").strip()
         if mode not in TIMING_MODES:
             raise CampaignError(f"Step {index + 1}: timing must be auto or manual.")
@@ -85,7 +90,22 @@ def validate_steps(specs: list[dict]) -> list[dict]:
                       "timing_mode": mode, "delay_business_days": 0 if index == 0 else delay,
                       "send_time_local": clock if mode == "manual" else None,
                       "allowed_weekdays": weekdays})
+    if opener_index(clean) is None:
+        # Everyone in a campaign is reviewed through their opening email before it starts (D4),
+        # and the campaign sends from a mailbox; a list of calls alone is the call queue's job.
+        raise CampaignError("A campaign needs at least one email step.")
     return clean
+
+
+def opener_index(steps) -> int | None:
+    """The opening email's step: the first email step, wherever it sits. ``steps`` are rows or
+    specs in step order; `None` when there is no email step at all."""
+    for position, step in enumerate(steps):
+        channel = step.get("channel") if isinstance(step, dict) else getattr(step, "channel", "")
+        if (channel or "email") == "email":
+            return int(getattr(step, "step_index", position)) if not isinstance(step, dict) \
+                else position
+    return None
 
 
 async def create_campaign(ts, *, name: str, owner_user_id: str, mailbox_id: str,
@@ -293,7 +313,10 @@ async def set_status(ts, enrollment, status: str, reason: str | None = None, *,
 
 async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
                              limit: int | None = None, only: set[str] | None = None) -> dict:
-    """Draft every step-0 email that has no draft yet. Idempotent: a second run drafts nothing.
+    """Draft every opening email that has no draft yet. Idempotent: a second run drafts nothing.
+
+    The opening email is the first email step (`opener_index`), so a campaign that opens with a
+    call drafts the email that comes after it, and its row carries that step's index.
 
     ``only`` limits it to those enrollments: a referral adds one person to a running campaign and
     must not pay to draft anyone else who happens to be waiting."""
@@ -312,6 +335,9 @@ async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
         # Every campaign is created with a step, but a hand-built or migrated one may have none,
         # and an opening email has nothing to be written from.
         raise CampaignError("This campaign has no steps yet. Add one before drafting.")
+    opener = opener_index(steps)
+    if opener is None:
+        raise CampaignError("This campaign has no email step to open with. Add one before drafting.")
     mailbox = await ts.get(MailboxConnection, campaign.mailbox_connection_id)
     pending = await ts.list(EngagementEnrollment, EngagementEnrollment.campaign_id == campaign.id,
                             EngagementEnrollment.status == "awaiting_review")
@@ -321,7 +347,7 @@ async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
         select(EngagementMessage.enrollment_id)
         .where(EngagementMessage.tenant_id == ts.tenant_id,
                EngagementMessage.enrollment_id.in_([e.id for e in pending]),
-               EngagementMessage.step_index == 0, EngagementMessage.direction == "out")
+               EngagementMessage.step_index == opener, EngagementMessage.direction == "out")
     )).all()) if pending else set()
     drafted = failed = 0
     errors: list[dict] = []
@@ -336,7 +362,7 @@ async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
         contact = await ts.get(Contact, enrollment.contact_id)
         account = await ts.get(Account, enrollment.account_id)
         result = await draft(ts, enrollment=enrollment, contact=contact, account=account,
-                             mailbox=mailbox, step=steps[0], kind="first", user_id=user_id)
+                             mailbox=mailbox, step=steps[opener], kind="first", user_id=user_id)
         if not result.ok:
             failed += 1
             errors.append({"contact_id": contact.id, "error": result.error})
@@ -345,7 +371,7 @@ async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
             continue
         row = EngagementMessage(
             mailbox_connection_id=mailbox.id, enrollment_id=enrollment.id, contact_id=contact.id,
-            direction="out", kind="step", status="draft", step_index=0,
+            direction="out", kind="step", status="draft", step_index=opener,
             from_addr=mailbox.email, to_addrs=[contact.email], subject=result.subject,
             body_text=result.body, ai_subject=result.subject, ai_body=result.body,
             quality_problems=result.problems, draft_facts=result.sources)
@@ -360,20 +386,33 @@ async def draft_first_emails(ts, campaign, *, user_id: str | None = None,
 
 
 async def first_draft(ts, enrollment):
-    from nexus.models.engagement import EngagementMessage
+    from nexus.models.engagement import EngagementCampaign, EngagementMessage
 
+    campaign = await ts.get(EngagementCampaign, enrollment.campaign_id)
+    opener = opener_index(await steps_of(ts, campaign)) if campaign is not None else None
     return await ts.first(EngagementMessage, EngagementMessage.enrollment_id == enrollment.id,
-                          EngagementMessage.step_index == 0,
+                          EngagementMessage.step_index == (opener or 0),
                           EngagementMessage.direction == "out")
 
 
 async def current_messages(ts, enrollments) -> dict:
-    """``{enrollment_id: outbound row at the step it is on}``, in one read for any number."""
-    from nexus.models.engagement import EngagementMessage
+    """``{enrollment_id: outbound row at the email it is on}``, in two reads for any number.
+
+    The email it is on is the step it is on, or for someone on a call step, the next email: before
+    launch, a campaign that opens with a call has everyone at step 0 and their opening email, the
+    row Review shows and launch approves, at the first email step."""
+    from nexus.models.engagement import EngagementMessage, EngagementStep
 
     if not enrollments:
         return {}
-    step_of = {e.id: e.current_step_index for e in enrollments}
+    email_at: dict[str, list[int]] = {}
+    for step in await ts.list(EngagementStep, EngagementStep.campaign_id.in_(
+            {e.campaign_id for e in enrollments})):
+        if step.channel == "email":
+            email_at.setdefault(step.campaign_id, []).append(step.step_index)
+    step_of = {e.id: next((i for i in sorted(email_at.get(e.campaign_id, []))
+                           if i >= e.current_step_index), e.current_step_index)
+               for e in enrollments}
     out: dict = {}
     for row in await ts.list(EngagementMessage, EngagementMessage.enrollment_id.in_(list(step_of)),
                              EngagementMessage.direction == "out"):
@@ -448,12 +487,13 @@ async def regenerate(ts, message, *, user_id: str | None = None):
     enrollment = await ts.get(EngagementEnrollment, message.enrollment_id)
     campaign = await ts.get(EngagementCampaign, enrollment.campaign_id)
     steps = await steps_of(ts, campaign)
+    opening = (message.step_index or 0) == (opener_index(steps) or 0)
     result = await draft(
         ts, enrollment=enrollment, contact=await ts.get(Contact, enrollment.contact_id),
         account=await ts.get(Account, enrollment.account_id),
         mailbox=await ts.get(MailboxConnection, campaign.mailbox_connection_id),
         step=steps[min(message.step_index or 0, len(steps) - 1)],
-        kind="first" if not message.step_index else "followup", user_id=user_id)
+        kind="first" if opening else "followup", user_id=user_id)
     if not result.ok:
         raise CampaignError(f"The draft could not be written: {result.error}")
     message.subject = message.ai_subject = result.subject
@@ -538,10 +578,12 @@ async def launch(ts, campaign, *, user_id: str):
     # review every touch) and approved while the campaign was paused was looked for at step 0,
     # whose row had already been sent, so that person never went out again.
     current = await current_messages(ts, waiting)
+    steps = await steps_of(ts, campaign)
     for enrollment in waiting:
         row = current.get(enrollment.id)
         if row is not None and row.status == "approved":
-            await _activate(ts, campaign, enrollment, row, row.approved_at or now, user_id)
+            await _activate(ts, campaign, enrollment, row, row.approved_at or now, user_id,
+                            steps=steps)
     # The person whose email hit the credit wall was paused with the campaign (D18). Resuming the
     # campaign left them paused for good, under a notice promising it "continues from where it
     # stopped"; nothing else ever resumes an `out_of_credits` pause.
@@ -564,15 +606,29 @@ async def _resume_after_credits(ts, enrollment, now, user_id) -> None:
     await set_status(ts, enrollment, "active", None, user_id=user_id)
 
 
-async def _activate(ts, campaign, enrollment, message, approved_at, user_id) -> None:
+async def _activate(ts, campaign, enrollment, message, approved_at, user_id, *,
+                    steps: list | None = None) -> None:
+    """Start someone's sequence. When the step they are on is a call that is already due (a
+    campaign that opens with a call, first touches on approval), the call is put in the owner's
+    queue now rather than on the next heartbeat, by the same `advance.call_step` that writes every
+    other call step: the step index moves past it in this transaction, so the heartbeat cannot
+    write it a second time. ``steps`` lets launch read them once for everyone it starts."""
     from nexus.core.db import utcnow
     from nexus.engagement.sequences.timing import first_due_at
 
+    now = utcnow()
     enrollment.next_action_at = first_due_at(
         first_send_mode=campaign.first_send_mode, first_send_at=campaign.first_send_at,
-        approved_at=approved_at, now=utcnow())
-    enrollment.started_at = enrollment.started_at or utcnow()
+        approved_at=approved_at, now=now)
+    enrollment.started_at = enrollment.started_at or now
     await set_status(ts, enrollment, "active", None, user_id=user_id)
+    if enrollment.next_action_at <= now:
+        steps = steps if steps is not None else await steps_of(ts, campaign)
+        index = enrollment.current_step_index
+        if index < len(steps) and steps[index].channel == "call":
+            from nexus.engagement.sequences.advance import call_step
+
+            await call_step(ts, campaign, enrollment, steps, steps[index], now)
 
 
 async def pause_campaign(ts, campaign, reason: str = "manual") -> None:

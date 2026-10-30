@@ -73,7 +73,8 @@ async def emails_left(ts, campaign) -> list[tuple[int, bool]]:
     """Per person who has not finished: emails still to send, and whether the next is written.
 
     The current step's email counts as ahead until it is sent (``current_step_index`` moves on at
-    the send), so a person waiting for review, due, or paused part-way all count the same way."""
+    the send), so a person waiting for review, due, or paused part-way all count the same way. Call
+    steps cost nothing here: a call is charged in minutes when it is placed, not at launch."""
     from nexus.models.engagement import EngagementEnrollment, EngagementMessage, EngagementStep
 
     steps = await ts.list(EngagementStep, EngagementStep.campaign_id == campaign.id)
@@ -91,7 +92,10 @@ async def emails_left(ts, campaign) -> list[tuple[int, bool]]:
     out = []
     for e in open_:
         index = e.current_step_index or 0
-        out.append((sum(1 for i in email_at if i >= index), (e.id, index) in written))
+        ahead = [i for i in email_at if i >= index]
+        # The NEXT email, not the current step: someone on a call step (a campaign that opens with
+        # a call) has their opening email already written at the email after it.
+        out.append((len(ahead), bool(ahead) and (e.id, ahead[0]) in written))
     return out
 
 

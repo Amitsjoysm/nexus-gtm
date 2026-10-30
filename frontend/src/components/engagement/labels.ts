@@ -76,6 +76,15 @@ export const CAPABILITY_LINE: Record<string, string> = {
 
 export const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
+/**
+ * What a step is called. Any step may be a call, the first included, so the opening email is the
+ * first EMAIL step wherever it sits (`opener_index` on the server), not step 1.
+ */
+export function stepLabel(steps: { channel: string }[], index: number): string {
+  if (steps[index]?.channel === "call") return "Call";
+  return steps.findIndex((s) => s.channel === "email") === index ? "Opening email" : "Follow-up email";
+}
+
 /** A timestamp as the reader's own short date and time, or an em-less placeholder. */
 export function when(iso: string | null | undefined): string {
   if (!iso) return "Not scheduled";

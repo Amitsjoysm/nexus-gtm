@@ -1,16 +1,18 @@
 import { Button, Field, IconButton, Icons, Input, Select, Textarea } from "@/components/ui";
 import type { BestTimeSuggestion, EngagementStep } from "@/lib/types";
 import { BestTimeHint } from "./BestTimeHint";
-import { WEEKDAYS } from "./labels";
+import { WEEKDAYS, stepLabel } from "./labels";
 import styles from "./StepsEditor.module.css";
 
 /**
  * The touches of a sequence, in order (spec §8). Used by the campaign builder and by sequence
  * templates, so a template and a campaign are edited with the same words and the same limits.
  *
- * The limits mirror `validate_steps` on the server, which stays the authority: at most 12 steps, the
- * first is always an email and goes out when approved (so it has no delay), later steps wait 0–60
- * business days, and a set send time is required only when "at a set time" is chosen.
+ * The limits mirror `validate_steps` on the server, which stays the authority: at most 12 steps, at
+ * least one of them an email, the first goes when each person's opening email is approved (so it has
+ * no delay), later steps wait 0–60 business days, and a set send time is required only when "at a
+ * set time" is chosen. Any step may be a call, the first included (SDR round 2, W3.1): the opening
+ * email is then the first email step, wherever it sits.
  */
 
 export const MAX_STEPS = 12;
@@ -30,7 +32,7 @@ export function blankStep(first = false): EngagementStep {
 export function stepsProblem(steps: EngagementStep[]): string | null {
   if (steps.length === 0) return "Add at least one step.";
   if (steps.length > MAX_STEPS) return `A sequence can have at most ${MAX_STEPS} steps.`;
-  if (steps[0].channel !== "email") return "The first step must be an email.";
+  if (!steps.some((s) => s.channel === "email")) return "Add at least one email step.";
   for (const [i, s] of steps.entries()) {
     if (i > 0 && (s.delay_business_days < 0 || s.delay_business_days > 60)) {
       return `Step ${i + 1}: wait between 0 and 60 business days.`;
@@ -60,13 +62,14 @@ export function StepsEditor({ steps, onChange, disabled = false, bestTime }: Ste
     if (target < 0 || target >= steps.length) return;
     const next = [...steps];
     [next[index], next[target]] = [next[target], next[index]];
-    // Whatever lands first becomes the opening email: it goes out on approval, with no wait.
-    next[0] = { ...next[0], channel: "email", delay_business_days: 0 };
+    // Whatever lands first goes when the opening email is approved, with no wait. It keeps its
+    // channel: a call may lead.
+    next[0] = { ...next[0], delay_business_days: 0 };
     onChange(next);
   }
   function remove(index: number) {
     const next = steps.filter((_, i) => i !== index);
-    if (next.length) next[0] = { ...next[0], channel: "email", delay_business_days: 0 };
+    if (next.length) next[0] = { ...next[0], delay_business_days: 0 };
     onChange(next);
   }
   function toggleDay(index: number, day: number) {
@@ -87,7 +90,7 @@ export function StepsEditor({ steps, onChange, disabled = false, bestTime }: Ste
                 <legend className={styles.legend}>
                   <span className={styles.number} aria-hidden="true">{index + 1}</span>
                   <span className={styles.srOnly}>{label}: </span>
-                  {first ? "Opening email" : step.channel === "call" ? "Call" : "Follow-up email"}
+                  {stepLabel(steps, index)}
                 </legend>
                 <div className={styles.reorder}>
                   <IconButton
@@ -108,18 +111,16 @@ export function StepsEditor({ steps, onChange, disabled = false, bestTime }: Ste
                 </div>
 
                 <div className={styles.grid}>
-                  {!first && (
-                    <Field label="Channel">
-                      <Select
-                        value={step.channel}
-                        onChange={(e) => update(index, { channel: e.target.value as EngagementStep["channel"] })}
-                        options={[
-                          { value: "email", label: "Email" },
-                          { value: "call", label: "Call (a task for you)" },
-                        ]}
-                      />
-                    </Field>
-                  )}
+                  <Field label="Channel">
+                    <Select
+                      value={step.channel}
+                      onChange={(e) => update(index, { channel: e.target.value as EngagementStep["channel"] })}
+                      options={[
+                        { value: "email", label: "Email" },
+                        { value: "call", label: "Call (a task for you)" },
+                      ]}
+                    />
+                  </Field>
                   {!first && (
                     <Field label="Wait" hint="Business days after the previous step.">
                       <Input
@@ -134,7 +135,9 @@ export function StepsEditor({ steps, onChange, disabled = false, bestTime }: Ste
                   <Field
                     label="When"
                     hint={first
-                      ? "Opening emails go when you approve them, or at the time you schedule."
+                      ? step.channel === "call"
+                        ? "The call joins your call list when you approve the person's opening email, or at the time you schedule."
+                        : "Opening emails go when you approve them, or at the time you schedule."
                       : "The best time is the contact's working morning."}
                   >
                     <Select
@@ -167,14 +170,25 @@ export function StepsEditor({ steps, onChange, disabled = false, bestTime }: Ste
                     onUse={(clock) => update(index, { send_time_local: clock })} />
                 )}
 
-                {step.channel === "email" && (
+                {step.channel === "email" ? (
                   <Field
                     label="What this email is about"
                     hint="The AI writes from this and from what it knows about the person. Leave it blank to let it choose the angle."
                   >
                     <Textarea
                       rows={2} maxLength={500} value={step.angle}
-                      placeholder={first ? "Open on their recent funding round" : "A different reason to talk"}
+                      placeholder={stepLabel(steps, index) === "Opening email" ? "Open on their recent funding round" : "A different reason to talk"}
+                      onChange={(e) => update(index, { angle: e.target.value })}
+                    />
+                  </Field>
+                ) : (
+                  <Field
+                    label="What this call is about"
+                    hint="Shown on the call in your list. Leave it blank to show the step and campaign."
+                  >
+                    <Textarea
+                      rows={2} maxLength={500} value={step.angle}
+                      placeholder="Introduce yourself before the first email"
                       onChange={(e) => update(index, { angle: e.target.value })}
                     />
                   </Field>
