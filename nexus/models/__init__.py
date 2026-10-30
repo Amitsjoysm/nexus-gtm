@@ -61,7 +61,7 @@ from nexus.models.network import (
 from nexus.models.notification_preference import NotificationPreference
 from nexus.models.outcome import Outcome
 from nexus.models.page_snapshot import PageSnapshot
-from nexus.models.relevance import RelevanceProfile
+from nexus.models.relevance import AccountServiceFit, IcpService, RelevanceProfile
 from nexus.models.signal import SignalEvent
 from nexus.models.payment_credential import PaymentCredential
 from nexus.models.runtime_setting import RuntimeSetting
@@ -98,6 +98,8 @@ __all__ = [
     "ProviderSetting",
     "SourceDatabase",
     "RelevanceProfile",
+    "IcpService",
+    "AccountServiceFit",
     "AccountScore",
     "AgentRun",
     "InboxTask",

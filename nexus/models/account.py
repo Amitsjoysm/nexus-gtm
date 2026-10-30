@@ -104,6 +104,13 @@ class Account(IdMixin, TimestampMixin, TenantScoped, Base):
         TZDateTime(), nullable=True, index=True
     )
 
+    # The service whose Populate or daily discovery found this account (migration 0077). NULL is the
+    # default service, which is every account a workspace with one service has, and every account
+    # added by hand, import or CRM: work on it pitches the workspace's main offer, as before.
+    service_id: Mapped[str | None] = mapped_column(
+        ForeignKey("icp_services.id"), nullable=True, index=True
+    )
+
     contacts: Mapped[list["Contact"]] = relationship(
         back_populates="account", cascade="all, delete-orphan"
     )

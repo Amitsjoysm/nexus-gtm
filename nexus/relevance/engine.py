@@ -292,6 +292,17 @@ class RelevanceEngine:
 
 
 async def get_profile(ts: TenantSession) -> RelevanceProfile | None:
+    """The ICP work runs against: the workspace's profile (its default service), or inside
+    ``services.using_service`` the service that names (W8). Shaped alike, so callers do not
+    change. Writing the default profile goes through ``get_or_create_profile``, which never does
+    this."""
+    from nexus.relevance.services import get_service, scoped_service_id
+
+    scoped = scoped_service_id()
+    if scoped:
+        service = await get_service(ts, scoped)
+        if service is not None:
+            return service
     return await ts.first(RelevanceProfile)
 
 

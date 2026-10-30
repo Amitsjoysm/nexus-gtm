@@ -188,9 +188,12 @@ async def run_pipeline(
             return result
         from nexus.contacts.sourcing import source_account_contacts
         from nexus.core.config import get_settings
+        from nexus.relevance.services import using_service
 
-        new_contacts = await source_account_contacts(
-            ts, account, limit=get_settings().discovery_contacts_per_account
-        )
+        # The buyer titles of the service that found the account (W8).
+        with using_service(account.service_id):
+            new_contacts = await source_account_contacts(
+                ts, account, limit=get_settings().discovery_contacts_per_account
+            )
         result["new_contacts"] = len(new_contacts)
         return result

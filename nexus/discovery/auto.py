@@ -195,7 +195,10 @@ async def rescreen_discovered_account(ts: TenantSession, account: Account) -> bo
         return False
     if account.is_archived:
         return False  # already out of the list; nothing to do
-    profile = await get_profile(ts)
+    # Against the ICP of the service that found it (W8), the one its discovery screened it on.
+    from nexus.relevance.services import resolve_profile
+
+    profile = await resolve_profile(ts, account=account)
     if profile is None or not profile.icp:
         return False
     # Discovery's gates run on incomplete data — search rarely returns headcount OR country, and
@@ -228,10 +231,14 @@ async def auto_discover_for_tenant(
     min_fit: int,
     pool_limit: int,
     search: Search | None = None,
+    service=None,
 ) -> dict:
     """Discover up to ``target_count`` net-new, strictly-ICP-matching accounts for this tenant.
-    Returns ``{discovered, screened, account_ids}`` (or ``{skipped: 'no_icp'}`` with no ICP)."""
-    profile = await get_profile(ts)
+    Returns ``{discovered, screened, account_ids}`` (or ``{skipped: 'no_icp'}`` with no ICP).
+
+    ``service`` is one of the workspace's further services (W8): its ICP is the one searched, and
+    the accounts delivered record it. None is the default service, exactly as before."""
+    profile = service if service is not None else await get_profile(ts)
     if profile is None or not profile.icp:
         return {"discovered": 0, "screened": 0, "account_ids": [], "skipped": "no_icp"}
 
@@ -265,6 +272,10 @@ async def auto_discover_for_tenant(
         ts, profile, chain.candidates, limit=target_count, source="auto_discovery",
         min_fit=min_fit, discarded=discarded,
     )
+    if account_ids:
+        from nexus.prospecting.populate import claim_for_service
+
+        await claim_for_service(ts, account_ids, getattr(service, "id", None))
     await _meter_discovered(ts, len(account_ids))
     return {"discovered": len(account_ids), "screened": screened, "account_ids": account_ids,
             "sources": chain.sources, "discarded": dict(discarded), "notes": chain.notes}
@@ -336,19 +347,26 @@ def pass_is_worth_repeating(run) -> bool:
     return any(v in _RETRYABLE_NOTES for v in (run.notes or {}).values())
 
 
-async def runs_since(ts: TenantSession, since) -> list:
+async def runs_since(ts: TenantSession, since, *, service_id: str | None = None) -> list:
+    """The daily passes since ``since`` for one service: the default (``None``) or the one named.
+    Each service has its own tally (W8); every pass recorded before services existed is the
+    default's."""
     from nexus.models.prospecting import ProspectRun
 
     if since is None:
         return []
-    stmt = ts.select(ProspectRun, ProspectRun.kind == DAILY_KIND,
+    service = (ProspectRun.service_id.is_(None) if service_id is None
+               else ProspectRun.service_id == service_id)
+    stmt = ts.select(ProspectRun, ProspectRun.kind == DAILY_KIND, service,
                      ProspectRun.created_at >= since).order_by(ProspectRun.created_at)
     return list((await ts.session.scalars(stmt)).all())
 
 
-async def today_summary(ts: TenantSession, tenant, *, target: int) -> dict | None:
-    """What the current interval delivered against the workspace's number. None before any pass."""
-    runs = await runs_since(ts, tenant.icp_discovery_last_run_at)
+async def today_summary(ts: TenantSession, tenant, *, target: int,
+                        service_id: str | None = None) -> dict | None:
+    """What the current interval delivered against the number, for the default service or the one
+    named. None before any pass."""
+    runs = await runs_since(ts, tenant.icp_discovery_last_run_at, service_id=service_id)
     if not runs:
         return None
     delivered = sum(r.delivered or 0 for r in runs)

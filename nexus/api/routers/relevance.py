@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -161,27 +161,43 @@ async def suggest_buyer_titles(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.run_agents)),
 ) -> list[TitleRecommendationOut]:
-    """Generate up to 10 buyer titles for the whole ICP (all target industries + size + tech), so a
-    founder/SDR can populate ``buyer_titles``. Uses the posted draft ICP, or the saved profile when
-    the body is empty. Read-only and additive."""
-    from nexus.relevance.titles import recommend_titles_for_icp
+    """Up to 10 buyer titles for the whole ICP, each with a one-line reason, so a founder or SDR can
+    fill ``buyer_titles``. Uses the posted draft ICP, or the saved ICP of ``service_id`` (the main
+    service when none) when the body is empty. Read-only.
+
+    Asks the LLM with everything the ICP says, then filters deterministically: no title containing
+    an exclude keyword, no C-level unless the job levels allow it or the companies are under 50
+    people, nothing already listed (``relevance.title_suggest``). Falls back to the catalogue
+    ranking, through the same filter, when no model answers (W4, 2026-10-29)."""
+    from nexus.agents.llm import get_llm_provider
+    from nexus.relevance.title_suggest import suggest_titles
 
     icp = {
         "industries": body.industries,
+        "countries": body.countries,
         "employee_min": body.employee_min,
         "employee_max": body.employee_max,
         "required_tech": body.required_tech,
         "buyer_titles": body.buyer_titles,
+        "title_keywords": body.title_keywords,
+        "exclude_title_keywords": body.exclude_title_keywords,
+        "job_levels": body.job_levels,
         # Forwarded so the ranking can actually use them. `recommend_titles_for_icp` weights
         # role templates against this text; dropping it here is why filling in the value
         # proposition and product context changed nothing about the suggestions.
         "value_props": body.value_props,
         "product_context": body.product_context,
     }
-    if not any([body.industries, body.employee_min, body.employee_max,
-                body.required_tech, body.buyer_titles, body.value_props,
+    if not any([body.industries, body.countries, body.employee_min, body.employee_max,
+                body.required_tech, body.buyer_titles, body.title_keywords,
+                body.exclude_title_keywords, body.job_levels, body.value_props,
                 body.product_context]):
-        profile = await get_or_create_profile(ts)
+        from nexus.relevance.services import get_service, normalise_id
+
+        profile = await get_service(ts, body.service_id) if normalise_id(body.service_id) \
+            else None
+        if profile is None:
+            profile = await get_or_create_profile(ts)
         # The SAVED profile carries value props and product context on its own columns, not
         # inside `icp` — so an empty request must merge them in, or the fallback path stays as
         # context-blind as the explicit one was.
@@ -190,7 +206,7 @@ async def suggest_buyer_titles(
             "value_props": profile.value_props or [],
             "product_context": profile.product_context or "",
         }
-    recs = recommend_titles_for_icp(icp, limit=body.limit)
+    recs, _source = await suggest_titles(icp, llm=get_llm_provider(), limit=body.limit)
     return [TitleRecommendationOut(**vars(r)) for r in recs]
 
 
@@ -214,8 +230,12 @@ async def analyze_website(
     from nexus.billing.entitlements import preflight
     from nexus.billing.meter import metered
     from nexus.integrations.registry import get_registry
+    from nexus.relevance.services import get_service, normalise_id
     from nexus.relevance.website_icp import analyze_website_to_icp
 
+    service_id = normalise_id(body.service_id)
+    if service_id is not None and await get_service(ts, service_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Service not found")
     (await preflight(ts, WEBSITE_ANALYSIS_CAPABILITY)).raise_if_blocked()
     draft = await analyze_website_to_icp(
         body.url, search=get_registry().search, llm=get_llm_provider()
@@ -224,7 +244,7 @@ async def analyze_website(
     if _found_something(result):
         try:
             async with metered(ts, WEBSITE_ANALYSIS_CAPABILITY, user_id=principal.user_id,
-                               attrs={"url": body.url}):
+                               attrs={"url": body.url, "service_id": service_id}):
                 pass
         except Exception:
             # The analysis is done and the customer is holding it; billing must not be why it
@@ -240,7 +260,8 @@ async def analyze_website(
 
         ts.add(AgentRun(
             tenant_id=ts.tenant_id, agent=WEBSITE_ANALYSIS_AGENT, account_id=None,
-            status="completed", input={"url": body.url}, output=result.model_dump(),
+            status="completed", input={"url": body.url, "service_id": service_id},
+            output=result.model_dump(),
         ))
         await ts.flush()
     return result
@@ -270,19 +291,25 @@ class LastAnalysisOut(BaseModel):
 
 @router.get("/last-analysis", response_model=LastAnalysisOut)
 async def last_website_analysis(
+    service_id: str | None = None,
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.run_agents)),
 ) -> LastAnalysisOut:
-    """What "Draft from website" found last time — so the page can offer it back for free."""
+    """What "Draft from website" found last time for this service (the main service when none is
+    named) — so the page can offer it back for free. A draft recorded before services existed has
+    no service and is the main service's."""
     from nexus.models.intelligence import AgentRun
+    from nexus.relevance.services import normalise_id
 
+    wanted = normalise_id(service_id)
     stmt = (
         ts.select(AgentRun, AgentRun.agent == WEBSITE_ANALYSIS_AGENT,
                   AgentRun.status == "completed")
         .order_by(AgentRun.created_at.desc())
-        .limit(1)
+        .limit(50)
     )
-    run = (await ts.session.scalars(stmt)).first()
+    run = next((r for r in (await ts.session.scalars(stmt)).all()
+                if normalise_id((r.input or {}).get("service_id")) == wanted), None)
     if run is None:
         return LastAnalysisOut()
     return LastAnalysisOut(

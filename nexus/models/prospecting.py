@@ -58,3 +58,6 @@ class ProspectRun(IdMixin, TimestampMixin, TenantScoped, Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    #: The service this run found companies for (migration 0077), so each service's daily tally and
+    #: latest Populate are its own. NULL is the default service.
+    service_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

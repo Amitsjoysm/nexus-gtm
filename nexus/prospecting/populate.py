@@ -7,6 +7,10 @@ actually delivered, in the same transaction that creates their accounts: both la
 
 One populate at a time per workspace. A second while one runs would buy the same pages twice and
 could double the spend the person agreed to.
+
+**Each service has its own Populate** (W8, 2026-10-29): a run names the service it is for, finds
+companies against that service's ICP, and the accounts it adds record the service. Still one at a
+time per workspace, whichever service: two services' searches overlap wherever their ICPs do.
 """
 from __future__ import annotations
 
@@ -47,15 +51,31 @@ async def quote(ts, count: int) -> dict:
             "balance": held, "enough": held is None or per == 0 or held >= total}
 
 
-async def start(ts, *, count: int, user_id: str | None):
+async def _profile(ts, service_id: str | None):
+    """The default profile, or the service named. A service named that this workspace does not
+    have is an error, never a silent fall back to the main service's ICP."""
+    from nexus.relevance.services import default_profile, get_service
+
+    if service_id is None:
+        return await default_profile(ts)
+    service = await get_service(ts, service_id)
+    if service is None:
+        raise PopulateRefused(404, "That service is not one this workspace sells.")
+    return service
+
+
+async def start(ts, *, count: int, user_id: str | None, service_id: str | None = None):
     """Validate, check the balance for the whole request, and record a queued run."""
     from nexus.billing.entitlements import preflight
     from nexus.models.prospecting import ProspectRun
-    from nexus.relevance.engine import get_profile
+    from nexus.relevance.services import normalise_id
 
     if count < 1 or count > MAX_COUNT:
         raise PopulateRefused(422, f"Choose between 1 and {MAX_COUNT} companies.")
-    profile = await get_profile(ts)
+    service_id = normalise_id(service_id)
+    profile = await _profile(ts, service_id)
+    if getattr(profile, "archived_at", None) is not None:
+        raise PopulateRefused(409, "That service is archived. Restore it to add companies for it.")
     if profile is None or not profile.icp:
         raise PopulateRefused(400, "Save an ICP first: it is what the companies are matched on.")
     running = await ts.first(ProspectRun, ProspectRun.kind == "populate",
@@ -66,7 +86,7 @@ async def start(ts, *, count: int, user_id: str | None):
     (await preflight(ts, CAPABILITY, quantity=count)).raise_if_blocked()
     run = ProspectRun(tenant_id=ts.tenant_id, kind="populate", user_id=user_id,
                       requested=count, delivered=0, status="queued", sources={},
-                      discarded={}, notes={}, account_ids=[])
+                      discarded={}, notes={}, account_ids=[], service_id=service_id)
     ts.add(run)
     await ts.flush()
     return run
@@ -75,6 +95,7 @@ async def start(ts, *, count: int, user_id: str | None):
 def run_out(run) -> dict:
     return {
         "id": run.id, "status": run.status, "requested": run.requested,
+        "service_id": getattr(run, "service_id", None),
         "delivered": run.delivered, "sources": run.sources or {}, "discarded": run.discarded or {},
         "notes": run.notes or {},
         "account_ids": run.account_ids or [], "error": run.error,
@@ -121,10 +142,12 @@ async def _deliver_run(ts, run_id: str, *, client, web_search, min_fit: int) -> 
     from nexus.models.prospecting import ProspectRun
     from nexus.prospecting.companies import find_icp_companies
     from nexus.prospecting.deliver import deliver, fit_screen
-    from nexus.relevance.engine import get_profile
 
     run = await ts.get(ProspectRun, run_id)
-    profile = await get_profile(ts)
+    try:
+        profile = await _profile(ts, run.service_id)
+    except PopulateRefused as exc:
+        raise RuntimeError(str(exc)) from exc
     if profile is None or not profile.icp:
         raise RuntimeError("The ICP was removed before companies could be added.")
 
@@ -139,6 +162,7 @@ async def _deliver_run(ts, run_id: str, *, client, web_search, min_fit: int) -> 
         min_fit=min_fit, discarded=discarded, owner_user_id=run.user_id,
     )
     if account_ids:
+        await claim_for_service(ts, account_ids, run.service_id)
         created = await _domains(ts, account_ids)
         delivered_sources = Counter(c.source for c in chain.candidates if c.domain in created)
         # Keyed on the run: a retried job re-derives the same charge and pays once.
@@ -155,6 +179,23 @@ async def _deliver_run(ts, run_id: str, *, client, web_search, min_fit: int) -> 
     run.notes = dict(chain.notes)
     run.status, run.finished_at = "done", utcnow()
     return {"run_id": run_id, "delivered": len(account_ids), "sources": dict(delivered_sources)}
+
+
+async def claim_for_service(ts, account_ids: list[str], service_id: str | None) -> None:
+    """Record the service that found these accounts and score them against every service (W8).
+
+    After ``deliver``, whose internals stay as they are: it scored each account against the
+    profile it was handed, which for a service run IS the service, so the Fit badge and the stored
+    per-service fits agree from the first read."""
+    from nexus.models.account import Account
+    from nexus.relevance.services import score_services
+
+    accounts = await ts.list(Account, Account.id.in_(account_ids))
+    if service_id is not None:
+        for account in accounts:
+            account.service_id = service_id
+        await ts.flush()
+    await score_services(ts, accounts)
 
 
 async def _domains(ts, account_ids: list[str]) -> set[str]:

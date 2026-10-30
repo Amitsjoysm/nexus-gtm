@@ -251,7 +251,10 @@ def recommend_titles(
 # the Relevance form and the ICP draft each spell it differently — reading only one means the
 # feature silently does nothing on the other two screens, which is the class of bug this whole
 # release is about.
-_CONTEXT_KEYS = ("value_props", "pains_solved", "product_context", "problem")
+#
+# ``title_keywords`` joined them in 2026-10-29 (W4): the functions an SDR typed ("facilities",
+# "procurement") are the strongest evidence of who to suggest, and nothing read them.
+_CONTEXT_KEYS = ("value_props", "pains_solved", "product_context", "problem", "title_keywords")
 
 # Words too common in GTM copy to distinguish one role from another. Without this, "sales",
 # "revenue" and "customer" appear in nearly every value proposition ever written and would boost
@@ -333,6 +336,13 @@ def recommend_titles_for_icp(icp: dict, *, limit: int = 10) -> list[TitleRecomme
     wins that boost), the midpoint of the employee range, the required tech stack, and the titles
     already listed. Deterministic; safe on a partial/empty ICP (falls back to the base ranking).
     """
+    return ranked_titles_for_icp(icp)[: min(10, max(1, limit))]
+
+
+def ranked_titles_for_icp(icp: dict) -> list[TitleRecommendation]:
+    """Every catalogue role ranked for the ICP, best first: what ``recommend_titles_for_icp``
+    slices, and what ``title_suggest`` filters before slicing (dropping C-level from a top ten
+    would otherwise leave six)."""
     icp = icp or {}
 
     # Value props, pains and product context are the strongest available evidence about WHO feels
@@ -377,5 +387,4 @@ def recommend_titles_for_icp(icp: dict, *, limit: int = 10) -> list[TitleRecomme
             if bonus:
                 best[title] = replace(rec, priority_score=rec.priority_score + bonus)
 
-    out = sorted(best.values(), key=lambda r: (-r.priority_score, -r.confidence, r.title))
-    return out[: min(10, max(1, limit))]
+    return sorted(best.values(), key=lambda r: (-r.priority_score, -r.confidence, r.title))

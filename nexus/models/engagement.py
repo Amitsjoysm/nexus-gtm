@@ -152,6 +152,11 @@ class EngagementCampaign(IdMixin, TimestampMixin, TenantScoped, Base):
     # came from: {filename, uploaded_at, uploaded_by, suggestion, original}.
     call_script: Mapped[str | None] = mapped_column(Text, nullable=True)
     call_script_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # The one service this campaign pitches (migration 0077): its drafts, call scripts and ICP
+    # checks read that service's ICP and value props. NULL is the default service.
+    service_id: Mapped[str | None] = mapped_column(
+        ForeignKey("icp_services.id"), nullable=True
+    )
 
 
 class EngagementStep(IdMixin, TimestampMixin, TenantScoped, Base):
