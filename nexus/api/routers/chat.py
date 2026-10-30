@@ -35,11 +35,26 @@ from nexus.workers.tasks import tenant_session
 router = APIRouter(prefix="/orchestration/chat", tags=["chat"])
 
 
-def _turn(session: ChatSession, messages: list[ChatMessage]) -> ChatTurnResponse:
-    return ChatTurnResponse(
-        session=ChatSessionOut.from_model(session),
-        messages=[ChatMessageOut.from_model(m) for m in messages],
+def _turn(
+    session: ChatSession, messages: list[ChatMessage], deleted_runs: set[str] | None = None
+) -> ChatTurnResponse:
+    out = [ChatMessageOut.from_model(m) for m in messages]
+    for message in out:
+        if message.kind == "run_launched" and str(message.data.get("run_id")) in (deleted_runs or ()):
+            message.data = {**message.data, "run_deleted": True}
+    return ChatTurnResponse(session=ChatSessionOut.from_model(session), messages=out)
+
+
+async def _deleted_runs(ts: TenantSession, session_id: str) -> set[str]:
+    """Runs this conversation launched that were since deleted. Marked on their card when the
+    conversation is read, rather than written into the message: the log is append-only."""
+    from nexus.models.orchestration import OrchestrationRun
+
+    rows = await ts.session.scalars(
+        ts.select(OrchestrationRun, OrchestrationRun.chat_session_id == session_id,
+                  OrchestrationRun.deleted_at.isnot(None))
     )
+    return {r.id for r in rows.all()}
 
 
 @router.post("/sessions", response_model=ChatTurnResponse, status_code=status.HTTP_201_CREATED)
@@ -81,7 +96,7 @@ async def get_session(
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
     messages = await ChatService().get_messages(ts, session_id)
-    return _turn(session, messages)
+    return _turn(session, messages, await _deleted_runs(ts, session_id))
 
 
 @router.post("/sessions/{session_id}/messages", response_model=ChatTurnResponse)

@@ -60,7 +60,9 @@ async def handle_run_orchestration(payload: dict) -> dict:
 
     async with tenant_session(tenant_id) as ts:
         run = await ts.get(OrchestrationRun, run_id)
-        if run is None:
+        # A deleted run is gone for the driver too: resuming it would work on something nobody can
+        # see any more.
+        if run is None or run.deleted_at is not None:
             return {"error": "run_not_found", "run_id": run_id}
         await get_orchestration_engine().execute_run(ts, run)
         return {"run_id": run.id, "status": run.status}

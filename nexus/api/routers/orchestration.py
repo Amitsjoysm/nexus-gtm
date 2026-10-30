@@ -49,6 +49,15 @@ async def _load_steps(ts: TenantSession, run_id: str) -> list[RunStep]:
     return list((await ts.session.scalars(stmt)).all())
 
 
+async def _live_run(ts: TenantSession, run_id: str) -> OrchestrationRun:
+    """The run, or 404 when it does not exist here or was deleted. A deleted run reads as gone on
+    every screen; only its usage rows, which are separate, still count it."""
+    run = await ts.get(OrchestrationRun, run_id)
+    if run is None or run.deleted_at is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    return run
+
+
 @router.post("/runs", response_model=RunOut, status_code=status.HTTP_201_CREATED)
 async def create_run(
     body: RunCreateRequest,
@@ -94,7 +103,11 @@ async def list_runs(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.run_orchestration)),
 ) -> list[RunOut]:
-    stmt = ts.select(OrchestrationRun).order_by(OrchestrationRun.created_at.desc()).limit(100)
+    stmt = (
+        ts.select(OrchestrationRun, OrchestrationRun.deleted_at.is_(None))
+        .order_by(OrchestrationRun.created_at.desc())
+        .limit(100)
+    )
     runs = list((await ts.session.scalars(stmt)).all())
 
     # Step counts for the whole page in ONE grouped query. The alternative that reads naturally —
@@ -129,9 +142,7 @@ async def get_run(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.run_orchestration)),
 ) -> RunOut:
-    run = await ts.get(OrchestrationRun, run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    run = await _live_run(ts, run_id)
     steps = await _load_steps(ts, run.id)
     return RunOut.from_model(run, steps)
 
@@ -148,9 +159,7 @@ async def get_run_results(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.run_orchestration)),
 ) -> ResultsResponse:
-    run = await ts.get(OrchestrationRun, run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    run = await _live_run(ts, run_id)
     discovery = (run.blackboard or {}).get("discovery") or {}
     candidates: list[dict] = list(discovery.get("candidates") or [])
     entity = "contact" if discovery.get("target") == "contacts" else "account"
@@ -222,12 +231,44 @@ async def cancel_run(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.run_orchestration)),
 ) -> RunOut:
-    run = await ts.get(OrchestrationRun, run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    run = await _live_run(ts, run_id)
     await get_orchestration_engine().cancel_run(ts, run)
     steps = await _load_steps(ts, run.id)
     return RunOut.from_model(run, steps)
+
+
+@router.delete("/runs/{run_id}")
+async def delete_run(
+    run_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    """Delete a run: it leaves AI Runs, its detail and its conversation's run card.
+
+    A soft delete (`deleted_at`). Nothing about what the run did is rewritten: its usage events are
+    their own rows, so billing and the credit report still count it, and the accounts or contacts
+    it added stay in the workspace. A run still working is cancelled first, which rejects a pending
+    approval, so nothing it parked can be sent after it is gone.
+
+    The person who started it, or a manager and up. Idempotent: deleting a deleted run succeeds.
+    """
+    from nexus.core.db import utcnow
+
+    run = await ts.get(OrchestrationRun, run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    own = bool(run.created_by) and run.created_by == principal.user_id
+    if not own and not has_permission(principal.role, Permission.run_orchestration):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the person who started this run, or a manager, can delete it.",
+        )
+    if run.deleted_at is None:
+        if run.status not in RUN_TERMINAL:
+            await get_orchestration_engine().cancel_run(ts, run)
+        run.deleted_at = utcnow()
+        await ts.flush()
+    return {"id": run_id, "deleted": True}
 
 
 def _format_sse(seq: int, type_: str, data: dict) -> str:
@@ -250,7 +291,7 @@ async def _event_stream(
             return
         async with tenant_session(tenant_id) as ts:
             run = await ts.get(OrchestrationRun, run_id)
-            if run is None:
+            if run is None or run.deleted_at is not None:
                 yield _format_sse(last_seq, "error", {"detail": "run not found"})
                 return
             stmt = (
@@ -301,7 +342,12 @@ async def list_approvals(
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.approve_outreach)),
 ) -> list[ApprovalOut]:
-    where = []
+    # A deleted run's approvals leave with it: each one links to a run that now reads as gone.
+    where = [Approval.run_id.notin_(
+        select(OrchestrationRun.id).where(
+            OrchestrationRun.tenant_id == ts.tenant_id, OrchestrationRun.deleted_at.isnot(None)
+        )
+    )]
     if status_filter:
         where.append(Approval.status == status_filter)
     stmt = ts.select(Approval, *where).order_by(Approval.created_at.desc()).limit(100)

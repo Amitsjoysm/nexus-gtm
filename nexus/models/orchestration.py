@@ -80,6 +80,11 @@ class OrchestrationRun(IdMixin, TimestampMixin, TenantScoped, Base):
     )
     idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Soft delete (migration 0076): the run leaves AI Runs and its detail, the row stays. Its usage
+    # events are separate rows, so billing and the credit report still count what it did.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class RunStep(IdMixin, TimestampMixin, TenantScoped, Base):
