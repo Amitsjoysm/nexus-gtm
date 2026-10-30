@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { RecordImportModal } from "@/components/imports/RecordImportModal";
+import { ActivityPanel } from "@/components/activity/ActivityPanel";
 import {
   Badge,
   Button,
@@ -763,6 +764,7 @@ export function ContactsPage() {
             emailStatus={emailFor.email_status}
           />
         )}
+        {emailFor && <ActivityPanel contactId={emailFor.id} compact />}
       </Modal>
 
       <Modal

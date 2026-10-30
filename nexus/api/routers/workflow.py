@@ -49,6 +49,14 @@ async def list_inbox(
     )
     triage = await svc.triage(ts, tasks)
     now = utcnow()
+    from nexus.models.signal import SignalEvent
+
+    account_ids = {t.account_id for t in tasks if t.account_id}
+    names = {a.id: a.name or "" for a in await ts.list(Account, Account.id.in_(account_ids))} \
+        if account_ids else {}
+    signal_ids = {t.signal_id for t in tasks if t.signal_id}
+    urls = {s.id: s.url for s in await ts.list(SignalEvent, SignalEvent.id.in_(signal_ids))} \
+        if signal_ids else {}
 
     def _age_hours(t) -> float | None:
         created = ensure_aware(t.created_at)
@@ -68,6 +76,8 @@ async def list_inbox(
             triage=TriageOut(**triage[t.id].as_dict()) if t.id in triage else None,
             created_at=t.created_at.isoformat() if t.created_at else None,
             age_hours=_age_hours(t),
+            account_name=names.get(t.account_id or "", ""),
+            signal_url=urls.get(t.signal_id or ""),
         )
         for t in tasks
     ]

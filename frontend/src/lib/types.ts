@@ -476,6 +476,9 @@ export interface InboxTask {
   /** SLA aging: when the task entered the queue and how long it has waited. */
   created_at?: string | null;
   age_hours?: number | null;
+  /** The company, and the signal's own link, for the Inbox's Signals section. */
+  account_name?: string;
+  signal_url?: string | null;
 }
 
 export interface TitleRecommendation {
@@ -2856,7 +2859,10 @@ export interface ResponseTimeRow {
 }
 
 export type TodayKind =
-  | "reply" | "decide" | "colleagues" | "call" | "review" | "restart" | "returning";
+  | "reply" | "decide" | "colleagues" | "call" | "followup" | "review" | "restart" | "returning";
+
+/** The Inbox's sections (SDR round 2): the engine's three, plus signal tasks from `/inbox`. */
+export type TodaySection = "calls" | "emails" | "replies";
 
 export interface TodayItem {
   kind: TodayKind;
@@ -2865,6 +2871,110 @@ export interface TodayItem {
   link: string;
   at: string | null;
   count: number;
+  section: TodaySection;
+  /** Against the start of the SDR's own day. */
+  due: "today" | "overdue";
+  /** The one action that clears it, as its button reads. */
+  action: string;
+  ref_id: string | null;
+  contact_id: string | null;
+  account_id: string | null;
+  contact_name: string;
+  account_name: string;
+}
+
+// ---- activity history (SDR round 2, 5.2) --------------------------------------------------------
+
+/** One call logged or one email sent or received, for a contact or an account. */
+export interface ActivityItem {
+  id: string;
+  kind: "call" | "email";
+  at: string | null;
+  contact_id: string | null;
+  contact_name: string;
+  /** A call: who called, in the team's own words for what happened. */
+  by: string;
+  category: string;
+  disposition: string;
+  disposition_code: string;
+  notes: string;
+  duration_s: number | null;
+  placed_live: boolean;
+  /** An email. `thread_link` is empty unless the viewer may open the thread. */
+  direction: "" | "out" | "in";
+  status: string;
+  subject: string;
+  preview: string;
+  mailbox: string;
+  campaign_id: string | null;
+  campaign_name: string;
+  thread_id: string | null;
+  thread_link: string;
+  reply_category: string | null;
+}
+
+// ---- unified inbox (SDR round 2, 6.4) -----------------------------------------------------------
+
+export interface InboxThread {
+  thread_id: string;
+  subject: string;
+  snippet: string;
+  last_at: string | null;
+  last_direction: "out" | "in" | "";
+  message_count: number;
+  replied: boolean;
+  /** Waiting on you: a reply on it is still open on the reply desk. */
+  unread: boolean;
+  contact_id: string | null;
+  contact_name: string;
+  contact_email: string;
+  account_id: string | null;
+  account_name: string;
+  mailbox_id: string;
+  mailbox_email: string;
+  campaign_id: string | null;
+  campaign_name: string;
+}
+
+export interface InboxOption {
+  id: string;
+  label: string;
+}
+
+export interface InboxList {
+  threads: InboxThread[];
+  mailboxes: InboxOption[];
+  campaigns: InboxOption[];
+  team: boolean;
+}
+
+export interface InboxMessage {
+  id: string;
+  direction: "out" | "in";
+  status: string;
+  from_addr: string;
+  to_addrs: string[];
+  subject: string;
+  body: string;
+  at: string | null;
+  category: string | null;
+}
+
+export interface InboxThreadDetail {
+  thread: InboxThread;
+  messages: InboxMessage[];
+  reply_id: string | null;
+  reply_open: boolean;
+  /** The reply desk item to answer it from, or "" when nobody has replied. */
+  reply_link: string;
+}
+
+export interface InboxFilters {
+  team?: boolean;
+  mailbox_id?: string;
+  campaign_id?: string;
+  replied?: boolean;
+  unread?: boolean;
 }
 
 // ---- engagement: insights (phase 13) -----------------------------------------------------------

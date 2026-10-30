@@ -663,6 +663,9 @@ class InboxTaskOut(BaseModel):
     # renders this as a commitment cue ("In queue 2d") so old tasks don't silently rot.
     created_at: str | None = None
     age_hours: float | None = None
+    # The Inbox's Signals section names the company and opens the signal itself (SDR round 2).
+    account_name: str = ""
+    signal_url: str | None = None
 
 
 # ---- lists ----

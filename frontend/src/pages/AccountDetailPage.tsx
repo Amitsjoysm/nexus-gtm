@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ActivityPanel } from "@/components/activity/ActivityPanel";
 import {
   Badge,
   Button,
@@ -772,6 +773,7 @@ export function AccountDetailPage() {
               );
             }}
           </DataState>
+          <Card padding="lg"><ActivityPanel accountId={id} /></Card>
         </div>
       </TabPanel>
 
