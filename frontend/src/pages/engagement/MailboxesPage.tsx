@@ -380,9 +380,8 @@ function MailboxRow({
           </span>
         </td>
         <td className={styles.num}>
-          <span className={cn(styles.today, over && styles.todayOver)}
-            title={`${advised} a day is advised, not a cap.`}>
-            {mailbox.sent_today}
+          <span className={styles.today} title={`${advised} a day is advised, not a cap.`}>
+            {over ? <Badge tone="warning" dot>{mailbox.sent_today}</Badge> : mailbox.sent_today}
             <span className={styles.of}> of {advised}</span>
           </span>
         </td>
