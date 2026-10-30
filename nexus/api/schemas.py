@@ -482,6 +482,15 @@ class CallBriefSignal(BaseModel):
     is_personal: bool = False       # tied to this contact (vs. account-level)
 
 
+class CallBriefValueFit(BaseModel):
+    """One of the workspace's value props, with the pains it solves and which look like theirs."""
+
+    name: str
+    description: str = ""
+    pains: list[str] = Field(default_factory=list)
+    matched: list[str] = Field(default_factory=list)
+
+
 class CallBriefOut(BaseModel):
     """The pre-call research dossier: who they are, their company, signals, and talking points —
     every block sourced, so the SDR is well-researched before dialing."""
@@ -491,6 +500,13 @@ class CallBriefOut(BaseModel):
     insights: CallBriefInsights | None = None
     signals: list[CallBriefSignal] = Field(default_factory=list)
     talking_points: list[str] = Field(default_factory=list)
+    # The console's one screen (6.3): their local time, and which of our value props meet what a
+    # person in their role usually cares about (`calling/value_fit.py`). Declared, or pydantic
+    # drops them.
+    local_timezone: str | None = None   # IANA name; None when neither contact nor account says
+    timezone_source: str | None = None  # "contact" | "account"
+    likely_pain: str = ""               # the role angle their title implies
+    value_fit: list[CallBriefValueFit] = Field(default_factory=list)
 
 
 class LookalikeOut(BaseModel):

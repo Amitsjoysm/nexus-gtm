@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
@@ -22,6 +22,8 @@ import { useToast } from "@/components/ui/Toast";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
+import { cn } from "@/lib/cn";
+import { formatDate, timeAgo } from "@/lib/format";
 import type { ConnectedMailbox, MailboxProviderState } from "@/lib/types";
 import styles from "./MailboxesPage.module.css";
 
@@ -34,11 +36,23 @@ import styles from "./MailboxesPage.module.css";
  *
  * The browser's own timezone is sent when connecting, because follow-ups default to the SDR's local
  * working day when a contact's timezone cannot be resolved.
+ *
+ * One table row per mailbox (6.2, 2026-10-29): what an SDR or a manager scans for is which mailbox
+ * is whose, whether it works, when it was last read and how much it sent today. A row expands in
+ * place to the mailbox's own settings (signature, timezone, confidence bar), the writing style its
+ * drafts follow, the reply switches and Check connection. Collapsed by default: a team of twelve
+ * mailboxes is twelve lines, not twelve forms.
  */
 
 const PROVIDER_LABEL: Record<ConnectedMailbox["provider"], string> = {
   google: "Google (Gmail)",
   microsoft: "Microsoft 365 (Outlook)",
+};
+
+/** The table's short form; the connect buttons keep the full names. */
+const PROVIDER_SHORT: Record<ConnectedMailbox["provider"], string> = {
+  google: "Gmail",
+  microsoft: "Outlook",
 };
 
 const STATUS: Record<ConnectedMailbox["status"], { label: string; tone: BadgeTone }> = {
@@ -61,6 +75,12 @@ const CONNECT_ERRORS: Record<string, string> = {
   owned_by_colleague:
     "A colleague has already connected that mailbox. They need to disconnect it before you can.",
   not_a_member: "You are no longer a member of this workspace.",
+};
+
+/** What the first email of a sequence asks for, as Settings > Email style words it. */
+const FIRST_ASK: Record<string, string> = {
+  interest: "asks whether it is worth a look",
+  meeting: "asks for a meeting",
 };
 
 function browserTimezone(): string {
@@ -90,8 +110,10 @@ export function MailboxesPage() {
   const [params, setParams] = useSearchParams();
   const isManager = session?.role === "manager" || session?.role === "admin"
     || session?.role === "owner";
+  const isAdmin = session?.role === "admin" || session?.role === "owner";
   const [team, setTeam] = useState(false);
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
 
   const providers = useApi<MailboxProviderState[]>((s) => api.connectedMailboxProviders(s), []);
   const mailboxes = useApi<ConnectedMailbox[]>((s) => api.listConnectedMailboxes(team, s), [team]);
@@ -123,6 +145,15 @@ export function MailboxesPage() {
     }
   }
 
+  function toggleRow(id: string) {
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   return (
     <div>
       <PageHeader
@@ -141,23 +172,24 @@ export function MailboxesPage() {
         }
       />
 
-      <Card padding="lg" className={styles.connect}>
-        <h4 className={styles.sectionTitle}>Connect a mailbox</h4>
+      <div className={styles.connect}>
+        <h4 className={styles.connectTitle}>Connect a mailbox</h4>
         <DataState
           state={providers}
           errorTitle="Couldn't check which providers are available"
-          skeleton={<Skeleton width="100%" height={44} />}
+          skeleton={<Skeleton width={320} height={38} />}
         >
           {(list) => (
             <div className={styles.providerRow}>
               {list.map((p) => (
                 <div key={p.provider} className={styles.provider}>
                   <Button
+                    variant="secondary"
                     onClick={() => connect(p.provider)}
                     disabled={!p.configured || connecting !== null}
                     loading={connecting === p.provider}
                   >
-                    Connect {PROVIDER_LABEL[p.provider]}
+                    <Icons.PlusIcon /> {PROVIDER_LABEL[p.provider]}
                   </Button>
                   {!p.configured && (
                     <span className={styles.hint}>Not set up yet. Ask your administrator.</span>
@@ -167,12 +199,12 @@ export function MailboxesPage() {
             </div>
           )}
         </DataState>
-      </Card>
+      </div>
 
       <DataState
         state={mailboxes}
         errorTitle="Couldn't load mailboxes"
-        skeleton={<Skeleton width="100%" height={180} />}
+        skeleton={<TableSkeleton />}
         isEmpty={(rows) => rows.length === 0}
         empty={
           <EmptyState
@@ -183,25 +215,76 @@ export function MailboxesPage() {
         }
       >
         {(rows) => (
-          <ul className={styles.list}>
-            {rows.map((m) => (
-              <MailboxCard key={m.id} mailbox={m} onChanged={mailboxes.refetch}
-                onReconnect={() => connect(m.provider)} canDisconnect={m.mine || isManager} />
-            ))}
-          </ul>
+          <Card padding="none" className={styles.tableCard}>
+            <div className={styles.scroll}>
+              <table className={styles.table}>
+                <caption className="sr-only">
+                  {team ? "The team's mailboxes" : "Your mailboxes"}. Open a row for its settings.
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Mailbox</th>
+                    <th scope="col">Owner</th>
+                    <th scope="col" className={styles.hideNarrow}>Provider</th>
+                    <th scope="col">Status</th>
+                    <th scope="col" className={styles.hideNarrow}>Last read</th>
+                    <th scope="col" className={styles.num}>Sent today</th>
+                    <th scope="col" className={styles.actionsHead}>
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((m) => (
+                    <MailboxRow
+                      key={m.id}
+                      mailbox={m}
+                      expanded={open.has(m.id)}
+                      onToggle={() => toggleRow(m.id)}
+                      onChanged={mailboxes.refetch}
+                      onReconnect={() => connect(m.provider)}
+                      canDisconnect={m.mine || isManager}
+                      canEditStyle={isAdmin}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         )}
       </DataState>
     </div>
   );
 }
 
-function MailboxCard({
-  mailbox, onChanged, onReconnect, canDisconnect,
+/** Loading rows shaped like the table, so nothing jumps when the data lands. */
+function TableSkeleton() {
+  return (
+    <Card padding="none" className={styles.tableCard} aria-busy="true">
+      <div className={styles.skeletonRows}>
+        {[0, 1, 2].map((i) => (
+          <div key={i} className={styles.skeletonRow}>
+            <Skeleton width="28%" height={14} />
+            <Skeleton width="12%" height={14} />
+            <Skeleton width="14%" height={20} />
+            <Skeleton width="10%" height={14} />
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function MailboxRow({
+  mailbox, expanded, onToggle, onChanged, onReconnect, canDisconnect, canEditStyle,
 }: {
   mailbox: ConnectedMailbox;
+  expanded: boolean;
+  onToggle: () => void;
   onChanged: () => void;
   onReconnect: () => void;
   canDisconnect: boolean;
+  canEditStyle: boolean;
 }) {
   const api = useApiClient();
   const toast = useToast();
@@ -217,6 +300,12 @@ function MailboxCard({
   const status = STATUS[mailbox.status];
   const dirty = timezone !== mailbox.timezone || signature !== mailbox.signature
     || confidence !== (mailbox.reply_confidence === null ? "" : String(mailbox.reply_confidence));
+  const panelId = `mailbox-${mailbox.id}`;
+  const editable = mailbox.mine && mailbox.status !== "revoked";
+  const advised = mailbox.daily_advised ?? 50;
+  const over = mailbox.sent_today > advised;
+  const paused = mailbox.paused_until && new Date(mailbox.paused_until).getTime() > Date.now()
+    ? mailbox.paused_until : null;
 
   async function run(label: string, action: () => Promise<unknown>, success?: [string, string]) {
     setBusy(label);
@@ -252,104 +341,155 @@ function MailboxCard({
     return run("save", () => api.updateConnectedMailbox(mailbox.id, body), ["Saved", "Your mailbox settings are updated."]);
   }
 
+  function check() {
+    return run("check", () => api.checkConnectedMailbox(mailbox.id), ["Checked", "The mailbox signed in."]);
+  }
+
   return (
-    <li>
-      <Card padding="lg" className={styles.card}>
-        <div className={styles.cardHead}>
-          <div>
-            <p className={styles.email}>{mailbox.email}</p>
-            <p className={styles.meta}>{PROVIDER_LABEL[mailbox.provider]}</p>
-          </div>
+    <Fragment>
+      <tr className={cn(styles.row, expanded && styles.rowOpen)}>
+        <td className={styles.addressCell}>
+          <button
+            type="button"
+            className={styles.disclose}
+            aria-expanded={expanded}
+            aria-controls={panelId}
+            onClick={onToggle}
+          >
+            <Icons.ChevronRightIcon className={styles.chevron} aria-hidden="true" />
+            <span className={styles.addressText}>
+              <span className={styles.email}>{mailbox.email}</span>
+              {mailbox.display_name && (
+                <span className={styles.sub}>Sends as {mailbox.display_name}</span>
+              )}
+            </span>
+          </button>
+        </td>
+        <td className={styles.owner}>{mailbox.mine ? "You" : mailbox.owner_name || "A colleague"}</td>
+        <td className={cn(styles.muted, styles.hideNarrow)}>{PROVIDER_SHORT[mailbox.provider]}</td>
+        <td className={styles.statusCell}>
           <Badge tone={status.tone} dot>{status.label}</Badge>
-        </div>
-
-        {mailbox.last_error && <p className={styles.error} role="status">{mailbox.last_error}</p>}
-        {mailbox.volume_warning && (
-          <p className={styles.error} role="status">
-            <Badge tone="warning" dot>{mailbox.sent_today} sent today</Badge>{" "}
-            {mailbox.volume_warning}
-          </p>
-        )}
-        <MailboxHealth mailbox={mailbox} />
-
-        {mailbox.mine && mailbox.status !== "revoked" && (
-          <div className={styles.fields}>
-            <Field label="Your timezone" hint="Used when a contact's own timezone is unknown.">
-              <Select value={timezone} onChange={(e) => setTimezone(e.target.value)} options={zones} />
-            </Field>
-            <Field
-              label="Reply confidence bar"
-              hint={`How sure the AI must be before a reply is acted on without you. Leave blank for the workspace default (${mailbox.effective_reply_confidence.toFixed(2)}); allowed ${mailbox.reply_confidence_min.toFixed(2)}–${mailbox.reply_confidence_max.toFixed(2)}.`}
-            >
-              <Input
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                min={mailbox.reply_confidence_min}
-                max={mailbox.reply_confidence_max}
-                value={confidence}
-                onChange={(e) => setConfidence(e.target.value)}
-                placeholder={mailbox.effective_reply_confidence.toFixed(2)}
-              />
-            </Field>
-            <Field label="Signature" hint="Added under every email this mailbox sends. Plain text.">
-              <Textarea rows={4} value={signature} onChange={(e) => setSignature(e.target.value)} />
-            </Field>
-          </div>
-        )}
-        {/* Save sits with the fields it saves; the switches below apply the moment they flip. */}
-        {mailbox.mine && mailbox.status !== "revoked" && (
-          <div className={styles.saveRow}>
-            <Button onClick={save} disabled={!dirty} loading={busy === "save"}>Save changes</Button>
-          </div>
-        )}
-
-        {mailbox.mine && mailbox.status !== "revoked" && (
-          <section className={styles.replies} aria-labelledby={`replies-${mailbox.id}`}>
-            <h4 id={`replies-${mailbox.id}`} className={styles.sectionTitle}>When a buyer replies</h4>
-            <SwitchRow
-              label="Act on clear replies by itself"
-              hint={'A confident "not now", "no thanks" or "unsubscribe" snoozes or stops the sequence straight away. Off: the sequence pauses and the reply waits for you.'}
-              status={!mailbox.auto_actions_allowed
-                ? "Not in force: a manager has switched this off for the workspace in Settings, Replies."
-                : undefined}
-              checked={mailbox.auto_actions}
-              disabled={busy !== null || (!mailbox.auto_actions_allowed && !mailbox.auto_actions)}
-              onChange={(next) => toggle("auto_actions", next)}
-            />
-            <SwitchRow
-              label="Let the AI send replies"
-              hint="The AI emails its answer to a buyer who is interested or asked a question, when it is confident and the draft passes every check. Off: it drafts the answer and you send it."
-              status={!mailbox.auto_send_allowed
-                ? (mailbox.auto_send_replies
-                  ? "Not in force: a manager has not allowed this in Settings, Replies."
-                  : "A manager can allow this in Settings, Replies.")
-                : mailbox.sends_alone
-                  ? "On: you get an alert for each reply the AI sends."
-                  : undefined}
-              checked={mailbox.auto_send_replies}
-              disabled={busy !== null || (!mailbox.auto_send_allowed && !mailbox.auto_send_replies)}
-              onChange={(next) => (next ? setConfirmingSend(true) : toggle("auto_send_replies", false))}
-            />
-          </section>
-        )}
-
-        <div className={styles.actions}>
+          {paused && (
+            <span className={styles.reason}>Paused by the provider until {formatDate(paused)}</span>
+          )}
+          {mailbox.last_error && <span className={styles.reason} title={mailbox.last_error}>{mailbox.last_error}</span>}
+        </td>
+        <td className={cn(styles.muted, styles.hideNarrow)}>
+          <span title={mailbox.last_synced_at ? new Date(mailbox.last_synced_at).toLocaleString() : undefined}>
+            {mailbox.last_synced_at ? timeAgo(mailbox.last_synced_at) : "Never"}
+          </span>
+        </td>
+        <td className={styles.num}>
+          <span className={cn(styles.today, over && styles.todayOver)}
+            title={`${advised} a day is advised, not a cap.`}>
+            {mailbox.sent_today}
+            <span className={styles.of}> of {advised}</span>
+          </span>
+        </td>
+        <td className={styles.rowActions}>
+          {mailbox.mine && (mailbox.status === "needs_reauth" || mailbox.status === "revoked") && (
+            <Button size="sm" variant="secondary" onClick={onReconnect}>Reconnect</Button>
+          )}
           {mailbox.mine && mailbox.status === "connected" && (
-            <Button variant="secondary" loading={busy === "check"}
-              onClick={() => run("check", () => api.checkConnectedMailbox(mailbox.id),
-                ["Checked", "The mailbox signed in."])}>
-              Check connection
+            <Button size="sm" variant="secondary" loading={busy === "check"} onClick={check}>
+              Check
             </Button>
           )}
-          {mailbox.mine && (mailbox.status === "needs_reauth" || mailbox.status === "revoked") && (
-            <Button variant="secondary" onClick={onReconnect}>Reconnect</Button>
-          )}
           {canDisconnect && mailbox.status !== "revoked" && (
-            <Button variant="ghost" onClick={() => setConfirming(true)}>Disconnect</Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>Disconnect</Button>
           )}
-        </div>
-      </Card>
+        </td>
+      </tr>
+
+      {expanded && (
+        <tr className={styles.detailRow}>
+          <td colSpan={7} id={panelId}>
+            <div className={styles.detail}>
+              <section className={styles.detailMain} aria-label={`Settings for ${mailbox.email}`}>
+                {mailbox.volume_warning && (
+                  <p className={styles.warning} role="status">{mailbox.volume_warning}</p>
+                )}
+                <MailboxHealth mailbox={mailbox} />
+                {editable ? (
+                  <>
+                    <Field label="Signature" hint="Added under every email this mailbox sends. Plain text.">
+                      <Textarea rows={4} value={signature} onChange={(e) => setSignature(e.target.value)} />
+                    </Field>
+                    <div className={styles.pair}>
+                      <Field label="Your timezone" hint="Used when a contact's own timezone is unknown.">
+                        <Select value={timezone} onChange={(e) => setTimezone(e.target.value)} options={zones} />
+                      </Field>
+                      <Field
+                        label="Reply confidence bar"
+                        hint={`Blank uses the workspace default (${mailbox.effective_reply_confidence.toFixed(2)}); allowed ${mailbox.reply_confidence_min.toFixed(2)}–${mailbox.reply_confidence_max.toFixed(2)}.`}
+                      >
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          step="0.01"
+                          min={mailbox.reply_confidence_min}
+                          max={mailbox.reply_confidence_max}
+                          value={confidence}
+                          onChange={(e) => setConfidence(e.target.value)}
+                          placeholder={mailbox.effective_reply_confidence.toFixed(2)}
+                        />
+                      </Field>
+                    </div>
+                    {/* Save sits with the fields it saves; the switches apply the moment they flip. */}
+                    <div className={styles.saveRow}>
+                      <Button onClick={save} disabled={!dirty} loading={busy === "save"}>Save changes</Button>
+                      {mailbox.status === "connected" && (
+                        <Button variant="secondary" loading={busy === "check"} onClick={check}>
+                          Check connection
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className={styles.hint}>
+                    {mailbox.mine
+                      ? "Reconnect this mailbox to change its settings."
+                      : `Only ${mailbox.owner_name || "its owner"} can change this mailbox's signature and switches.`}
+                  </p>
+                )}
+              </section>
+
+              <div className={styles.detailSide}>
+                <WritingStyle mailbox={mailbox} canEdit={canEditStyle} />
+                {editable && (
+                  <section className={styles.replies} aria-labelledby={`replies-${mailbox.id}`}>
+                    <h5 id={`replies-${mailbox.id}`} className={styles.sideTitle}>When a buyer replies</h5>
+                    <SwitchRow
+                      label="Act on clear replies by itself"
+                      hint={'A confident "not now", "no thanks" or "unsubscribe" snoozes or stops the sequence straight away. Off: the sequence pauses and the reply waits for you.'}
+                      status={!mailbox.auto_actions_allowed
+                        ? "Not in force: a manager has switched this off for the workspace in Settings, Replies."
+                        : undefined}
+                      checked={mailbox.auto_actions}
+                      disabled={busy !== null || (!mailbox.auto_actions_allowed && !mailbox.auto_actions)}
+                      onChange={(next) => toggle("auto_actions", next)}
+                    />
+                    <SwitchRow
+                      label="Let the AI send replies"
+                      hint="The AI emails its answer to a buyer who is interested or asked a question, when it is confident and the draft passes every check. Off: it drafts the answer and you send it."
+                      status={!mailbox.auto_send_allowed
+                        ? (mailbox.auto_send_replies
+                          ? "Not in force: a manager has not allowed this in Settings, Replies."
+                          : "A manager can allow this in Settings, Replies.")
+                        : mailbox.sends_alone
+                          ? "On: you get an alert for each reply the AI sends."
+                          : undefined}
+                      checked={mailbox.auto_send_replies}
+                      disabled={busy !== null || (!mailbox.auto_send_allowed && !mailbox.auto_send_replies)}
+                      onChange={(next) => (next ? setConfirmingSend(true) : toggle("auto_send_replies", false))}
+                    />
+                  </section>
+                )}
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
 
       <Modal
         open={confirming}
@@ -369,7 +509,7 @@ function MailboxCard({
           </>
         }
       >
-        <p className={styles.meta}>You can connect it again at any time.</p>
+        <p className={styles.hint}>You can connect it again at any time.</p>
       </Modal>
 
       <Modal
@@ -397,7 +537,31 @@ function MailboxCard({
           <li>You get an alert for each one, and can turn this off at any time.</li>
         </ul>
       </Modal>
-    </li>
+    </Fragment>
+  );
+}
+
+/**
+ * The tone and shape drafts from this mailbox follow. It is the workspace's (Settings > Email
+ * style), so it is read here and edited there, by an admin; the SDR is still owed the sentence.
+ */
+function WritingStyle({ mailbox, canEdit }: { mailbox: ConnectedMailbox; canEdit: boolean }) {
+  const style = mailbox.writing_style;
+  const parts = [
+    style?.tone ? `Tone: ${style.tone}.` : "No tone set: drafts follow the house playbook.",
+    style?.length_words ? `About ${style.length_words} words.` : null,
+    `The first email ${FIRST_ASK[style?.first_ask ?? "interest"] ?? FIRST_ASK.interest}.`,
+  ].filter(Boolean);
+  return (
+    <section className={styles.style} aria-labelledby={`style-${mailbox.id}`}>
+      <h5 id={`style-${mailbox.id}`} className={styles.sideTitle}>Writing style</h5>
+      <p className={styles.styleText}>{parts.join(" ")}</p>
+      <p className={styles.hint}>
+        {canEdit
+          ? <Link to="/settings/email" className={styles.inlineLink}>Change it in Email &amp; signature</Link>
+          : "Set for the whole workspace by an admin."}
+      </p>
+    </section>
   );
 }
 
