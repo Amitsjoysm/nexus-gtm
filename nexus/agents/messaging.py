@@ -350,7 +350,7 @@ class MessagingAgent(BaseAgent):
                 message, subject, body, ps = second, retry_subject, retry_body, retry_ps
         # A P.S. is kept only when asked for, and only when it says nothing the verifier cannot
         # find and quotes nothing: it sits below the signature with a person's word on it.
-        if not wants_ps or unverified_terms(ps, grounding, allow=allow) \
+        if not wants_ps or unverified_terms(ps, grounding, allow=allow, strict=True) \
                 or quoted_activity(ps, posts):
             ps = ""
         # A BLANK COMPLETION IS NOT A DRAFT. Observed live 2026-09-08: the provider returned an

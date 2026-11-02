@@ -157,6 +157,11 @@ def quoted_activity(text: str, activity) -> bool:
 #   so are the contact's, the sender's and the company's names;
 # * dates, clock times and (in the ask, or anywhere in a call script) durations are not facts about
 #   the buyer, and are not checked.
+# * a number keeps its KIND: "40%" needs a percentage of 40 in the context and "$40M" an amount of
+#   40, while a plain "12" matches any 12. Comparing digits alone let "Globex saw 40% faster
+#   onboarding" pass on an account that had raised $40M (found writing the test, 2026-10-29).
+# * `strict` (the P.S., which is dropped rather than retried) also checks a capitalised word that
+#   opens a sentence, unless it is one of the common openers in `_STARTERS`.
 
 _ALWAYS_ALLOWED = frozenset("""
 monday tuesday wednesday thursday friday saturday sunday mon tue tues wed thu thur thurs fri sat sun
@@ -169,9 +174,23 @@ svp evp hr it api apis us usa uk eu emea apac latam anz q1 q2 q3 q4 h1 h2 icp kp
 revops salesops faq pdf csv smb arr mrr sla slas rfp erp hse ehs qhse ops linkedin
 """.split())
 
+#: Words that open a sentence and name nothing, for `strict` checking.
+_STARTERS = frozenset("""
+a an the and but or so if when while since after before as at by for from in into of on to with
+congrats congratulations saw seen noticed loved liked read heard curious also one quick just
+your you our we they their this that these those it its there here what how why who which
+great nice good thanks thank happy glad worth open would could should can will may might
+""".split())
+
 _SEGMENT = re.compile(r"(?<=[.!?:;])\s+|\n+")
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9&'’.]*")
-_NUMBER = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,]\d+)*")
+_NUMBER = re.compile(
+    r"(?<![A-Za-z0-9])(?P<cur>[$£€]\s?)?(?P<n>\d+(?:[.,]\d+)*)"
+    r"(?:\s?(?P<unit>%|percent\b|per\s?cent\b|k\b|mm\b|m\b|bn\b|b\b|million\b|billion\b|"
+    r"thousand\b))?",
+    re.IGNORECASE,
+)
+_PERCENT_UNITS = ("%", "percent", "per cent")
 
 _MONTHS = ("january|february|march|april|may|june|july|august|september|october|november|"
            "december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec")
@@ -189,12 +208,21 @@ _DURATION = re.compile(
 )
 
 
-def _norm_number(raw: str) -> str:
-    return raw.replace(",", "").rstrip(".")
+def _numbers(text: str) -> list[tuple[str, str, str]]:
+    """``(value, kind, as written)`` for each number: kind is ``pct``, ``money`` or ``plain``."""
+    out = []
+    for match in _NUMBER.finditer(text or ""):
+        unit = " ".join((match.group("unit") or "").lower().split())
+        kind = ("pct" if unit in _PERCENT_UNITS
+                else "money" if match.group("cur") or unit else "plain")
+        out.append((match.group("n").replace(",", ""), kind, match.group(0).strip()))
+    return out
 
 
-def _context_numbers(context: str) -> set[str]:
-    return {_norm_number(n) for n in _NUMBER.findall(context or "")}
+def _number_given(value: str, kind: str, known: set[tuple[str, str]]) -> bool:
+    if kind == "plain":
+        return any(v == value for v, _ in known)
+    return (value, kind) in known
 
 
 def _allowed_words(allow) -> set[str]:
@@ -205,7 +233,7 @@ def _allowed_words(allow) -> set[str]:
     return words
 
 
-def _proper_nouns(text: str) -> list[str]:
+def _proper_nouns(text: str, *, strict: bool = False) -> list[str]:
     found: list[str] = []
     for segment in _SEGMENT.split(text or ""):
         tokens = _TOKEN.findall(segment)
@@ -215,19 +243,22 @@ def _proper_nouns(text: str) -> list[str]:
                 if len(word) < 2 or not word[0].isalpha():
                     continue
                 inner = any(c.isupper() for c in word[1:]) or any(c.isdigit() for c in word)
-                if position == 0 and not inner:
+                if position == 0 and not inner and (
+                        not strict or word.lower().replace("’", "'") in _STARTERS):
                     continue
                 if word[0].isupper() or inner:
                     found.append(word)
     return found
 
 
-def unverified_terms(text: str, context: str, *, allow=(), durations: str = "") -> list[str]:
+def unverified_terms(text: str, context: str, *, allow=(), durations: str = "",
+                     strict: bool = False) -> list[str]:
     """Numbers and proper nouns in ``text`` that ``context`` never mentions, in order, deduplicated.
 
     ``allow`` holds names always permitted (the contact, the sender, the company). ``durations`` is
     the span in which a duration is not a fact: the ask of an email ("15 minutes" there is the
-    meeting length), or the whole of a call script."""
+    meeting length), or the whole of a call script. ``strict`` also checks the word that opens a
+    sentence (see above)."""
     context = context or ""
     lowered_context = context.lower().replace("’", "'")
     allowed = _ALWAYS_ALLOWED | _allowed_words(allow)
@@ -237,7 +268,7 @@ def unverified_terms(text: str, context: str, *, allow=(), durations: str = "") 
         if term not in out:
             out.append(term)
 
-    for word in _proper_nouns(text):
+    for word in _proper_nouns(text, strict=strict):
         key = word.lower().replace("’", "'")
         if key in allowed:
             continue
@@ -248,10 +279,10 @@ def unverified_terms(text: str, context: str, *, allow=(), durations: str = "") 
     if durations and durations in source:
         source = source.replace(durations, _DURATION.sub(" ", durations))
     scrubbed = _NOT_FACTS.sub(" ", source)
-    known = _context_numbers(context)
-    for number in _NUMBER.findall(scrubbed):
-        if _norm_number(number) not in known:
-            add(number)
+    known = {(value, kind) for value, kind, _ in _numbers(context)}
+    for value, kind, written in _numbers(scrubbed):
+        if not _number_given(value, kind, known):
+            add(written)
     return out
 
 

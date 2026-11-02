@@ -379,9 +379,30 @@ def test_a_name_and_a_number_nobody_gave_are_found():
     from nexus.agents.email_quality import unverified_terms
 
     context = "Acme Robotics raises $40M Series B. Jane Buyer, VP Engineering. Thursday 24."
-    assert unverified_terms("We helped Globex cut onboarding 37%.", context) == ["Globex", "37"]
+    assert unverified_terms("We helped Globex cut onboarding 37%.", context) == ["Globex", "37%"]
     # What was given passes: the company, the round, the amount.
     assert unverified_terms(GOOD, context, allow=["Sam"]) == []
+
+
+def test_a_number_keeps_its_kind():
+    """The sample's "40%" is not the account's "$40M": comparing digits alone let a fabricated
+    percentage through on any account that had raised the same number of millions."""
+    from nexus.agents.email_quality import unverified_terms
+
+    context = "Acme Robotics raises $40M Series B, hiring 12 engineers, up 30% this year."
+    assert unverified_terms("We helped Globex cut onboarding 40%.", context) == ["Globex", "40%"]
+    assert unverified_terms("They hired 30 people and grew 12%.", context) == ["12%"]
+    assert unverified_terms("Saw the $40 million round and the 12 roles.", context) == []
+    assert unverified_terms("A $12M budget.", context) == ["$12M"]
+
+
+def test_a_ps_is_checked_from_its_first_word():
+    from nexus.agents.email_quality import unverified_terms
+
+    context = "Acme Robotics raises $40M Series B."
+    assert unverified_terms("Globex saw faster onboarding.", context) == []
+    assert unverified_terms("Globex saw faster onboarding.", context, strict=True) == ["Globex"]
+    assert unverified_terms("Congrats on the $40M Series B.", context, strict=True) == []
 
 
 def test_weekdays_months_times_and_the_meeting_length_are_not_facts():
@@ -409,7 +430,8 @@ async def test_a_samples_customer_and_metric_leaking_into_another_draft_cost_a_r
     out = await _compose(w)
     assert "Globex" in llm.prompts[0]                        # the sample reached the model
     assert len(llm.prompts) == 2                             # ...and its leak cost one retry
-    assert "not in the facts given: Globex, 40" in llm.prompts[1]
+    # 40% is caught although the account raised $40M: a percentage is not an amount.
+    assert "not in the facts given: Globex, 40%." in llm.prompts[1]
     assert "Globex" not in out["body"]
 
 
@@ -697,8 +719,13 @@ async def test_the_offline_stub_script_names_the_caller_and_passes_its_check():
 
 
 async def test_the_script_prompt_names_the_caller_and_a_bad_script_is_redone_once(model):
-    llm = model(json.dumps(_script(opener="Hi Jane, this is <your name>. Got a minute?")),
-                json.dumps(_script()))
+    # The workspace is "Callscript" (`_world` names it from the slug): a script naming any other
+    # company is caught by the verifier, which is how this test first failed.
+    good = json.loads(json.dumps(_script()).replace("Playbook", "Callscript"))
+    # A placeholder alone would not do: `_coerce` fills "<your name>" with the real caller. A
+    # stock line is the model's own fault, and costs the one retry.
+    llm = model(json.dumps({**good, "opener": "Hi Jane, how are you today? It's Sam."}),
+                json.dumps(good))
     w = await _world("callscript")
     from nexus.agents.runtime import get_agent_runtime
 
