@@ -206,11 +206,38 @@ async def _from_model(icp: dict, *, llm, limit: int) -> list[TitleRecommendation
     return kept
 
 
+#: The level words a keyword title is built with, most senior first. C-level is left out: "Chief of
+#: Facilities" is not a title anyone holds.
+_KEYWORD_LEVELS = (("vp", "VP"), ("head", "Head"), ("director", "Director"),
+                   ("manager", "Manager"))
+
+
+def keyword_titles(icp: dict) -> list[TitleRecommendation]:
+    """Titles built from the ICP's title keywords at its job levels ("Head of Facilities"), the
+    form people actually hold. Without these the fallback ranked a fixed list of roles, none of them
+    in the function the SDR typed, which is the "ignores keywords" half of the report."""
+    keywords = [str(k).strip() for k in (icp.get("title_keywords") or []) if str(k).strip()]
+    levels = {str(x).strip().lower() for x in (icp.get("job_levels") or [])}
+    words = [(lv, w) for lv, w in _KEYWORD_LEVELS if lv in levels] or [
+        ("head", "Head"), ("director", "Director")]
+    out: list[TitleRecommendation] = []
+    for keyword in keywords:
+        label = keyword if keyword[:1].isupper() else keyword.title()
+        for level, word in words:
+            out.append(TitleRecommendation(
+                title=f"{word} of {label}", priority_score=max(40, 90 - 3 * len(out)),
+                confidence=0.6, department=label, buying_influence="",
+                reason=f'In "{keyword}", one of your title keywords, at {level} level.',
+            ))
+    return out
+
+
 def from_catalogue(icp: dict, *, limit: int) -> list[TitleRecommendation]:
-    """The deterministic ranking, through the same filter."""
+    """The deterministic suggestions, through the same filter: titles in the ICP's own title
+    keywords first, then the catalogue ranking."""
     seen = _listed(icp)
     out: list[TitleRecommendation] = []
-    for rec in ranked_titles_for_icp(icp):
+    for rec in [*keyword_titles(icp), *ranked_titles_for_icp(icp)]:
         if len(out) >= limit:
             break
         if keep(rec.title, icp, seen):
