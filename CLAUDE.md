@@ -2848,6 +2848,51 @@ engagement kind; anything else (composer, plays, orchestrator) is a first email:
   `U+2011`/`U+202F`; after, "hg capital buy", paragraphs, "Open to seeing how?", the rep's name, no
   look-alike characters, `check_draft` clean.
 
+**The content writers' upgrade** (2026-10-29, W7 of `docs/superpowers/plans/2026-10-29-sdr-round-2.md`,
+`tests/test_copy_upgrade.py`). Sixteen items; every one a reader can point at is checked, not only
+asked for:
+- **One anchor, more facts, only real facts.** `copy.pick_anchor` (a signal about the person, else
+  the strongest) is picked once and drives the hook, the value prop (`select_value_prop` now reads
+  the signal's KIND via `_KIND_WORDS`, with stopwords, and the person's function as tie-break) and
+  `trigger_signal_id`; they were three picks. The latest research brief's highlights and the usable
+  fit reasons reach the prompt, three lines at most (`extra_fact_lines`; a reason carrying a
+  headcount or revenue is dropped). **The fact verifier** (`email_quality.unverified_terms`): every
+  number and proper noun in a draft must appear in what the model was given (system grounding plus
+  the facts, NOT the house-style samples). A number keeps its kind ("40%" is not "$40M", which let a
+  sample's "Globex cut onboarding 40%" through on an account that raised $40M). Precision first:
+  a plain capitalised word opening a sentence is not checked, weekdays, months, times, dates and
+  common acronyms are allowed, durations only in the ask. A miss costs one retry; still there, it is
+  a problem on the Draft, so `advance.py` holds the follow-up. The messaging agent returns
+  `unverified` (subject and body apart) for the drafter.
+- **What we do, and the problem as a pattern.** The value prop's description reaches the prompt and
+  `STRUCTURE_RULE` asks for one plain sentence of it; the problem is "what teams like theirs usually
+  find", and `check_draft` catches "your team is struggling with ...".
+- **Less sameness.** No rule or complaint quotes an example any more (the quoted 'Worth a look?'
+  closed most drafts); `BANNED_PHRASES` lives in `copy.py`, is rendered into the prompt and checked
+  (AI tells added: "I came across", "impressive", "streamline", "seamless", "I'd love to", ...);
+  `copy.shape_for(contact_id)` (sha256, not `hash()`) picks one of three described opener, ask and
+  subject styles, stable per contact, logged on the message as a `draft_facts` item of kind
+  `shape`. The offline stub follows the shape too.
+- **The gate's bugs**: a greeting is a whole word (`startswith("hi")` took "Hiring 12 engineers"),
+  the name in it too, and the retry shows the draft it is correcting.
+- **Size and revenue are register only** (`FIRMOGRAPHICS_RULE`, labelled so in `account_facts`,
+  checked). **Activity: reference the idea, never the quote** (`ACTIVITY_RULE`, the one sentence
+  `brief.py` and `SIGNAL_RULE` share; six words in a row from a post is caught).
+- **Roles** (`brief.role_profile`): whole words, seniority AND function, with named exceptions
+  ("Vice President" is not "president", "Product Owner" not "owner", "Lead Generation" not "lead").
+- **Call scripts**: `copy.caller_block` names the caller (the task's owner, else the account's) and
+  the workspace; `_coerce` fills a model's `<your name>` with them and its fallback has no
+  placeholder or stock line; the opener asks permission and `first_reactions` answers "Who is
+  this?", "Just send me an email." and "I'm busy." (`CallScriptOut.first_reactions`);
+  `email_quality.check_call_script` caps the opener (30 words) and voicemail (55), bans stock lines
+  and checks facts, with one retry.
+- **The optional P.S.** (`style.ps_line`, off by default, Settings > Email style): asked for only on
+  a first email that is not automatic, always split OFF the body (`copy.split_ps`, so one a model
+  adds unasked is dropped), kept only if the strict verifier finds its every fact, and stored as a
+  `draft_facts` item of kind `ps` (no migration). Review shows it with an unticked "I confirm this is
+  true"; `approve` adds it only with `confirm_ps` (to `ai_body` too, so it is not an edit), and
+  `sending/mime.compose_message_text` moves it below the signature.
+
 ## Drafted email: structure, signature, and the mailbox that sends it
 
 Four reports on 2026-09-16, one chain: the draft had no salutation, no signature, did not read like
