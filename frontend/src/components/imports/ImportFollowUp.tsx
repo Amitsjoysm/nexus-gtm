@@ -35,6 +35,8 @@ export interface ImportFollowUpProps {
   ids: string[];
   /** Rows the import wrote in all, to say when only the first 1,000 can be acted on. */
   written: number;
+  /** After it ran, so the page behind can re-read what changed. */
+  onDone?: () => void;
 }
 
 /**
@@ -45,7 +47,7 @@ export interface ImportFollowUpProps {
  * (the verifier Prospector's Verify uses, the enricher behind an account's Enrich), so the price is
  * the one the rate card already sets.
  */
-export function ImportFollowUp({ action, ids, written }: ImportFollowUpProps) {
+export function ImportFollowUp({ action, ids, written, onDone }: ImportFollowUpProps) {
   const api = useApiClient();
   const copy = COPY[action];
   const [quote, setQuote] = useState<ImportActionQuote | null>(null);
@@ -74,6 +76,7 @@ export function ImportFollowUp({ action, ids, written }: ImportFollowUpProps) {
     setRunError("");
     try {
       setDone(await api.runImportAction(action, ids));
+      onDone?.();
     } catch (err) {
       setRunError(err instanceof ApiError ? err.detail : "It didn't start. Nothing was charged.");
     } finally {
@@ -104,7 +107,7 @@ export function ImportFollowUp({ action, ids, written }: ImportFollowUpProps) {
           <span>
             {done.mode === "inline"
               ? `Checked ${copy.noun(done.count)}${done.charged ? `, ${formatNumber(done.charged)} charged` : ""}. Their status is on the list.`
-              : `Working on ${copy.noun(done.count)} in the background. The list updates as each one finishes.`}
+              : `Working on ${copy.noun(done.count)} in the background. Reload the list in a few minutes to see what was found.`}
           </span>
         </p>
       ) : quote.count === 0 ? (

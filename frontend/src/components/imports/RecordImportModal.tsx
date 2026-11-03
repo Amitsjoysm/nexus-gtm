@@ -389,6 +389,7 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
                 action="verify_emails"
                 ids={result.contact_ids}
                 written={result.created + result.updated}
+                onDone={() => onImported?.(result)}
               />
             )}
             {entity === "accounts" && result.account_ids && result.account_ids.length > 0 && (
@@ -396,6 +397,7 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
                 action="fill_firmographics"
                 ids={result.account_ids}
                 written={result.created + result.updated}
+                onDone={() => onImported?.(result)}
               />
             )}
             {result.errors.length > 0 && (
