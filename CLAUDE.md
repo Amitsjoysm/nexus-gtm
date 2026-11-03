@@ -2228,6 +2228,21 @@ observe-only `search.entity` ($0.005) and `verify.decision` ($0.001). Key: Provi
   Exa answers as before. Customers read it as "company research".
 - The Populate panel reads each step's note by its step (`STEP_NOTE_LABEL`): it used to read every
   note through LinkedIn's table, so a web search failure showed as LinkedIn's.
+- **Every new company's industry is checked, whatever found it, LinkedIn first** (owner decision
+  2026-10-29, SDR item "wrong industry, companies in several industries";
+  `prospecting/industry_check.py`, run by `deliver` beside `_industry_from_evidence`,
+  `tests/test_industry_check.py`). The shared store's LinkedIn read (industry label, description),
+  else one company-details run for pages known but unread, then ONE Decisions request carrying it
+  and asking per ICP industry yes / supplier / no, plus the main business. Operates in one or more
+  (0.7+): `industry` is the main one, `custom_fields.industries` all of them, cited; the gate
+  (`gate._industry`) matches on any, and on `supplier_to` when the ICP includes suppliers. Only a
+  supplier (suppliers excluded) or a confident no on every one: `wrong_industry`. Anything less
+  certain keeps the source's label. Parallel's own finds are skipped; with no Parallel key nothing
+  runs, not even the LinkedIn read (`ParallelClient.configured`). linkedin.com itself is never
+  fetched by our crawlers: LinkedIn bans scrapers and walls bots.
+- **Web finds and shared rows face the homepage check too** (`deliver._drop_moved_sites`): one whose
+  site now lands on another company's domain is `lands_elsewhere`, refused before the industry
+  check spends anything on it.
 
 ## Orchestrator intake (`nexus/orchestration/intake.py`)
 

@@ -97,6 +97,35 @@ def fit_screen(profile, min_fit: int):
     return passes
 
 
+#: Sources whose website was never checked for landing on another company. LinkedIn rows are
+#: vetted when they are taken, Parallel rows before their check.
+_UNVETTED_SOURCES = frozenset({"web", "shared"})
+
+
+async def _drop_moved_sites(built, discarded: Counter):
+    """Web finds and shared rows whose homepage now lands on another company's domain
+    (`vetting.lands_elsewhere`, 2026-10-29: cabotog.com lands on coterra.com) are acquired or gone,
+    and are not delivered. One homepage read each, cached a day; a site that does not answer stays."""
+    import asyncio
+
+    from nexus.prospecting.vetting import lands_elsewhere
+
+    todo = [(c, a) for c, a in built if c.source in _UNVETTED_SOURCES and c.domain]
+    if not todo:
+        return built
+    gate = asyncio.Semaphore(6)
+
+    async def moved(cand, account) -> bool:
+        async with gate:
+            return await lands_elsewhere(cand.domain, cand.name or account.name or "")
+
+    verdicts = await asyncio.gather(*(moved(c, a) for c, a in todo))
+    gone = {c.domain for (c, _), elsewhere in zip(todo, verdicts) if elsewhere}
+    if gone:
+        discarded["lands_elsewhere"] += len(gone)
+    return [(c, a) for c, a in built if c.domain not in gone]
+
+
 async def _industry_from_evidence(built, icp: dict, settings) -> set[str]:
     """Apply `companies.industry_evidence` per ``industry_evidence_mode``. Returns the domains whose
     own activity is not one of the ICP's industries (``on`` only), which are not delivered.
@@ -141,9 +170,10 @@ async def _industry_from_evidence(built, icp: dict, settings) -> set[str]:
 
 async def deliver(
     ts, profile, candidates: list[Candidate], *, limit: int, source: str, min_fit: int,
-    discarded: Counter, owner_user_id: str | None = None,
+    discarded: Counter, owner_user_id: str | None = None, industry_client=None,
 ) -> tuple[list[str], int]:
-    """Create up to ``limit`` accounts. Returns ``(account_ids, screened)``."""
+    """Create up to ``limit`` accounts. Returns ``(account_ids, screened)``. ``industry_client``
+    replaces the Parallel client the industry check uses (tests)."""
     from nexus.accounts.dedupe import find_existing_account
     from nexus.core.config import get_settings
     from nexus.discovery.auto import _enrich_candidates, _within_geo, _within_size_band
@@ -160,10 +190,21 @@ async def deliver(
         (cand, _account_for(ts.tenant_id, cand, source=source, owner_user_id=owner_user_id))
         for cand in candidates
     ]
+    built = await _drop_moved_sites(built, discarded)
 
     # What each company DOES, from its own site (2026-10-26). Before web enrichment, so a quoted
     # verdict is never overwritten by enrichment's looser guess (it fills blanks only).
     wrong_industry = await _industry_from_evidence(built, icp, settings)
+    # Every company Parallel did not find itself: LinkedIn first, then one cited check of which
+    # ICP industries it operates in (2026-10-29). Inert with no Parallel key.
+    from nexus.prospecting.industry_check import check_industries
+
+    checked = await check_industries(built, icp, client=industry_client)
+    wrong_industry |= checked.wrong
+    if checked.decisions:
+        from nexus.prospecting.parallel_companies import record_costs
+
+        await record_costs(ts, searches=0, decisions=checked.decisions)
 
     # Web rows are always enriched. Any other row is enriched only when a MANDATORY field has no
     # data on it, because no data is no match (D3): a LinkedIn company with no tech stack would

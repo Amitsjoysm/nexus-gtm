@@ -91,8 +91,12 @@ def _industry(icp: dict, account) -> str | None:
     if _industry_matches(account.industry, icp, codes):
         return "ok"
     custom = account.custom_fields if isinstance(account.custom_fields, dict) else {}
-    if icp.get("include_suppliers") and _industry_matches(custom.get("industry_self_label"), icp,
-                                                          codes):
+    # A company in several industries (`prospecting.industry_check`, 2026-10-29) matches on any.
+    if any(_industry_matches(i, icp, codes) for i in custom.get("industries") or []):
+        return "ok"
+    if icp.get("include_suppliers") and (
+            _industry_matches(custom.get("industry_self_label"), icp, codes)
+            or any(_industry_matches(i, icp, codes) for i in custom.get("supplier_to") or [])):
         return "ok"
     return "fail"
 

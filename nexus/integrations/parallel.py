@@ -195,6 +195,10 @@ class ParallelClient:
             logger.warning("could not resolve %s keys", PROVIDER, exc_info=True)
             return []
 
+    async def configured(self) -> bool:
+        """A key is in force. Lets a caller skip work that only feeds a Parallel call."""
+        return bool(await self._resolve_keys())
+
     def _url(self, path: str) -> str:
         from nexus.core.config import get_settings
 
