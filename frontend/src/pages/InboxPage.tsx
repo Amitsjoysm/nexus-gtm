@@ -40,6 +40,8 @@ interface Row {
   company: string;
   contactId: string | null;
   accountId: string | null;
+  /** What the who column says when the task is about nobody in particular (a campaign's review). */
+  group: string;
   action: { label: string; to: string; external?: boolean };
   signal?: InboxTask;
 }
@@ -86,6 +88,8 @@ function fromToday(item: TodayItem, index: number): Row {
     company: item.account_name,
     contactId: item.contact_id,
     accountId: item.account_id,
+    group: item.kind === "review" ? "Campaign"
+      : `${item.count} ${item.count === 1 ? "person" : "people"}`,
     action: { label: item.action, to: item.link },
   };
 }
@@ -106,6 +110,7 @@ function fromSignal(task: InboxTask): Row {
     company: task.account_name ?? "",
     contactId: null,
     accountId: task.account_id,
+    group: "Signal",
     action: task.signal_url
       ? { label: "Open signal", to: task.signal_url, external: true }
       : { label: "Open account", to: task.account_id ? `/accounts/${task.account_id}` : "/signals" },
@@ -320,7 +325,11 @@ function TaskRow({
   onComplete?: () => void;
 }) {
   const detailId = `task-${row.key}`;
-  const name = row.who || row.company || row.title;
+  const name = row.who || row.company || row.group;
+  // With a person named beside it, the title ("Call Jane at Acme") only repeats the who column, so
+  // the reason is the task; otherwise the title says what it is.
+  const lead = row.who ? row.detail : row.title;
+  const sub = row.who ? "" : row.detail;
   return (
     <>
       <tr className={open ? `${styles.row} ${styles.rowOpen}` : styles.row}>
@@ -334,15 +343,15 @@ function TaskRow({
             </span>
           </button>
         </td>
-        <td className={styles.taskCell}>
-          <span className={styles.taskTitle}>{row.title}</span>
-          <span className={styles.taskDetail}>{row.detail}</span>
+        <td className={styles.taskCell} title={row.who ? row.title : undefined}>
+          <span className={styles.taskTitle}>{lead}</span>
+          {sub && <span className={styles.taskDetail}>{sub}</span>}
         </td>
         <td className={styles.dueCell}>
           <span className={row.due === "overdue" ? styles.overdue : styles.today}>{dueLabel(row)}</span>
         </td>
         <td className={styles.actionCell}>
-          <ButtonLink size="sm" variant={row.due === "overdue" ? "primary" : "secondary"} to={row.action.to}
+          <ButtonLink size="sm" variant="secondary" to={row.action.to}
             {...(row.action.external ? { target: "_blank", rel: "noreferrer noopener" } : {})}>
             {row.action.label}
           </ButtonLink>
@@ -421,7 +430,7 @@ function TaskDetail({
         )}
         <div className={styles.block}>
           <h3 className={styles.blockTitle}>Why it's here</h3>
-          <p className={styles.why}>{row.detail}</p>
+          <p className={styles.why}>{row.title}. {row.detail}</p>
         </div>
         <div className={styles.detailActions}>
           <ButtonLink size="sm" variant="primary" to={row.action.to}

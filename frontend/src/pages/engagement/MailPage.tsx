@@ -173,7 +173,7 @@ function Reading({ threadId }: { threadId: string }) {
   const messages = useMemo(() => (view.data?.messages ?? []).map((m) => ({
     id: m.id, direction: m.direction, subject: m.subject, body: m.body, at: m.at,
     who: m.direction === "in" ? view.data?.thread.contact_name || undefined : undefined,
-    context: m.direction === "out" ? `From ${m.from_addr}` : undefined,
+    context: m.direction === "out" && m.from_addr ? `From ${m.from_addr}` : undefined,
     category: (m.category as ReplyCategory | null) ?? null,
   })), [view.data]);
 
