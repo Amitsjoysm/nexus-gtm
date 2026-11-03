@@ -79,6 +79,49 @@ async def backfill_companies(*, limit: int = 1000, dry_run: bool = False) -> dic
     return report
 
 
+async def link_accounts(account_ids: list[str]) -> dict[str, str]:
+    """Link these accounts to their shared company now, and give it what they know. Never raises.
+
+    `backfill_companies` for named rows, linked or not: bulk delete (5.5) calls it before removing
+    accounts, so the master record holds the account's firmographics and outlives it for other
+    workspaces and this one's later campaigns. Fills blanks only, through `resolve_company`, like the
+    backfill. An account with no usable domain has no company and is left out. Its own platform
+    session and commit, so the caller runs it before its tenant transaction writes anything.
+    Returns ``{account_id: company_id}``.
+    """
+    from sqlalchemy import select
+
+    from nexus.companies.resolution import normalise_domain, resolve_company
+    from nexus.core.db import get_platform_sessionmaker
+    from nexus.models.account import Account
+
+    linked: dict[str, str] = {}
+    ids = sorted({i for i in account_ids if i})
+    if not ids:
+        return linked
+    try:
+        async with get_platform_sessionmaker()() as session:
+            accounts = (await session.scalars(select(Account).where(Account.id.in_(ids)))).all()
+            for account in accounts:
+                if not normalise_domain(account.domain):
+                    continue
+                company = await resolve_company(
+                    session, domain=account.domain, name=account.name or "",
+                    industry=account.industry or None, country=account.country or None,
+                    employee_count=account.employee_count,
+                    tech_stack=list(account.tech_stack or []), source="account_backfill",
+                )
+                if company is None:
+                    continue
+                await session.flush()
+                account.company_id = company.id
+                linked[account.id] = company.id
+            await session.commit()
+    except Exception:
+        logger.warning("linking accounts to shared companies failed", exc_info=True)
+    return linked
+
+
 async def fill_from_linked_accounts(*, limit: int = 500) -> dict:
     """Give shared rows what their linked accounts learned after the link. Never raises.
 

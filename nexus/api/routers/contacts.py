@@ -170,6 +170,50 @@ async def delete_contact(
     return {"id": contact_id, "deleted": True, "restorable": True}
 
 
+class BulkContactIdsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    #: As many as a selection on the Contacts page holds at once (the accounts' bulk limit).
+    ids: list[str] = Field(min_length=1, max_length=500)
+
+
+async def _set_deleted(ts: TenantSession, ids: list[str], *, deleted: bool) -> int:
+    from sqlalchemy import update
+
+    from nexus.core.db import utcnow
+
+    unique = list(dict.fromkeys(ids))
+    state = Contact.deleted_at.is_(None) if deleted else Contact.deleted_at.isnot(None)
+    result = await ts.session.execute(
+        update(Contact)
+        .where(Contact.tenant_id == ts.tenant_id, Contact.id.in_(unique), state)
+        .values(deleted_at=utcnow() if deleted else None)
+        .execution_options(synchronize_session=False))
+    await ts.commit()
+    return int(result.rowcount or 0)
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_contacts(
+    body: BulkContactIdsIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.delete_records)),
+) -> dict:
+    """Soft-delete up to 500 contacts at once (manager+), exactly as one is deleted: hidden from
+    the list, history kept, restorable. Only this workspace's; an id that is not is skipped."""
+    return {"deleted": await _set_deleted(ts, body.ids, deleted=True), "restorable": True}
+
+
+@router.post("/bulk-restore")
+async def bulk_restore_contacts(
+    body: BulkContactIdsIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.delete_records)),
+) -> dict:
+    """Undo a bulk delete: the Undo on its confirmation."""
+    return {"restored": await _set_deleted(ts, body.ids, deleted=False)}
+
+
 @router.post("/{contact_id}/enrich-phone")
 async def enrich_contact_phone(
     contact_id: str,

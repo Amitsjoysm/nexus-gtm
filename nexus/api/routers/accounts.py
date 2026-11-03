@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, or_, select
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictBool
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
@@ -338,6 +338,164 @@ async def company_domain(
         return CompanyDomainOut()
     return CompanyDomainOut(domain=found.domain, url=found.url, title=found.title,
                             source="search")
+
+
+# ---- bulk delete (SDR round 2, 5.5) --------------------------------------------------------------
+
+#: Most accounts one request may delete. A selection on the Accounts page is at most a page or two.
+BULK_DELETE_MAX = 500
+
+
+class BulkIdsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    ids: list[str] = Field(min_length=1, max_length=BULK_DELETE_MAX)
+
+
+class AccountBulkDeleteIn(BulkIdsIn):
+    #: "Don't suggest these again here": Populate and the daily sweep skip their domains.
+    suppress: StrictBool = False
+    #: "Report wrong company data": flag each one's shared company row for review.
+    report_wrong: StrictBool = False
+    reason: str = Field(default="", max_length=500)
+
+
+class BulkDeleteBlockedOut(BaseModel):
+    id: str
+    name: str
+    campaigns: list[str]
+
+
+class AccountBulkDeletePreviewOut(BaseModel):
+    accounts: int
+    #: Their contacts, deleted with them.
+    contacts: int
+    #: Accounts someone in a running campaign is at; the delete is refused while any is chosen.
+    in_running_campaigns: list[BulkDeleteBlockedOut] = []
+    #: Accounts with a website, whose shared company record stays for other workspaces.
+    with_shared_record: int
+
+
+class AccountBulkDeleteOut(BaseModel):
+    deleted: int
+    contacts_deleted: int
+    suppressed: int = 0
+    reported: int = 0
+    #: Shared company records kept (linked first) for the accounts deleted.
+    shared_records_kept: int = 0
+
+
+async def _bulk_targets(ts: TenantSession, ids: list[str]) -> list:
+    """(id, name, domain, company_id) for the ids that are this workspace's accounts. Columns, not
+    ORM rows: the purge deletes with Core statements, and a loaded row would be a stale object."""
+    rows = await ts.session.execute(
+        select(Account.id, Account.name, Account.domain, Account.company_id)
+        .where(Account.tenant_id == ts.tenant_id, Account.id.in_(list(dict.fromkeys(ids)))))
+    return list(rows.all())
+
+
+async def _blocked(ts: TenantSession, targets) -> list[BulkDeleteBlockedOut]:
+    from nexus.accounts.purge import in_running_campaigns
+
+    running = await in_running_campaigns(ts, [t.id for t in targets])
+    return [BulkDeleteBlockedOut(id=t.id, name=t.name, campaigns=running[t.id])
+            for t in targets if t.id in running]
+
+
+@router.post("/bulk-delete/preview", response_model=AccountBulkDeletePreviewOut)
+async def preview_bulk_delete(
+    body: BulkIdsIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.delete_records)),
+) -> AccountBulkDeletePreviewOut:
+    """What deleting these accounts would remove, for the confirmation. Changes nothing."""
+    from nexus.companies.resolution import normalise_domain
+
+    targets = await _bulk_targets(ts, body.ids)
+    contacts = 0
+    if targets:
+        contacts = await ts.session.scalar(select(func.count()).select_from(Contact).where(
+            Contact.tenant_id == ts.tenant_id,
+            Contact.account_id.in_([t.id for t in targets]))) or 0
+    return AccountBulkDeletePreviewOut(
+        accounts=len(targets), contacts=int(contacts),
+        in_running_campaigns=await _blocked(ts, targets),
+        with_shared_record=sum(1 for t in targets if normalise_domain(t.domain)),
+    )
+
+
+@router.post("/bulk-delete", response_model=AccountBulkDeleteOut)
+async def bulk_delete_accounts(
+    body: AccountBulkDeleteIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.delete_records)),
+) -> AccountBulkDeleteOut:
+    """Delete accounts for good, with their contacts (owner decision 2026-10-29). Manager+.
+
+    Unlike ``DELETE /{account_id}`` (an archive), this removes the rows and what belongs to them
+    (`accounts.purge`): a person chose the selection and confirmed the count. What it keeps:
+
+    * **The shared company record.** Each account is linked to it first and its firmographics
+      folded in (`companies.backfill.link_accounts`), so other workspaces' Populates, and this
+      one's later campaigns, still have the company.
+    * **Records that are somebody else's**: an AI run and its charge, a do-not-contact block (it
+      holds the address), the mailbox's own threads and replies. They lose the pointer, not the row.
+
+    **Refused (409) while any chosen account has someone in a running campaign**, naming them, and
+    nothing is deleted: a campaign about to email a deleted person would email nobody. The options
+    are workspace-only: "don't suggest these again" suppresses the domains for this workspace's
+    discovery, and "report wrong company data" flags the shared row for review and never
+    quarantines a row every workspace reads.
+    """
+    from nexus.accounts.purge import PurgeIncomplete, purge_accounts
+    from nexus.accounts.suppression import suppress
+    from nexus.companies.backfill import link_accounts
+    from nexus.companies.reports import report_wrong
+
+    if body.report_wrong and not body.reason.strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Say what is wrong with the company data, so it can be checked.")
+    targets = await _bulk_targets(ts, body.ids)
+    if not targets:
+        return AccountBulkDeleteOut(deleted=0, contacts_deleted=0)
+    blocked = await _blocked(ts, targets)
+    if blocked:
+        names = ", ".join(b.name for b in blocked[:5]) + (
+            f" and {len(blocked) - 5} more" if len(blocked) > 5 else "")
+        campaigns = sorted({c for b in blocked for c in b.campaigns})
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={
+            "error": "in_running_campaign",
+            "message": (f"{names} {'is' if len(blocked) == 1 else 'are'} in a running campaign "
+                        f"({', '.join(campaigns[:3])}). Nothing was deleted. Remove them from the "
+                        "campaign, or leave them out of this delete."),
+            "accounts": [b.model_dump() for b in blocked],
+        })
+
+    ids = [t.id for t in targets]
+    # Shared rows first, on their own platform session, before this request's transaction writes
+    # anything (the order the shared stores need; SQLite would otherwise lock).
+    linked = await link_accounts(ids)
+    reported = 0
+    if body.report_wrong:
+        companies = set(linked.values()) | {t.company_id for t in targets if t.company_id}
+        reported = await report_wrong(companies, tenant_id=ts.tenant_id,
+                                      user_id=principal.user_id, reason=body.reason)
+
+    suppressed = 0
+    if body.suppress:
+        suppressed = await suppress(ts, [t.domain for t in targets], user_id=principal.user_id)
+    try:
+        counts = await purge_accounts(ts, ids)
+    except PurgeIncomplete as exc:
+        logger.error("bulk delete refused: %s", exc)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            "Nothing was deleted: a record still points at these accounts.") from exc
+    await ts.commit()
+    return AccountBulkDeleteOut(
+        deleted=counts.get("accounts", 0), contacts_deleted=counts.get("contacts", 0),
+        suppressed=suppressed, reported=reported,
+        shared_records_kept=len(set(linked) | {t.id for t in targets if t.company_id}),
+    )
 
 
 @router.get("/{account_id}", response_model=AccountOut)
