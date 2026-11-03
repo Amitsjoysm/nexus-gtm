@@ -41,7 +41,6 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
 def _account_out(
     a: Account, *, fit_score: int | None = None, owner_name: str | None = None,
     icp: dict | None = None, service_name: str | None = None,
-    service_fits: dict[str, int] | None = None,
 ) -> AccountOut:
     from nexus.relevance.gate import icp_gate, mandatory_fields
 
@@ -81,7 +80,6 @@ def _account_out(
         icp_gate=icp_gate(icp, a).as_dict() if mandatory_fields(icp) else None,
         service_id=a.service_id,
         service_name=service_name,
-        service_fits=service_fits or {},
     )
 
 
@@ -290,9 +288,6 @@ async def list_accounts(
     scores = await _latest_fit_scores(ts, [a.id for a in rows])
     names = await _owner_names(ts, rows)
     icps, service_names = await _service_icps(ts)
-    from nexus.relevance.services import fits_for
-
-    fits = await fits_for(ts, [a.id for a in rows]) if len(icps) > 1 else {}
     events = await _recent_signals(ts, [a.id for a in rows])
     out = []
     for a in rows:
@@ -300,7 +295,7 @@ async def list_accounts(
                              owner_name=names.get(a.owner_user_id or ""),
                              icp=icps.get(a.service_id, icps[None]),
                              service_name=service_names.get(a.service_id) if a.service_id
-                             else None, service_fits=fits.get(a.id))
+                             else None)
         shown.recent_signals = events.get(a.id, [])
         out.append(shown)
     return out

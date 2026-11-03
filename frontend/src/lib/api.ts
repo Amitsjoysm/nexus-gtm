@@ -26,6 +26,8 @@ import type {
   AccountInput,
   ActivityItem,
   AgentRunResponse,
+  IcpService,
+  IcpServiceInput,
   LatestAgentRun,
   LastWebsiteAnalysis,
   McpConnection,
@@ -229,7 +231,9 @@ import type {
   SignalWindowPolicy,
   TelephonyConnection,
   TelephonyConnectionInput,
+  ServiceFit,
 } from "./types";
+import { MAIN_SERVICE } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -763,17 +767,21 @@ export class ApiClient {
   getPopulateQuote(count: number, signal?: AbortSignal) {
     return this.request<PopulateQuote>("/discovery/populate/quote", { query: { count }, signal });
   }
-  startPopulate(count: number) {
+  startPopulate(count: number, serviceId?: string | null) {
     return this.request<PopulateRun>("/discovery/populate", {
       method: "POST",
-      body: { count },
+      body: { count, service_id: serviceId ?? null },
     });
   }
   getPopulateRun(id: string, signal?: AbortSignal) {
     return this.request<PopulateRun>(`/discovery/populate/${encodeURIComponent(id)}`, { signal });
   }
-  getLatestPopulate(signal?: AbortSignal) {
-    return this.request<PopulateRun | null>("/discovery/populate/latest", { signal });
+  /** The latest populate; for one service when `serviceId` is given (MAIN_SERVICE: the main). */
+  getLatestPopulate(signal?: AbortSignal, serviceId?: string) {
+    return this.request<PopulateRun | null>("/discovery/populate/latest", {
+      query: { service_id: serviceId },
+      signal,
+    });
   }
   suggestBuyerTitles(
     icp: {
@@ -786,6 +794,12 @@ export class ApiClient {
       // filling in the value proposition and product context changed nothing about the results.
       value_props?: { name: string; description?: string; pains_solved?: string[] }[];
       product_context?: string;
+      // Read since W4: the functions and exclusions an SDR typed, and the levels they want.
+      countries?: string[];
+      title_keywords?: string[];
+      exclude_title_keywords?: string[];
+      job_levels?: string[];
+      service_id?: string | null;
       limit?: number;
     },
     signal?: AbortSignal,
@@ -796,16 +810,54 @@ export class ApiClient {
       signal,
     });
   }
-  analyzeWebsite(url: string, signal?: AbortSignal) {
+  /** Draft an ICP from a site, or from one service's own page (`acme.com/services/abc`). */
+  analyzeWebsite(url: string, serviceId?: string | null, signal?: AbortSignal) {
     return this.request<RelevanceProfileInput>("/relevance/analyze-website", {
       method: "POST",
-      body: { url },
+      body: { url, service_id: serviceId ?? null },
       signal,
     });
   }
-  /** What "Draft from website" last found — offered back for free rather than re-analysed. */
-  lastWebsiteAnalysis(signal?: AbortSignal) {
-    return this.request<LastWebsiteAnalysis>("/relevance/last-analysis", { signal });
+  /** What "Draft from website" last found for this service — offered back for free. */
+  lastWebsiteAnalysis(signal?: AbortSignal, serviceId?: string | null) {
+    return this.request<LastWebsiteAnalysis>("/relevance/last-analysis", {
+      query: { service_id: serviceId ?? undefined },
+      signal,
+    });
+  }
+
+  // ---- services: a full ICP per service the workspace sells (W8) ----
+  listServices(signal?: AbortSignal, includeArchived = false) {
+    return this.request<IcpService[]>("/relevance/services", {
+      query: { include_archived: includeArchived || undefined },
+      signal,
+    });
+  }
+  createService(body: IcpServiceInput) {
+    return this.request<IcpService>("/relevance/services", { method: "POST", body });
+  }
+  /** Save a service. `id` null saves the main service (the workspace's relevance profile). */
+  updateService(id: string | null, body: IcpServiceInput) {
+    return this.request<IcpService>(
+      `/relevance/services/${encodeURIComponent(id ?? MAIN_SERVICE)}`,
+      { method: "PUT", body },
+    );
+  }
+  archiveService(id: string) {
+    return this.request<IcpService>(`/relevance/services/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+    });
+  }
+  restoreService(id: string) {
+    return this.request<IcpService>(`/relevance/services/${encodeURIComponent(id)}/restore`, {
+      method: "POST",
+    });
+  }
+  accountServiceFits(accountId: string, signal?: AbortSignal) {
+    return this.request<ServiceFit[]>(
+      `/relevance/services/fits/${encodeURIComponent(accountId)}`,
+      { signal },
+    );
   }
 
   // ---- lists / segments ----
@@ -1134,11 +1186,12 @@ export class ApiClient {
       signal,
     });
   }
-  /** How many net-new strict-ICP accounts discovery should add per day for this workspace. */
-  setIcpDailyCount(count: number, signal?: AbortSignal) {
+  /** How many net-new strict-ICP accounts discovery should add per day: for the main service, or
+   *  for `serviceId` (0 turns that service's daily discovery off). */
+  setIcpDailyCount(count: number, serviceId?: string | null, signal?: AbortSignal) {
     return this.request<AutomationSettings>("/workspace/automation", {
       method: "PATCH",
-      body: { icp_daily_count: count },
+      body: { icp_daily_count: count, service_id: serviceId ?? null },
       signal,
     });
   }
@@ -1539,6 +1592,12 @@ export class ApiClient {
   }
   getEngagementCampaign(id: string, signal?: AbortSignal) {
     return this.request<EngagementCampaign>(`/engagement/campaigns/${id}`, { signal });
+  }
+  /** Pitch another service. Before launch only (409 after). */
+  setCampaignService(id: string, serviceId: string | null) {
+    return this.request<EngagementCampaign>(`/engagement/campaigns/${id}/service`, {
+      method: "PUT", body: { service_id: serviceId },
+    });
   }
   replaceCampaignSteps(id: string, steps: EngagementStep[]) {
     return this.request<EngagementCampaign>(`/engagement/campaigns/${id}/steps`, {

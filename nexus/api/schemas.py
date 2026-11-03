@@ -276,12 +276,11 @@ class AccountOut(AccountIn):
     # None when the ICP marks nothing mandatory, so the screen keeps showing the fit score alone.
     # Read against the ICP of the service that found the account (W8).
     icp_gate: dict | None = None
-    # The service whose discovery found the account (W8). None is the main service.
+    # The service whose discovery found the account (W8). None is the main service. The Fit
+    # column is already this service's fit: the account is scored against the service that found
+    # it; every other service's fit is on Account 360 (`/relevance/services/fits/{id}`).
     service_id: str | None = None
     service_name: str | None = None
-    # ICP fit (0..100) against each further service, by service id; the main service's is the
-    # Fit column. Only on the Accounts list, which filters by service.
-    service_fits: dict[str, int] = Field(default_factory=dict)
     # The account's events by kind, newest of each: [{kind, days_ago}]. Events only (strength 0.5,
     # the Signals page's own floor), so the Accounts list can filter on them. Filled by the list.
     recent_signals: list[dict] = Field(default_factory=list)

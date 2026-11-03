@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
-import { Button, Card, Icons, Input, WorkingIndicator } from "@/components/ui";
+import { Button, Card, Field, Icons, Input, Select, WorkingIndicator } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import type { PopulateQuote, PopulateRun } from "@/lib/types";
+import { MAIN_SERVICE } from "@/lib/types";
+import type { IcpService, PopulateQuote, PopulateRun } from "@/lib/types";
 import styles from "./PopulatePanel.module.css";
 
 /**
@@ -15,6 +16,10 @@ import styles from "./PopulatePanel.module.css";
  * looking at, and a progress view that can outlive a dialog belongs on the page. The server checks
  * the balance for the whole count before buying anything and charges only for companies actually
  * added, so the cost line here says "up to".
+ *
+ * Each service has its own Populate (W8, 2026-10-29): the panel opens on the service the page is
+ * editing, and once the workspace sells more than one it asks which service the companies are for.
+ * The companies are found against that service's ICP and record it.
  */
 
 const PRESETS = [10, 20, 50, 100] as const;
@@ -111,10 +116,27 @@ export interface PopulatePanelProps {
   /** Show the question. Set by a save that changed the ICP, or by the page's "Add companies". */
   asking: boolean;
   onClose: () => void;
+  /** The services the workspace sells, the main one first. Absent or one: no picker. */
+  services?: IcpService[];
+  /** The service the page is editing, which the question opens on; null is the main service. */
+  serviceId?: string | null;
 }
 
-export function PopulatePanel({ asking, onClose }: PopulatePanelProps) {
+function hasIcp(s: IcpService): boolean {
+  const icp = s.icp ?? {};
+  return Boolean(
+    icp.industries?.length || icp.countries?.length || icp.employee_min != null ||
+      icp.employee_max != null,
+  );
+}
+
+export function PopulatePanel({ asking, onClose, services = [], serviceId = null }: PopulatePanelProps) {
   const api = useApiClient();
+  const [target, setTarget] = useState<string>(serviceId ?? MAIN_SERVICE);
+  useEffect(() => setTarget(serviceId ?? MAIN_SERVICE), [serviceId]);
+  const multiService = services.length > 1;
+  const nameOf = (id: string | null | undefined) =>
+    services.find((s) => (s.id ?? MAIN_SERVICE) === (id ?? MAIN_SERVICE))?.name;
   const [choice, setChoice] = useState<Choice>(20);
   const [custom, setCustom] = useState("");
   const [quote, setQuote] = useState<PopulateQuote | null>(null);
@@ -213,7 +235,7 @@ export function PopulatePanel({ asking, onClose }: PopulatePanelProps) {
     setStarting(true);
     setRefused(null);
     try {
-      setRun(await api.startPopulate(count));
+      setRun(await api.startPopulate(count, target === MAIN_SERVICE ? null : target));
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         // Already running: show that run instead of an error about it.
@@ -226,7 +248,7 @@ export function PopulatePanel({ asking, onClose }: PopulatePanelProps) {
     } finally {
       setStarting(false);
     }
-  }, [api, count, countValid, starting]);
+  }, [api, count, countValid, starting, target]);
 
   function onSegmentKey(e: KeyboardEvent<HTMLButtonElement>, index: number) {
     const options: Choice[] = [...PRESETS, "custom"];
@@ -255,6 +277,7 @@ export function PopulatePanel({ asking, onClose }: PopulatePanelProps) {
       <Card padding="lg" className={styles.panel} aria-labelledby="populate-title">
         <h2 id="populate-title" className={styles.title}>
           Adding {plural(run.requested, "company", "companies")}
+          {multiService && nameOf(run.service_id) ? ` for ${nameOf(run.service_id)}` : ""}
         </h2>
         <WorkingIndicator
           className={styles.working}
@@ -358,7 +381,9 @@ export function PopulatePanel({ asking, onClose }: PopulatePanelProps) {
       <div className={styles.head}>
         <div>
           <h2 id="populate-title" className={styles.title}>
-            Add companies that match this ICP now?
+            {multiService && nameOf(target)
+              ? `Add companies that match ${nameOf(target)} now?`
+              : "Add companies that match this ICP now?"}
           </h2>
           <p className={styles.desc}>
             Companies we already know come first, then a LinkedIn search for the rest. Each one
@@ -367,6 +392,22 @@ export function PopulatePanel({ asking, onClose }: PopulatePanelProps) {
           </p>
         </div>
       </div>
+
+      {multiService && (
+        <div className={styles.service}>
+          <Field label="For" hint="Found against this service's ICP, and kept as the service that found them.">
+            <Select
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              options={services.map((s) => ({
+                value: s.id ?? MAIN_SERVICE,
+                label: hasIcp(s) ? s.name : `${s.name} (save its ICP first)`,
+                disabled: !hasIcp(s),
+              }))}
+            />
+          </Field>
+        </div>
+      )}
 
       <div className={styles.picker}>
         <div role="radiogroup" aria-label="How many companies" className={styles.switch}>

@@ -77,7 +77,7 @@ async def test_the_scoring_refresh_scores_every_service_and_the_badge_is_the_fin
     assert score.icp_fit == fits[found.id][health], "scored against the service that found it"
 
 
-async def test_the_list_shows_the_finding_service_its_fits_and_filters_by_it(client):
+async def test_the_list_shows_the_finding_service_and_filters_by_it(client):
     token = await signup(client, slug="fit4", email="o@fit4.io", company="Fit4")
     tid = principal_from_token(token).tenant_id
     health, audits = await _services(tid)
@@ -95,7 +95,6 @@ async def test_the_list_shows_the_finding_service_its_fits_and_filters_by_it(cli
     assert rows[found_id]["service_id"] == health
     assert rows[found_id]["service_name"] == "Health cloud"
     assert rows[mine_id]["service_id"] is None and rows[mine_id]["service_name"] is None
-    assert set(rows[found_id]["service_fits"]) == {health, audits}
     # Its must-match result is the health service's (industry), not the main service's (none).
     assert rows[found_id]["icp_gate"]["passed"] is False
     assert rows[mine_id]["icp_gate"] is None

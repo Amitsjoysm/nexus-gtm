@@ -169,6 +169,8 @@ export function CampaignDetailPage() {
               <span>Paused because {reasonText(c.pause_reason)}</span>
             )}
             <span>{mailbox ? `Sends from ${mailbox.email}` : c.mailbox_connection_id ? "Sends from your mailbox" : "No sending mailbox yet"}</span>
+            {/* Named only for a further service: with one service there is nothing to tell apart. */}
+            {c.service_id && c.service_name && <span>Pitches {c.service_name}</span>}
           </span>
         }
         actions={

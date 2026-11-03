@@ -21,6 +21,7 @@ import {
   WorkingIndicator,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
+import { ServiceFitCard } from "@/components/icp/ServiceFitCard";
 import { AccountOwner } from "@/components/AccountOwner";
 import {
   AddSimilarPerson,
@@ -772,6 +773,7 @@ export function AccountDetailPage() {
               );
             }}
           </DataState>
+          <ServiceFitCard accountId={id} />
         </div>
       </TabPanel>
 

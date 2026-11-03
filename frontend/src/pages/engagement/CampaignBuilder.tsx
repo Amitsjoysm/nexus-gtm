@@ -8,7 +8,8 @@ import { StepsEditor, blankStep, stepsProblem } from "@/components/engagement/St
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import type { ConnectedMailbox, EngagementStep, SequenceTemplate } from "@/lib/types";
+import { MAIN_SERVICE } from "@/lib/types";
+import type { ConnectedMailbox, EngagementStep, IcpService, SequenceTemplate } from "@/lib/types";
 import styles from "./Engagement.module.css";
 
 /**
@@ -20,6 +21,10 @@ import styles from "./Engagement.module.css";
  * list could only become a campaign from the list page's own button). Arriving from a selection
  * elsewhere (discovery's "Add to a campaign") carries it in router state, and those people are added
  * the moment the campaign exists, with the list if one is chosen: still nothing is drafted or sent.
+ *
+ * A campaign pitches ONE service (W8, 2026-10-29). The picker appears once the workspace sells more
+ * than one; its drafts, call scripts and the ICP check on who is added read that service's ICP and
+ * value props. With one service there is nothing to choose and nothing is shown.
  */
 
 /** People handed over from another screen: by id, companies meaning everyone there, or a list. */
@@ -45,6 +50,7 @@ export function CampaignBuilder() {
   const handedAccounts = handover.accountIds ?? [];
   const mailboxes = useApi<ConnectedMailbox[]>((s) => api.listConnectedMailboxes(false, s), []);
   const templates = useApi<SequenceTemplate[]>((s) => api.listSequenceTemplates(s), []);
+  const services = useApi<IcpService[]>((s) => api.listServices(s), []);
 
   const mine = useMemo(
     () => (mailboxes.data ?? []).filter((m) => m.mine && m.status === "connected"),
@@ -54,6 +60,7 @@ export function CampaignBuilder() {
   const [listId, setListId] = useState(handover.listId ?? "");
   const [mailboxId, setMailboxId] = useState("");
   const [templateId, setTemplateId] = useState(CUSTOM);
+  const [serviceId, setServiceId] = useState(MAIN_SERVICE);
   const [steps, setSteps] = useState<EngagementStep[]>([blankStep(true), blankStep()]);
   const [firstSend, setFirstSend] = useState<"on_approval" | "scheduled">("on_approval");
   const [firstSendAt, setFirstSendAt] = useState(() => {
@@ -100,6 +107,7 @@ export function CampaignBuilder() {
         first_send_mode: firstSend,
         first_send_at: firstSend === "scheduled" ? new Date(firstSendAt).toISOString() : null,
         timezone_mode: timezoneMode,
+        service_id: serviceId,
       });
       if (handedContacts.length || handedAccounts.length || listId) {
         try {
@@ -187,6 +195,21 @@ export function CampaignBuilder() {
                 options={mine.map((m) => ({ value: m.id, label: m.email }))}
               />
             </Field>
+            {(services.data?.length ?? 0) > 1 && (
+              <Field
+                label="Pitches"
+                hint="The service this campaign sells. Its emails, call scripts and the check on who can be added use that service's ICP and value propositions."
+              >
+                <Select
+                  value={serviceId}
+                  onChange={(e) => setServiceId(e.target.value)}
+                  options={(services.data ?? []).map((s) => ({
+                    value: s.id ?? MAIN_SERVICE,
+                    label: s.name,
+                  }))}
+                />
+              </Field>
+            )}
           </div>
         </Card>
 
