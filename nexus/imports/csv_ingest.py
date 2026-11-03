@@ -170,7 +170,8 @@ def sniff_delimiter(text: str) -> str:
 MAX_RETURNED_IDS = 1_000
 
 
-def _rows(content: bytes) -> list[dict]:
+def _rows(content: bytes) -> tuple[list[dict], int]:
+    """The data rows, and the spreadsheet line the first one is on (for "row N" in the errors)."""
     from nexus.imports.template import is_guide_row
 
     text = _decode(content)
@@ -179,8 +180,8 @@ def _rows(content: bytes) -> list[dict]:
     # The sample file's second line says what each column needs. Uploaded back with the operator's
     # rows under it, that line would otherwise import as a company called "Required: ...".
     if rows and is_guide_row(rows[0].values()):
-        rows = rows[1:]
-    return rows
+        return rows[1:], 3
+    return rows, 2  # 2 == the first data line in a spreadsheet
 
 
 def _example_row(index: int, errors: list[str]) -> int:
@@ -299,11 +300,11 @@ async def import_accounts_csv(
     created = updated = skipped = 0
     errors: list[str] = []
     ids: list[str] = []
-    rows = _rows(content)
+    rows, first_line = _rows(content)
     mapped_columns = set(mapping)
     real, custom = split_targets(mapping)
 
-    for index, row in enumerate(rows, start=2):  # 2 == the first data line in a spreadsheet
+    for index, row in enumerate(rows, start=first_line):
         fields = {field: (row.get(column) or "").strip() for column, field in real.items()}
         name = fields.get("name", "")
         domain = normalise_domain(fields.get("domain", ""))
@@ -405,11 +406,11 @@ async def import_contacts_csv(
     created = updated = skipped = 0
     errors: list[str] = []
     ids: list[str] = []
-    rows = _rows(content)
+    rows, first_line = _rows(content)
     mapped_columns = set(mapping)
     real, custom = split_targets(mapping)
 
-    for index, row in enumerate(rows, start=2):
+    for index, row in enumerate(rows, start=first_line):
         fields = {field: (row.get(column) or "").strip() for column, field in real.items()}
         email = normalise_email(fields.get("email", ""))
         full_name = fields.get("full_name", "")

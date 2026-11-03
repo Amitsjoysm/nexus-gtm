@@ -114,6 +114,8 @@ async def test_the_template_uploaded_as_it_is_imports_nothing(client):
     assert result["total_rows"] == 2
     assert result["skipped"] == 2
     assert all("example row" in e for e in result["errors"])
+    # Numbered as the spreadsheet shows them: header 1, guide 2, the examples 3 and 4.
+    assert [e.split(":")[0] for e in result["errors"]] == ["row 3", "row 4"]
     async with tenant_session(tid) as ts:
         assert await ts.list(Account) == []
 

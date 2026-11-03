@@ -200,7 +200,7 @@ export function BulkDeleteAccountsModal({ open, ids, onClose, onDeleted }: BulkD
                 <Field
                   label="What is wrong?"
                   required
-                  error={reasonMissing ? "Say what is wrong, so it can be checked." : undefined}
+                  hint="Needed to send the report, so it can be checked."
                 >
                   <Textarea
                     rows={3}

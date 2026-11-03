@@ -47,11 +47,11 @@ class FieldGuide:
 #: a person's own profile on a contact).
 GUIDE: dict[str, dict[str, FieldGuide]] = {
     "accounts": {
-        "name": FieldGuide(REQUIRED, "the company's name. A website below is enough on its own.",
+        "name": FieldGuide(REQUIRED, "the company's name. This or the website is enough.",
                            ("Example Analytics", "Example Logistics")),
-        "domain": FieldGuide(REQUIRED, "the website, like acme.com. A company name is enough on "
-                             "its own; with a website, the company you already have is updated.",
-                             ("example.com", "example.org")),
+        "domain": FieldGuide(REQUIRED, "the website, like acme.com. This or the name is enough; "
+                             "with a website, a company you already have is updated, not added "
+                             "twice.", ("example.com", "example.org")),
         "industry": FieldGuide(RECOMMENDED, "the industry, in your words.",
                                ("Software Development", "Transportation and Logistics")),
         "country": FieldGuide(RECOMMENDED, "the country of the headquarters.",
