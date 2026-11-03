@@ -246,9 +246,11 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0075_call_scripts` on branch `fix/sdr-data-accuracy`
-(`0073_field_provenance`, `0074_draft_facts`, `0075_call_scripts`, none applied anywhere but a DB
-copy); `0072_prospector` before it. The chain is
+Alembic under `migrations/versions/`. Head: `0076_run_soft_delete` on branch
+`claude/records-housekeeping-abf793` (SDR round 2, Session B), on `0075_call_scripts` of
+`fix/sdr-data-accuracy` (`0073_field_provenance`, `0074_draft_facts`, `0075_call_scripts`, none
+applied anywhere but a DB copy); `0072_prospector` before it. Session E's `0077_icp_services` is
+parented on `0075` and is re-parented onto `0076` at merge. The chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -274,7 +276,9 @@ fields on `companies`, `company_countries` and `prospect_cursors`, all platform-
 platform-global) -> `0072` (`prospector_pages` platform-global; `prospector_purchases`,
 `prospector_daily_rows` tenant-scoped) -> `0073` (`field_sources` on accounts, contacts and
 companies; `companies.labels_quarantined_at`) -> `0074` (`engagement_messages.draft_facts`) ->
-`0075` (`engagement_campaigns.call_script`, `.call_script_meta`). Every tenant-scoped table gets
+`0075` (`engagement_campaigns.call_script`, `.call_script_meta`) -> `0076`
+(`orchestration_runs.deleted_at`; `discovery_suppressions` tenant-scoped; `company_reports`
+platform-global, `subject_tenant_id`). Every tenant-scoped table gets
 RLS via `scripts/apply_rls.py` on deploy — no manual policy work needed for new tables.
 
 **Two feature branches both claimed 0044–0046 and merging them produced two alembic heads**, which
@@ -1582,6 +1586,46 @@ Do not enable fan-out on assertion. It multiplies any attribution mistake by the
 subscribing tenants, and four of this subsystem's six attribution bugs were found only by running
 against live providers.
 
+## Deleting accounts and contacts, and adding one contact (SDR round 2, 5.4 and 5.5)
+
+**Bulk delete is manager+ (`Permission.delete_records`), at most 500 a request.** Contacts
+(`POST /contacts/bulk-delete`, `/bulk-restore` for the Undo) are soft-deleted exactly as one is.
+Accounts (`POST /accounts/bulk-delete`, `/preview` for the confirmation's counts) are deleted for
+good with their contacts (owner decision 2026-10-29), unlike `DELETE /accounts/{id}`, which still
+archives. `tests/test_bulk_delete.py`.
+
+- **Refused (409, nothing deleted) while anyone at a chosen account is in a running campaign**
+  (campaign `reviewing`/`active`/`paused`, enrolment not finished), naming the accounts and
+  campaigns; the dialog offers "Leave them out".
+- **`nexus/accounts/purge.py` splits explicit from derived.** `OWNED` names what goes with an
+  account or contact (scores, snapshots, signals, alerts, Inbox tasks, list items, call tasks and
+  calls, finished enrolments, the legacy campaign targets and cadence rows). Every other foreign key
+  into a row being deleted is found from `Base.metadata` and CLEARED when nullable, so somebody
+  else's record keeps its row and loses the pointer: an AI run and its charge, an agent action, a
+  conversation, a play run, an outcome, a do-not-contact block (it holds the address and must stay),
+  the mailbox's own threads, messages and replies, source runs. A NOT NULL reference that is not in
+  `OWNED` raises `PurgeIncomplete` before anything is written. SQLite checks no foreign key, so the
+  test builds a row in every table that points at an account or contact, scans every FK afterwards,
+  and fails when a new table points at accounts without being added to it.
+- **The shared company record is linked first and stays.** `companies.backfill.link_accounts`
+  resolves each account's company on the platform session and folds in its firmographics (fill
+  blanks only), before the request's tenant transaction writes anything (the SQLite lock order).
+- **"Don't suggest these again here"** writes `discovery_suppressions` (tenant-scoped).
+  `prospecting.companies._held` and the shared-store anti-join (`_matching`) read it through
+  `accounts.suppression`, so Populate, the daily sweep, the Orchestrator's discover and the
+  Parallel step skip those domains for this workspace only (counted as `already_held`).
+- **"Report wrong company data"** needs a reason and writes `company_reports` (platform-global, one
+  row per company per workspace, `status=open`). It never quarantines or edits the shared row: one
+  workspace's opinion does not change what every workspace reads. Nothing reviews them yet.
+
+**Add one contact** (`POST /accounts/contacts`, the Contacts page's "Add contact"): name, email,
+title, phone, LinkedIn, and an account the workspace has or a company named by its WEBSITE
+(normalised; the name defaults to the domain). The contact is written by `_new_contact`, the same
+code as `POST /accounts/{id}/contacts` (the person's own `/in/` profile or a 422, manual
+provenance); the account by `_find_or_create_account`, the similar-person add's (domain first, an
+archived match brought back). The same email or LinkedIn profile anywhere in the workspace returns
+that contact (restored when deleted, 200, `created: false`) instead of a second row. Free.
+
 ## Shared people records (`nexus/people/`) — encrypted, resolve once
 
 The companion to `nexus/companies/`. A `Contact` is per-tenant, so forty workspaces tracking one VP
@@ -2282,6 +2326,16 @@ ones (the queue they work), and `my_agent_actions`. The second comes from the us
 shared-book counts a rep can already browse. Agent failures and plays executed are left out rather
 than zeroed. The activity feed and outcome attribution keep their manager-only gate.
 `test_rep_dashboard.py` pins both halves.
+
+**Deleting an AI run is a soft delete, and its charge stays** (SDR round 2, 5.1, migration 0076,
+`tests/test_orchestration_soft_delete.py`). `DELETE /orchestration/runs/{id}` sets `deleted_at`, for
+the person who started it or a manager and up. The run then reads as gone everywhere it is read:
+the list, detail, results, event stream (`_live_run`), the Approvals list (by subquery), the
+`run_orchestration` worker driver, and its conversation's run card, which the chat router marks
+`run_deleted` **at read time** (the message log is append-only and is never rewritten). A run still
+working is cancelled first, so a parked send is rejected rather than left to be approved. Usage
+events are separate rows and are never touched: the test reads the credit report before and after.
+One `DeleteRunDialog` serves AI Runs, the run console and the Orchestrator's run card.
 
 ## Feature switches (`nexus/features/switches.py`) — superadmin, platform-wide
 
@@ -2994,6 +3048,29 @@ built around, and it left no way to exclude anything: an internal note, a stale 
 somebody should not have exported. It is mapped explicitly rather than by omission, so "I chose to
 drop this" and "I forgot about this" stay different statements, and the server sends the sentinel
 back in `/imports/fields` so the picker's spelling and the server's cannot drift.
+
+**The sample file is built from the served field list, and is skipped on the way back in**
+(SDR round 2, 5.3, `nexus/imports/template.py`, `tests/test_import_templates.py`).
+`GET /imports/template/{accounts|contacts}.csv` writes every mappable field (`ACCOUNT_FIELDS` /
+`CONTACT_FIELDS`, plus the workspace's own as `custom:<key>`), required first, then a guide line
+(`Required: ...` / `Recommended: ...` / `Optional: ...`) and two example rows. The headers ARE the
+mapping targets, so the modal's guess matches each one exactly; `GUIDE` only says how a field reads,
+and a test refuses a mappable field with no line. On import the guide line is dropped by shape (every
+filled cell opens with one of the three words and a colon, at least two cells, first data line only:
+a company called "Optional Systems" is a company) and the examples by domain (RFC 2606's
+`example.com` / `.org` / `.net`, which no real company or work address is on), so a filled-in copy
+imports only real rows and its row numbers stay the spreadsheet's. `/imports/fields` serves the
+required fields' notes from the same `GUIDE`.
+
+**After an import, the rows it wrote can be verified or enriched, priced first.** An import returns
+up to 1,000 ids it created or updated (`account_ids` / `contact_ids`). `POST /imports/actions/quote`
+says how many rows an action would act on (contacts with an address and no verdict; accounts missing
+industry, size or country), the rate card's price and the preflight answer, and charges nothing.
+`verify-emails` runs `prospector.verify.verify_contacts` (Prospector's Verify, without its module
+gate: `verify.email` per address, Prospector-delivered ones free, 25 inline and the rest in the
+background); `fill-firmographics` preflights `enrich.account` for the whole set (402 before
+anything) and queues `fill_firmographics`, which runs the account page's enricher per account
+(`force`, its own per-account charge, one transaction each). Nothing new is priced.
 
 ## Feed text (`nexus/ingestion/sources.py`)
 
