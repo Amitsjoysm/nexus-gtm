@@ -3391,6 +3391,53 @@ that combines them; the API, the screens and the engine all read it. `tests/test
 - Screens: the allows on Settings > Replies (managers), each SDR's switches on their mailbox card in
   Settings > My mailboxes, and turning on sending asks for confirmation with the four rules above.
 
+## Calls as any step, the Inbox as the task list, history and Mail (SDR round 2, 2026-10-29)
+
+W3, 5.2, 6.1 and 6.4 of `docs/superpowers/plans/2026-10-29-sdr-round-2.md`.
+
+- **A call may be any step, the first included** (`tests/test_call_first_step.py`). The opening email
+  is the first EMAIL step wherever it sits: `sequences.service.opener_index` is the one place that
+  says which, and the drafting of openers, Review (`current_messages` looks past a call to the next
+  email), regenerate, the worker's "no approved opener, back to review" guard and the launch
+  estimate all read it. Everyone is still reviewed before they start (D4): a campaign that opens
+  with a call drafts and approves the email after it, and approval is what starts the call.
+  `_activate` writes a due first call at once through `advance.call_step`, the same function the
+  heartbeat uses, and the step index moves past it in that transaction, so it is written once. A
+  scheduled first touch writes it when due. The first email opens the thread whatever comes before
+  it; later emails answer it with one "Re:" across any call between. **A campaign needs at least one
+  email step** (my default, reversible): a list of calls alone is the call queue's job, and every
+  person is reviewed through an opener. Not fixed here, Session A's file: `drafting/context.py`
+  numbers a follow-up's touch by step index, so a call before it counts as a touch.
+- **Every due step is a task** (`engagement/reports/today.py`, `tests/test_today_tasks.py`). Each
+  `/engagement/today` item now carries `section` (calls, emails, replies), `due` (today or overdue,
+  against the start of the SDR's own day), `action`, `ref_id` and the person and account. The order
+  is unchanged (the Dashboard and the MCP overview read it as most urgent first). New: a follow-up
+  held for review is its own `followup` task, and only someone who has never STARTED (`started_at`)
+  counts as an opening email to review (held follow-ups used to inflate that count); calls are any
+  open call the SDR owns due by the end of today, a campaign's always, any other once it is dated.
+- **History** (`nexus/activity/history.py`, `routers/activity.py`,
+  `tests/test_activity_history.py`): `GET /contacts/{id}/activity` and `GET /accounts/{id}/activity`,
+  newest first, `manage_accounts`, whatever the engine switch says. **`call_activities` records no
+  logger**, so "who called" is the live call's placer (`placed_calls.user_id`), else the call task's
+  owner, named through this workspace's membership ("Former member" once they leave). Adding a
+  logged-by column needs a migration; worth it if managers log calls for reps. Emails are what left
+  or arrived; an inbound one's first lines go through `strip_quoted`. The thread link is given only
+  to someone who may open it (mailbox owner or manager). `components/activity/ActivityPanel.tsx`
+  mounts with one line: Account 360's Overview, and the Contacts page's Email dialog (that page has
+  no per-contact view; a row opens the account).
+- **The Inbox is the one daily task list** (`pages/InboxPage.tsx`, owner decision 2026-10-29):
+  Calls, Emails to send or follow up, Replies, Signals; each a compact table with its count; folded
+  sections remembered per browser; today first, then overdue; a row opens in place to the person,
+  the company and the history. Signals are `/inbox` (now with `account_name` and `signal_url`). The
+  Dashboard's Today card summarises it and links here. `/calls?task=` opens that call.
+- **Mail, the unified inbox** (`engagement/desk/inbox.py`, `routers/engagement_inbox.py`,
+  `pages/engagement/MailPage.tsx`, `tests/test_unified_inbox.py`): every engagement conversation on
+  the viewer's mailboxes (a manager may switch to the team's), filtered by mailbox, campaign,
+  replied and unread, with a reading pane. **Read-only**: the reply button opens the conversation's
+  reply on the desk, which holds the one send path, and the router declares GET only (pinned).
+  **There is no read mark, so "unread" means waiting on you**: a reply on the thread still open on
+  the desk; opening a thread does not change it. A per-person read state needs a migration.
+
 ## MCP server and OAuth (`nexus/mcp/`) — AI apps
 
 AI assistants (Claude on every surface, ChatGPT, Cursor, VS Code, the model APIs) use the product
