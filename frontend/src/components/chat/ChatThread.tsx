@@ -9,6 +9,8 @@ export interface ChatThreadProps {
   onChip?: (text: string) => void;
   /** The "Open run console" action on a handoff card. */
   onOpenRun?: (runId: string) => void;
+  /** The "Delete run" action on a handoff card; the caller confirms. Absent, none is offered. */
+  onDeleteRun?: (runId: string) => void;
 }
 
 /** Pull a typed `string[]` out of an untyped `data` bag. */
@@ -21,7 +23,7 @@ function stringList(value: unknown): string[] {
  * Scrollable conversation transcript. Renders each message by `kind` and keeps the latest
  * turn in view as new messages arrive (instantly under reduced-motion, smoothly otherwise).
  */
-export function ChatThread({ messages, onChip, onOpenRun }: ChatThreadProps) {
+export function ChatThread({ messages, onChip, onOpenRun, onDeleteRun }: ChatThreadProps) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -48,7 +50,12 @@ export function ChatThread({ messages, onChip, onOpenRun }: ChatThreadProps) {
       <ul className={styles.list}>
         {messages.map((message) => (
           <li key={message.id}>
-            <MessageRow message={message} onChip={onChip} onOpenRun={onOpenRun} />
+            <MessageRow
+              message={message}
+              onChip={onChip}
+              onOpenRun={onOpenRun}
+              onDeleteRun={onDeleteRun}
+            />
           </li>
         ))}
       </ul>
@@ -61,10 +68,12 @@ function MessageRow({
   message,
   onChip,
   onOpenRun,
+  onDeleteRun,
 }: {
   message: ChatMessage;
   onChip?: (text: string) => void;
   onOpenRun?: (runId: string) => void;
+  onDeleteRun?: (runId: string) => void;
 }) {
   if (message.kind === "user") {
     return (
@@ -77,7 +86,7 @@ function MessageRow({
   }
 
   if (message.kind === "run_launched") {
-    return <HandoffCard message={message} onOpenRun={onOpenRun} />;
+    return <HandoffCard message={message} onOpenRun={onOpenRun} onDeleteRun={onDeleteRun} />;
   }
 
   const suggestions =
@@ -110,31 +119,57 @@ function MessageRow({
 function HandoffCard({
   message,
   onOpenRun,
+  onDeleteRun,
 }: {
   message: ChatMessage;
   onOpenRun?: (runId: string) => void;
+  onDeleteRun?: (runId: string) => void;
 }) {
   const runId = message.data.run_id != null ? String(message.data.run_id) : null;
   const goal = typeof message.data.goal === "string" ? message.data.goal : null;
+  // Marked by the server when the conversation is read; the message itself is never rewritten.
+  const deleted = message.data.run_deleted === true;
 
   return (
     <div className={styles.row} data-role="assistant">
-      <div className={styles.handoff}>
+      <div className={styles.handoff} data-deleted={deleted || undefined}>
         <span className={styles.handoffIcon} aria-hidden="true">
           <Icons.BoltIcon />
         </span>
         <div className={styles.handoffBody}>
-          <h3 className={styles.handoffTitle}>Discovery run started</h3>
+          <h3 className={styles.handoffTitle}>
+            {deleted ? "Discovery run deleted" : "Discovery run started"}
+          </h3>
           {goal && <p className={styles.handoffGoal}>{goal}</p>}
           {message.content && !goal && <p className={styles.handoffGoal}>{message.content}</p>}
-          {runId && onOpenRun && (
-            <Button
-              size="sm"
-              iconRight={<Icons.ChevronRightIcon />}
-              onClick={() => onOpenRun(runId)}
-            >
-              Open run console
-            </Button>
+          {deleted ? (
+            <p className={styles.handoffGoal}>
+              What it added is still in your workspace.
+            </p>
+          ) : (
+            runId && (onOpenRun || onDeleteRun) && (
+              <div className={styles.handoffActions}>
+                {onOpenRun && (
+                  <Button
+                    size="sm"
+                    iconRight={<Icons.ChevronRightIcon />}
+                    onClick={() => onOpenRun(runId)}
+                  >
+                    Open run console
+                  </Button>
+                )}
+                {onDeleteRun && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    iconLeft={<Icons.TrashIcon />}
+                    onClick={() => onDeleteRun(runId)}
+                  >
+                    Delete run
+                  </Button>
+                )}
+              </div>
+            )
           )}
         </div>
       </div>

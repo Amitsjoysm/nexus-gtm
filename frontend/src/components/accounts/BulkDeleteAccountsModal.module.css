@@ -1,0 +1,114 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.lead {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: var(--leading);
+  color: var(--text);
+}
+
+/* What survives, said once and plainly: the reason a permanent delete is safe for everyone else. */
+.kept {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-muted);
+}
+.kept svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--success);
+}
+
+.blocked {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--warning-quiet);
+}
+.blockedTitle {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+.blockedList {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+  max-block-size: 140px;
+  overflow-y: auto;
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text);
+}
+.blockedList strong {
+  font-weight: var(--weight-medium);
+}
+.blockedActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.hint {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: 44px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  cursor: pointer;
+}
+.check input {
+  inline-size: 16px;
+  block-size: 16px;
+  accent-color: var(--accent);
+}
+.check input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.checkHint {
+  margin: calc(var(--space-2) * -1) 0 var(--space-1) calc(16px + var(--space-2));
+  font-size: var(--text-xs);
+  line-height: var(--leading);
+  color: var(--text-muted);
+}
+
+.error {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--danger);
+}

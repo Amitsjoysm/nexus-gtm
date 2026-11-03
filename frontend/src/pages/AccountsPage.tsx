@@ -18,15 +18,16 @@ import {
 import type { Column } from "@/components/ui";
 import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
-import { useApiClient } from "@/app/AuthContext";
+import { useApiClient, useAuth } from "@/app/AuthContext";
 import { useCurrentUserId } from "@/app/useCurrentUserId";
 import { ApiError } from "@/lib/api";
 import { RecordImportModal } from "@/components/imports/RecordImportModal";
 import { AddToListModal } from "@/components/lists/AddToListModal";
+import { BulkDeleteAccountsModal } from "@/components/accounts/BulkDeleteAccountsModal";
 import { FitBadge, fitSortValue } from "@/components/icp/FitBadge";
 import { useSelection } from "@/hooks/useSelection";
 import { formatNumber, humanize } from "@/lib/format";
-import type { Account, AccountInput } from "@/lib/types";
+import type { Account, AccountInput, Role } from "@/lib/types";
 import styles from "./AccountsPage.module.css";
 
 const ALL = "__all__";
@@ -58,6 +59,9 @@ function sourceGroup(a: Account): string {
   return "manual";
 }
 
+/** Bulk delete is manager+ on the server (`delete_records`); a rep is not offered it. */
+const DELETES_IN_BULK: Role[] = ["manager", "admin", "owner"];
+
 const EMPTY_FORM = {
   name: "",
   domain: "",
@@ -71,6 +75,9 @@ export function AccountsPage() {
   const api = useApiClient();
   const navigate = useNavigate();
   const toast = useToast();
+  const { session } = useAuth();
+  const canBulkDelete = !!session && DELETES_IN_BULK.includes(session.role);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const accounts = useApi<Account[]>((signal) => api.listAccounts(signal), []);
   const [params, setParams] = useSearchParams();
@@ -420,6 +427,19 @@ export function AccountsPage() {
         onImported={() => void accounts.refetch()}
       />
 
+      <BulkDeleteAccountsModal
+        open={deleteOpen}
+        ids={selection.ids}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={(_, gone) => {
+          // Off the table in place, then a refetch for the counts and any second page.
+          const removed = new Set(gone);
+          accounts.setData((prev) => (prev ?? []).filter((a) => !removed.has(a.id)));
+          selection.clear();
+          void accounts.refetch();
+        }}
+      />
+
       <DataState
         state={accounts}
         skeleton={
@@ -562,6 +582,20 @@ export function AccountsPage() {
                     >
                       Add to list
                     </Button>
+                    {canBulkDelete && (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        iconLeft={<Icons.TrashIcon />}
+                        disabled={selection.selected.size > 500}
+                        title={
+                          selection.selected.size > 500 ? "Delete up to 500 at a time" : undefined
+                        }
+                        onClick={() => setDeleteOpen(true)}
+                      >
+                        Delete
+                      </Button>
+                    )}
                   </div>
                 </div>
               )}

@@ -23,7 +23,14 @@ import type {
 } from "./prospectorTypes";
 import type {
   Account,
+  AccountBulkDeleteInput,
+  AccountBulkDeletePreview,
+  AccountBulkDeleteResult,
   AccountInput,
+  ImportAction,
+  ImportActionQuote,
+  ImportActionResult,
+  NewContactInput,
   ActivityItem,
   AgentRunResponse,
   LatestAgentRun,
@@ -662,6 +669,41 @@ export class ApiClient {
   }
   restoreContact(contactId: string, signal?: AbortSignal) {
     return this.request<Contact>(`/contacts/${contactId}/restore`, { method: "POST", signal });
+  }
+  /** Add one person from the Contacts page (200 when they were already here, `created: false`). */
+  addContact(body: NewContactInput, signal?: AbortSignal) {
+    return this.request<SimilarPersonAdded>("/accounts/contacts", { method: "POST", body, signal });
+  }
+  /** Soft delete, up to 500 (manager+). */
+  bulkDeleteContacts(ids: string[], signal?: AbortSignal) {
+    return this.request<{ deleted: number; restorable: boolean }>("/contacts/bulk-delete", {
+      method: "POST",
+      body: { ids },
+      signal,
+    });
+  }
+  bulkRestoreContacts(ids: string[], signal?: AbortSignal) {
+    return this.request<{ restored: number }>("/contacts/bulk-restore", {
+      method: "POST",
+      body: { ids },
+      signal,
+    });
+  }
+  /** What deleting these accounts would remove. Changes nothing. */
+  previewBulkDeleteAccounts(ids: string[], signal?: AbortSignal) {
+    return this.request<AccountBulkDeletePreview>("/accounts/bulk-delete/preview", {
+      method: "POST",
+      body: { ids },
+      signal,
+    });
+  }
+  /** Deletes for good, with their contacts (manager+). 409 while any is in a running campaign. */
+  bulkDeleteAccounts(body: AccountBulkDeleteInput, signal?: AbortSignal) {
+    return this.request<AccountBulkDeleteResult>("/accounts/bulk-delete", {
+      method: "POST",
+      body,
+      signal,
+    });
   }
   /** Exports exactly what the list is showing — an export that disagrees is worse than none. */
   exportContacts(query?: { q?: string; account_id?: string; include_deleted?: boolean }) {
@@ -2284,6 +2326,13 @@ export class ApiClient {
   cancelRun(id: string, signal?: AbortSignal) {
     return this.request<Run>(`/orchestration/runs/${id}/cancel`, { method: "POST", signal });
   }
+  /** Soft delete: the run leaves every screen; its charges stay on the credit report. */
+  deleteRun(id: string, signal?: AbortSignal) {
+    return this.request<{ id: string; deleted: boolean }>(`/orchestration/runs/${id}`, {
+      method: "DELETE",
+      signal,
+    });
+  }
   listApprovals(status?: ApprovalStatus, signal?: AbortSignal) {
     return this.request<Approval[]>("/orchestration/approvals", {
       query: { status_filter: status },
@@ -2403,6 +2452,28 @@ export class ApiClient {
   // rest. These CREATE, which is what a team arriving with an existing list needs.
   importableFields(signal?: AbortSignal) {
     return this.request<ImportFields>("/imports/fields", { signal });
+  }
+
+  /** The sample file: every mappable column, a guide line, two example rows. */
+  downloadImportTemplate(entity: "accounts" | "contacts") {
+    return this.download(`/imports/template/${entity}.csv`, `${entity}-import-template.csv`);
+  }
+
+  /** What verifying or enriching the imported rows would cost. Charges nothing. */
+  quoteImportAction(action: ImportAction, ids: string[], signal?: AbortSignal) {
+    return this.request<ImportActionQuote>("/imports/actions/quote", {
+      method: "POST",
+      body: { action, ids },
+      signal,
+    });
+  }
+
+  runImportAction(action: ImportAction, ids: string[], signal?: AbortSignal) {
+    const path =
+      action === "verify_emails"
+        ? "/imports/actions/verify-emails"
+        : "/imports/actions/fill-firmographics";
+    return this.request<ImportActionResult>(path, { method: "POST", body: { ids }, signal });
   }
 
   importAccountsCsv(

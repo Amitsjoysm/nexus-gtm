@@ -18,6 +18,7 @@ import { formatNumber } from "@/lib/format";
 import type { ParsedCsv } from "@/lib/csv";
 import type { ImportFields, RecordImportResult } from "@/lib/types";
 import { readCsvText } from "@/lib/readCsvText";
+import { ImportFollowUp } from "./ImportFollowUp";
 import styles from "./RecordImportModal.module.css";
 
 /** "1.2 MB". Sizes are shown so an operator can tell a 40-row test file from the real export. */
@@ -100,9 +101,23 @@ const REQUIRED_ONE_OF: Record<ImportEntity, string[]> = {
   contacts: ["email"],
 };
 
+/** The sample file's second line (every filled cell "Required: ...", "Recommended: ..." or
+ *  "Optional: ..."). Mirrors `is_guide_row` in nexus/imports/template.py: the server skips it, so the
+ *  preview must not show it as a column's sample value. */
+const GUIDE_CELL = /^\s*(required|recommended|optional)\s*:/i;
+function isGuideRow(cells: string[] | undefined): boolean {
+  const filled = (cells ?? []).filter((c) => c.trim());
+  return filled.length >= 2 && filled.every((c) => GUIDE_CELL.test(c));
+}
+
 /** Header text -> field name, for the initial guess. Only a starting point: every row stays
- * editable, because a wrong guess the operator does not notice is worse than no guess. */
-function guessField(header: string, allowed: string[]): string {
+ * editable, because a wrong guess the operator does not notice is worse than no guess.
+ *
+ * A header that IS a target (`employee_count`, `custom:territory`) maps to it: the sample file's
+ * headers are the server's own field names, so a filled-in copy maps itself. */
+function guessField(header: string, allowed: string[], customTargets: string[] = []): string {
+  const exact = header.trim();
+  if (allowed.includes(exact) || customTargets.includes(exact)) return exact;
   const h = header.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
   const rules: [RegExp, string][] = [
     [/^(company|companyname|account|accountname|organisation|organization|org)$/, "name"],
@@ -147,6 +162,7 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
   const [error, setError] = useState("");
   const [result, setResult] = useState<RecordImportResult | null>(null);
   const [crmLimit, setCrmLimit] = useState(100);
+  const [downloading, setDownloading] = useState(false);
 
   const allowed = useMemo(
     () => (entity === "accounts" ? fields?.account_fields : fields?.contact_fields) ?? [],
@@ -228,11 +244,36 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
   /** The operator's choice where they made one, the guess otherwise. */
   const mapping = useMemo(() => {
     const out: Record<string, string> = {};
+    const custom = customFields.map((c) => c.target);
     for (const header of parsed?.headers ?? []) {
-      out[header] = overrides[header] ?? guessField(header, allowed);
+      out[header] = overrides[header] ?? guessField(header, allowed, custom);
     }
     return out;
-  }, [parsed, overrides, allowed]);
+  }, [parsed, overrides, allowed, customFields]);
+
+  /** The first real row, for the samples under each picker: the sample file's guide line is not
+   *  one. Read with one row to spare for exactly that. */
+  const sampleRow = useMemo(
+    () => (isGuideRow(parsed?.rows[0]) ? parsed?.rows[1] : parsed?.rows[0]),
+    [parsed],
+  );
+
+  const required = useMemo(
+    () => (entity === "accounts" ? fields?.account_required : fields?.contact_required) ?? [],
+    [fields, entity],
+  );
+
+  async function downloadTemplate() {
+    setDownloading(true);
+    setError("");
+    try {
+      await api.downloadImportTemplate(entity);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "The sample file didn't download. Try again.");
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   const skipTarget = fields?.skip_target || SKIP;
 
@@ -343,6 +384,20 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
               {result.skipped > 0 && <Badge tone="warning">{result.skipped} skipped</Badge>}
               <span className={styles.muted}>of {result.total_rows} rows</span>
             </div>
+            {entity === "contacts" && result.contact_ids && result.contact_ids.length > 0 && (
+              <ImportFollowUp
+                action="verify_emails"
+                ids={result.contact_ids}
+                written={result.created + result.updated}
+              />
+            )}
+            {entity === "accounts" && result.account_ids && result.account_ids.length > 0 && (
+              <ImportFollowUp
+                action="fill_firmographics"
+                ids={result.account_ids}
+                written={result.created + result.updated}
+              />
+            )}
             {result.errors.length > 0 && (
               /* Skipped rows are shown, never swallowed: a silent drop reads as data loss and the
                  operator has no way to find which row it was. */
@@ -374,6 +429,34 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
           <>
             <section className={styles.section}>
               <h3 className={styles.heading}>From a CSV file</h3>
+              {!file && (
+                <div className={styles.template}>
+                  <div className={styles.templateText}>
+                    <p className={styles.hint}>
+                      Start from the sample file: every column the import reads, a line saying
+                      what each needs, and two example rows (skipped when you upload it).
+                    </p>
+                    {required.length > 0 && (
+                      <ul className={styles.requiredList} aria-label="Required columns">
+                        {required.map((r) => (
+                          <li key={r.field}>
+                            <strong>{LABELS[r.field] ?? r.field}</strong>: {r.note}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    iconLeft={<Icons.DownloadIcon />}
+                    loading={downloading}
+                    onClick={() => void downloadTemplate()}
+                  >
+                    Download sample file
+                  </Button>
+                </div>
+              )}
               <input
                 ref={fileInput}
                 type="file"
@@ -458,7 +541,7 @@ export function RecordImportModal({ open, entity, onClose, onImported }: Props) 
                             }
                           />
                           <span className={styles.sample}>
-                            {parsed.rows[0]?.[columnIndex] || <em>empty</em>}
+                            {sampleRow?.[columnIndex] || <em>empty</em>}
                           </span>
                         </Field>
                       );

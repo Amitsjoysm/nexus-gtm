@@ -205,3 +205,34 @@
   overflow-y: auto;
   line-height: 1.6;
 }
+
+/* The sample file offer, above the drop target: what a good file looks like before one is chosen.
+   The required columns are listed beside it because they are what a skipped row is skipped for. */
+.template {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.templateText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 320px;
+  min-inline-size: 0;
+}
+
+.requiredList {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  color: var(--text-muted);
+}
+
+.requiredList strong {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
