@@ -503,6 +503,12 @@ async def create_contact(
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    return _contact_out(await _new_contact(ts, account, body))
+
+
+async def _new_contact(ts: TenantSession, account: Account, body: ContactIn) -> Contact:
+    """A contact a person typed, on ``account``: the one write both add-contact paths share, so the
+    profile rule and the provenance cannot differ between them."""
     contact = Contact(
         tenant_id=ts.tenant_id,
         account_id=account.id,
@@ -518,7 +524,33 @@ async def create_contact(
     record_present(contact, "manual", detail="typed by a person in this workspace")
     ts.add(contact)
     await ts.flush()
-    return _contact_out(contact)
+    return contact
+
+
+async def _find_or_create_account(
+    ts: TenantSession, *, name: str, domain: str | None, owner_user_id: str, source: str,
+) -> tuple[Account, bool]:
+    """The account a person named for a contact: the workspace's own when it has the company
+    (`find_existing_account`, domain first), otherwise a new one they own. An archived match comes
+    back into the working list. Returns the account and whether it was created."""
+    from nexus.accounts.dedupe import find_existing_account, normalise_on_write
+
+    account = await find_existing_account(ts, domain=domain, name=name)
+    if account is None:
+        account = Account(
+            tenant_id=ts.tenant_id, name=name, domain=normalise_on_write(domain),
+            source=source, owner_user_id=owner_user_id,
+        )
+        ts.add(account)
+        await ts.flush()
+        # Enqueued, never inline — the same rule `create_account` and `add_from_lookalike`
+        # follow, for the same 48-second reason.
+        await _enqueue_first_ingest(ts.tenant_id, account.id)
+        return account, True
+    if account.is_archived:
+        account.set_archived(False)
+        await ts.flush()
+    return account, False
 
 
 @router.get("/{account_id}/contacts", response_model=list[ContactOut])
@@ -748,8 +780,6 @@ async def add_similar_person(
       writing the row the rep picked from them is not a second purchase. Finding their email is a
       separate, metered act the client offers next.
     """
-    from nexus.accounts.dedupe import find_existing_account, normalise_on_write
-
     full_name = " ".join(body.full_name.split())
     _profile_or_422(body.linkedin_url)  # before anything is created for it
     profile = _profile_key(body.linkedin_url)
@@ -788,21 +818,9 @@ async def add_similar_person(
         # NOT resolved here: it usually means the rep cleared a suggestion they judged wrong, and
         # filling it back unseen would file the account under a domain a person already refused.
         domain = (body.new_account_domain or "").strip() or None
-        account = await find_existing_account(ts, domain=domain, name=name)
-        if account is None:
-            account = Account(
-                tenant_id=ts.tenant_id, name=name, domain=normalise_on_write(domain),
-                source="lookalike", owner_user_id=principal.user_id,
-            )
-            ts.add(account)
-            await ts.flush()
-            account_created = True
-            # Enqueued, never inline — the same rule `create_account` and `add_from_lookalike`
-            # follow, for the same 48-second reason.
-            await _enqueue_first_ingest(ts.tenant_id, account.id)
-        elif account.is_archived:
-            account.set_archived(False)
-            await ts.flush()
+        account, account_created = await _find_or_create_account(
+            ts, name=name, domain=domain, owner_user_id=principal.user_id, source="lookalike",
+        )
 
     if not profile:
         wanted = full_name.lower()
@@ -818,6 +836,102 @@ async def add_similar_person(
     )
     ts.add(contact)
     await ts.flush()
+    return SimilarPersonAddedOut(
+        contact=_contact_out(contact), account_id=account.id, account_name=account.name,
+        account_domain=account.domain, created=True, account_created=account_created,
+    )
+
+
+class NewContactIn(BaseModel):
+    """One contact typed on the Contacts page, with the account it belongs to: one the workspace
+    has (``account_id``), or a company named by its website."""
+
+    model_config = {"extra": "forbid"}
+
+    contact: ContactIn
+    account_id: str | None = None
+    new_account_domain: str | None = None
+    new_account_name: str | None = None
+
+
+@router.post("/contacts", response_model=SimilarPersonAddedOut,
+             status_code=status.HTTP_201_CREATED)
+async def add_contact(
+    body: NewContactIn,
+    response: Response,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> SimilarPersonAddedOut:
+    """Add one person from the Contacts page. 201 if added, 200 if they were already here.
+
+    The contact is written by the same code as ``POST /{account_id}/contacts`` (the profile must be
+    the person's own, the provenance says a person typed it); the account is found or created by
+    the same code as the similar-person add, domain first. Two things are this path's own:
+
+    * **A new company is named by its website**, normalised, because the website is what identifies
+      a company here; a name alone would make a second Acme. The name defaults to the domain.
+    * **The person is not added twice.** The same email or LinkedIn profile anywhere in the
+      workspace returns that contact (a deleted one restored) rather than a second row, which
+      would split their history and email them twice.
+
+    Free: nothing is bought. Finding or verifying their email is the separate, charged act it was.
+    """
+    from nexus.companies.resolution import normalise_domain
+
+    full_name = " ".join(body.contact.full_name.split())
+    if not full_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Type the person's name.")
+    email = (body.contact.email or "").strip().lower() or None
+    if email and (email.count("@") != 1 or "." not in email.split("@")[1]):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "That is not an email address, like sam@acme.com.")
+    _profile_or_422(body.contact.linkedin_url)  # before anything is created for it
+    fields = body.contact.model_copy(update={
+        "full_name": full_name, "email": email,
+        "title": (body.contact.title or "").strip() or None,
+        "phone": (body.contact.phone or "").strip() or None,
+    })
+
+    existing = None
+    if email:
+        existing = await ts.first(Contact, func.lower(Contact.email) == email)
+    profile = _profile_key(body.contact.linkedin_url)
+    if existing is None and profile:
+        existing = await _contact_by_profile(ts, profile)
+    if existing is not None:
+        if existing.deleted_at is not None:
+            existing.deleted_at = None
+            await ts.flush()
+        held = await ts.get(Account, existing.account_id)
+        response.status_code = status.HTTP_200_OK
+        return SimilarPersonAddedOut(
+            contact=_contact_out(existing), account_id=existing.account_id,
+            account_name=held.name if held else "", account_domain=held.domain if held else None,
+            created=False, account_created=False,
+        )
+
+    account_created = False
+    if body.account_id:
+        account = await ts.get(Account, body.account_id)
+        if account is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    else:
+        domain = normalise_domain(body.new_account_domain or "")
+        if not domain:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Choose an account, or type the company's website, like acme.com.",
+            )
+        name = " ".join((body.new_account_name or "").split()) or domain
+        account, account_created = await _find_or_create_account(
+            ts, name=name, domain=domain, owner_user_id=principal.user_id, source="manual",
+        )
+        if account_created:
+            from nexus.integrations.provenance import record_present
+
+            record_present(account, "manual", detail="typed by a person in this workspace")
+
+    contact = await _new_contact(ts, account, fields)
     return SimilarPersonAddedOut(
         contact=_contact_out(contact), account_id=account.id, account_name=account.name,
         account_domain=account.domain, created=True, account_created=account_created,
