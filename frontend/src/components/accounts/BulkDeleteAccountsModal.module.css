@@ -51,6 +51,8 @@
   color: var(--text);
 }
 .blockedList {
+  /* A scroller is a containing block, or an absolutely-positioned child escapes it. */
+  position: relative;
   margin: 0;
   padding-inline-start: var(--space-5);
   max-block-size: 140px;
