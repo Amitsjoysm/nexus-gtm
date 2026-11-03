@@ -165,10 +165,28 @@ def sniff_delimiter(text: str) -> str:
     return max(_DELIMITERS, key=lambda d: (line.count(d), -_DELIMITERS.index(d)))
 
 
+#: How many imported row ids an import returns, for the actions offered after it (verify emails,
+#: fill firmographics). Those act on at most this many at once; the rest are a later pass.
+MAX_RETURNED_IDS = 1_000
+
+
 def _rows(content: bytes) -> list[dict]:
+    from nexus.imports.template import is_guide_row
+
     text = _decode(content)
     reader = _csv.DictReader(io.StringIO(text), delimiter=sniff_delimiter(text))
-    return [row for _, row in zip(range(MAX_ROWS), reader)]
+    rows = [row for _, row in zip(range(MAX_ROWS), reader)]
+    # The sample file's second line says what each column needs. Uploaded back with the operator's
+    # rows under it, that line would otherwise import as a company called "Required: ...".
+    if rows and is_guide_row(rows[0].values()):
+        rows = rows[1:]
+    return rows
+
+
+def _example_row(index: int, errors: list[str]) -> int:
+    """Skip one of the sample file's example rows, saying so. Returns the 1 the caller counts."""
+    errors.append(f"row {index}: an example row from the sample file, skipped")
+    return 1
 
 
 def _extras(row: dict, mapped_columns: set[str]) -> dict:
@@ -276,8 +294,11 @@ async def import_accounts_csv(
     those accounts, the same as typing them in. Accounts it only updates keep their owner — an
     import is not a way to take a colleague's book.
     """
+    from nexus.imports.template import is_example_domain
+
     created = updated = skipped = 0
     errors: list[str] = []
+    ids: list[str] = []
     rows = _rows(content)
     mapped_columns = set(mapping)
     real, custom = split_targets(mapping)
@@ -290,6 +311,9 @@ async def import_accounts_csv(
         if not name and not domain:
             skipped += 1
             errors.append(f"row {index}: no company name and no usable website")
+            continue
+        if domain and is_example_domain(domain):
+            skipped += _example_row(index, errors)
             continue
 
         existing = None
@@ -329,16 +353,19 @@ async def import_accounts_csv(
                     await ts.flush()
                     created += 1
                 else:
+                    account = existing
                     _apply_account(existing, fields, extras)
                     await ts.flush()
                     updated += 1
+            if len(ids) < MAX_RETURNED_IDS and account.id not in ids:
+                ids.append(account.id)
         except Exception as exc:  # noqa: BLE001 - the database's reason is what the operator needs
             skipped += 1
             errors.append(f"row {index}: {_row_reason(exc)}")
 
     return {
         "created": created, "updated": updated, "skipped": skipped,
-        "total_rows": len(rows), "errors": errors[:50],
+        "total_rows": len(rows), "errors": errors[:50], "account_ids": ids,
     }
 
 
@@ -373,8 +400,11 @@ async def import_contacts_csv(
     account cannot be actioned at all. An account created that way is owned by ``owner_user_id``,
     the person who ran the import, exactly as ``import_accounts_csv`` does.
     """
+    from nexus.imports.template import is_example_domain
+
     created = updated = skipped = 0
     errors: list[str] = []
+    ids: list[str] = []
     rows = _rows(content)
     mapped_columns = set(mapping)
     real, custom = split_targets(mapping)
@@ -387,6 +417,9 @@ async def import_contacts_csv(
         if not email:
             skipped += 1
             errors.append(f"row {index}: no email address")
+            continue
+        if is_example_domain(email.split("@")[-1]):
+            skipped += _example_row(index, errors)
             continue
 
         # The mapped account domain, else the domain of the email itself — which is right far more
@@ -428,6 +461,7 @@ async def import_contacts_csv(
                     ts.add(contact)
                     await ts.flush()
                     created += 1
+                    existing = contact
                 else:
                     # Blank cells never overwrite, for the same reason they do not on accounts.
                     if full_name:
@@ -439,11 +473,13 @@ async def import_contacts_csv(
                         existing.custom_fields = {**(existing.custom_fields or {}), **extras}
                     await ts.flush()
                     updated += 1
+            if len(ids) < MAX_RETURNED_IDS and existing.id not in ids:
+                ids.append(existing.id)
         except Exception as exc:  # noqa: BLE001 - the database's reason is what the operator needs
             skipped += 1
             errors.append(f"row {index}: {_row_reason(exc)}")
 
     return {
         "created": created, "updated": updated, "skipped": skipped,
-        "total_rows": len(rows), "errors": errors[:50],
+        "total_rows": len(rows), "errors": errors[:50], "contact_ids": ids,
     }
