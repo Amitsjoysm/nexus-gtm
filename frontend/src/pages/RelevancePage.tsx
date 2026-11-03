@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
@@ -11,6 +12,7 @@ import {
   IconButton,
   Input,
   Skeleton,
+  Tabs,
   Textarea,
   useToast,
 } from "@/components/ui";
@@ -18,13 +20,13 @@ import { DataState } from "@/components/DataState";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
-import { JOB_LEVELS, MANDATORY_LABELS } from "@/lib/types";
+import { JOB_LEVELS, MAIN_SERVICE, MANDATORY_LABELS } from "@/lib/types";
 import type {
   IcpDefinition,
+  IcpService,
   LastWebsiteAnalysis,
   LearnedWeights,
   MandatoryField,
-  RelevanceProfile,
   RelevanceProfileInput,
   Role,
   TitleRecommendation,
@@ -42,6 +44,8 @@ interface ValuePropDraft {
 }
 
 interface Draft {
+  /** What the workspace calls this service. */
+  name: string;
   industries: string;
   countries: string;
   regions: string;
@@ -135,8 +139,16 @@ function weightsToPct(stored?: Record<string, number> | null): Record<WeightKey,
   ) as Record<WeightKey, number>;
 }
 
-function toDraft(p: RelevanceProfile): Draft {
+/** Anything shaped like a profile: the main service and every other service are (W8). */
+interface ProfileLike {
+  icp: IcpDefinition;
+  value_props: ValueProp[];
+  product_context: string;
+}
+
+function toDraft(p: ProfileLike & { name?: string }): Draft {
   return {
+    name: p.name ?? "",
     industries: csv(p.icp.industries),
     countries: csv(p.icp.countries),
     regions: csv(p.icp.regions),
@@ -167,23 +179,110 @@ function toDraft(p: RelevanceProfile): Draft {
   };
 }
 
+/**
+ * The Relevance page edits one SERVICE at a time (W8, owner decision 2026-10-29). Each service the
+ * workspace sells has its own ICP, value props, product context, Populate and daily discovery; the
+ * main service is the workspace's relevance profile, so a workspace that adds none sees the page
+ * it always had, plus a way to add one. The chosen service is in the address (`?service=`), so a
+ * link opens the service it names.
+ */
 export function RelevancePage() {
   const api = useApiClient();
   const toast = useToast();
   const { session } = useAuth();
   const canEdit = session ? ROLE_RANK[session.role] >= ROLE_RANK.admin : false;
 
-  const profile = useApi<RelevanceProfile>((signal) => api.getRelevanceProfile(signal), []);
+  const services = useApi<IcpService[]>((signal) => api.listServices(signal), []);
+  const [params, setParams] = useSearchParams();
+  const selectedKey = params.get("service") ?? MAIN_SERVICE;
+  const selected = useMemo(
+    () =>
+      services.data?.find((s) => (s.id ?? MAIN_SERVICE) === selectedKey) ?? services.data?.[0],
+    [services.data, selectedKey],
+  );
+  const multiService = (services.data?.length ?? 0) > 1;
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   // "How many companies now?" is asked after a save that changed the ICP, or from the header.
   const [askingPopulate, setAskingPopulate] = useState(false);
-  const hasIcp = !!profile.data && hasAnyIcp(profile.data.icp);
+  const hasIcp = !!selected && hasAnyIcp(selected.icp);
 
-  // Hydrate the editable draft once the profile loads (and after a save refetch).
+  // Hydrate the editable draft once the service loads, when another is chosen, and after a save.
   useEffect(() => {
-    if (profile.data) setDraft(toDraft(profile.data));
-  }, [profile.data]);
+    if (selected) setDraft(toDraft(selected));
+  }, [selected]);
+
+  const dirty = !!draft && !!selected && JSON.stringify(draft) !== JSON.stringify(toDraft(selected));
+
+  function chooseService(key: string) {
+    if (key === (selected?.id ?? MAIN_SERVICE)) return;
+    if (dirty && !window.confirm(`Discard your unsaved changes to ${selected?.name}?`)) return;
+    const next = new URLSearchParams(params);
+    if (key === MAIN_SERVICE) next.delete("service");
+    else next.set("service", key);
+    setParams(next, { replace: true });
+    setTitleSuggestions([]);
+    setAskingPopulate(false);
+  }
+
+  // ---- adding and archiving a service ----
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  async function addService(e: FormEvent) {
+    e.preventDefault();
+    const name = newName.trim();
+    if (!name) return;
+    setCreating(true);
+    try {
+      const created = await api.createService({
+        name, icp: {}, value_props: [], product_context: "",
+      });
+      services.setData([...(services.data ?? []), created]);
+      setAdding(false);
+      setNewName("");
+      const next = new URLSearchParams(params);
+      next.set("service", created.id ?? MAIN_SERVICE);
+      setParams(next, { replace: true });
+      toast.success(`${created.name} added`, "Draft its ICP from its own page below, or fill it in.");
+    } catch (err) {
+      toast.error("Couldn't add the service", err instanceof ApiError ? err.detail : "Please try again.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function archiveSelected() {
+    if (!selected?.id) return;
+    const archived = selected;
+    try {
+      await api.archiveService(archived.id!);
+      services.setData((services.data ?? []).filter((s) => s.id !== archived.id));
+      const next = new URLSearchParams(params);
+      next.delete("service");
+      setParams(next, { replace: true });
+      toast.toast({
+        tone: "success",
+        title: `${archived.name} archived`,
+        description:
+          "It is off every picker and its daily discovery stopped. Accounts and campaigns keep it.",
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await api.restoreService(archived.id!);
+              services.refetch();
+            } catch (err) {
+              toast.error("Couldn't restore", err instanceof ApiError ? err.detail : "Try again.");
+            }
+          },
+        },
+      });
+    } catch (err) {
+      toast.error("Couldn't archive", err instanceof ApiError ? err.detail : "Please try again.");
+    }
+  }
 
   function setField<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((d) => (d ? { ...d, [key]: value } : d));
@@ -224,8 +323,16 @@ export function RelevancePage() {
   const [website, setWebsite] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   // The last analysis that found something. It used to live only in the unsaved form: leave the
-  // page before Save and it was gone, and "Generate ICP" bought it again. Now it is offered back.
-  const lastAnalysis = useApi<LastWebsiteAnalysis>((signal) => api.lastWebsiteAnalysis(signal), []);
+  // page before Save and it was gone, and "Generate ICP" bought it again. Now it is offered back,
+  // per service: each service's page drafts that service.
+  const serviceId = selected?.id ?? null;
+  const lastAnalysis = useApi<LastWebsiteAnalysis>(
+    (signal) => api.lastWebsiteAnalysis(signal, serviceId),
+    [serviceId],
+  );
+  useEffect(() => {
+    setWebsite(selected?.source_url ?? "");
+  }, [serviceId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const url = lastAnalysis.data?.url;
     if (url) setWebsite((w) => w || url);
@@ -278,7 +385,7 @@ export function RelevancePage() {
     if (!website.trim()) return;
     setAnalyzing(true);
     try {
-      const drafted = await api.analyzeWebsite(website.trim());
+      const drafted = await api.analyzeWebsite(website.trim(), serviceId);
       const hasData = Boolean(drafted.icp?.industries?.length || drafted.product_context?.trim());
       applyDraftFromProfile(drafted);
       if (hasData) {
@@ -309,6 +416,12 @@ export function RelevancePage() {
           employee_max: numOrNull(draft.employee_max),
           required_tech: splitCsv(draft.required_tech),
           buyer_titles: splitCsv(draft.buyer_titles),
+          countries: splitCsv(draft.countries),
+          // What SDRs typed and the suggestions ignored (W4): the functions to look in, the words
+          // that disqualify a title, and the levels wanted.
+          title_keywords: splitCsv(draft.title_keywords),
+          exclude_title_keywords: splitCsv(draft.exclude_title_keywords),
+          job_levels: draft.job_levels,
           // The campaign context. Without these the server ranks on firmographics alone and
           // returns the same generic committee however much the user fills in below.
           value_props: draft.value_props
@@ -343,7 +456,11 @@ export function RelevancePage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!draft || !profile.data) return;
+    if (!draft || !selected) return;
+    if (!draft.name.trim()) {
+      toast.error("Name the service", "It is how pickers and accounts refer to it.");
+      return;
+    }
     setSaving(true);
     try {
       // Store weights as fractions to match the engine's DEFAULT_WEIGHTS shape. The engine
@@ -386,9 +503,21 @@ export function RelevancePage() {
         value_props,
         product_context: draft.product_context.trim(),
       };
-      const updated = await api.updateRelevanceProfile(body);
-      profile.setData(updated);
-      toast.success("Relevance saved", "New accounts will be scored against this profile.");
+      const updated = await api.updateService(selected.id, {
+        ...body,
+        name: draft.name.trim(),
+        // The page it was drafted from, so "Generate ICP" can run on it again later.
+        source_url: selected.is_default ? null : website.trim() || selected.source_url,
+      });
+      services.setData(
+        (services.data ?? []).map((s) => ((s.id ?? null) === (updated.id ?? null) ? updated : s)),
+      );
+      toast.success(
+        multiService ? `${updated.name} saved` : "Relevance saved",
+        multiService
+          ? "Accounts are scored against this service's ICP."
+          : "New accounts will be scored against this profile.",
+      );
       if (updated.icp_changed) setAskingPopulate(true);
     } catch (err) {
       toast.error(
@@ -432,8 +561,28 @@ export function RelevancePage() {
         }
       />
 
+      {services.data && (
+        <ServicesBar
+          services={services.data}
+          selectedKey={selected?.id ?? MAIN_SERVICE}
+          onChoose={chooseService}
+          canEdit={canEdit}
+          adding={adding}
+          setAdding={setAdding}
+          newName={newName}
+          setNewName={setNewName}
+          creating={creating}
+          onAdd={addService}
+        />
+      )}
+
       {canEdit && (
-        <PopulatePanel asking={askingPopulate} onClose={() => setAskingPopulate(false)} />
+        <PopulatePanel
+          asking={askingPopulate}
+          onClose={() => setAskingPopulate(false)}
+          services={services.data ?? []}
+          serviceId={selected?.id ?? null}
+        />
       )}
 
       {!canEdit && (
@@ -446,7 +595,7 @@ export function RelevancePage() {
       )}
 
       <DataState
-        state={profile}
+        state={services}
         errorTitle="Couldn't load relevance profile"
         skeleton={
           <div className={styles.stack}>
@@ -462,21 +611,71 @@ export function RelevancePage() {
         }
       >
         {() =>
-          draft ? (
+          draft && selected ? (
+            <div
+              {...(multiService
+                ? {
+                    role: "tabpanel",
+                    id: `service-panel-${selected.id ?? MAIN_SERVICE}`,
+                    "aria-labelledby": `service-tab-${selected.id ?? MAIN_SERVICE}`,
+                  }
+                : {})}
+            >
             <form id="relevance-form" className={styles.stack} onSubmit={onSubmit} noValidate>
+              {(multiService || !selected.is_default) && (
+                <Card padding="lg">
+                  <div className={styles.serviceHead}>
+                    <Field
+                      label="Service name"
+                      hint="How campaigns, Accounts and Settings refer to it."
+                    >
+                      <Input
+                        value={draft.name}
+                        onChange={(e) => setField("name", e.target.value)}
+                        maxLength={120}
+                        disabled={!canEdit}
+                      />
+                    </Field>
+                    <p className={styles.serviceStats}>
+                      {selected.accounts.toLocaleString()}{" "}
+                      {selected.accounts === 1 ? "account" : "accounts"} found by this service
+                      {selected.is_default && " or added another way"}
+                    </p>
+                    {canEdit && !selected.is_default && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        iconLeft={<Icons.TrashIcon />}
+                        onClick={archiveSelected}
+                      >
+                        Archive service
+                      </Button>
+                    )}
+                  </div>
+                </Card>
+              )}
               {canEdit && (
                 <Card padding="lg">
                   <SectionHead
-                    title="Draft your ICP with AI"
-                    description="Paste your website — AI infers your ideal customer profile (industries, size, buyer titles, value props) from what you sell. Everything lands in the editable fields below; review and Save when it looks right."
+                    title={selected.is_default ? "Draft your ICP with AI" : `Draft ${draft.name.trim() || "this service"}'s ICP with AI`}
+                    description={
+                      selected.is_default
+                        ? "Paste your website — AI infers your ideal customer profile (industries, size, buyer titles, value props) from what you sell. Everything lands in the editable fields below; review and Save when it looks right."
+                        : "Paste the page that describes this service, like yourcompany.com/services/… — AI reads it and infers who buys this service, not your whole company. Everything lands in the editable fields below; review and Save when it looks right."
+                    }
                   />
                   <div className={styles.websiteRow}>
                     <Input
                       value={website}
                       onChange={(e) => setWebsite(e.target.value)}
-                      placeholder="https://yourcompany.com"
+                      placeholder={
+                        selected.is_default
+                          ? "https://yourcompany.com"
+                          : "https://yourcompany.com/services/…"
+                      }
                       disabled={analyzing}
-                      aria-label="Your website URL"
+                      aria-label={selected.is_default ? "Your website URL" : "This service's page URL"}
                     />
                     <Button
                       type="button"
@@ -688,20 +887,30 @@ export function RelevancePage() {
                         Suggest titles (AI)
                       </Button>
                       {titleSuggestions.length > 0 && (
-                        <div className={styles.chips}>
-                          {titleSuggestions.map((t) => (
-                            <button
-                              key={t.title}
-                              type="button"
-                              className={styles.chip}
-                              title={`${t.priority_score}/100 · ${t.department} · ${t.reason}`}
-                              onClick={() => addTitle(t.title)}
-                            >
-                              <span className={styles.chipScore}>{t.priority_score}</span>
-                              {t.title}
-                            </button>
-                          ))}
-                        </div>
+                        // Each with its one-line reason, so the SDR can judge it before adding it
+                        // (W4): a bare chip said nothing about why this person buys this offer.
+                        <ul className={styles.suggestions} aria-label="Suggested buyer titles">
+                          {titleSuggestions.map((t) => {
+                            const added = splitCsv(draft.buyer_titles).some(
+                              (x) => x.toLowerCase() === t.title.toLowerCase(),
+                            );
+                            return (
+                              <li key={t.title} className={styles.suggestion}>
+                                <button
+                                  type="button"
+                                  className={styles.chip}
+                                  aria-pressed={added}
+                                  disabled={added}
+                                  onClick={() => addTitle(t.title)}
+                                >
+                                  {added ? <Icons.CheckIcon aria-hidden="true" /> : <Icons.PlusIcon aria-hidden="true" />}
+                                  {t.title}
+                                </button>
+                                {t.reason && <span className={styles.suggestionReason}>{t.reason}</span>}
+                              </li>
+                            );
+                          })}
+                        </ul>
                       )}
                     </div>
                   )}
@@ -816,6 +1025,7 @@ export function RelevancePage() {
                 </div>
               )}
             </form>
+            </div>
           ) : null
         }
       </DataState>
@@ -1090,6 +1300,104 @@ function MustMatch({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Which service the page is editing (W8). With one service it is a sentence and an "Add service"
+ * button, so a workspace selling one thing is not handed a one-item switcher; with more, a tab per
+ * service with the number of accounts each found, the main one first.
+ */
+function ServicesBar({
+  services,
+  selectedKey,
+  onChoose,
+  canEdit,
+  adding,
+  setAdding,
+  newName,
+  setNewName,
+  creating,
+  onAdd,
+}: {
+  services: IcpService[];
+  selectedKey: string;
+  onChoose: (key: string) => void;
+  canEdit: boolean;
+  adding: boolean;
+  setAdding: (v: boolean) => void;
+  newName: string;
+  setNewName: (v: string) => void;
+  creating: boolean;
+  onAdd: (e: FormEvent) => void;
+}) {
+  const multi = services.length > 1;
+  return (
+    <Card padding="lg" className={styles.servicesBar}>
+      <SectionHead
+        title="Services"
+        description={
+          multi
+            ? "Each service you sell has its own ICP, company discovery and fit score. Choose one to edit it below; campaigns pick the service they pitch."
+            : "Sell more than one service? Give each its own ICP, company discovery and fit score, and let each campaign pitch one."
+        }
+        action={
+          canEdit && !adding ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              iconLeft={<Icons.PlusIcon />}
+              onClick={() => setAdding(true)}
+            >
+              Add service
+            </Button>
+          ) : undefined
+        }
+      />
+      {adding && (
+        <form className={styles.addService} onSubmit={onAdd}>
+          <Field label="New service name" hideLabel>
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Cloud migration"
+              maxLength={120}
+              autoFocus
+              aria-label="New service name"
+            />
+          </Field>
+          <Button type="submit" size="sm" loading={creating} disabled={!newName.trim()}>
+            Add
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setAdding(false);
+              setNewName("");
+            }}
+          >
+            Cancel
+          </Button>
+        </form>
+      )}
+      {multi && (
+        <Tabs
+          aria-label="Services"
+          idPrefix="service"
+          wrap
+          value={selectedKey}
+          onChange={onChoose}
+          items={services.map((s) => ({
+            value: s.id ?? MAIN_SERVICE,
+            label: s.name,
+            count: s.accounts,
+          }))}
+        />
+      )}
+    </Card>
   );
 }
 
