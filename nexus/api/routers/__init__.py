@@ -1,6 +1,7 @@
 """API router registry."""
 from nexus.api.routers import (
     accounts,
+    activity,
     admin_billing,
     admin_billing_write,
     admin_engagement,
@@ -30,6 +31,7 @@ from nexus.api.routers import (
     engagement_suppression,
     engagement_campaigns,
     engagement_desk,
+    engagement_inbox,
     engagement_insights,
     engagement_restart,
     engagement_reports,
@@ -61,6 +63,7 @@ all_routers = [
     prospector.router,
     accounts.router,
     contacts.router,
+    activity.router,
     agents.router,
     workflow.router,
     lists.router,
@@ -96,6 +99,7 @@ all_routers = [
     engagement_suppression.router,
     engagement_campaigns.router,
     engagement_desk.router,
+    engagement_inbox.router,
     engagement_insights.router,
     engagement_restart.router,
     engagement_reports.router,

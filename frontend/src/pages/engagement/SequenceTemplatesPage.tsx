@@ -5,7 +5,7 @@ import {
 } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import { StepsEditor, blankStep, stepsProblem } from "@/components/engagement/StepsEditor";
-import { WEEKDAYS } from "@/components/engagement/labels";
+import { WEEKDAYS, stepLabel } from "@/components/engagement/labels";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -156,7 +156,7 @@ export function SequenceTemplatesPage() {
                     <li key={i} className={styles.stepRow}>
                       <span className={styles.stepNumber} aria-hidden="true">{i + 1}</span>
                       <span>
-                        {i === 0 ? "Opening email" : s.channel === "call" ? "Call" : "Follow-up email"}
+                        {stepLabel(t.steps, i)}
                         {i > 0 && <span className={styles.muted}> after {s.delay_business_days} business {s.delay_business_days === 1 ? "day" : "days"}</span>}
                         {s.angle && <span className={styles.muted}>: {s.angle}</span>}
                         {s.allowed_weekdays.length < 5 || s.allowed_weekdays.some((d) => d > 4) ? (

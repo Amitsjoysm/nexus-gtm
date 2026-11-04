@@ -84,6 +84,7 @@ const CampaignDetailPage = lazyPage(
   () => import("@/pages/engagement/CampaignDetailPage"), "CampaignDetailPage",
 );
 const ReplyDeskPage = lazyPage(() => import("@/pages/engagement/ReplyDeskPage"), "ReplyDeskPage");
+const MailPage = lazyPage(() => import("@/pages/engagement/MailPage"), "MailPage");
 const SequenceTemplatesPage = lazyPage(
   () => import("@/pages/engagement/SequenceTemplatesPage"), "SequenceTemplatesPage",
 );
@@ -477,6 +478,18 @@ export function App() {
                       <RequireEngine name="Replies">
                         <RequireCapability capability="module.campaigns" name="Replies">
                           <ReplyDeskPage />
+                        </RequireCapability>
+                      </RequireEngine>
+                    </RequirePage>
+                  }
+                />
+                <Route
+                  path="/engagement/mail"
+                  element={
+                    <RequirePage page="/engagement/mail">
+                      <RequireEngine name="Mail">
+                        <RequireCapability capability="module.campaigns" name="Mail">
+                          <MailPage />
                         </RequireCapability>
                       </RequireEngine>
                     </RequirePage>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
@@ -18,7 +19,9 @@ import styles from "./CallsPage.module.css";
 export function CallsPage() {
   const api = useApiClient();
   const queue = useApi<CallTask[]>((signal) => api.callQueue("open", false, signal), []);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // `?task=` opens that call: the Inbox's Call button lands here (SDR round 2, 6.1).
+  const [params] = useSearchParams();
+  const [selectedId, setSelectedId] = useState<string | null>(params.get("task"));
 
   const rows = queue.data ?? [];
   const selected = useMemo(() => rows.find((t) => t.id === selectedId) ?? null, [rows, selectedId]);

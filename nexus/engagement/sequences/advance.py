@@ -165,7 +165,7 @@ async def process(ts, enrollment_id: str, *, now: datetime) -> str:
 
     step = steps[enrollment.current_step_index]
     if step.channel == "call":
-        return await _call_step(ts, campaign, enrollment, steps, step, contact, now)
+        return await call_step(ts, campaign, enrollment, steps, step, now)
     return await _email_step(ts, campaign, enrollment, steps, step, mailbox, contact, account,
                              thread, now)
 
@@ -173,7 +173,7 @@ async def process(ts, enrollment_id: str, *, now: datetime) -> str:
 async def _email_step(ts, campaign, enrollment, steps, step, mailbox, contact, account, thread,
                       now) -> str:
     from nexus.engagement.drafting.drafter import draft
-    from nexus.engagement.sequences.service import set_status
+    from nexus.engagement.sequences.service import opener_index, set_status
     from nexus.models.engagement import EngagementMessage
 
     index = enrollment.current_step_index
@@ -194,9 +194,10 @@ async def _email_step(ts, campaign, enrollment, steps, step, mailbox, contact, a
         await set_status(ts, enrollment, "paused", "needs_decision")
         return "failed"
     else:
-        if index == 0:
+        if index == opener_index(steps):
             # A first email is reviewed before it goes (D4); an active enrollment with no approved
-            # draft is a state the review queue must resolve, not one the worker papers over.
+            # draft is a state the review queue must resolve, not one the worker papers over. The
+            # first email is the first EMAIL step, which follows any call the campaign opens with.
             await set_status(ts, enrollment, "awaiting_review")
             return "awaiting_review"
         written = await draft(ts, enrollment=enrollment, contact=contact, account=account,
@@ -304,11 +305,17 @@ async def _after_send(ts, campaign, enrollment, steps, thread_id, sent_at, *,
     return "sent"
 
 
-async def _call_step(ts, campaign, enrollment, steps, step, contact, now) -> str:
-    """A call step becomes a task in the rep's call queue, and the sequence moves on."""
+async def call_step(ts, campaign, enrollment, steps, step, now) -> str:
+    """A call step becomes a task in the rep's call queue, and the sequence moves on.
+
+    Any step may be a call, the first included (W3.1): launch calls this directly for someone whose
+    first step is a call (`service._activate`), the heartbeat for every later one. Either way the
+    step index moves past the call in the same transaction that writes the task, so it is written
+    once. The thread is carried through unchanged, so an email after a call answers the thread an
+    earlier email opened, and the first email of a campaign that opens with a call starts one."""
     from nexus.models.calling import CallTask
 
-    ts.add(CallTask(account_id=enrollment.account_id, contact_id=contact.id,
+    ts.add(CallTask(account_id=enrollment.account_id, contact_id=enrollment.contact_id,
                     reason=step.angle or f"Step {step.step_index + 1} of {campaign.name}",
                     priority=60, owner_user_id=campaign.owner_user_id, due_at=now,
                     engagement_enrollment_id=enrollment.id))

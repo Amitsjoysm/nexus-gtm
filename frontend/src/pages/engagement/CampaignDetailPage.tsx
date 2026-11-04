@@ -15,7 +15,7 @@ import { useContactInsights } from "@/components/engagement/InsightBadge";
 import { zonedClockToLocalInput } from "@/components/engagement/zonedTime";
 import { StepsEditor, stepsProblem } from "@/components/engagement/StepsEditor";
 import {
-  CAMPAIGN_STATUS, ENROLLMENT_STATUS, WEEKDAYS, reasonText, when,
+  CAMPAIGN_STATUS, ENROLLMENT_STATUS, WEEKDAYS, reasonText, stepLabel, when,
 } from "@/components/engagement/labels";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
@@ -528,7 +528,7 @@ function StepsPanel({ campaign, editable, onSaved }: {
               <span className={styles.stepNumber} aria-hidden="true">{i + 1}</span>
               <div>
                 <p className={styles.personName}>
-                  {i === 0 ? "Opening email" : s.channel === "call" ? "Call" : "Follow-up email"}
+                  {stepLabel(campaign.steps, i)}
                   {i > 0 && <span className={styles.muted}> · after {s.delay_business_days} business {s.delay_business_days === 1 ? "day" : "days"}</span>}
                   {s.timing_mode === "manual" && s.send_time_local && <span className={styles.muted}> · at {s.send_time_local}</span>}
                 </p>

@@ -10,6 +10,7 @@ import {
   FileTextIcon,
   InboxIcon,
   ListIcon,
+  MailIcon,
   MessageIcon,
   NetworkIcon,
   PhoneIcon,
@@ -86,6 +87,12 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     to: "/engagement/replies", label: "Replies", icon: <MessageIcon />,
+    capability: "module.campaigns", engine: "on",
+  },
+  // Every engagement email sent and received, one conversation per row (SDR round 2, 6.4). Read
+  // here; answered on Replies.
+  {
+    to: "/engagement/mail", label: "Mail", icon: <MailIcon />,
     capability: "module.campaigns", engine: "on",
   },
   {

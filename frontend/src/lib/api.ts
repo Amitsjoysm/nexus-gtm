@@ -130,6 +130,10 @@ import type {
   CampaignReport,
   ResponseTimeRow,
   TodayItem,
+  HistoryItem,
+  InboxFilters,
+  InboxList,
+  InboxThreadDetail,
   ContactInsight,
   LegacyCampaign,
   BestTimeSuggestion,
@@ -294,6 +298,9 @@ interface RequestOptions {
   /** Extra request headers, e.g. an Idempotency-Key so a double-submit can't run twice. */
   headers?: Record<string, string>;
 }
+
+/** How many conversations Mail reads at once: the newest, which filters narrow. */
+export const MAIL_PAGE = 200;
 
 export class ApiClient {
   private baseUrl: string;
@@ -1773,6 +1780,30 @@ export class ApiClient {
   }
   engagementToday(signal?: AbortSignal) {
     return this.request<TodayItem[]>("/engagement/today", { signal });
+  }
+
+  // ---- activity history and the unified inbox (SDR round 2) ----
+  getContact(contactId: string, signal?: AbortSignal) {
+    return this.request<WorkspaceContact>(`/contacts/${contactId}`, { signal });
+  }
+  contactActivity(contactId: string, signal?: AbortSignal) {
+    return this.request<HistoryItem[]>(`/contacts/${contactId}/activity`, { signal });
+  }
+  accountActivity(accountId: string, signal?: AbortSignal) {
+    return this.request<HistoryItem[]>(`/accounts/${accountId}/activity`, { signal });
+  }
+  inboxThreads(filters: InboxFilters, signal?: AbortSignal) {
+    return this.request<InboxList>("/engagement/inbox", {
+      query: {
+        team: filters.team || undefined, mailbox_id: filters.mailbox_id,
+        campaign_id: filters.campaign_id, replied: filters.replied || undefined,
+        unread: filters.unread || undefined, limit: MAIL_PAGE,
+      },
+      signal,
+    });
+  }
+  inboxThread(threadId: string, signal?: AbortSignal) {
+    return this.request<InboxThreadDetail>(`/engagement/inbox/threads/${threadId}`, { signal });
   }
 
   // ---- engagement: insights ----
