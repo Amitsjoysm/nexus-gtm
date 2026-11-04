@@ -248,6 +248,14 @@ async def enrich_contact_phone(
             "This contact needs a LinkedIn URL or an email address before a phone can be found.",
         )
 
+    # Asked BEFORE the lookup, as every pay-per-result charge is (`preflight`): the charge comes
+    # after the number and swallows its own refusal (`_meter_lookup`), so without this a workspace
+    # with no credits, under enforcement, was handed numbers free and the actor run was ours.
+    from nexus.billing.entitlements import preflight
+    from nexus.people.enrich import PHONE_CAPABILITY
+
+    (await preflight(ts, PHONE_CAPABILITY)).raise_if_blocked()
+
     result = await find_phone(
         ts,
         linkedin_url=linkedin,

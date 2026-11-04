@@ -2943,10 +2943,12 @@ sat beside the queue and scrolled. `tests/test_call_console.py`.
   `timekeeping.zone_for_place`, else null: never the rep's, which would read as theirs);
   `likely_pain` (the role angle their title implies); `value_fit` (`calling/value_fit.py`,
   deterministic): the workspace's value props, at most 3, ranked by how many of their pains share a
-  content word with the title, role angle, industry and cited signals. The pains are only ever the
-  workspace's `pains_solved`; a match is shown as likely, ticked, never as a claim about them.
-  **`_value_props_for(ts, task)` is the one reader**, so a campaign that pitches one service (W8)
-  changes that function and nothing else.
+  content word with the title, role angle, the function's own problem words (`brief.role_words`),
+  industry and cited signals. The words are needed: W7 reads a VP of Operations as Operations,
+  whose prose angle matched no pain on its own. The pains are only ever the workspace's
+  `pains_solved`; a match is shown as likely, ticked, never as a claim about them.
+  **`_value_props_for(ts, task, account)` is the one reader**: the service the call's campaign
+  pitches, else the service that found the account, else the main one (W8, joined at the merge).
 
 ## Drafted copy (`nexus/agents/copy.py`)
 
@@ -3666,8 +3668,9 @@ W3, 5.2, 6.1 and 6.4 of `docs/superpowers/plans/2026-10-29-sdr-round-2.md`.
   scheduled first touch writes it when due. The first email opens the thread whatever comes before
   it; later emails answer it with one "Re:" across any call between. **A campaign needs at least one
   email step** (my default, reversible): a list of calls alone is the call queue's job, and every
-  person is reviewed through an opener. Not fixed here, Session A's file: `drafting/context.py`
-  numbers a follow-up's touch by step index, so a call before it counts as a touch.
+  person is reviewed through an opener. "Email N of M" in a follow-up's prompt
+  (`drafting/context.py`) counts email steps only, fixed at the merge: counting calls told the
+  third email of three it was the fifth of five, so it closed the loop early.
 - **Every due step is a task** (`engagement/reports/today.py`, `tests/test_today_tasks.py`). Each
   `/engagement/today` item now carries `section` (calls, emails, replies), `due` (today or overdue,
   against the start of the SDR's own day), `action`, `ref_id` and the person and account. The order

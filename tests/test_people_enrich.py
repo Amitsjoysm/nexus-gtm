@@ -410,3 +410,41 @@ async def test_a_platform_admin_can_gate_the_phone_lookup_per_plan(client, monke
     )
     assert r.status_code == 200, r.text
     assert r.json()["quota"] == 50
+
+
+async def test_a_refused_workspace_is_told_before_any_number_is_bought(client, monkeypatch):
+    """The charge comes after the number and swallows its own refusal, so the balance is asked
+    first: under enforcement a workspace with no credits got numbers free, on our actor run."""
+    from nexus.billing import entitlements
+    from nexus.billing.entitlements import MeterResult
+    from nexus.core.security import decode_access_token
+    from nexus.models.account import Account, Contact
+    from tests.conftest import auth, signup
+
+    await _seed_billing()
+    stub = _StubApify()
+    set_apify_client(stub)
+    asked: list[str] = []
+
+    async def refuses(ts, capability_id, *, quantity=1):
+        asked.append(capability_id)
+        return MeterResult(allowed=False, reason="quota_exhausted", used=1, quota=0)
+
+    try:
+        token = await signup(client, slug="pe402", email="o@pe402.io", company="PE402")
+        tid = decode_access_token(token)["tid"]
+        async with tenant_session(tid) as ts:
+            account = Account(tenant_id=tid, name="Acme", domain="acme.io")
+            ts.add(account)
+            await ts.flush()
+            contact = Contact(tenant_id=tid, account_id=account.id, full_name="Derek Lemoine",
+                              linkedin_url=LINKEDIN)
+            ts.add(contact)
+            await ts.flush()
+            contact_id = contact.id
+        monkeypatch.setattr(entitlements, "preflight", refuses)
+        r = await client.post(f"/api/contacts/{contact_id}/enrich-phone", headers=auth(token))
+        assert r.status_code == 402, r.text
+        assert asked == ["enrich.phone"] and stub.runs == 0
+    finally:
+        set_apify_client(None)

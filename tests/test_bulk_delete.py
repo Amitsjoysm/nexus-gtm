@@ -127,6 +127,10 @@ async def _graph(ts, account_id: str, contact_id: str) -> dict[str, str]:
                                  signal_id=ids["signal"])
     ids["outcome"] = await _row(ts, "outcomes", account_id=account_id, contact_id=contact_id)
     ids["source_run"] = await _row(ts, "signal_source_runs", account_id=account_id)
+    # Its fit against a further service (W8, 0077): goes with the account; the service stays.
+    ids["service"] = await _row(ts, "icp_services", name=f"Service {account_id[:6]}")
+    ids["service_fit"] = await _row(ts, "account_service_fits", account_id=account_id,
+                                    service_id=ids["service"], reasons=[])
     return ids
 
 
@@ -145,7 +149,7 @@ def test_every_table_pointing_at_an_account_or_contact_is_in_the_graph():
         "campaign_targets", "cadence_enrollments", "engagement_enrollments", "engagement_threads",
         "engagement_messages", "reply_classifications", "call_tasks", "call_activities",
         "do_not_contact", "orchestration_runs", "agent_runs", "chat_sessions", "play_runs",
-        "outcomes", "signal_source_runs", "contacts",
+        "outcomes", "signal_source_runs", "contacts", "account_service_fits",
     }
     assert pointing == covered, (
         f"new: {sorted(pointing - covered)}; gone: {sorted(covered - pointing)}")
@@ -186,8 +190,10 @@ async def test_nothing_is_left_pointing_at_what_was_deleted(client):
 
         g = s["graph"]
         for owned in ("score", "snapshot", "signal", "alert", "task", "list_item", "target",
-                      "cadence_enrollment", "touch", "enrollment", "call_task", "call"):
+                      "cadence_enrollment", "touch", "enrollment", "call_task", "call",
+                      "service_fit"):
             table = {"score": "account_scores", "snapshot": "page_snapshots",
+                     "service_fit": "account_service_fits",
                      "signal": "signal_events", "alert": "alerts", "task": "inbox_tasks",
                      "list_item": "list_items", "target": "campaign_targets",
                      "cadence_enrollment": "cadence_enrollments", "touch": "cadence_touches",
@@ -203,7 +209,8 @@ async def test_nothing_is_left_pointing_at_what_was_deleted(client):
                             ("outcome", "outcomes"), ("dnc", "do_not_contact"),
                             ("thread", "engagement_threads"), ("message", "engagement_messages"),
                             ("reply", "reply_classifications"), ("source_run", "signal_source_runs"),
-                            ("list", "prospect_lists"), ("mailbox", "mailbox_connections")):
+                            ("list", "prospect_lists"), ("mailbox", "mailbox_connections"),
+                            ("service", "icp_services")):
             assert await exists(table, g[kept]), f"{table} row should be kept"
         dnc = tables["do_not_contact"]
         email = (await ts.session.execute(select(dnc.c.email, dnc.c.contact_id)

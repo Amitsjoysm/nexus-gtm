@@ -37,6 +37,9 @@ logger = logging.getLogger("nexus.accounts.purge")
 OWNED: tuple[tuple[str, str, str], ...] = (
     ("contacts", "account_id", "accounts"),
     ("account_scores", "account_id", "accounts"),
+    # Its fit against each further service (W8, 0077): a score of the account, NOT NULL, so left
+    # out it refused every delete in a workspace that had scored a second service.
+    ("account_service_fits", "account_id", "accounts"),
     ("page_snapshots", "account_id", "accounts"),
     ("signal_events", "account_id", "accounts"),
     ("alerts", "account_id", "accounts"),
