@@ -2773,6 +2773,41 @@ composer, call scripts and campaign drafts (`tests/test_draft_facts.py`):
   Upload is `POST .../call-script/file`: a one-segment POST under a campaign is the catch-all
   action route's.
 
+## The call console is one screen (`components/CallConsole.tsx`, 6.3, 2026-10-29)
+
+SDR feedback: the rep should be prepared before the call and never scroll during it. The old console
+sat beside the queue and scrolled. `tests/test_call_console.py`.
+- **The queue and a call are never on screen together** (`CallsPage`): open a call and the console
+  takes the page (`layout="screen"`); Esc or logging the outcome comes back to the queue. The Call
+  modals on Account 360 and Contacts keep the default `layout="stacked"`, one column.
+- **A fixed grid sized to the window, measured**: `useFitToScroller` sets the console's height to
+  what is left in the content scroller (`<main>`) and pulls the frame's bottom padding back, so the
+  page has nothing to scroll. Measured, not `100dvh - ...`, because a banner or the topbar is not
+  the console's to know. The grid applies at `(min-width: 1200px) and (min-height: 640px)`; the
+  hook's `SCREEN_QUERY` and the CSS media query must be the same string (tested), and below it the
+  console stacks and the page scrolls. Panels: head (person, their local time with a word when it
+  is outside 8am-6pm there, phone, LinkedIn, call controls); Who they are + Past calls; the script
+  (the campaign's own, verbatim, the AI track under it to borrow from; else the AI script); Where
+  we help + If they say...; the outcome bar. Every panel body scrolls inside itself and is a
+  containing block. Measured in the preview: 1366x768 gives 1078x667 with 227px panels, 1920x1080
+  gives 1160x979 (the app's 1200px content cap), `main` scroll height equal to its height in both.
+- **Keys, on the Calls page only**: C call (the `tel:` link, or the live bridge), E end (stops the
+  clock, focuses Notes), 1-9 a category then a disposition in it (options are numbered there),
+  Backspace back to categories, Ctrl+Enter log, Esc queue. A field or an open dialog owns the
+  keyboard. The on-call clock is shown and never sent: platform minutes are Twilio's measured ones.
+- **Past calls** come from `GET /calling/contacts/{id}/activities`, not the general activity
+  endpoint (5.2), so the console works without it. **First-reaction lines** are read from
+  `script.first_reactions` when the server sends them (W7.15) and typed locally, not in `types.ts`.
+- **The brief carries what the screen needs** (`CallBriefOut`): `local_timezone` +
+  `timezone_source` (the contact's own zone, else the account's country and region through
+  `timekeeping.zone_for_place`, else null: never the rep's, which would read as theirs);
+  `likely_pain` (the role angle their title implies); `value_fit` (`calling/value_fit.py`,
+  deterministic): the workspace's value props, at most 3, ranked by how many of their pains share a
+  content word with the title, role angle, industry and cited signals. The pains are only ever the
+  workspace's `pains_solved`; a match is shown as likely, ticked, never as a claim about them.
+  **`_value_props_for(ts, task)` is the one reader**, so a campaign that pitches one service (W8)
+  changes that function and nothing else.
+
 ## Drafted copy (`nexus/agents/copy.py`)
 
 **Everything the agents generate is sent to a real buyer**, including the offline stub's output:
@@ -3388,8 +3423,25 @@ that combines them; the API, the screens and the engine all read it. `tests/test
   Turning a mailbox switch ON where the workspace does not allow it is a 422; turning one OFF is
   never refused. `MailboxOut` reports the choice, what is allowed, and what is in force
   (`acts_alone`, `sends_alone`) separately, because "chosen" and "in force" are different facts.
-- Screens: the allows on Settings > Replies (managers), each SDR's switches on their mailbox card in
-  Settings > My mailboxes, and turning on sending asks for confirmation with the four rules above.
+- Screens: the allows on Settings > Replies (managers), each SDR's switches in their mailbox's row
+  detail in Settings > My mailboxes, and turning on sending asks for confirmation with the four
+  rules above.
+
+## My mailboxes is a table (`pages/engagement/MailboxesPage.tsx`, 6.2, 2026-10-29)
+
+One row per mailbox: address (and the name it sends as), owner, provider, status with its reason
+(`last_error`, a provider pause), last read, and sent today against the advised daily figure; the
+row's own action is Check or Reconnect. The address is the disclosure (`aria-expanded`), and a row
+opens in place, collapsed by default, to the signature, timezone, confidence bar, the writing style
+its drafts follow, the reply switches, Check connection and Disconnect. Disconnect lives in the
+detail, apart from Save, so it is never the button pressed by habit. `tests/test_mailboxes_table.py`.
+- `MailboxOut` gained three response-only fields: `owner_name` (the team view had only an id),
+  `daily_advised` (`sending/limits.VOLUME_WARNING_THRESHOLD`: advice, never a cap, D10), and
+  `writing_style` (tone, length, first ask: the workspace's Email style, readable until now only
+  through the admin-only `/workspace/email/style`; samples and the signature stay there). Read once
+  per list, not per row. A stored length that is not a number is passed on as null.
+- It fits the Settings frame at 1366x768 (829px for the table) without sideways scroll: a two-line
+  clamp on the status reason, slim cells, provider and last read leave below 860px.
 
 ## MCP server and OAuth (`nexus/mcp/`) — AI apps
 
