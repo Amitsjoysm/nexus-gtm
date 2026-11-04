@@ -76,7 +76,9 @@ def _page() -> str:
 
 def test_one_table_row_per_mailbox_with_the_columns_asked_for():
     page = _page()
-    headers = re.findall(r'<th scope="col"[^>]*>([^<]+)</th>', page)
+    # The connected mailboxes' table; the app-password one below it has its own four columns.
+    main = page.split("function AppPasswordTable", 1)[0]
+    headers = re.findall(r'<th scope="col"[^>]*>([^<]+)</th>', main)
     assert headers == ["Mailbox", "Owner", "Provider", "Status", "Last read", "Sent today"]
     # The detail row spans every column, the actions column included.
     assert page.count('<th scope="col"') == 7 and "colSpan={7}" in page
@@ -108,3 +110,31 @@ def test_the_style_is_read_here_and_edited_by_an_admin():
     style = page[page.index("function WritingStyle"):]
     assert 'to="/settings/email"' in style and "canEdit" in style
     assert "api.emailStyle(" not in page   # admin-only; the row's own field carries it
+
+
+async def test_app_password_mailboxes_are_listed_beside_the_others_without_their_secrets(client):
+    """2026-11-04, "multiple mailboxes not visible": mailboxes added with an app password lived only
+    in Email defaults. They are listed in My mailboxes too, marked for one-off emails, with nothing
+    of the password or the server."""
+    from nexus.models.identity import Tenant
+
+    token = await _mailbox(client, "apw")
+    me = principal_from_token(token)
+    async with tenant_session(me.tenant_id) as ts:
+        tenant = await ts.session.get(Tenant, me.tenant_id)
+        tenant.email_settings = {**dict(tenant.email_settings or {}), "accounts": [
+            {"id": "a1", "label": "My Gmail", "provider": "gmail", "username": "me@apwco.com",
+             "from_email": "me@apwco.com", "password": "app-pass-secret", "enabled": True,
+             "owner_user_id": me.user_id},
+            {"id": "a2", "label": "Colleague", "provider": "smtp", "username": "c@apwco.com",
+             "from_email": "c@apwco.com", "password": "", "enabled": True,
+             "owner_user_id": "someone-else"},
+        ]}
+    r = await client.get("/api/engagement/mailboxes/app-password", headers=auth(token))
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    assert [(m["email"], m["mine"], m["ready"]) for m in rows] == [("me@apwco.com", True, True)]
+    assert "app-pass-secret" not in r.text and "host" not in rows[0]
+    team = (await client.get("/api/engagement/mailboxes/app-password", headers=auth(token),
+                             params={"team": "true"})).json()
+    assert {m["email"]: m["ready"] for m in team} == {"me@apwco.com": True, "c@apwco.com": False}

@@ -2672,6 +2672,19 @@ export interface ConnectedMailbox {
   workspace_style?: WritingStyleSummary | null;
 }
 
+/** A mailbox added with an app password: one-off emails only, listed beside the others. */
+export interface AppPasswordMailbox {
+  id: string;
+  email: string;
+  label: string;
+  provider: string;
+  owner_user_id: string;
+  owner_name: string;
+  mine: boolean;
+  /** Enabled and holding what it needs to send. */
+  ready: boolean;
+}
+
 export interface WritingStyleSummary {
   tone: string;
   length_words: number | null;

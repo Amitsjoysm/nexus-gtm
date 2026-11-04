@@ -367,3 +367,17 @@
     transition: none;
   }
 }
+
+/* Mailboxes added with an app password: one-off emails only, beside the others (2026-11-04). */
+.appPassword {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+}
+
+.appPasswordHead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}

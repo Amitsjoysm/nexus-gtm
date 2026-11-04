@@ -24,7 +24,9 @@ import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDate, timeAgo } from "@/lib/format";
-import type { ConnectedMailbox, MailboxOwnStyle, MailboxProviderState } from "@/lib/types";
+import type {
+  AppPasswordMailbox, ConnectedMailbox, MailboxOwnStyle, MailboxProviderState,
+} from "@/lib/types";
 import styles from "./MailboxesPage.module.css";
 
 /**
@@ -117,6 +119,9 @@ export function MailboxesPage() {
 
   const providers = useApi<MailboxProviderState[]>((s) => api.connectedMailboxProviders(s), []);
   const mailboxes = useApi<ConnectedMailbox[]>((s) => api.listConnectedMailboxes(team, s), [team]);
+  const appPassword = useApi<AppPasswordMailbox[]>(
+    (s) => api.listAppPasswordMailboxes(team, s), [team],
+  );
 
   useEffect(() => {
     const connected = params.get("connected");
@@ -253,7 +258,72 @@ export function MailboxesPage() {
           </Card>
         )}
       </DataState>
+
+      {(appPassword.data?.length ?? 0) > 0 && (
+        <AppPasswordTable rows={appPassword.data ?? []} team={team} canManage={isAdmin} />
+      )}
     </div>
+  );
+}
+
+/**
+ * Mailboxes added with an app password (Settings, Email defaults), listed here so every mailbox is
+ * seen in one place (2026-11-04). They send one email at a time from a contact; a campaign needs a
+ * mailbox connected with Google or Microsoft sign-in, which the note says rather than leaving
+ * someone to find out when a campaign has no mailbox to send from.
+ */
+function AppPasswordTable({ rows, team, canManage }: {
+  rows: AppPasswordMailbox[];
+  team: boolean;
+  canManage: boolean;
+}) {
+  return (
+    <section className={styles.appPassword} aria-labelledby="app-password-title">
+      <div className={styles.appPasswordHead}>
+        <h4 id="app-password-title" className={styles.connectTitle}>Mailboxes with an app password</h4>
+        <p className={styles.hint}>
+          For one email at a time from a contact. Campaigns send from a mailbox connected above
+          with Google or Microsoft sign-in.
+          {canManage && <> <Link to="/settings/email" className={styles.inlineLink}>Manage them in Email defaults</Link></>}
+        </p>
+      </div>
+      <Card padding="none" className={styles.tableCard}>
+        <div className={styles.scroll}>
+          <table className={styles.table}>
+            <caption className="sr-only">
+              {team ? "The team's app-password mailboxes" : "Your app-password mailboxes"}
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Mailbox</th>
+                <th scope="col">Owner</th>
+                <th scope="col" className={styles.hideNarrow}>Provider</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((m) => (
+                <tr key={m.id} className={styles.row}>
+                  <td className={styles.addressCell}>
+                    <span className={styles.addressText}>
+                      <span className={styles.email}>{m.email || m.label}</span>
+                      {m.label && m.email && <span className={styles.sub}>{m.label}</span>}
+                    </span>
+                  </td>
+                  <td className={styles.owner}>{m.mine ? "You" : m.owner_name || "Nobody yet"}</td>
+                  <td className={cn(styles.muted, styles.hideNarrow)}>{m.provider === "smtp" ? "SMTP" : m.provider}</td>
+                  <td className={styles.statusCell}>
+                    <Badge tone={m.ready ? "success" : "warning"} dot>
+                      {m.ready ? "One-off emails" : "Needs its password"}
+                    </Badge>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </section>
   );
 }
 

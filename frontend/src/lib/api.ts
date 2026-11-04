@@ -169,6 +169,7 @@ import type {
   CallTaskCampaignScript,
   MyCallScript,
   MailboxOwnStyle,
+  AppPasswordMailbox,
   CampaignCallScript,
   DispositionCategory,
   TelephonyStatus,
@@ -1614,6 +1615,11 @@ export class ApiClient {
       style?: MailboxOwnStyle },
   ) {
     return this.request<ConnectedMailbox>(`/engagement/mailboxes/${id}`, { method: "PATCH", body });
+  }
+  /** Mailboxes added with an app password, for My mailboxes' second table (one-off emails only). */
+  listAppPasswordMailboxes(team: boolean, signal?: AbortSignal) {
+    return this.request<AppPasswordMailbox[]>("/engagement/mailboxes/app-password",
+      { query: { team: team || undefined }, signal });
   }
   checkConnectedMailbox(id: string) {
     return this.request<ConnectedMailbox>(`/engagement/mailboxes/${id}/check`, {

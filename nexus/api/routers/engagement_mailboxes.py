@@ -265,6 +265,52 @@ async def list_mailboxes(
     return [await _out(ts, r, principal, style=style) for r in rows]
 
 
+class AppPasswordMailboxOut(BaseModel):
+    """A mailbox added with an app password (Settings, Email defaults), for the same table.
+
+    Listed so every mailbox is seen in one place (2026-11-04, "multiple mailboxes not visible").
+    It sends one email at a time from a contact; campaigns need a mailbox connected with Google or
+    Microsoft sign-in (decided with the owner). No secret and no server detail is in this model.
+    """
+
+    id: str
+    email: str
+    label: str = ""
+    provider: str = "smtp"
+    owner_user_id: str = ""
+    owner_name: str = ""
+    mine: bool = False
+    #: Enabled and holding what it needs to send (`email_sender.account_is_configured`).
+    ready: bool = False
+
+
+@router.get("/app-password", response_model=list[AppPasswordMailboxOut])
+async def list_app_password_mailboxes(
+    team: bool = False,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> list[AppPasswordMailboxOut]:
+    """The viewer's app-password mailboxes, or the team's for a manager who asks."""
+    from nexus.integrations.email_sender import account_is_configured
+
+    if team and not _is_manager(principal):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only managers can see the team's mailboxes")
+    settings = await _workspace_email_settings(ts)
+    accounts = [dict(a) for a in (settings.get("accounts") or []) if isinstance(a, dict)]
+    out = []
+    for a in accounts:
+        owner = str(a.get("owner_user_id") or "")
+        if not team and owner != principal.user_id:
+            continue
+        email = str(a.get("from_email") or a.get("username") or "")
+        out.append(AppPasswordMailboxOut(
+            id=str(a.get("id") or ""), email=email, label=str(a.get("label") or ""),
+            provider=str(a.get("provider") or "smtp"), owner_user_id=owner,
+            owner_name=await _owner_name(ts, owner) if owner else "",
+            mine=owner == principal.user_id, ready=account_is_configured(a)))
+    return out
+
+
 @router.get("/providers", response_model=list[ProviderStateOut])
 async def provider_states(
     _: Principal = Depends(require(Permission.run_engagement)),
