@@ -246,3 +246,9 @@
     width: 100%;
   }
 }
+
+/* Which service the companies are for: above the count, because it changes what is searched. */
+.service {
+  max-width: 360px;
+  margin-top: var(--space-4);
+}

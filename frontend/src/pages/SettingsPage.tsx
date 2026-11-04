@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   Badge,
@@ -24,6 +24,7 @@ import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatNumber, humanize } from "@/lib/format";
+import { MAIN_SERVICE } from "@/lib/types";
 import type {
   DiscoveryToday,
   AutomationSettings,
@@ -807,6 +808,12 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "su
   );
 }
 
+/**
+ * The daily discovery number. Each service the workspace sells has its own (W8, 2026-10-29): the
+ * picker chooses which one this control sets and reports on. The main service keeps its 5 to 100
+ * range and the platform default; a further service starts at 0, which is off, so adding a
+ * service never starts buying companies by itself.
+ */
 function IcpDailyCountControl({
   settings,
   onSaved,
@@ -816,20 +823,34 @@ function IcpDailyCountControl({
 }) {
   const api = useApiClient();
   const toast = useToast();
+  const services = settings.services ?? [];
+  const multiService = services.length > 1;
+  const [serviceKey, setServiceKey] = useState(MAIN_SERVICE);
+  const chosen = services.find((s) => (s.service_id ?? MAIN_SERVICE) === serviceKey);
+  const isMain = serviceKey === MAIN_SERVICE;
+  const stored = isMain ? settings.icp_daily_count : (chosen?.daily_count ?? 0);
   const [value, setValue] = useState(String(settings.icp_daily_count ?? ""));
+  useEffect(() => setValue(stored == null ? "" : String(stored)), [serviceKey, stored]);
   const [saving, setSaving] = useState(false);
-  const effective = settings.icp_daily_count ?? settings.icp_daily_default;
+  const effective = isMain ? (settings.icp_daily_count ?? settings.icp_daily_default) : stored ?? 0;
+  const today = isMain ? settings.today : chosen?.today;
+  const min = isMain ? 5 : 0;
 
   async function save() {
     const n = Number(value);
-    if (!Number.isFinite(n) || n < 5 || n > 100) {
-      toast.error("Pick a value between 5 and 100");
+    if (!Number.isFinite(n) || n < min || n > 100) {
+      toast.error(`Pick a value between ${min} and 100`);
       return;
     }
     setSaving(true);
     try {
-      onSaved(await api.setIcpDailyCount(n));
-      toast.success("Daily discovery target saved", `Up to ${n} net-new ICP accounts per day.`);
+      onSaved(await api.setIcpDailyCount(n, isMain ? null : serviceKey));
+      toast.success(
+        "Daily discovery target saved",
+        n === 0
+          ? `Daily discovery is off for ${chosen?.name ?? "this service"}.`
+          : `Up to ${n} net-new ICP accounts per day${multiService && chosen ? ` for ${chosen.name}` : ""}.`,
+      );
     } catch (err) {
       toast.error("Couldn't save", err instanceof ApiError ? err.detail : "Please try again.");
     } finally {
@@ -842,21 +863,34 @@ function IcpDailyCountControl({
       <div className={styles.controlText}>
         <span className={styles.controlLabel}>New ICP accounts per day</span>
         <span className={styles.controlHint}>
-          How many net-new accounts that strictly match your ICP the daily discovery adds
-          (currently {effective}/day). Needs automation on and an ICP defined on the Relevance
-          page. A day that falls short is topped up a few hours later.
+          How many net-new accounts that strictly match {multiService ? "this service's" : "your"}{" "}
+          ICP the daily discovery adds ({effective === 0 ? "off" : `currently ${effective}/day`}).
+          Needs automation on and an ICP defined on the Relevance page. A day that falls short is
+          topped up a few hours later.
+          {multiService && !isMain && " 0 turns it off for this service."}
         </span>
-        {settings.today && <DiscoveryTodayLine today={settings.today} />}
+        {today && <DiscoveryTodayLine today={today} />}
       </div>
-      <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" }}>
+        {multiService && (
+          <Select
+            aria-label="Service"
+            value={serviceKey}
+            onChange={(e) => setServiceKey(e.target.value)}
+            options={services.map((s) => ({
+              value: s.service_id ?? MAIN_SERVICE,
+              label: s.name,
+            }))}
+          />
+        )}
         <Input
           type="number"
-          min={5}
+          min={min}
           max={100}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder={String(settings.icp_daily_default)}
-          aria-label="New ICP accounts per day"
+          placeholder={isMain ? String(settings.icp_daily_default) : "0"}
+          aria-label={multiService && chosen ? `New ICP accounts per day for ${chosen.name}` : "New ICP accounts per day"}
           style={{ width: 96 }}
         />
         <Button size="sm" variant="secondary" loading={saving} onClick={save}>

@@ -11,7 +11,6 @@ from nexus.models.account import Account, Contact
 from nexus.models.intelligence import AgentRun
 from nexus.models.signal import SignalEvent
 from nexus.relevance import RelevanceContext, RelevanceEngine, get_relevance_engine
-from nexus.relevance.engine import get_profile
 
 
 @dataclass
@@ -125,7 +124,12 @@ class AgentRuntime:
                 .limit(50)
             )
             signals = list((await ts.session.scalars(stmt)).all())
-        profile = await get_profile(ts)
+        # The campaign's service inside a campaign, else the service that found the account, else
+        # the workspace's default (W8): the email, the call script and the score are all written
+        # against the offer this account is being worked for.
+        from nexus.relevance.services import resolve_profile
+
+        profile = await resolve_profile(ts, account=account)
         rc = self.relevance.build_context(profile, account, contacts, signals)
         return AgentContext(
             ts=ts,

@@ -409,6 +409,11 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
 
     One workspace failing never stops the others: each runs in its own try, and a failure is
     recorded so the retry gap applies to it too rather than re-running it on every tick.
+
+    **Each service with a daily number gets its own passes** (W8, 2026-10-29): the default service
+    against ``icp_daily_count``, every further service against its ``daily_target`` (0 is off, the
+    default for a new service). They share the workspace's interval, and each has its own runs,
+    tally, top-ups and reason, in the order the workspace added them.
     """
     from datetime import datetime, timedelta, timezone
 
@@ -441,61 +446,83 @@ async def handle_discover_icp_accounts(payload: dict) -> dict:
 
     discovered = 0
     for tid in tenant_ids:
-        need = 0
+        services: list = []
         try:
             async with tenant_session(tid) as ts:
-                # Row-lock the tenant so two workers can't both decide to run a pass (double search
-                # spend). A concurrent worker blocks here until we commit, then sees the new run.
-                # On SQLite this is a no-op; writes already serialize there.
-                tenant = await ts.session.get(Tenant, tid, with_for_update=True)
-                if tenant is None:
-                    continue
-                target = tenant.icp_daily_count or settings.icp_discovery_daily_count
-                start = tenant.icp_discovery_last_run_at
-                new_window = start is None or ensure_aware(start) <= now - interval
-                runs = [] if new_window else await auto.runs_since(ts, start)
-                if runs:
-                    delivered = sum(r.delivered or 0 for r in runs)
-                    last = runs[-1]
-                    if (delivered >= target or len(runs) >= max_attempts
-                            or not auto.pass_is_worth_repeating(last)
-                            or ensure_aware(last.created_at) > now - retry_gap):
+                from nexus.relevance.services import active_services
+
+                services = [s for s in await active_services(ts) if (s.daily_target or 0) > 0]
+        except Exception:
+            # The default service still runs: a services read that fails must not cost the
+            # workspace the discovery it had before services existed.
+            logger.warning("could not read the services of %s", tid, exc_info=True)
+        for service in [None, *services]:
+            service_id = getattr(service, "id", None)
+            need = 0
+            try:
+                async with tenant_session(tid) as ts:
+                    # Row-lock the tenant so two workers can't both decide to run a pass (double
+                    # search spend). A concurrent worker blocks here until we commit, then sees the
+                    # new run. On SQLite this is a no-op; writes already serialize there.
+                    tenant = await ts.session.get(Tenant, tid, with_for_update=True)
+                    if tenant is None:
+                        break
+                    if service is None:
+                        target = tenant.icp_daily_count or settings.icp_discovery_daily_count
+                    else:
+                        target = int(service.daily_target or 0)
+                    start = tenant.icp_discovery_last_run_at
+                    new_window = start is None or ensure_aware(start) <= now - interval
+                    runs = ([] if new_window
+                            else await auto.runs_since(ts, start, service_id=service_id))
+                    if runs:
+                        delivered = sum(r.delivered or 0 for r in runs)
+                        last = runs[-1]
+                        if (delivered >= target or len(runs) >= max_attempts
+                                or not auto.pass_is_worth_repeating(last)
+                                or ensure_aware(last.created_at) > now - retry_gap):
+                            continue
+                        need = target - delivered
+                    else:
+                        need = target
+                    pool = max(need * settings.icp_discovery_pool_multiplier, need)
+                    # The default is called exactly as before a service existed.
+                    extra = {} if service is None else {
+                        "service": await ts.get(type(service), service.id)}
+                    res = await auto.auto_discover_for_tenant(
+                        ts, target_count=need, min_fit=settings.icp_discovery_min_fit,
+                        pool_limit=pool, **extra,
+                    )
+                    if res.get("skipped") == "no_icp":
+                        # The slot is not consumed: discovery fires the moment an ICP is added.
+                        # The paused state is surfaced in-app, the #1 reason "no new accounts"
+                        # reaches support. A further service with no ICP yet is simply waiting.
+                        if service is None:
+                            await _ensure_icp_paused_alert(ts)
                         continue
-                    need = target - delivered
-                else:
-                    need = target
-                pool = max(need * settings.icp_discovery_pool_multiplier, need)
-                res = await auto.auto_discover_for_tenant(
-                    ts, target_count=need, min_fit=settings.icp_discovery_min_fit,
-                    pool_limit=pool,
-                )
-                if res.get("skipped") == "no_icp":
-                    # The slot is not consumed: discovery fires the moment an ICP is added. The
-                    # paused state is surfaced in-app, the #1 reason "no new accounts" reaches
-                    # support.
-                    await _ensure_icp_paused_alert(ts)
-                    continue
-                if new_window:
-                    tenant.icp_discovery_last_run_at = now
-                ts.add(_daily_run(tid, now, need, res))
-                await _resolve_icp_paused_alert(ts)
-                discovered += res.get("discovered", 0)
-                logger.info(
-                    "icp discovery %s: asked %s, delivered %s, sources %s, discarded %s, notes %s",
-                    tid, need, res.get("discovered", 0), res.get("sources"), res.get("discarded"),
-                    res.get("notes") or res.get("skipped"),
-                )
-        except Exception as exc:
-            logger.exception("icp discovery failed for tenant %s", tid)
-            await _record_failed_pass(tid, now, need, exc, interval)
+                    if new_window:
+                        tenant.icp_discovery_last_run_at = now
+                    ts.add(_daily_run(tid, now, need, res, service_id=service_id))
+                    if service is None:
+                        await _resolve_icp_paused_alert(ts)
+                    discovered += res.get("discovered", 0)
+                    logger.info(
+                        "icp discovery %s%s: asked %s, delivered %s, sources %s, discarded %s, "
+                        "notes %s", tid, f" service {service_id}" if service_id else "", need,
+                        res.get("discovered", 0), res.get("sources"), res.get("discarded"),
+                        res.get("notes") or res.get("skipped"),
+                    )
+            except Exception as exc:
+                logger.exception("icp discovery failed for tenant %s", tid)
+                await _record_failed_pass(tid, now, need, exc, interval, service_id=service_id)
     return {"discovered": discovered, "tenants": len(tenant_ids)}
 
 
-def _daily_run(tenant_id: str, now, need: int, res: dict):
+def _daily_run(tenant_id: str, now, need: int, res: dict, *, service_id: str | None = None):
     from nexus.models.prospecting import ProspectRun
 
     return ProspectRun(
-        tenant_id=tenant_id, kind="daily", requested=need,
+        tenant_id=tenant_id, kind="daily", requested=need, service_id=service_id,
         delivered=int(res.get("discovered", 0) or 0),
         status="done" if not res.get("skipped") else str(res["skipped"])[:16],
         sources=res.get("sources") or {}, discarded=res.get("discarded") or {},
@@ -504,7 +531,8 @@ def _daily_run(tenant_id: str, now, need: int, res: dict):
     )
 
 
-async def _record_failed_pass(tenant_id: str, now, need: int, exc: BaseException, interval) -> None:
+async def _record_failed_pass(tenant_id: str, now, need: int, exc: BaseException, interval,
+                              *, service_id: str | None = None) -> None:
     """Record a pass that raised, in its own transaction (the pass's own was rolled back), so the
     retry gap applies to it. Opens the interval if none is open, or a failing workspace would be
     re-run on every tick. Never raises."""
@@ -520,6 +548,7 @@ async def _record_failed_pass(tenant_id: str, now, need: int, exc: BaseException
                 tenant.icp_discovery_last_run_at = now
             ts.add(ProspectRun(
                 tenant_id=tenant_id, kind="daily", requested=need, delivered=0, status="failed",
+                service_id=service_id,
                 sources={}, discarded={}, notes={}, account_ids=[],
                 error=f"{type(exc).__name__}: {exc}"[:500],
                 started_at=now, finished_at=now, created_at=now,
@@ -544,6 +573,21 @@ async def handle_populate_accounts(payload: dict) -> dict:
         if await ts.get(ProspectRun, run_id) is None:
             raise RuntimeError(f"populate run {run_id} is not visible yet")
     return await execute(tenant_id, run_id)
+
+
+async def handle_score_service_fits(payload: dict) -> dict:
+    """Score every account against one service after its ICP was saved (W8), so the Accounts list
+    and Account 360 show the fit against the ICP that is saved. A service archived or gone since
+    is skipped."""
+    from nexus.relevance.services import get_service, score_service_everywhere
+
+    tenant_id, service_id = payload["tenant_id"], payload["service_id"]
+    async with tenant_session(tenant_id) as ts:
+        service = await get_service(ts, service_id)
+        if service is None or service.archived_at is not None:
+            return {"skipped": "no_service", "service_id": service_id}
+        scored = await score_service_everywhere(ts, service)
+    return {"service_id": service_id, "scored": scored}
 
 
 async def handle_sync_network_account(payload: dict) -> dict:
@@ -1506,6 +1550,7 @@ HANDLERS: dict[str, Handler] = {
     "alert_digests": handle_alert_digests,
     "discover_icp_accounts": handle_discover_icp_accounts,
     "populate_accounts": handle_populate_accounts,
+    "score_service_fits": handle_score_service_fits,
     "crawl_companies": handle_crawl_companies,
     "backfill_companies": handle_backfill_companies,
     "pool_found_people": handle_pool_found_people,
@@ -1596,6 +1641,15 @@ async def enqueue_populate_accounts(
     queue = queue or get_task_queue()
     await queue.enqueue(
         Job(name="populate_accounts", payload={"tenant_id": tenant_id, "run_id": run_id})
+    )
+
+
+async def enqueue_score_service_fits(
+    tenant_id: str, service_id: str, *, queue: TaskQueue | None = None
+) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(
+        Job(name="score_service_fits", payload={"tenant_id": tenant_id, "service_id": service_id})
     )
 
 

@@ -246,11 +246,12 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0076_run_soft_delete` on branch
-`claude/records-housekeeping-abf793` (SDR round 2, Session B), on `0075_call_scripts` of
-`fix/sdr-data-accuracy` (`0073_field_provenance`, `0074_draft_facts`, `0075_call_scripts`, none
-applied anywhere but a DB copy); `0072_prospector` before it. Session E's `0077_icp_services` is
-parented on `0075` and is re-parented onto `0076` at merge. The chain is
+Alembic under `migrations/versions/`. Head: `0077_icp_services` on branch `fix/sdr-data-accuracy`
+(`0073_field_provenance`, `0074_draft_facts`, `0075_call_scripts`, `0076_run_soft_delete`,
+`0077_icp_services`, none applied anywhere but a DB copy); `0072_prospector` before them. `0076`
+(SDR round 2, Session B) and `0077` (Session E) were written on parallel branches both parented on
+`0075`; `0077` was re-parented onto `0076` at the merge (2026-11-04), so there is one head. The
+chain is
 `0020_baseline_schema` (a **frozen, literal-DDL squash** of the old 0001–0020) → `0021`–`0026`
 (the Billing tables below) → `0027` (`dead_letter_jobs`, job durability) → `0028` (`user_mfa` +
 `mfa_recovery_codes`) → `0029` (`platform_admins.permissions`) → `0030` (`signal_source_runs`) →
@@ -2187,6 +2188,62 @@ size, Country, State/province, Tech stack and Job titles can each be `icp["manda
 - The Relevance form splits comma lists **outside brackets only**: "CRM (Salesforce, HubSpot,
   Zoho)" is one entry, read by `tech_terms` as any of three. Splitting at every comma had stored
   "CRM (Salesforce" and "Zoho)", which matched nothing.
+
+## A full ICP per service (`nexus/relevance/services.py`, W8, 2026-10-29)
+
+Owner decision, superseding one ICP per workspace: each service a company sells has its own ICP,
+value props, product context, Populate and daily discovery; a campaign pitches one; fit is scored per
+service. Migration `0077_icp_services`. `tests/test_icp_services.py`, `test_service_populate.py`,
+`test_service_fit.py`.
+
+- **The relevance profile IS the default service** ("Main service" until named,
+  `relevance_profiles.name`); every other is an `icp_services` row shaped like it (`icp`,
+  `value_props`, `product_context`), so `score_icp_fit`, `build_context`, `deliver` and `fit_screen`
+  take a service unchanged. A NULL `service_id` anywhere (accounts, campaigns, runs) is the default:
+  a workspace that adds no service behaves exactly as before, which the first test pins. The API
+  names the default `default` (`MAIN_SERVICE` in the client) and never stores it.
+- **One resolver, in this order**: `using_service(id)` (a context variable, like `using_model`), then
+  the account's `service_id`, then the default. `engine.get_profile` honours the scope, so the
+  drafting context, Find contacts and the agent runtime, which read `get_profile(ts)` several calls
+  below the code that knows the campaign, need no change; `get_or_create_profile` never does, so
+  writing the profile cannot hit a service. The drafter opens the campaign's scope
+  (`campaign_service`), as do the call script (`calling.generate_script`, through the task's
+  enrollment) and campaign enrolment (router); Find contacts and the pipeline's sourcing open the
+  account's. An explicit default scope beats the account's own service: a campaign for the main
+  service pitches it even to an account another service found.
+- **Fit per service is its own table** (`account_service_fits`, one row per account and service,
+  overwritten), not a column on `account_scores`: five readers take the newest score row as the
+  account's score and a per-service row there would become it. Written on delivery, on each scoring
+  refresh (`ScoringAgent`), and by the `score_service_fits` job when a service's ICP is saved or
+  restored; Account 360 (`GET /relevance/services/fits/{id}`) re-scores a row older than the service
+  or the account before showing it. The default's fit stays in `account_scores`, and an account's
+  Fit column is the FINDING service's (the runtime scores it under its own service), so the list
+  needs only the Service column and filter (`GET /accounts?service_id=`).
+- **Populate and the daily sweep take a service** without touching `deliver.py`: the service is
+  passed as the profile, and `populate.claim_for_service` stamps `accounts.service_id` and scores the
+  new accounts against every service afterwards. Each service with a `daily_target` (0, off, by
+  default: adding a service never starts buying) gets its own passes, runs (`prospect_runs.service_id`)
+  and tally in the shared interval; the default is called exactly as before (no `service` kwarg), and
+  only the default raises the no-ICP alert. Still one Populate at a time per workspace.
+- **A campaign's service changes only before launch** (409 after): sent emails were written for it.
+- **"Draft from page"** (`website_icp`): a URL with a path is ONE service; that page is read
+  (SSRF-guarded on every redirect hop, 300 KB, `fetch_page`), the searches name the service, and the
+  model is told to describe that service's buyers. The homepage path is unchanged. The draft is
+  remembered per service (`/relevance/last-analysis?service_id=`), charged as before.
+- Services are archived, never deleted (accounts, campaigns and runs name them); up to 20 active.
+
+## Buyer title suggestions (`nexus/relevance/title_suggest.py`, W4, 2026-10-29)
+
+SDRs got CEO and CXO back and their Title and Exclude keywords ignored. `/suggest-titles` now asks the
+LLM with everything the ICP or service says (product context, value props and pains, industries,
+size, countries, tech, title keywords, exclude keywords, job levels, titles listed), each title with
+a one-line reason, then filters deterministically: an exclude keyword drops a title by the same
+substring rule contact search uses (`matches_title`), so a suggestion is never a title the search
+then refuses; C-level (`level_of`) only when the job levels include it or the ICP's typical company
+(the middle of its size band) is under 50; nothing already listed. With no model, a failure, or
+every title filtered, the catalogue answers through the same filter, led by titles built from the
+keywords at the chosen levels ("Head of Facilities"), and with keywords set only catalogue roles in
+those functions. One completion per click, not metered (COGS). `tests/test_title_suggestions.py`.
 
 ## Find contacts: pool, then InfoJoy, then LinkedIn, then web (2026-10-26)
 

@@ -214,11 +214,22 @@ class SuggestTitlesIn(BaseModel):
     # the context never reached it.
     value_props: list[dict] = Field(default_factory=list)
     product_context: str = ""
+    # Read since 2026-10-29 (W4): SDRs typed functions and exclusions and still got CEO and CXO back.
+    countries: list[str] = Field(default_factory=list)
+    title_keywords: list[str] = Field(default_factory=list)
+    exclude_title_keywords: list[str] = Field(default_factory=list)
+    job_levels: list[str] = Field(default_factory=list)
+    # With nothing else posted, the saved ICP of this service is used (None: the main service).
+    service_id: str | None = None
     limit: int = 10
 
 
 class AnalyzeWebsiteIn(BaseModel):
+    #: The site, or one service's own page (``acme.com/services/abc``), which drafts that service.
     url: str
+    #: The service the draft is for (W8): remembered with it, so each service offers back its own
+    #: last draft. None or "default" is the workspace's main service.
+    service_id: str | None = None
 
 
 # ---- accounts / contacts ----
@@ -263,7 +274,13 @@ class AccountOut(AccountIn):
     field_sources: dict = Field(default_factory=dict)
     # How the account fares on the ICP's MANDATORY fields: {passed, failed, unknown, reason}.
     # None when the ICP marks nothing mandatory, so the screen keeps showing the fit score alone.
+    # Read against the ICP of the service that found the account (W8).
     icp_gate: dict | None = None
+    # The service whose discovery found the account (W8). None is the main service. The Fit
+    # column is already this service's fit: the account is scored against the service that found
+    # it; every other service's fit is on Account 360 (`/relevance/services/fits/{id}`).
+    service_id: str | None = None
+    service_name: str | None = None
     # The account's events by kind, newest of each: [{kind, days_ago}]. Events only (strength 0.5,
     # the Signals page's own floor), so the Accounts list can filter on them. Filled by the list.
     recent_signals: list[dict] = Field(default_factory=list)
@@ -764,8 +781,11 @@ class AutomationSettingsIn(BaseModel):
     """Partial update: omitted fields keep their stored value."""
 
     automation_enabled: bool | None = None
-    # Net-new strict-ICP accounts to discover per day for this workspace (SDR-selectable).
-    icp_daily_count: int | None = Field(default=None, ge=5, le=100)
+    # Net-new strict-ICP accounts to discover per day for this workspace (SDR-selectable): 5 to 100
+    # for the main service; for a further service (``service_id``) 0, which is off, to 100.
+    icp_daily_count: int | None = Field(default=None, ge=0, le=100)
+    # Which service ``icp_daily_count`` is for (W8). None or "default" is the main service.
+    service_id: str | None = None
 
 
 class DiscoveryTodayOut(BaseModel):
@@ -781,6 +801,17 @@ class DiscoveryTodayOut(BaseModel):
     short_reason: str = ""
 
 
+class ServiceDailyOut(BaseModel):
+    """One service's daily discovery number and what today delivered against it (W8)."""
+
+    #: None is the main service.
+    service_id: str | None = None
+    name: str
+    #: None for the main service means the platform default applies; 0 for another means off.
+    daily_count: int | None = None
+    today: DiscoveryTodayOut | None = None
+
+
 class AutomationSettingsOut(BaseModel):
     automation_enabled: bool
     # None -> the platform default applies (shown via icp_daily_default).
@@ -788,6 +819,9 @@ class AutomationSettingsOut(BaseModel):
     icp_daily_default: int = 20
     # None until the first pass of an interval has run.
     today: DiscoveryTodayOut | None = None
+    # Every service the workspace sells, the main one first. The fields above stay the main
+    # service's, so a client written before services keeps working.
+    services: list[ServiceDailyOut] = Field(default_factory=list)
 
 
 class EmailSettingsIn(BaseModel):

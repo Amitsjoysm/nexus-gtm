@@ -54,6 +54,8 @@ class CampaignIn(BaseModel):
     first_send_at: datetime | None = None
     timezone_mode: str = "contact"
     source_list_id: str | None = None
+    # The service this campaign pitches (W8); None or "default" is the workspace's main service.
+    service_id: str | None = None
 
 
 class StepOut(StepIn):
@@ -74,6 +76,9 @@ class CampaignOut(BaseModel):
     launched_at: datetime | None
     steps: list[StepOut]
     counts: dict[str, int]
+    # None is the default service. The name rides along so a screen needs no second read.
+    service_id: str | None = None
+    service_name: str = ""
 
 
 class ContactsIn(BaseModel):
@@ -171,15 +176,19 @@ async def _status_counts(ts: TenantSession, campaign_ids: list[str]) -> dict[str
 
 
 async def _out(ts: TenantSession, campaign, *, counts: dict[str, int] | None = None,
-               steps: list | None = None) -> CampaignOut:
-    """One campaign as the screens read it. A list passes `counts` and `steps` it fetched for
-    every campaign at once, rather than two queries per campaign."""
+               steps: list | None = None,
+               service_names: dict[str | None, str] | None = None) -> CampaignOut:
+    """One campaign as the screens read it. A list passes `counts`, `steps` and `service_names`
+    it fetched for every campaign at once, rather than three queries per campaign."""
     from nexus.engagement.sequences.service import steps_of
+    from nexus.relevance.services import names
 
     if counts is None:
         counts = (await _status_counts(ts, [campaign.id])).get(campaign.id, {})
     if steps is None:
         steps = await steps_of(ts, campaign)
+    if service_names is None:
+        service_names = await names(ts)
     return CampaignOut(
         id=campaign.id, name=campaign.name, owner_user_id=campaign.owner_user_id,
         mailbox_connection_id=campaign.mailbox_connection_id, status=campaign.status,
@@ -191,7 +200,23 @@ async def _out(ts: TenantSession, campaign, *, counts: dict[str, int] | None = N
                        send_time_local=s.send_time_local,
                        allowed_weekdays=list(s.allowed_weekdays or []))
                for s in steps],
-        counts=counts)
+        counts=counts, service_id=campaign.service_id,
+        service_name=service_names.get(campaign.service_id, ""))
+
+
+async def _chosen_service(ts: TenantSession, raw: str | None) -> str | None:
+    """The stored ``service_id`` for a service a campaign may be built for: None for the default,
+    else a service of this workspace that is still offered (422 otherwise)."""
+    from nexus.relevance.services import get_service, normalise_id
+
+    service_id = normalise_id(raw)
+    if service_id is None:
+        return None
+    service = await get_service(ts, service_id)
+    if service is None or service.archived_at is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Choose one of the services this workspace sells.")
+    return service.id
 
 
 def _refuse(exc: Exception) -> HTTPException:
@@ -300,8 +325,12 @@ async def list_campaigns(
     steps: dict[str, list] = {}
     for step in (await ts.list(EngagementStep, EngagementStep.campaign_id.in_(ids)) if ids else []):
         steps.setdefault(step.campaign_id, []).append(step)
+    from nexus.relevance.services import names
+
+    service_names = await names(ts)
     return [await _out(ts, c, counts=counts.get(c.id, {}),
-                       steps=sorted(steps.get(c.id, []), key=lambda s: s.step_index))
+                       steps=sorted(steps.get(c.id, []), key=lambda s: s.step_index),
+                       service_names=service_names)
             for c in sorted(rows, key=lambda c: c.created_at, reverse=True)]
 
 
@@ -351,6 +380,7 @@ async def create(
 ) -> CampaignOut:
     from nexus.engagement.sequences.service import CampaignError, create_campaign
 
+    service_id = await _chosen_service(ts, body.service_id)
     try:
         campaign = await create_campaign(
             ts, name=body.name, owner_user_id=principal.user_id, mailbox_id=body.mailbox_id,
@@ -360,6 +390,32 @@ async def create(
             source_list_id=body.source_list_id)
     except CampaignError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    campaign.service_id = service_id
+    await ts.flush()
+    return await _out(ts, campaign)
+
+
+class ServiceIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    service_id: str | None = None
+
+
+@router.put("/campaigns/{campaign_id}/service", response_model=CampaignOut)
+async def put_service(
+    campaign_id: str, body: ServiceIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.run_engagement)),
+) -> CampaignOut:
+    """Pitch another service (W8). Before launch only: emails already sent were written for the
+    service the campaign was launched with, and a follow-up must not change the offer mid-thread.
+    Drafts written for the old service stay as they are; Regenerate writes them again."""
+    campaign = await _campaign(ts, campaign_id, principal)
+    if campaign.status != "draft":
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "A launched campaign keeps the service it was launched with.")
+    campaign.service_id = await _chosen_service(ts, body.service_id)
+    await ts.flush()
     return await _out(ts, campaign)
 
 
@@ -455,8 +511,12 @@ async def add_contacts(
     # Someone chosen by name who is already in is still reported; a list or company re-added is not
     # a page of "already in this campaign" lines.
     named_again = [c for c in dict.fromkeys(body.contact_ids) if c in enrolled]
+    # The ICP check on the way in is the campaign's service's (W8).
+    from nexus.relevance.services import using_service
+
     try:
-        result = await enroll(ts, campaign, batch + named_again)
+        with using_service(campaign.service_id):
+            result = await enroll(ts, campaign, batch + named_again)
     except CampaignError as exc:
         raise _refuse(exc) from exc
     return {"added": result.added, "skipped": result.skipped, "warnings": result.warnings,
@@ -772,13 +832,13 @@ async def enhance_call_script(
     as one AI call script (`ai.call_script`), the price of generating one."""
     from nexus.agents.llm import LLMMessage, get_llm_provider
     from nexus.billing.meter import metered
-    from nexus.relevance.engine import get_profile
     from nexus.calling.scripts import enhance_prompt
+    from nexus.relevance.services import profile_for_campaign
 
     campaign = await _campaign(ts, campaign_id, principal)
     if not (campaign.call_script or "").strip():
         raise HTTPException(status.HTTP_409_CONFLICT, "Upload a script first.")
-    profile = await get_profile(ts)
+    profile = await profile_for_campaign(ts, campaign)
     prompt = enhance_prompt(campaign.call_script, getattr(profile, "product_context", "") or "")
     async with metered(ts, "ai.call_script", user_id=principal.user_id, source="calling",
                        attrs={"enhance": True}):

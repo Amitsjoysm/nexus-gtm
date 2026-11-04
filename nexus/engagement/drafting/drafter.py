@@ -73,9 +73,18 @@ async def _fresh_insights(ts, contact) -> None:
         logger.info("LinkedIn insights before a draft failed", exc_info=True)
 
 
-async def draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: str = "first",
-                thread=None, user_id: str | None = None, now=None,
-                capability: str = EMAIL_DRAFT, automatic: bool = False) -> Draft:
+async def draft(ts, *, enrollment, **kwargs) -> Draft:
+    """One draft, written for the service the enrollment's campaign pitches (W8): the context pack
+    and the messaging agent both read that service's ICP and value props."""
+    from nexus.relevance.services import campaign_service
+
+    async with campaign_service(ts, getattr(enrollment, "campaign_id", None)):
+        return await _draft(ts, enrollment=enrollment, **kwargs)
+
+
+async def _draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: str = "first",
+                 thread=None, user_id: str | None = None, now=None,
+                 capability: str = EMAIL_DRAFT, automatic: bool = False) -> Draft:
     """One draft. Never raises: a draft that cannot be written reports why.
 
     ``capability`` is what the draft is charged as. An outbound step is ``ai.email_draft``; a reply

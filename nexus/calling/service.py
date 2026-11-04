@@ -182,10 +182,21 @@ class CallQueueService:
         if not refresh and cached and _written_today(cached.get("generated_at"), utcnow()):
             return cached
 
-        result = await get_agent_runtime().run(
-            "call_script", ts, account_id=task.account_id,
-            contact_id=task.contact_id, persist=False,
-        )
+        # A campaign's call pitches the campaign's service (W8); any other call, the service that
+        # found the account (the runtime resolves that itself).
+        from nexus.relevance.services import campaign_service
+
+        campaign_id = None
+        if getattr(task, "engagement_enrollment_id", None):
+            from nexus.models.engagement import EngagementEnrollment
+
+            enrollment = await ts.get(EngagementEnrollment, task.engagement_enrollment_id)
+            campaign_id = enrollment.campaign_id if enrollment is not None else None
+        async with campaign_service(ts, campaign_id):
+            result = await get_agent_runtime().run(
+                "call_script", ts, account_id=task.account_id,
+                contact_id=task.contact_id, persist=False,
+            )
         script = dict((result.output or {}).get("script") or {})
         if script:
             script["generated_at"] = utcnow().isoformat()

@@ -68,8 +68,12 @@ export interface Account {
   owner_name?: string | null;
   /** Where each value came from, so a rep can check it against the evidence. */
   field_sources?: FieldSources;
-  /** The ICP's mandatory fields, checked. `null` when the ICP marks nothing mandatory. */
+  /** The ICP's mandatory fields, checked against the finding service's ICP. `null` when it marks
+   *  nothing mandatory. */
   icp_gate?: IcpGate | null;
+  /** The service whose discovery found this account; `null` is the main service. */
+  service_id?: string | null;
+  service_name?: string | null;
   /** The newest event of each signal kind (strength 0.5 and up), on the Accounts list only. */
   recent_signals?: { kind: string; days_ago: number }[];
 }
@@ -765,6 +769,50 @@ export interface RelevanceProfile {
 
 export type RelevanceProfileInput = Omit<RelevanceProfile, "id" | "icp_changed">;
 
+/**
+ * A service the workspace sells, with a full ICP of its own (W8). The main service is the
+ * workspace's relevance profile: `id` null, `is_default` true.
+ */
+export interface IcpService {
+  id: string | null;
+  name: string;
+  is_default: boolean;
+  source_url: string | null;
+  icp: IcpDefinition;
+  value_props: ValueProp[];
+  product_context: string;
+  /** New companies a day. null on the main service means the platform default; 0 is off. */
+  daily_target: number | null;
+  archived_at: string | null;
+  /** Accounts this service's discovery found. */
+  accounts: number;
+  icp_changed?: boolean;
+}
+
+export interface IcpServiceInput {
+  name: string;
+  source_url?: string | null;
+  icp: IcpDefinition;
+  value_props: ValueProp[];
+  product_context: string;
+}
+
+/** One account's ICP fit against one service, for Account 360. */
+export interface ServiceFit {
+  service_id: string | null;
+  name: string;
+  is_default: boolean;
+  /** null while the service has no ICP to score against. */
+  icp_fit: number | null;
+  gate: IcpGate | null;
+  reasons: string[];
+  /** This service's discovery found the account. */
+  found_here: boolean;
+}
+
+/** The API's name for the main service where an id is required. */
+export const MAIN_SERVICE = "default";
+
 /** What adding N ICP companies would cost, against the workspace's credit balance. */
 export interface PopulateQuote {
   count: number;
@@ -783,6 +831,8 @@ export interface PopulateRun {
   status: PopulateStatus;
   requested: number;
   delivered: number;
+  /** The service the companies were found for; null is the main service. */
+  service_id?: string | null;
   /** Companies added per source: `database`, `linkedin`, `web`. */
   sources: Record<string, number>;
   /** Companies found and not added, by reason: `no_website`, `already_held`, ... */
@@ -1215,6 +1265,17 @@ export interface AutomationSettings {
   icp_daily_default: number;
   /** What the current discovery interval delivered. Absent before the first pass, or from an older server. */
   today?: DiscoveryToday | null;
+  /** Every service's daily number and today, the main service first. */
+  services?: ServiceDaily[];
+}
+
+export interface ServiceDaily {
+  /** null is the main service. */
+  service_id: string | null;
+  name: string;
+  /** null on the main service: the platform default. 0 on another: off. */
+  daily_count: number | null;
+  today: DiscoveryToday | null;
 }
 
 export interface DiscoveryToday {
@@ -2698,6 +2759,9 @@ export interface EngagementCampaign {
   steps: Required<EngagementStep>[];
   /** Enrollment count by status. */
   counts: Record<string, number>;
+  /** The one service this campaign pitches; null is the main service. */
+  service_id?: string | null;
+  service_name?: string;
 }
 
 export interface EngagementCampaignInput {
@@ -2710,6 +2774,8 @@ export interface EngagementCampaignInput {
   first_send_at?: string | null;
   timezone_mode?: "contact" | "sdr";
   source_list_id?: string | null;
+  /** The service the campaign pitches; null or "default" is the main service. */
+  service_id?: string | null;
 }
 
 export interface EngagementCandidate {

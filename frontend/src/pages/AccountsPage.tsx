@@ -27,7 +27,8 @@ import { BulkDeleteAccountsModal } from "@/components/accounts/BulkDeleteAccount
 import { FitBadge, fitSortValue } from "@/components/icp/FitBadge";
 import { useSelection } from "@/hooks/useSelection";
 import { formatNumber, humanize } from "@/lib/format";
-import type { Account, AccountInput, Role } from "@/lib/types";
+import { MAIN_SERVICE } from "@/lib/types";
+import type { Account, AccountInput, IcpService, Role } from "@/lib/types";
 import styles from "./AccountsPage.module.css";
 
 const ALL = "__all__";
@@ -80,7 +81,13 @@ export function AccountsPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const accounts = useApi<Account[]>((signal) => api.listAccounts(signal), []);
+  // The services the workspace sells (W8). With one, the list has nothing to tell apart and shows
+  // neither the Service column nor its filter.
+  const services = useApi<IcpService[]>((signal) => api.listServices(signal), []);
+  const multiService = (services.data?.length ?? 0) > 1;
+  const mainServiceName = services.data?.find((s) => s.is_default)?.name ?? "Main service";
   const [params, setParams] = useSearchParams();
+  const [serviceFilter, setServiceFilterState] = useState(() => params.get("service") ?? ALL);
   const [query, setQuery] = useState("");
   const [industry, setIndustry] = useState(ALL);
   const [country, setCountry] = useState(ALL);
@@ -172,6 +179,15 @@ export function AccountsPage() {
     }
   }
 
+  /** The service that found the account, kept in the address like the source. */
+  function setServiceFilter(next: string) {
+    setServiceFilterState(next);
+    const updated = new URLSearchParams(params);
+    if (next === ALL) updated.delete("service");
+    else updated.set("service", next);
+    setParams(updated, { replace: true });
+  }
+
   /** Keep the address in step, so a filtered view is a link someone can be sent. */
   function setSource(next: string) {
     setSourceState(next);
@@ -185,7 +201,7 @@ export function AccountsPage() {
     () => filtered(accounts.data ?? []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [accounts.data, query, industry, country, source, minFit, ownerFilter, gateFilter,
-      signalKind, signalDays, me],
+      signalKind, signalDays, me, serviceFilter],
   );
   const visibleIds = useMemo(() => visible.map((a) => a.id), [visible]);
   const selection = useSelection(visibleIds);
@@ -231,6 +247,24 @@ export function AccountsPage() {
             <span className={styles.muted}>—</span>
           ),
       },
+      ...(multiService
+        ? [
+            {
+              key: "service",
+              header: "Service",
+              hideOnMobile: true,
+              sortValue: (a: Account) => a.service_name ?? mainServiceName,
+              // The Fit beside it is this service's: an account is scored against the service
+              // that found it.
+              render: (a: Account) =>
+                a.service_id ? (
+                  (a.service_name ?? <span className={styles.muted}>—</span>)
+                ) : (
+                  <span className={styles.muted}>{mainServiceName}</span>
+                ),
+            } satisfies Column<Account>,
+          ]
+        : []),
       {
         key: "owner",
         header: "Owner",
@@ -325,7 +359,7 @@ export function AccountsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId, me, selection, visibleIds],
+    [busyId, me, selection, visibleIds, multiService, mainServiceName],
   );
 
   function filtered(rows: Account[]): Account[] {
@@ -336,6 +370,7 @@ export function AccountsPage() {
       if (industry !== ALL && a.industry !== industry) return false;
       if (country !== ALL && a.country !== country) return false;
       if (source !== ALL && sourceGroup(a) !== source) return false;
+      if (serviceFilter !== ALL && (a.service_id ?? MAIN_SERVICE) !== serviceFilter) return false;
       // A minimum fit means "matches the ICP at least this well": missing a must-match field is
       // not a match at any score.
       if (minFit > 0 && ((a.fit_score ?? -1) < minFit || a.icp_gate?.passed === false)) return false;
@@ -496,6 +531,20 @@ export function AccountsPage() {
                     onChange={(e) => setSource(e.target.value)}
                     options={[{ value: ALL, label: "Any source" }, ...SOURCE_GROUPS]}
                   />
+                  {multiService && (
+                    <Select
+                      aria-label="Found by service"
+                      value={serviceFilter}
+                      onChange={(e) => setServiceFilter(e.target.value)}
+                      options={[
+                        { value: ALL, label: "Any service" },
+                        ...(services.data ?? []).map((s) => ({
+                          value: s.id ?? MAIN_SERVICE,
+                          label: s.is_default ? `${s.name} (or added another way)` : s.name,
+                        })),
+                      ]}
+                    />
+                  )}
                   <Select
                     aria-label="Minimum fit"
                     value={String(minFit)}

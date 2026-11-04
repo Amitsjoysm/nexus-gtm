@@ -36,6 +36,7 @@ from nexus.api.routers import (
     engagement_settings,
     engagement_templates,
     engagement_webhooks,
+    icp_services,
     imports,
     integrations,
     lists,
@@ -55,6 +56,7 @@ from nexus.api.routers import (
 all_routers = [
     auth.router,
     relevance.router,
+    icp_services.router,
     prospecting.router,
     prospector.router,
     accounts.router,

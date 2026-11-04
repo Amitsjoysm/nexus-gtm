@@ -29,6 +29,7 @@ from nexus.api.schemas import (
     MemberInviteRequest,
     MemberOut,
     MemberRoleUpdate,
+    ServiceDailyOut,
     WorkspaceIn,
     WorkspaceOut,
 )
@@ -139,12 +140,24 @@ async def set_automation(
     _: Principal = Depends(require(Permission.manage_workspace)),
 ) -> AutomationSettingsOut:
 
+    from nexus.relevance.services import get_service, normalise_id
+
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     # Partial update: only fields present in the PATCH body change.
     if body.automation_enabled is not None:
         tenant.automation_enabled = body.automation_enabled
     if body.icp_daily_count is not None:
-        tenant.icp_daily_count = body.icp_daily_count
+        service_id = normalise_id(body.service_id)
+        if service_id is None:
+            if body.icp_daily_count < 5:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    "Pick between 5 and 100 a day.")
+            tenant.icp_daily_count = body.icp_daily_count
+        else:
+            service = await get_service(ts, service_id)
+            if service is None or service.archived_at is not None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Service not found")
+            service.daily_target = body.icp_daily_count
     await ts.flush()
     return await _automation_out(ts, tenant)
 
@@ -154,6 +167,7 @@ async def _automation_out(ts: TenantSession, tenant: Tenant) -> AutomationSettin
     explains itself on the screen where the number was set."""
     from nexus.core.config import get_settings
     from nexus.discovery.auto import today_summary
+    from nexus.relevance.services import active_services, default_profile, display_name
 
     default = get_settings().icp_discovery_daily_count
     today = None
@@ -161,11 +175,27 @@ async def _automation_out(ts: TenantSession, tenant: Tenant) -> AutomationSettin
         today = await today_summary(ts, tenant, target=tenant.icp_daily_count or default)
     except Exception:  # a report must never break the settings screen
         logger.warning("could not summarise today's discovery", exc_info=True)
+    services = [ServiceDailyOut(service_id=None,
+                                name=display_name(await default_profile(ts)),
+                                daily_count=tenant.icp_daily_count, today=today)]
+    for service in await active_services(ts):
+        service_today = None
+        if service.daily_target:
+            try:
+                service_today = await today_summary(ts, tenant, target=service.daily_target,
+                                                    service_id=service.id)
+            except Exception:
+                logger.warning("could not summarise today's discovery for a service",
+                               exc_info=True)
+        services.append(ServiceDailyOut(service_id=service.id, name=service.name,
+                                        daily_count=service.daily_target or 0,
+                                        today=service_today))
     return AutomationSettingsOut(
         automation_enabled=bool(tenant.automation_enabled),
         icp_daily_count=tenant.icp_daily_count,
         icp_daily_default=default,
         today=today,
+        services=services,
     )
 
 

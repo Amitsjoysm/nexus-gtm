@@ -42,7 +42,7 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 def _account_out(
     a: Account, *, fit_score: int | None = None, owner_name: str | None = None,
-    icp: dict | None = None,
+    icp: dict | None = None, service_name: str | None = None,
 ) -> AccountOut:
     from nexus.relevance.gate import icp_gate, mandatory_fields
 
@@ -80,15 +80,24 @@ def _account_out(
         owner_name=owner_name if a.owner_user_id else None,
         field_sources=display_sources(a),
         icp_gate=icp_gate(icp, a).as_dict() if mandatory_fields(icp) else None,
+        service_id=a.service_id,
+        service_name=service_name,
     )
 
 
-async def _workspace_icp(ts: TenantSession) -> dict:
-    """The ICP the mandatory-field gate reads, once per request."""
-    from nexus.relevance.engine import get_profile
+async def _service_icps(ts: TenantSession) -> tuple[dict, dict]:
+    """``({service_id: icp}, {service_id: name})`` for every service, the main one under None, once
+    per request: an account's must-match result is read against the service that found it."""
+    from nexus.models.relevance import IcpService
+    from nexus.relevance.services import default_profile, display_name
 
-    profile = await get_profile(ts)
-    return dict(profile.icp or {}) if profile else {}
+    profile = await default_profile(ts)
+    icps = {None: dict(profile.icp or {}) if profile else {}}
+    names = {None: display_name(profile)}
+    for service in await ts.list(IcpService):
+        icps[service.id] = dict(service.icp or {})
+        names[service.id] = service.name
+    return icps, names
 
 
 async def _owner_names(ts: TenantSession, accounts) -> dict[str, str]:
@@ -115,9 +124,12 @@ async def _one_out(ts: TenantSession, account: Account, *, with_score: bool = Tr
     """One account as the client sees it, with its fit score and its owner's name."""
     scores = await _latest_fit_scores(ts, [account.id]) if with_score else {}
     names = await _owner_names(ts, [account])
+    icps, service_names = await _service_icps(ts)
     return _account_out(
         account, fit_score=scores.get(account.id),
-        owner_name=names.get(account.owner_user_id or ""), icp=await _workspace_icp(ts),
+        owner_name=names.get(account.owner_user_id or ""),
+        icp=icps.get(account.service_id, icps[None]),
+        service_name=service_names.get(account.service_id) if account.service_id else None,
     )
 
 
@@ -245,6 +257,7 @@ async def list_accounts(
     limit: int = Query(default=200, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     q: str | None = Query(default=None, max_length=200),
+    service_id: str | None = Query(default=None, max_length=32),
 ) -> list[AccountOut]:
     """Active (non-archived) accounts, newest first, paginated in SQL.
 
@@ -255,8 +268,17 @@ async def list_accounts(
 
     ``q`` searches name and domain across the whole workspace, so a picker can find an account
     that is not among the newest 200.
+
+    ``service_id`` keeps the accounts that service found (``default``: the main service's, which
+    includes every account added by hand, import or CRM).
     """
     active = ts.select(Account).where(Account.archived_at.is_(None))
+    if service_id is not None:
+        from nexus.relevance.services import normalise_id
+
+        wanted = normalise_id(service_id)
+        active = active.where(Account.service_id.is_(None) if wanted is None
+                              else Account.service_id == wanted)
     if q and q.strip():
         like = f"%{q.strip().lower()}%"
         active = active.where(or_(func.lower(Account.name).like(like),
@@ -267,12 +289,15 @@ async def list_accounts(
     rows = list((await ts.session.scalars(stmt)).all())
     scores = await _latest_fit_scores(ts, [a.id for a in rows])
     names = await _owner_names(ts, rows)
-    icp = await _workspace_icp(ts)
+    icps, service_names = await _service_icps(ts)
     events = await _recent_signals(ts, [a.id for a in rows])
     out = []
     for a in rows:
         shown = _account_out(a, fit_score=scores.get(a.id),
-                             owner_name=names.get(a.owner_user_id or ""), icp=icp)
+                             owner_name=names.get(a.owner_user_id or ""),
+                             icp=icps.get(a.service_id, icps[None]),
+                             service_name=service_names.get(a.service_id) if a.service_id
+                             else None)
         shown.recent_signals = events.get(a.id, [])
         out.append(shown)
     return out
@@ -1112,8 +1137,11 @@ async def source_contacts(
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
     from nexus.contacts.sourcing import find_contacts
+    from nexus.relevance.services import using_service
 
-    result = await find_contacts(ts, account, limit=max(1, min(limit, 25)))
+    # The buyer titles of the service that found the account (W8).
+    with using_service(account.service_id):
+        result = await find_contacts(ts, account, limit=max(1, min(limit, 25)))
     return SourcedContactsOut(contacts=[_contact_out(c) for c in result.contacts],
                               outcome=result.outcome, message=result.message_for(account))
 

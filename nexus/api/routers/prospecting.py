@@ -18,6 +18,8 @@ router = APIRouter(prefix="/discovery", tags=["discovery"])
 class PopulateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     count: int = Field(ge=1, le=500)
+    #: The service to find companies for (W8); None or "default" is the main service.
+    service_id: str | None = None
 
 
 class PopulateRunOut(BaseModel):
@@ -25,6 +27,7 @@ class PopulateRunOut(BaseModel):
     status: str
     requested: int
     delivered: int
+    service_id: str | None = None
     sources: dict = Field(default_factory=dict)
     discarded: dict = Field(default_factory=dict)
     notes: dict = Field(default_factory=dict)
@@ -69,7 +72,8 @@ async def start_populate(
     from nexus.prospecting.populate import PopulateRefused, run_out, start
 
     try:
-        run = await start(ts, count=body.count, user_id=principal.user_id)
+        run = await start(ts, count=body.count, user_id=principal.user_id,
+                          service_id=body.service_id)
     except PopulateRefused as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     out = PopulateRunOut(**run_out(run))
@@ -87,15 +91,23 @@ async def start_populate(
 
 @router.get("/populate/latest", response_model=PopulateRunOut | None)
 async def latest_populate(
+    service_id: str | None = None,
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> PopulateRunOut | None:
-    """The workspace's most recent populate, so a reloaded page can pick its progress back up."""
+    """The workspace's most recent populate, so a reloaded page can pick its progress back up.
+    With ``service_id``, that service's (``default`` for the main service); without, any."""
     from nexus.models.prospecting import ProspectRun
     from nexus.prospecting.populate import run_out
+    from nexus.relevance.services import normalise_id
 
+    where = [ProspectRun.kind == "populate"]
+    if service_id is not None:
+        wanted = normalise_id(service_id)
+        where.append(ProspectRun.service_id.is_(None) if wanted is None
+                     else ProspectRun.service_id == wanted)
     run = (await ts.session.scalars(
-        ts.select(ProspectRun, ProspectRun.kind == "populate")
+        ts.select(ProspectRun, *where)
         .order_by(ProspectRun.created_at.desc()).limit(1))).first()
     return PopulateRunOut(**run_out(run)) if run is not None else None
 

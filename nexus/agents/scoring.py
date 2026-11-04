@@ -98,6 +98,10 @@ class ScoringAgent(BaseAgent):
         )
         ctx.ts.add(score)
         await ctx.ts.flush()
+        # And against every other service the workspace sells (W8), on the same refresh.
+        from nexus.relevance.services import score_services
+
+        await score_services(ctx.ts, [ctx.account])
         from nexus.engagement.ledger.emit import emit
 
         await emit(ctx.ts, "account.scored",
