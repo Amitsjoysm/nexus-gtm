@@ -4,6 +4,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { Badge, Button, Card, CardHeader, Icons, Modal, Skeleton, useToast } from "@/components/ui";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
+import { useRefreshEntitlements } from "@/app/EntitlementsContext";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
@@ -48,6 +49,7 @@ export function PlanPicker({
 }) {
   const api = useApiClient();
   const toast = useToast();
+  const refreshEntitlements = useRefreshEntitlements();
   const plans = useApi<SellablePlan[]>((signal) => api.billingPlans(signal), []);
   const { refetch } = plans;
   // Prices, plans and what the list shows change in Admin without a deploy, and this page is often
@@ -139,6 +141,8 @@ export function PlanPicker({
         `${formatPrice(result.charged_cents, result.currency)} was charged to the card on file.`,
       );
       refetch();
+      // The new plan's modules are open now: the menu's padlocks must not wait for a reload.
+      refreshEntitlements();
       onChanged?.();
     } catch (err) {
       const detail = err instanceof ApiError ? err.detail : "Please try again.";

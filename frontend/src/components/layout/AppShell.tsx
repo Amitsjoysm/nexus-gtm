@@ -79,8 +79,10 @@ export function AppShell() {
 
   return (
     // Wraps the whole shell, not just the sidebar: page-level empty states and headers ask the
-    // same "is this in our plan?" question, and one fetch answers all of them.
-    <EntitlementsProvider>
+    // same "is this in our plan?" question, and one fetch answers all of them. Keyed on the
+    // workspace, like the page below: switching workspace kept the previous one's plan gates
+    // (padlocks on Calls and Mail carried over from a Free workspace) and its engine status.
+    <EntitlementsProvider key={tenantEpoch}>
       <EngagementProvider>
         <ImpersonationBanner />
         {/* Asks an owner or admin once, for workspaces created before the ledger existed. */}

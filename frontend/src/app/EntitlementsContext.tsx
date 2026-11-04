@@ -1,18 +1,34 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from "react";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import type { Entitlements, FeatureSwitchState } from "@/lib/types";
 
 /**
- * The workspace's module gates, fetched once per session and shared.
+ * The workspace's module gates, fetched at the shell and shared.
  *
  * Fetched at the shell so navigation, page headers and empty states all answer "is this included
  * in our plan?" from one request instead of each issuing its own.
+ *
+ * **Read again whenever the answer can have changed** (2026-11-04). It was read once per page
+ * load, so the padlocks stayed those of whatever the workspace was when the page loaded: switching
+ * workspace kept the last one's (AppShell now re-keys this provider on the switch), paying for
+ * Launch in Checkout kept Free's (the page loads before Stripe's webhook moves the plan), and an
+ * in-app upgrade kept the old plan's. `useRefreshEntitlements` is what a plan change calls, and
+ * coming back to the tab re-reads it, at most once a minute, for changes made somewhere else.
  */
 const EntitlementsContext = createContext<Entitlements | null>(null);
+const RefreshEntitlementsContext = createContext<() => void>(() => {});
+
+/** How long the tab must have been away before coming back re-reads the gates. */
+const REREAD_ON_RETURN_MS = 60_000;
 
 export function useEntitlements(): Entitlements | null {
   return useContext(EntitlementsContext);
+}
+
+/** Re-read the gates now: after a plan change that took effect here, or that Stripe confirmed. */
+export function useRefreshEntitlements(): () => void {
+  return useContext(RefreshEntitlementsContext);
 }
 
 /**
@@ -79,13 +95,29 @@ export function isPageHidden(entitlements: Entitlements | null, path: string): b
 export function EntitlementsProvider({ children }: { children: ReactNode }) {
   const api = useApiClient();
   const state = useApi<Entitlements>((signal) => api.billingEntitlements(signal), []);
+  const { refetch } = state;
+  const readAt = useRef(Date.now());
+  const refresh = useCallback(() => {
+    readAt.current = Date.now();
+    refetch();
+  }, [refetch]);
+  useEffect(() => {
+    function onReturn() {
+      if (document.visibilityState === "visible"
+          && Date.now() - readAt.current > REREAD_ON_RETURN_MS) refresh();
+    }
+    document.addEventListener("visibilitychange", onReturn);
+    return () => document.removeEventListener("visibilitychange", onReturn);
+  }, [refresh]);
   // An error deliberately yields `null`, which `isLocked` reads as "nothing is locked". Failing
   // OPEN is right here and is the opposite of `RequirePlatformAdmin`: that gate protects staff
   // tooling, whereas this one only decides whether to advertise a feature the server will police
   // anyway. A billing endpoint blip must not delete the customer's navigation.
   return (
-    <EntitlementsContext.Provider value={state.data ?? null}>
-      {children}
-    </EntitlementsContext.Provider>
+    <RefreshEntitlementsContext.Provider value={refresh}>
+      <EntitlementsContext.Provider value={state.data ?? null}>
+        {children}
+      </EntitlementsContext.Provider>
+    </RefreshEntitlementsContext.Provider>
   );
 }

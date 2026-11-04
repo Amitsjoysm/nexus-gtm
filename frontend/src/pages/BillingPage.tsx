@@ -7,6 +7,7 @@ import { PlanPicker } from "./billing/PlanPicker";
 import { CreditUsageReport } from "./billing/CreditUsageReport";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
+import { useRefreshEntitlements } from "@/app/EntitlementsContext";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
 import type {
@@ -218,6 +219,7 @@ export function BillingPage() {
   const { refetch: refetchUsage } = usage;
   const { refetch: refetchCredits } = credits;
   const { refetch: refetchInvoices } = invoices;
+  const refreshEntitlements = useRefreshEntitlements();
   useEffect(() => {
     if (returned.current) return;
     returned.current = true;
@@ -244,6 +246,9 @@ export function BillingPage() {
             refetchUsage();
             refetchCredits();
             refetchInvoices();
+            // The page loaded before Stripe's webhook moved the plan, so the menu still held the
+            // old plan's padlocks (a customer who had just paid for Launch saw Calls locked).
+            refreshEntitlements();
             toast.success(`You're on ${now.plan_name ?? "your new plan"}`,
               "Your payment went through and your credits are in your balance.");
             return;
@@ -255,7 +260,7 @@ export function BillingPage() {
       }
       setConfirming("late");
     })();
-  }, [api, toast, refetchUsage, refetchCredits, refetchInvoices]);
+  }, [api, toast, refetchUsage, refetchCredits, refetchInvoices, refreshEntitlements]);
 
   // GAUGES ONLY. This card used to list every capability with usage, drawing a "40 of 500" bar
   // against the plan quota. Under credits-only billing that quota is no longer what gates a priced
