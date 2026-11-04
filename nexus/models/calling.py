@@ -137,3 +137,21 @@ class PlacedCall(IdMixin, TimestampMixin, TenantScoped, Base):
     charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Started minutes charged. NULL with charged_at set: given up, nothing could be measured.
     minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class UserCallScript(IdMixin, TimestampMixin, TenantScoped, Base):
+    """An SDR's own call script, uploaded from the call console (2026-11-04, migration 0078).
+
+    Asked by the SDR team: "upload a script which is visible to the SDR during calls". One per
+    person per workspace, stored exactly as written (`calling/scripts.read_document`), shown in
+    the console for every call that person makes, beside the campaign's script when the call's
+    campaign has one. Its `{{placeholders}}` are filled per call, as a campaign script's are.
+    """
+
+    __tablename__ = "user_call_scripts"
+    __table_args__ = (UniqueConstraint("tenant_id", "user_id", name="uq_user_call_script"),)
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    script: Mapped[str] = mapped_column(Text)
+    #: `filename`, `uploaded_at`.
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)

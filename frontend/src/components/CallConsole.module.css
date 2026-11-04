@@ -258,6 +258,53 @@
   min-width: 0;
 }
 
+/* The SDR's own script and the campaign's, when a call has both (2026-11-04). */
+.scriptSwitch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.scriptSwitch button {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.scriptSwitch button + button {
+  border-left: 1px solid var(--border);
+}
+
+.scriptSwitch button[aria-pressed="true"] {
+  background: var(--accent-quiet);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.scriptSwitch button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* The file picker behind "Upload my script": the button is what people see and press. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---- The script ---- */
 /* The team's script exactly as written: its own line breaks, in the reading face. */
 .ownScript {

@@ -530,6 +530,14 @@ export interface CallTaskCampaignScript {
   text: string;
 }
 
+/** The SDR's own call script, uploaded from the call console (2026-11-04). */
+export interface MyCallScript {
+  filename: string | null;
+  uploaded_at: string | null;
+  /** As written; for a call, with its {{placeholders}} filled. */
+  text: string;
+}
+
 export interface TriageSummary {
   signal_kind: string | null;
   signal_strength: number | null;

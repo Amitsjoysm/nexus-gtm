@@ -189,7 +189,9 @@ def test_long_text_scrolls_inside_its_panel_never_the_page():
 
 def test_the_campaigns_script_is_still_read_as_written():
     console = _read("components/CallConsole.tsx")
-    assert "<pre className={styles.ownScript}>{ownScript.text}</pre>" in console
+    # The campaign's or the SDR's own (2026-11-04), whichever is shown: verbatim either way.
+    assert "<pre className={styles.ownScript}>{shown.text}</pre>" in console
+    assert "const shown = showMine ? myScript : ownScript;" in console
     assert "api.callTaskCampaignScript(" in console
 
 
@@ -215,3 +217,14 @@ def test_the_call_clock_is_shown_and_never_billed():
     console = _read("components/CallConsole.tsx")
     log = console[console.index("async function logDisposition"):console.index("const dial = telHref")]
     assert "duration_s" not in log   # platform minutes are Twilio's measured ones
+
+
+def test_an_sdr_can_upload_their_own_script_from_the_console():
+    """Asked by the SDR team (2026-11-04): "upload a script which is visible to the SDR during
+    calls". The upload sits in the script panel itself, and a call with a campaign script too
+    offers both, the SDR's first."""
+    src = _read("components/CallConsole.tsx")
+    assert "api.uploadMyCallScript(file)" in src and 'accept=".docx,.txt"' in src
+    assert "api.callTaskMyScript(task.id" in src
+    assert '"Upload my script"' in src and 'aria-label="Which script to read"' in src
+    assert 'useState<"mine" | "campaign">("mine")' in src, "their own script must come first"

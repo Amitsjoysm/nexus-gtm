@@ -167,6 +167,7 @@ import type {
   CallScript,
   CallActivity,
   CallTaskCampaignScript,
+  MyCallScript,
   CampaignCallScript,
   DispositionCategory,
   TelephonyStatus,
@@ -1687,6 +1688,19 @@ export class ApiClient {
   callTaskCampaignScript(taskId: string, signal?: AbortSignal) {
     return this.request<CallTaskCampaignScript>(`/calling/tasks/${taskId}/campaign-script`,
                                                 { signal });
+  }
+  /** The SDR's own call script for this call, placeholders filled; 404 when they have none. */
+  callTaskMyScript(taskId: string, signal?: AbortSignal) {
+    return this.request<MyCallScript>(`/calling/tasks/${taskId}/my-script`, { signal });
+  }
+  /** Upload or replace the SDR's own call script (.docx or .txt), shown on every call they make. */
+  uploadMyCallScript(file: File) {
+    const form = new FormData();
+    form.set("file", file);
+    return this.requestForm<MyCallScript>("/calling/my-script/file", form);
+  }
+  removeMyCallScript() {
+    return this.request<null>("/calling/my-script", { method: "DELETE" });
   }
   engagementCandidates(
     params: { list_id?: string; q?: string; title?: string; seniority?: string },

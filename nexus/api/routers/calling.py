@@ -5,7 +5,7 @@ gate as accounts/contacts. Additive: nothing here touches the email/cadence send
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -148,11 +148,8 @@ async def campaign_script(
     """The team's own script for this call's campaign, as written, with only its marked
     placeholders filled (`nexus/calling/scripts.py`). 404 when the call has no campaign or the
     campaign no script, so the console shows the AI talk track instead."""
-    from nexus.agents.facts import citable_signals
     from nexus.calling.scripts import fill_placeholders
     from nexus.models.engagement import EngagementCampaign, EngagementEnrollment
-    from nexus.models.identity import User
-    from nexus.models.signal import SignalEvent
 
     task = await ts.get(CallTask, task_id)
     enrollment = await ts.get(EngagementEnrollment, task.engagement_enrollment_id) \
@@ -160,25 +157,125 @@ async def campaign_script(
     campaign = await ts.get(EngagementCampaign, enrollment.campaign_id) if enrollment else None
     if campaign is None or not (campaign.call_script or "").strip():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "This call has no campaign script")
+    values = await _placeholder_values(ts, task, principal.user_id)
+    meta = dict(campaign.call_script_meta or {})
+    return {"campaign_id": campaign.id, "campaign_name": campaign.name,
+            "filename": meta.get("filename"),
+            "text": fill_placeholders(campaign.call_script, values)}
+
+
+async def _placeholder_values(ts: TenantSession, task: CallTask, user_id: str | None) -> dict:
+    """What a script's `{{placeholders}}` become for this call (`calling/scripts.PLACEHOLDERS`):
+    the person, their company, the caller's first name and the strongest citable signal."""
+    from nexus.agents.facts import citable_signals
+    from nexus.models.identity import User
+    from nexus.models.signal import SignalEvent
+
     contact = await ts.get(Contact, task.contact_id) if task.contact_id else None
     account = await ts.get(Account, task.account_id)
     signals = citable_signals(list((await ts.session.scalars(
         ts.select(SignalEvent, SignalEvent.account_id == task.account_id)
         .order_by(SignalEvent.occurred_at.desc()).limit(30))).all()))
     trigger = max(signals, key=lambda s: s.strength or 0, default=None)
-    me = await ts.session.get(User, principal.user_id)
+    me = await ts.session.get(User, user_id) if user_id else None
     full_name = getattr(contact, "full_name", "") or ""
-    values = {
+    return {
         "first_name": full_name.split()[0] if full_name.split() else "",
         "full_name": full_name, "title": getattr(contact, "title", "") or "",
         "company": getattr(account, "name", "") or "",
         "my_name": ((getattr(me, "full_name", "") or "").split() or [""])[0],
         "trigger": getattr(trigger, "title", "") or "",
     }
-    meta = dict(campaign.call_script_meta or {})
-    return {"campaign_id": campaign.id, "campaign_name": campaign.name,
-            "filename": meta.get("filename"),
-            "text": fill_placeholders(campaign.call_script, values)}
+
+
+# ---- the SDR's own script (2026-11-04) ---------------------------------------------------------
+#
+# "Upload a script which is visible to the SDR during calls." One per person per workspace,
+# uploaded from the call console, stored as written, shown for every call that person makes.
+
+def _my_script_out(row) -> dict:
+    meta = dict(row.meta or {})
+    return {"filename": meta.get("filename"), "uploaded_at": meta.get("uploaded_at"),
+            "text": row.script}
+
+
+async def _my_script_row(ts: TenantSession, user_id: str):
+    from nexus.models.calling import UserCallScript
+
+    return await ts.first(UserCallScript, UserCallScript.user_id == user_id)
+
+
+@router.get("/my-script")
+async def get_my_script(
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """The signed-in SDR's own script, as written. 404 when they have not uploaded one."""
+    row = await _my_script_row(ts, principal.user_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "You have not uploaded a call script")
+    return _my_script_out(row)
+
+
+@router.post("/my-script/file")
+async def put_my_script(
+    file: UploadFile = File(...),
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """Upload or replace the SDR's own script (.docx or .txt), read with the campaign script's
+    reader, so the same files work and the same ones are refused (422 with the reason)."""
+    from nexus.calling.scripts import MAX_BYTES, UnreadableScript, read_document
+    from nexus.core.db import utcnow
+    from nexus.models.calling import UserCallScript
+
+    data = await file.read(MAX_BYTES + 1)
+    try:
+        text = read_document(file.filename or "", data)
+    except UnreadableScript as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    meta = {"filename": (file.filename or "")[:200], "uploaded_at": utcnow().isoformat()}
+    row = await _my_script_row(ts, principal.user_id)
+    if row is None:
+        row = UserCallScript(tenant_id=ts.tenant_id, user_id=principal.user_id, script=text,
+                             meta=meta)
+        ts.add(row)
+    else:
+        row.script, row.meta = text, meta
+    await ts.flush()
+    return _my_script_out(row)
+
+
+@router.delete("/my-script", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_my_script(
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> None:
+    """Remove the SDR's own script; their calls show the campaign's or the AI's again."""
+    row = await _my_script_row(ts, principal.user_id)
+    if row is not None:
+        await ts.session.delete(row)
+        await ts.flush()
+
+
+@router.get("/tasks/{task_id}/my-script")
+async def my_script_for_call(
+    task_id: str,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """The SDR's own script for this call, with its marked placeholders filled. 404 when the
+    call does not exist or they have no script, so the console shows what it showed before."""
+    from nexus.calling.scripts import fill_placeholders
+
+    task = await ts.get(CallTask, task_id)
+    row = await _my_script_row(ts, principal.user_id) if task is not None else None
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No call script of yours for this call")
+    out = _my_script_out(row)
+    out["text"] = fill_placeholders(row.script, await _placeholder_values(ts, task,
+                                                                          principal.user_id))
+    return out
 
 
 @router.get("/tasks/{task_id}/brief", response_model=CallBriefOut)

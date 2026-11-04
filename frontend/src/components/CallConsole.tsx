@@ -28,6 +28,7 @@ import type {
   CallActivity,
   CallTaskCampaignScript,
   DispositionCategory,
+  MyCallScript,
   CallBrief,
   CallBriefSignal,
   CallScript,
@@ -219,6 +220,45 @@ export function CallConsole({ task, autoGenerate, onLogged, layout = "stacked", 
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
+  // The SDR's own script (2026-11-04), uploaded here and shown on every call they make. When the
+  // call's campaign also has one, a switch picks which to read; theirs first, they chose it.
+  const [myScript, setMyScript] = useState<MyCallScript | null>(null);
+  const [myScriptTick, setMyScriptTick] = useState(0);
+  const [scriptView, setScriptView] = useState<"mine" | "campaign">("mine");
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    api.callTaskMyScript(task.id, ctrl.signal).then(setMyScript).catch(() => setMyScript(null));
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id, myScriptTick]);
+
+  async function uploadMyScript(file: File | undefined) {
+    if (!file) return;
+    setUploading(true);
+    try {
+      await api.uploadMyCallScript(file);
+      setScriptView("mine");
+      setMyScriptTick((n) => n + 1);
+      toast.success("Your script is ready", "It shows on every call you make.");
+    } catch (err) {
+      toast.error("Couldn't use that file", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function removeMyScript() {
+    try {
+      await api.removeMyCallScript();
+      setMyScript(null);
+      toast.success("Your script was removed");
+    } catch (err) {
+      toast.error("Couldn't remove your script", err instanceof ApiError ? err.detail : "Try again.");
+    }
+  }
   // Telephony is manual (click-to-dial) until the server says otherwise, so the default
   // workflow renders immediately instead of waiting on a status round-trip.
   const [telephony, setTelephony] = useState<TelephonyStatus | null>(null);
@@ -541,15 +581,58 @@ export function CallConsole({ task, autoGenerate, onLogged, layout = "stacked", 
     </span>
   );
 
-  const ownScriptPanel = ownScript && (
-    // The team's own script, read out as written (D10), with the AI's track under it to borrow from.
+  // A file picker the SDR opens from the script panel; .docx and .txt, as the campaign's upload.
+  const scriptFile = (
+    <input
+      ref={fileRef}
+      type="file"
+      accept=".docx,.txt"
+      className={styles.srOnly}
+      tabIndex={-1}
+      aria-hidden="true"
+      onChange={(e) => void uploadMyScript(e.target.files?.[0])}
+    />
+  );
+  const uploadButton = (
+    <Button size="sm" variant="secondary" iconLeft={<Icons.UploadIcon />} loading={uploading}
+      onClick={() => fileRef.current?.click()}
+      title="A .docx or .txt file. {{first_name}}, {{company}} and {{my_name}} are filled per call.">
+      {myScript ? "Replace" : "Upload my script"}
+    </Button>
+  );
+  const showMine = Boolean(myScript) && (scriptView === "mine" || !ownScript);
+  const shown = showMine ? myScript : ownScript;
+  const ownScriptPanel = shown && (
+    // The SDR's or the team's own script, read out as written (D10), with the AI's track under it
+    // to borrow from.
     <Panel
       area="script"
       scroll={screen}
-      title="Your script"
-      aside={<span className={styles.panelAside}>{ownScript.campaign_name}</span>}
+      title={showMine ? "My script" : "Campaign script"}
+      aside={
+        <span className={styles.scriptActions}>
+          {myScript && ownScript && (
+            <span className={styles.scriptSwitch} role="group" aria-label="Which script to read">
+              <button type="button" aria-pressed={showMine} onClick={() => setScriptView("mine")}>
+                Mine
+              </button>
+              <button type="button" aria-pressed={!showMine} onClick={() => setScriptView("campaign")}>
+                Campaign
+              </button>
+            </span>
+          )}
+          {!showMine && ownScript && (
+            <span className={styles.panelAside}>{ownScript.campaign_name}</span>
+          )}
+          {uploadButton}
+          {showMine && (
+            <Button size="sm" variant="ghost" onClick={() => void removeMyScript()}>Remove</Button>
+          )}
+          {scriptFile}
+        </span>
+      }
     >
-      <pre className={styles.ownScript}>{ownScript.text}</pre>
+      <pre className={styles.ownScript}>{shown.text}</pre>
       <section className={styles.reference} aria-label="AI talk track, for reference">
         <div className={styles.referenceHead}>
           <h5 className={styles.subTitle}>AI talk track, for reference</h5>
@@ -655,7 +738,12 @@ export function CallConsole({ task, autoGenerate, onLogged, layout = "stacked", 
       </Panel>
 
       {ownScriptPanel ?? (
-        <Panel area="script" scroll={screen} title="AI call script" aside={scriptActions}>
+        <Panel
+          area="script"
+          scroll={screen}
+          title="AI call script"
+          aside={<span className={styles.scriptActions}>{scriptActions}{uploadButton}{scriptFile}</span>}
+        >
           {aiScriptBody}
         </Panel>
       )}

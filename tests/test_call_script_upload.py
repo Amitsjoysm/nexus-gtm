@@ -170,3 +170,71 @@ async def test_the_call_console_shows_the_campaigns_script_filled_in(client, eng
     assert r.status_code == 200, r.text
     assert r.json()["text"].startswith("Hi Ana, this is ")
     assert "how Acme Ops handles" in r.json()["text"] and r.json()["campaign_name"] == "Q4"
+
+
+# ---- the SDR's own script, from the call console (2026-11-04) -------------------------------------
+
+async def _call(tid):
+    from nexus.models.account import Account, Contact
+    from nexus.models.calling import CallTask
+    from tests.conftest import tenant_session
+
+    async with tenant_session(tid) as ts:
+        account = Account(tenant_id=tid, name="Acme Ops", domain="acme-ops.io")
+        ts.add(account)
+        await ts.flush()
+        contact = Contact(tenant_id=tid, account_id=account.id, full_name="Ana Example",
+                          email="ana@acme-ops.io", phone="+15550001111")
+        ts.add(contact)
+        await ts.flush()
+        task = CallTask(tenant_id=tid, account_id=account.id, contact_id=contact.id)
+        ts.add(task)
+        await ts.flush()
+        return task.id
+
+
+async def test_an_sdr_uploads_their_own_script_and_sees_it_on_every_call(client):
+    from nexus.core.security import decode_access_token
+    from tests.conftest import auth, signup
+
+    token = await signup(client, slug="mys1", email="o@mys1.io", company="Mys1")
+    h, tid = auth(token), decode_access_token(token)["tid"]
+    assert (await client.get("/api/calling/my-script", headers=h)).status_code == 404
+
+    r = await client.post("/api/calling/my-script/file", headers=h,
+                          files={"file": ("mine.txt", SCRIPT.encode(), "text/plain")})
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == SCRIPT and r.json()["filename"] == "mine.txt"
+    bad = await client.post("/api/calling/my-script/file", headers=h,
+                            files={"file": ("s.pdf", b"%PDF-1.4", "application/pdf")})
+    assert bad.status_code == 422 and "PDF" in bad.json()["detail"]
+    assert (await client.get("/api/calling/my-script", headers=h)).json()["text"] == SCRIPT
+
+    # A call outside any campaign: their script, filled for this person.
+    task_id = await _call(tid)
+    call = await client.get(f"/api/calling/tasks/{task_id}/my-script", headers=h)
+    assert call.status_code == 200, call.text
+    assert call.json()["text"].startswith("Hi Ana, this is")
+    assert "how Acme Ops handles" in call.json()["text"]
+
+    # Replacing it keeps one row; removing it brings the console back to what it showed before.
+    again = await client.post("/api/calling/my-script/file", headers=h,
+                              files={"file": ("v2.txt", b"Hi {{first_name}}.", "text/plain")})
+    assert again.json()["filename"] == "v2.txt"
+    assert (await client.delete("/api/calling/my-script", headers=h)).status_code == 204
+    assert (await client.get(f"/api/calling/tasks/{task_id}/my-script",
+                             headers=h)).status_code == 404
+
+
+async def test_one_sdrs_script_is_never_shown_to_another(client):
+    from nexus.core.security import decode_access_token
+    from tests.conftest import auth, signup
+
+    a = await signup(client, slug="mys2a", email="o@mys2a.io", company="Mys2a")
+    b = await signup(client, slug="mys2b", email="o@mys2b.io", company="Mys2b")
+    await client.post("/api/calling/my-script/file", headers=auth(a),
+                      files={"file": ("mine.txt", SCRIPT.encode(), "text/plain")})
+    assert (await client.get("/api/calling/my-script", headers=auth(b))).status_code == 404
+    other_task = await _call(decode_access_token(a)["tid"])
+    assert (await client.get(f"/api/calling/tasks/{other_task}/my-script",
+                             headers=auth(b))).status_code == 404
