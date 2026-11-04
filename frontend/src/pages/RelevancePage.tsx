@@ -573,7 +573,36 @@ export function RelevancePage() {
           setNewName={setNewName}
           creating={creating}
           onAdd={addService}
-        />
+        >
+          {draft && selected && (multiService || !selected.is_default) && (
+            <div className={styles.serviceHead}>
+              <Field label="Service name" hint="How campaigns, Accounts and Settings refer to it.">
+                <Input
+                  value={draft.name}
+                  onChange={(e) => setField("name", e.target.value)}
+                  maxLength={120}
+                  disabled={!canEdit}
+                />
+              </Field>
+              <p className={styles.serviceStats}>
+                {selected.accounts.toLocaleString()}{" "}
+                {selected.accounts === 1 ? "account" : "accounts"} found by this service
+                {selected.is_default && " or added another way"}. Saved with the ICP below.
+              </p>
+              {canEdit && !selected.is_default && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  iconLeft={<Icons.TrashIcon />}
+                  onClick={archiveSelected}
+                >
+                  Archive service
+                </Button>
+              )}
+            </div>
+          )}
+        </ServicesBar>
       )}
 
       {canEdit && (
@@ -621,410 +650,377 @@ export function RelevancePage() {
                   }
                 : {})}
             >
-            <form id="relevance-form" className={styles.stack} onSubmit={onSubmit} noValidate>
-              {(multiService || !selected.is_default) && (
-                <Card padding="lg">
-                  <div className={styles.serviceHead}>
-                    <Field
-                      label="Service name"
-                      hint="How campaigns, Accounts and Settings refer to it."
-                    >
+              <form id="relevance-form" className={styles.stack} onSubmit={onSubmit} noValidate>
+                {canEdit && (
+                  <Card padding="lg">
+                    <SectionHead
+                      title={selected.is_default ? "Draft your ICP with AI" : `Draft ${draft.name.trim() || "this service"}'s ICP with AI`}
+                      description={
+                        selected.is_default
+                          ? "Paste your website — AI infers your ideal customer profile (industries, size, buyer titles, value props) from what you sell. Everything lands in the editable fields below; review and Save when it looks right."
+                          : "Paste the page that describes this service, like yourcompany.com/services/… — AI reads it and infers who buys this service, not your whole company. Everything lands in the editable fields below; review and Save when it looks right."
+                      }
+                    />
+                    <div className={styles.websiteRow}>
                       <Input
-                        value={draft.name}
-                        onChange={(e) => setField("name", e.target.value)}
-                        maxLength={120}
-                        disabled={!canEdit}
+                        value={website}
+                        onChange={(e) => setWebsite(e.target.value)}
+                        placeholder={
+                          selected.is_default
+                            ? "https://yourcompany.com"
+                            : "https://yourcompany.com/services/…"
+                        }
+                        disabled={analyzing}
+                        aria-label={selected.is_default ? "Your website URL" : "This service's page URL"}
                       />
-                    </Field>
-                    <p className={styles.serviceStats}>
-                      {selected.accounts.toLocaleString()}{" "}
-                      {selected.accounts === 1 ? "account" : "accounts"} found by this service
-                      {selected.is_default && " or added another way"}
-                    </p>
-                    {canEdit && !selected.is_default && (
                       <Button
                         type="button"
-                        variant="ghost"
-                        size="sm"
-                        iconLeft={<Icons.TrashIcon />}
-                        onClick={archiveSelected}
+                        iconLeft={<Icons.BoltIcon />}
+                        loading={analyzing}
+                        onClick={analyzeFromWebsite}
+                        disabled={!website.trim()}
                       >
-                        Archive service
+                        Generate ICP
                       </Button>
+                    </div>
+                    {lastAnalysis.data?.draft && lastAnalysis.data.analyzed_at && (
+                      <div className={styles.lastAnalysis}>
+                        <span>
+                          Last analysed <strong>{lastAnalysis.data.url}</strong>{" "}
+                          {new Date(lastAnalysis.data.analyzed_at).toLocaleString([], {
+                            day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
+                          })}
+                          .
+                        </span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          iconLeft={<Icons.RefreshIcon />}
+                          onClick={reapplyLastAnalysis}
+                          disabled={analyzing}
+                        >
+                          Re-apply this draft
+                        </Button>
+                      </div>
                     )}
-                  </div>
-                </Card>
-              )}
-              {canEdit && (
+                  </Card>
+                )}
                 <Card padding="lg">
                   <SectionHead
-                    title={selected.is_default ? "Draft your ICP with AI" : `Draft ${draft.name.trim() || "this service"}'s ICP with AI`}
-                    description={
-                      selected.is_default
-                        ? "Paste your website — AI infers your ideal customer profile (industries, size, buyer titles, value props) from what you sell. Everything lands in the editable fields below; review and Save when it looks right."
-                        : "Paste the page that describes this service, like yourcompany.com/services/… — AI reads it and infers who buys this service, not your whole company. Everything lands in the editable fields below; review and Save when it looks right."
-                    }
+                    title="Ideal customer profile"
+                    description="Accounts matching these traits score higher on fit."
                   />
-                  <div className={styles.websiteRow}>
-                    <Input
-                      value={website}
-                      onChange={(e) => setWebsite(e.target.value)}
-                      placeholder={
-                        selected.is_default
-                          ? "https://yourcompany.com"
-                          : "https://yourcompany.com/services/…"
-                      }
-                      disabled={analyzing}
-                      aria-label={selected.is_default ? "Your website URL" : "This service's page URL"}
-                    />
-                    <Button
-                      type="button"
-                      iconLeft={<Icons.BoltIcon />}
-                      loading={analyzing}
-                      onClick={analyzeFromWebsite}
-                      disabled={!website.trim()}
+                  <div className={styles.fields}>
+                    <Field label="Industries" hint="Comma-separated.">
+                      <Input
+                        value={draft.industries}
+                        onChange={(e) => setField("industries", e.target.value)}
+                        placeholder="Software, Fintech, E-commerce"
+                        disabled={!canEdit}
+                      />
+                    </Field>
+                    <Field label="Countries" hint="Comma-separated.">
+                      <Input
+                        value={draft.countries}
+                        onChange={(e) => setField("countries", e.target.value)}
+                        placeholder="United States, Canada, United Kingdom"
+                        disabled={!canEdit}
+                      />
+                    </Field>
+                    <Field
+                      label="States / provinces"
+                      hint="Comma-separated. Narrows within the countries above."
                     >
-                      Generate ICP
-                    </Button>
-                  </div>
-                  {lastAnalysis.data?.draft && lastAnalysis.data.analyzed_at && (
-                    <div className={styles.lastAnalysis}>
-                      <span>
-                        Last analysed <strong>{lastAnalysis.data.url}</strong>{" "}
-                        {new Date(lastAnalysis.data.analyzed_at).toLocaleString([], {
-                          day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
+                      <Input
+                        value={draft.regions}
+                        onChange={(e) => setField("regions", e.target.value)}
+                        placeholder="California, Texas, Ontario"
+                        disabled={!canEdit}
+                      />
+                    </Field>
+                    <Field
+                      label="ZIP / postal codes"
+                      hint="Prefixes work — 941 matches every San Francisco code."
+                    >
+                      <Input
+                        value={draft.postal_codes}
+                        onChange={(e) => setField("postal_codes", e.target.value)}
+                        placeholder="941, 100, SW1"
+                        disabled={!canEdit}
+                      />
+                    </Field>
+                    <div className={styles.grid2}>
+                      <Field label="Min revenue" hint="Annual, in whole dollars.">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={draft.revenue_min}
+                          onChange={(e) => setField("revenue_min", e.target.value)}
+                          placeholder="10000000"
+                          disabled={!canEdit}
+                        />
+                      </Field>
+                      <Field label="Max revenue">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={draft.revenue_max}
+                          onChange={(e) => setField("revenue_max", e.target.value)}
+                          placeholder="500000000"
+                          disabled={!canEdit}
+                        />
+                      </Field>
+                    </div>
+                    <div className={styles.grid2}>
+                      <Field label="Min employees">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={draft.employee_min}
+                          onChange={(e) => setField("employee_min", e.target.value)}
+                          placeholder="50"
+                          disabled={!canEdit}
+                        />
+                      </Field>
+                      <Field label="Max employees">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={draft.employee_max}
+                          onChange={(e) => setField("employee_max", e.target.value)}
+                          placeholder="5000"
+                          disabled={!canEdit}
+                        />
+                      </Field>
+                    </div>
+                    <Field
+                      label="Required tech"
+                      hint="Comma-separated. Brackets group alternatives: CRM (Salesforce, HubSpot) means either."
+                    >
+                      <Input
+                        value={draft.required_tech}
+                        onChange={(e) => setField("required_tech", e.target.value)}
+                        placeholder="Snowflake, CRM (Salesforce, HubSpot)"
+                        disabled={!canEdit}
+                      />
+                    </Field>
+                    <Field label="Buyer titles" hint="Who to target across the buying committee. Comma-separated.">
+                      <Input
+                        value={draft.buyer_titles}
+                        onChange={(e) => setField("buyer_titles", e.target.value)}
+                        placeholder="VP Sales, Head of RevOps, CTO"
+                        disabled={!canEdit}
+                      />
+                    </Field>
+
+                    {/* Level + keyword matching. Exact titles miss the way people actually write
+                        them: asking for "Facilities Director" never finds "Director of Facilities"
+                        or "Head of Facilities". Levels and keywords catch every phrasing at once,
+                        and both are optional — leave them blank and matching behaves exactly as it
+                        did before they existed. */}
+                    <Field
+                      label="Job levels"
+                      hint="Optional. Combined with the keywords below — leave empty to match any level."
+                    >
+                      <div className={styles.levelRow}>
+                        {JOB_LEVELS.map((lvl) => {
+                          const on = draft.job_levels.includes(lvl.value);
+                          return (
+                            <button
+                              key={lvl.value}
+                              type="button"
+                              className={on ? styles.levelChipOn : styles.levelChip}
+                              aria-pressed={on}
+                              disabled={!canEdit}
+                              onClick={() =>
+                                setField(
+                                  "job_levels",
+                                  on
+                                    ? draft.job_levels.filter((v) => v !== lvl.value)
+                                    : [...draft.job_levels, lvl.value],
+                                )
+                              }
+                            >
+                              {lvl.label}
+                            </button>
+                          );
                         })}
-                        .
-                      </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        iconLeft={<Icons.RefreshIcon />}
-                        onClick={reapplyLastAnalysis}
-                        disabled={analyzing}
-                      >
-                        Re-apply this draft
-                      </Button>
-                    </div>
-                  )}
-                </Card>
-              )}
-              <Card padding="lg">
-                <SectionHead
-                  title="Ideal customer profile"
-                  description="Accounts matching these traits score higher on fit."
-                />
-                <div className={styles.fields}>
-                  <Field label="Industries" hint="Comma-separated.">
-                    <Input
-                      value={draft.industries}
-                      onChange={(e) => setField("industries", e.target.value)}
-                      placeholder="Software, Fintech, E-commerce"
-                      disabled={!canEdit}
-                    />
-                  </Field>
-                  <Field label="Countries" hint="Comma-separated.">
-                    <Input
-                      value={draft.countries}
-                      onChange={(e) => setField("countries", e.target.value)}
-                      placeholder="United States, Canada, United Kingdom"
-                      disabled={!canEdit}
-                    />
-                  </Field>
-                  <Field
-                    label="States / provinces"
-                    hint="Comma-separated. Narrows within the countries above."
-                  >
-                    <Input
-                      value={draft.regions}
-                      onChange={(e) => setField("regions", e.target.value)}
-                      placeholder="California, Texas, Ontario"
-                      disabled={!canEdit}
-                    />
-                  </Field>
-                  <Field
-                    label="ZIP / postal codes"
-                    hint="Prefixes work — 941 matches every San Francisco code."
-                  >
-                    <Input
-                      value={draft.postal_codes}
-                      onChange={(e) => setField("postal_codes", e.target.value)}
-                      placeholder="941, 100, SW1"
-                      disabled={!canEdit}
-                    />
-                  </Field>
-                  <div className={styles.grid2}>
-                    <Field label="Min revenue" hint="Annual, in whole dollars.">
+                      </div>
+                    </Field>
+                    <Field
+                      label="Title keywords"
+                      hint="Any of these in the title. Word order does not matter."
+                    >
                       <Input
-                        type="number"
-                        min={0}
-                        value={draft.revenue_min}
-                        onChange={(e) => setField("revenue_min", e.target.value)}
-                        placeholder="10000000"
+                        value={draft.title_keywords}
+                        onChange={(e) => setField("title_keywords", e.target.value)}
+                        placeholder="facilities, workplace, real estate"
                         disabled={!canEdit}
                       />
                     </Field>
-                    <Field label="Max revenue">
+                    <Field
+                      label="Exclude title keywords"
+                      hint="Disqualifies a match — e.g. assistant, deputy, intern."
+                    >
                       <Input
-                        type="number"
-                        min={0}
-                        value={draft.revenue_max}
-                        onChange={(e) => setField("revenue_max", e.target.value)}
-                        placeholder="500000000"
+                        value={draft.exclude_title_keywords}
+                        onChange={(e) => setField("exclude_title_keywords", e.target.value)}
+                        placeholder="assistant, deputy, intern"
                         disabled={!canEdit}
                       />
                     </Field>
-                  </div>
-                  <div className={styles.grid2}>
-                    <Field label="Min employees">
-                      <Input
-                        type="number"
-                        min={0}
-                        value={draft.employee_min}
-                        onChange={(e) => setField("employee_min", e.target.value)}
-                        placeholder="50"
-                        disabled={!canEdit}
-                      />
-                    </Field>
-                    <Field label="Max employees">
-                      <Input
-                        type="number"
-                        min={0}
-                        value={draft.employee_max}
-                        onChange={(e) => setField("employee_max", e.target.value)}
-                        placeholder="5000"
-                        disabled={!canEdit}
-                      />
-                    </Field>
-                  </div>
-                  <Field
-                    label="Required tech"
-                    hint="Comma-separated. Brackets group alternatives: CRM (Salesforce, HubSpot) means either."
-                  >
-                    <Input
-                      value={draft.required_tech}
-                      onChange={(e) => setField("required_tech", e.target.value)}
-                      placeholder="Snowflake, CRM (Salesforce, HubSpot)"
-                      disabled={!canEdit}
-                    />
-                  </Field>
-                  <Field label="Buyer titles" hint="Who to target across the buying committee. Comma-separated.">
-                    <Input
-                      value={draft.buyer_titles}
-                      onChange={(e) => setField("buyer_titles", e.target.value)}
-                      placeholder="VP Sales, Head of RevOps, CTO"
-                      disabled={!canEdit}
-                    />
-                  </Field>
-
-                  {/* Level + keyword matching. Exact titles miss the way people actually write
-                      them: asking for "Facilities Director" never finds "Director of Facilities"
-                      or "Head of Facilities". Levels and keywords catch every phrasing at once,
-                      and both are optional — leave them blank and matching behaves exactly as it
-                      did before they existed. */}
-                  <Field
-                    label="Job levels"
-                    hint="Optional. Combined with the keywords below — leave empty to match any level."
-                  >
-                    <div className={styles.levelRow}>
-                      {JOB_LEVELS.map((lvl) => {
-                        const on = draft.job_levels.includes(lvl.value);
-                        return (
-                          <button
-                            key={lvl.value}
-                            type="button"
-                            className={on ? styles.levelChipOn : styles.levelChip}
-                            aria-pressed={on}
-                            disabled={!canEdit}
-                            onClick={() =>
-                              setField(
-                                "job_levels",
-                                on
-                                  ? draft.job_levels.filter((v) => v !== lvl.value)
-                                  : [...draft.job_levels, lvl.value],
-                              )
-                            }
-                          >
-                            {lvl.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </Field>
-                  <Field
-                    label="Title keywords"
-                    hint="Any of these in the title. Word order does not matter."
-                  >
-                    <Input
-                      value={draft.title_keywords}
-                      onChange={(e) => setField("title_keywords", e.target.value)}
-                      placeholder="facilities, workplace, real estate"
-                      disabled={!canEdit}
-                    />
-                  </Field>
-                  <Field
-                    label="Exclude title keywords"
-                    hint="Disqualifies a match — e.g. assistant, deputy, intern."
-                  >
-                    <Input
-                      value={draft.exclude_title_keywords}
-                      onChange={(e) => setField("exclude_title_keywords", e.target.value)}
-                      placeholder="assistant, deputy, intern"
-                      disabled={!canEdit}
-                    />
-                  </Field>
-                  {canEdit && (
-                    <div className={styles.suggestBlock}>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        iconLeft={<Icons.BoltIcon />}
-                        loading={suggesting}
-                        onClick={suggestTitles}
-                      >
-                        Suggest titles (AI)
-                      </Button>
-                      {titleSuggestions.length > 0 && (
-                        // Each with its one-line reason, so the SDR can judge it before adding it
-                        // (W4): a bare chip said nothing about why this person buys this offer.
-                        <ul className={styles.suggestions} aria-label="Suggested buyer titles">
-                          {titleSuggestions.map((t) => {
-                            const added = splitCsv(draft.buyer_titles).some(
-                              (x) => x.toLowerCase() === t.title.toLowerCase(),
-                            );
-                            return (
-                              <li key={t.title} className={styles.suggestion}>
-                                <button
-                                  type="button"
-                                  className={styles.chip}
-                                  aria-pressed={added}
-                                  disabled={added}
-                                  onClick={() => addTitle(t.title)}
-                                >
-                                  {added ? <Icons.CheckIcon aria-hidden="true" /> : <Icons.PlusIcon aria-hidden="true" />}
-                                  {t.title}
-                                </button>
-                                {t.reason && <span className={styles.suggestionReason}>{t.reason}</span>}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                </div>
-                <MustMatch draft={draft} canEdit={canEdit} setField={setField} />
-              </Card>
-
-              <Card padding="lg">
-                <SectionHead
-                  title="Fit weighting"
-                  description="How much each firmographic trait counts toward the fit score. Positions are relative — the engine normalizes them — so drag to emphasize what matters for your motion."
-                  action={
-                    canEdit ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        iconLeft={<Icons.RefreshIcon />}
-                        onClick={resetWeights}
-                      >
-                        Reset to defaults
-                      </Button>
-                    ) : undefined
-                  }
-                />
-                <WeightSliders weights={draft.weights} onChange={setWeight} disabled={!canEdit} />
-              </Card>
-
-              <Card padding="lg">
-                <SectionHead
-                  title="Value propositions"
-                  description="What you sell and the pains it solves. Agents use these to personalize outreach."
-                  action={
-                    canEdit ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        iconLeft={<Icons.PlusIcon />}
-                        onClick={addVP}
-                      >
-                        Add value prop
-                      </Button>
-                    ) : undefined
-                  }
-                />
-                <div className={styles.vpList}>
-                  {draft.value_props.map((vp, i) => (
-                    <div key={i} className={styles.vp}>
-                      <div className={styles.vpHead}>
-                        <span className={styles.vpIndex}>{i + 1}</span>
-                        {canEdit && draft.value_props.length > 1 && (
-                          <IconButton
-                            label={`Remove value prop ${i + 1}`}
-                            icon={<Icons.TrashIcon />}
-                            variant="ghost"
-                            onClick={() => removeVP(i)}
-                          />
+                    {canEdit && (
+                      <div className={styles.suggestBlock}>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          iconLeft={<Icons.BoltIcon />}
+                          loading={suggesting}
+                          onClick={suggestTitles}
+                        >
+                          Suggest titles (AI)
+                        </Button>
+                        {titleSuggestions.length > 0 && (
+                          // Each with its one-line reason, so the SDR can judge it before adding it
+                          // (W4): a bare chip said nothing about why this person buys this offer.
+                          <ul className={styles.suggestions} aria-label="Suggested buyer titles">
+                            {titleSuggestions.map((t) => {
+                              const added = splitCsv(draft.buyer_titles).some(
+                                (x) => x.toLowerCase() === t.title.toLowerCase(),
+                              );
+                              return (
+                                <li key={t.title} className={styles.suggestion}>
+                                  <button
+                                    type="button"
+                                    className={styles.chip}
+                                    aria-pressed={added}
+                                    disabled={added}
+                                    onClick={() => addTitle(t.title)}
+                                  >
+                                    {added ? <Icons.CheckIcon aria-hidden="true" /> : <Icons.PlusIcon aria-hidden="true" />}
+                                    {t.title}
+                                  </button>
+                                  {t.reason && <span className={styles.suggestionReason}>{t.reason}</span>}
+                                </li>
+                              );
+                            })}
+                          </ul>
                         )}
                       </div>
-                      <Field label="Name" hideLabel>
-                        <Input
-                          value={vp.name}
-                          onChange={(e) => setVP(i, "name", e.target.value)}
-                          placeholder="Value prop name"
-                          disabled={!canEdit}
-                        />
-                      </Field>
-                      <Field label="Description" hideLabel>
-                        <Textarea
-                          rows={2}
-                          value={vp.description}
-                          onChange={(e) => setVP(i, "description", e.target.value)}
-                          placeholder="What it does and who it's for."
-                          disabled={!canEdit}
-                        />
-                      </Field>
-                      <Field label="Pains solved" hint="Comma-separated.">
-                        <Input
-                          value={vp.pains_solved}
-                          onChange={(e) => setVP(i, "pains_solved", e.target.value)}
-                          placeholder="Slow reporting, manual data entry"
-                          disabled={!canEdit}
-                        />
-                      </Field>
-                    </div>
-                  ))}
-                </div>
-              </Card>
+                    )}
+                  </div>
+                  <MustMatch draft={draft} canEdit={canEdit} setField={setField} />
+                </Card>
 
-              <Card padding="lg">
-                <SectionHead
-                  title="Product context"
-                  description="Background the AI agents reference when researching and writing."
-                />
-                <Field label="Product context" hideLabel>
-                  <Textarea
-                    rows={5}
-                    value={draft.product_context}
-                    onChange={(e) => setField("product_context", e.target.value)}
-                    placeholder="Describe your product, category, and differentiators."
-                    disabled={!canEdit}
+                <Card padding="lg">
+                  <SectionHead
+                    title="Fit weighting"
+                    description="How much each firmographic trait counts toward the fit score. Positions are relative — the engine normalizes them — so drag to emphasize what matters for your motion."
+                    action={
+                      canEdit ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          iconLeft={<Icons.RefreshIcon />}
+                          onClick={resetWeights}
+                        >
+                          Reset to defaults
+                        </Button>
+                      ) : undefined
+                    }
                   />
-                </Field>
-              </Card>
+                  <WeightSliders weights={draft.weights} onChange={setWeight} disabled={!canEdit} />
+                </Card>
 
-              {canEdit && (
-                <div className={styles.footer}>
-                  <Button type="submit" iconLeft={<Icons.CheckIcon />} loading={saving}>
-                    Save changes
-                  </Button>
-                </div>
-              )}
-            </form>
+                <Card padding="lg">
+                  <SectionHead
+                    title="Value propositions"
+                    description="What you sell and the pains it solves. Agents use these to personalize outreach."
+                    action={
+                      canEdit ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          iconLeft={<Icons.PlusIcon />}
+                          onClick={addVP}
+                        >
+                          Add value prop
+                        </Button>
+                      ) : undefined
+                    }
+                  />
+                  <div className={styles.vpList}>
+                    {draft.value_props.map((vp, i) => (
+                      <div key={i} className={styles.vp}>
+                        <div className={styles.vpHead}>
+                          <span className={styles.vpIndex}>{i + 1}</span>
+                          {canEdit && draft.value_props.length > 1 && (
+                            <IconButton
+                              label={`Remove value prop ${i + 1}`}
+                              icon={<Icons.TrashIcon />}
+                              variant="ghost"
+                              onClick={() => removeVP(i)}
+                            />
+                          )}
+                        </div>
+                        <Field label="Name" hideLabel>
+                          <Input
+                            value={vp.name}
+                            onChange={(e) => setVP(i, "name", e.target.value)}
+                            placeholder="Value prop name"
+                            disabled={!canEdit}
+                          />
+                        </Field>
+                        <Field label="Description" hideLabel>
+                          <Textarea
+                            rows={2}
+                            value={vp.description}
+                            onChange={(e) => setVP(i, "description", e.target.value)}
+                            placeholder="What it does and who it's for."
+                            disabled={!canEdit}
+                          />
+                        </Field>
+                        <Field label="Pains solved" hint="Comma-separated.">
+                          <Input
+                            value={vp.pains_solved}
+                            onChange={(e) => setVP(i, "pains_solved", e.target.value)}
+                            placeholder="Slow reporting, manual data entry"
+                            disabled={!canEdit}
+                          />
+                        </Field>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+
+                <Card padding="lg">
+                  <SectionHead
+                    title="Product context"
+                    description="Background the AI agents reference when researching and writing."
+                  />
+                  <Field label="Product context" hideLabel>
+                    <Textarea
+                      rows={5}
+                      value={draft.product_context}
+                      onChange={(e) => setField("product_context", e.target.value)}
+                      placeholder="Describe your product, category, and differentiators."
+                      disabled={!canEdit}
+                    />
+                  </Field>
+                </Card>
+
+                {canEdit && (
+                  <div className={styles.footer}>
+                    <Button type="submit" iconLeft={<Icons.CheckIcon />} loading={saving}>
+                      Save changes
+                    </Button>
+                  </div>
+                )}
+              </form>
             </div>
           ) : null
         }
@@ -1319,7 +1315,9 @@ function ServicesBar({
   setNewName,
   creating,
   onAdd,
+  children,
 }: {
+  children?: React.ReactNode;
   services: IcpService[];
   selectedKey: string;
   onChoose: (key: string) => void;
@@ -1397,6 +1395,7 @@ function ServicesBar({
           }))}
         />
       )}
+      {children}
     </Card>
   );
 }

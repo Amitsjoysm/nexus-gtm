@@ -377,13 +377,15 @@ div.mustMatchOption {
 /* Name, what it found, and the one destructive act, on one line where there is room. */
 .serviceHead {
   display: grid;
-  grid-template-columns: minmax(0, 360px) 1fr auto;
-  align-items: end;
+  grid-template-columns: minmax(0, 360px) minmax(0, 1fr) auto;
+  align-items: center;
   gap: var(--space-3) var(--space-5);
+  margin-top: var(--space-5);
 }
 .serviceStats {
-  margin: 0 0 var(--space-2);
+  margin: 0;
   font-size: var(--text-sm);
+  line-height: var(--leading);
   color: var(--text-muted);
 }
 @media (max-width: 760px) {
@@ -405,11 +407,22 @@ div.mustMatchOption {
   flex-direction: column;
   gap: var(--space-2);
 }
+/* Title then reason, in two aligned columns, so a column of reasons reads down the page. */
 .suggestion {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
   align-items: baseline;
   gap: var(--space-1) var(--space-3);
+}
+.suggestion .chip {
+  justify-self: start;
+  max-width: 100%;
+  text-align: left;
+}
+@media (max-width: 600px) {
+  .suggestion {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .suggestion .chip :global(svg) {
   width: 12px;

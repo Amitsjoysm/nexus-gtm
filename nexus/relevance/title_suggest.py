@@ -232,12 +232,23 @@ def keyword_titles(icp: dict) -> list[TitleRecommendation]:
     return out
 
 
+def _in_keywords(rec: TitleRecommendation, keywords: list[str]) -> bool:
+    """Is this catalogue role in one of the functions the SDR typed (its title, department or a
+    common alternative phrasing)?"""
+    text = _normalise(" ".join([rec.title, rec.department, *rec.alternatives]))
+    return any(k in text for k in keywords)
+
+
 def from_catalogue(icp: dict, *, limit: int) -> list[TitleRecommendation]:
     """The deterministic suggestions, through the same filter: titles in the ICP's own title
-    keywords first, then the catalogue ranking."""
+    keywords first, then the catalogue ranking. With title keywords set, only catalogue roles in
+    those functions: a VP Sales beside "infrastructure, estates" is the ignored-keywords report."""
     seen = _listed(icp)
+    keywords = [_normalise(str(k)) for k in (icp.get("title_keywords") or []) if _normalise(str(k))]
+    catalogue = [r for r in ranked_titles_for_icp(icp)
+                 if not keywords or _in_keywords(r, keywords)]
     out: list[TitleRecommendation] = []
-    for rec in [*keyword_titles(icp), *ranked_titles_for_icp(icp)]:
+    for rec in [*keyword_titles(icp), *catalogue]:
         if len(out) >= limit:
             break
         if keep(rec.title, icp, seen):
