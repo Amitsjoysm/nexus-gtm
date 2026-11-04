@@ -393,8 +393,8 @@ div.mustMatchOption {
     grid-template-columns: 1fr;
     align-items: start;
   }
-  .serviceStats {
-    margin: 0;
+  .serviceHead > button {
+    justify-self: start;
   }
 }
 
