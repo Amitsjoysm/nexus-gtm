@@ -24,7 +24,7 @@ import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDate, timeAgo } from "@/lib/format";
-import type { ConnectedMailbox, MailboxProviderState } from "@/lib/types";
+import type { ConnectedMailbox, MailboxOwnStyle, MailboxProviderState } from "@/lib/types";
 import styles from "./MailboxesPage.module.css";
 
 /**
@@ -293,13 +293,15 @@ function MailboxRow({
   const [confidence, setConfidence] = useState(
     mailbox.reply_confidence === null ? "" : String(mailbox.reply_confidence),
   );
+  const [own, setOwn] = useState<StyleDraft>(() => draftOf(mailbox.own_style));
   const [busy, setBusy] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [confirmingSend, setConfirmingSend] = useState(false);
   const zones = useMemo(() => timezoneOptions(mailbox.timezone), [mailbox.timezone]);
   const status = STATUS[mailbox.status];
   const dirty = timezone !== mailbox.timezone || signature !== mailbox.signature
-    || confidence !== (mailbox.reply_confidence === null ? "" : String(mailbox.reply_confidence));
+    || confidence !== (mailbox.reply_confidence === null ? "" : String(mailbox.reply_confidence))
+    || !sameDraft(own, draftOf(mailbox.own_style));
   const panelId = `mailbox-${mailbox.id}`;
   const editable = mailbox.mine && mailbox.status !== "revoked";
   const advised = mailbox.daily_advised ?? 50;
@@ -335,7 +337,9 @@ function MailboxRow({
   }
 
   function save() {
-    const body: Parameters<typeof api.updateConnectedMailbox>[1] = { timezone, signature };
+    const body: Parameters<typeof api.updateConnectedMailbox>[1] = {
+      timezone, signature, style: styleOf(own),
+    };
     if (confidence.trim() === "") body.clear_reply_confidence = true;
     else body.reply_confidence = Number(confidence);
     return run("save", () => api.updateConnectedMailbox(mailbox.id, body), ["Saved", "Your mailbox settings are updated."]);
@@ -414,6 +418,7 @@ function MailboxRow({
                     <Field label="Signature" hint="Added under every email this mailbox sends. Plain text.">
                       <Textarea rows={4} value={signature} onChange={(e) => setSignature(e.target.value)} />
                     </Field>
+                    <StyleFields mailbox={mailbox} value={own} onChange={setOwn} />
                     <div className={styles.pair}>
                       <Field label="Your timezone" hint="Used when a contact's own timezone is unknown.">
                         <Select value={timezone} onChange={(e) => setTimezone(e.target.value)} options={zones} />
@@ -546,26 +551,131 @@ function MailboxRow({
 }
 
 /**
- * The tone and shape drafts from this mailbox follow. It is the workspace's (Settings > Email
- * style), so it is read here and edited there, by an admin; the SDR is still owed the sentence.
+ * The tone and shape drafts from this mailbox follow, in force: the mailbox's own fields over the
+ * workspace's (2026-11-04). The owner edits theirs beside the signature; an admin edits the
+ * workspace defaults in Email defaults.
  */
 function WritingStyle({ mailbox, canEdit }: { mailbox: ConnectedMailbox; canEdit: boolean }) {
   const style = mailbox.writing_style;
+  const ownSet = Object.values(styleOf(draftOf(mailbox.own_style)))
+    .some((v) => (Array.isArray(v) ? v.length > 0 : v !== null));
+  const samples = style?.sample_count ?? 0;
   const parts = [
     style?.tone ? `Tone: ${style.tone}.` : "No tone set: drafts follow the house playbook.",
     style?.length_words ? `About ${style.length_words} words.` : null,
     `The first email ${FIRST_ASK[style?.first_ask ?? "interest"] ?? FIRST_ASK.interest}.`,
+    style?.ps_line ? "First emails may carry a P.S. you confirm." : null,
+    samples ? `Follows ${samples} sample email${samples === 1 ? "" : "s"}.` : null,
   ].filter(Boolean);
   return (
     <section className={styles.style} aria-labelledby={`style-${mailbox.id}`}>
-      <h5 id={`style-${mailbox.id}`} className={styles.sideTitle}>Writing style</h5>
+      <h5 id={`style-${mailbox.id}`} className={styles.sideTitle}>Writing style in force</h5>
       <p className={styles.styleText}>{parts.join(" ")}</p>
       <p className={styles.hint}>
+        {ownSet ? "This mailbox's own choices, with the workspace's for the rest. " : "The workspace defaults. "}
         {canEdit
-          ? <Link to="/settings/email" className={styles.inlineLink}>Change it in Email &amp; signature</Link>
-          : "Set for the whole workspace by an admin."}
+          ? <Link to="/settings/email" className={styles.inlineLink}>Edit the workspace defaults</Link>
+          : null}
       </p>
     </section>
+  );
+}
+
+/** The owner's own style, as the form holds it: blank means "use the workspace's". */
+interface StyleDraft {
+  tone: string;
+  length: string;
+  firstAsk: "" | "interest" | "meeting";
+  ps: "" | "on" | "off";
+  samples: [string, string, string];
+}
+
+function draftOf(own: ConnectedMailbox["own_style"]): StyleDraft {
+  const samples = own?.samples ?? [];
+  return {
+    tone: own?.tone ?? "",
+    length: own?.length_words ? String(own.length_words) : "",
+    firstAsk: own?.first_ask ?? "",
+    ps: own?.ps_line === true ? "on" : own?.ps_line === false ? "off" : "",
+    samples: [samples[0] ?? "", samples[1] ?? "", samples[2] ?? ""],
+  };
+}
+
+function styleOf(d: StyleDraft): MailboxOwnStyle {
+  const length = d.length.trim() ? Number(d.length) : null;
+  return {
+    tone: d.tone.trim() || null,
+    length_words: length !== null && Number.isFinite(length) ? Math.round(length) : null,
+    first_ask: d.firstAsk || null,
+    ps_line: d.ps === "" ? null : d.ps === "on",
+    samples: d.samples.map((x) => x.trim()).filter(Boolean),
+  };
+}
+
+function sameDraft(a: StyleDraft, b: StyleDraft): boolean {
+  return JSON.stringify(styleOf(a)) === JSON.stringify(styleOf(b));
+}
+
+/** The mailbox's own writing style. Every field left blank uses the workspace default it names. */
+function StyleFields({ mailbox, value, onChange }: {
+  mailbox: ConnectedMailbox;
+  value: StyleDraft;
+  onChange: (next: StyleDraft) => void;
+}) {
+  const ws = mailbox.workspace_style;
+  const set = (patch: Partial<StyleDraft>) => onChange({ ...value, ...patch });
+  const wsAsk = FIRST_ASK[ws?.first_ask ?? "interest"] ?? FIRST_ASK.interest;
+  const wsSamples = ws?.sample_count ?? 0;
+  return (
+    <fieldset className={styles.styleFields}>
+      <legend className={styles.sideTitle}>This mailbox&apos;s writing style</legend>
+      <p className={styles.hint}>Leave a field blank to use the workspace default shown in it.</p>
+      <div className={styles.pair}>
+        <Field label="Tone">
+          <Input value={value.tone} maxLength={200} onChange={(e) => set({ tone: e.target.value })}
+            placeholder={ws?.tone || "The house playbook"} />
+        </Field>
+        <Field label="Length in words" hint="40 to 200.">
+          <Input type="number" inputMode="numeric" min={40} max={200} value={value.length}
+            onChange={(e) => set({ length: e.target.value })}
+            placeholder={ws?.length_words ? String(ws.length_words) : "About 90"} />
+        </Field>
+      </div>
+      <div className={styles.pair}>
+        <Field label="The first email asks for">
+          <Select value={value.firstAsk}
+            onChange={(e) => set({ firstAsk: e.target.value as StyleDraft["firstAsk"] })}
+            options={[
+              { value: "", label: `Workspace default (${wsAsk})` },
+              { value: "interest", label: FIRST_ASK.interest },
+              { value: "meeting", label: FIRST_ASK.meeting },
+            ]} />
+        </Field>
+        <Field label="A P.S. you confirm">
+          <Select value={value.ps} onChange={(e) => set({ ps: e.target.value as StyleDraft["ps"] })}
+            options={[
+              { value: "", label: `Workspace default (${ws?.ps_line ? "on" : "off"})` },
+              { value: "on", label: "On" },
+              { value: "off", label: "Off" },
+            ]} />
+        </Field>
+      </div>
+      <Field label="Sample emails" hint={wsSamples
+        ? `Up to three emails whose shape and voice drafts follow, never their facts. Empty uses the workspace's ${wsSamples}.`
+        : "Up to three emails whose shape and voice drafts follow, never their facts. Plain text."}>
+        <div className={styles.samples}>
+          {value.samples.map((sample, i) => (
+            <Textarea key={i} rows={3} value={sample} aria-label={`Sample email ${i + 1}`}
+              placeholder={i === 0 ? "Paste an email you are proud of" : undefined}
+              onChange={(e) => {
+                const next = [...value.samples] as StyleDraft["samples"];
+                next[i] = e.target.value;
+                set({ samples: next });
+              }} />
+          ))}
+        </div>
+      </Field>
+    </fieldset>
   );
 }
 

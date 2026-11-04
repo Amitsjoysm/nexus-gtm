@@ -36,6 +36,32 @@ class WritingStyleOut(BaseModel):
     tone: str = ""
     length_words: int | None = None
     first_ask: str = "interest"
+    ps_line: bool = False
+    #: How many sample emails apply (the workspace's text is an admin's to read).
+    sample_count: int = 0
+
+
+class MailboxStyleOut(BaseModel):
+    """What this mailbox set for itself (2026-11-04). None / empty: it uses the workspace's."""
+
+    tone: str | None = None
+    length_words: int | None = None
+    first_ask: str | None = None
+    ps_line: bool | None = None
+    samples: list[str] = Field(default_factory=list)
+
+
+class MailboxStyleIn(BaseModel):
+    """The mailbox's own writing style, replacing what it had. A field left out or null uses the
+    workspace's; the limits are the workspace style's own (`schemas.EmailStyleIn`)."""
+
+    model_config = {"extra": "forbid"}
+
+    tone: str | None = Field(default=None, max_length=200)
+    length_words: int | None = Field(default=None, ge=40, le=200)
+    first_ask: str | None = None
+    ps_line: StrictBool | None = None
+    samples: list[str] = Field(default_factory=list, max_length=3)
 
 
 class MailboxOut(BaseModel):
@@ -78,7 +104,11 @@ class MailboxOut(BaseModel):
     # it follow. The style is the workspace's, edited by an admin; the row only says what it is.
     owner_name: str = ""
     daily_advised: int = 50
+    #: The style drafts from this mailbox follow: its own fields over the workspace's.
     writing_style: WritingStyleOut | None = None
+    #: What the mailbox set itself, and the workspace defaults it falls back to (2026-11-04).
+    own_style: MailboxStyleOut = Field(default_factory=MailboxStyleOut)
+    workspace_style: WritingStyleOut | None = None
 
 
 class ProviderStateOut(BaseModel):
@@ -106,6 +136,8 @@ class MailboxPatch(BaseModel):
     clear_reply_confidence: bool = False
     auto_actions: StrictBool | None = None
     auto_send_replies: StrictBool | None = None
+    #: The mailbox's own writing style (2026-11-04); omitted leaves it as it is.
+    style: MailboxStyleIn | None = None
 
 
 async def _settings(ts: TenantSession):
@@ -116,20 +148,43 @@ async def _settings(ts: TenantSession):
     return read_settings(getattr(tenant, "email_settings", None))
 
 
-async def _writing_style(ts: TenantSession) -> WritingStyleOut:
-    """What `GET /workspace/email/style` would say, minus samples and signature: that endpoint is
-    admin-only, and an SDR is still owed the sentence describing how their drafts are written."""
-    from nexus.agents.email_style import draft_options
+async def _workspace_email_settings(ts: TenantSession) -> dict:
     from nexus.models.identity import Tenant
 
     tenant = await ts.session.get(Tenant, ts.tenant_id)
-    settings = dict(getattr(tenant, "email_settings", None) or {})
+    return dict(getattr(tenant, "email_settings", None) or {})
+
+
+def _style_out(settings: dict) -> WritingStyleOut:
+    """What `GET /workspace/email/style` would say, minus the samples' text and the signature:
+    that endpoint is admin-only, and an SDR is still owed the sentence describing how their drafts
+    are written."""
+    from nexus.agents.email_style import draft_options, ps_line_on, samples
+
     style = settings.get("style") if isinstance(settings.get("style"), dict) else {}
     length = style.get("length_words")
     return WritingStyleOut(
         tone=str(style.get("tone") or ""),
         length_words=length if isinstance(length, int) and not isinstance(length, bool) else None,
         first_ask=draft_options({"style": style})["first_ask"],
+        ps_line=ps_line_on({"style": style}),
+        sample_count=len(samples({"style": style})),
+    )
+
+
+async def _writing_style(ts: TenantSession) -> WritingStyleOut:
+    return _style_out(await _workspace_email_settings(ts))
+
+
+def _own_style(row: MailboxConnection) -> MailboxStyleOut:
+    raw = row.style if isinstance(row.style, dict) else {}
+    length = raw.get("length_words")
+    return MailboxStyleOut(
+        tone=raw.get("tone") or None,
+        length_words=length if isinstance(length, int) and not isinstance(length, bool) else None,
+        first_ask=raw.get("first_ask") or None,
+        ps_line=raw.get("ps_line") if isinstance(raw.get("ps_line"), bool) else None,
+        samples=[str(x) for x in (raw.get("samples") or []) if str(x).strip()],
     )
 
 
@@ -149,9 +204,11 @@ async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal,
         sent_today,
         volume_warning,
     )
+    from nexus.agents.email_style import merged_settings
     from nexus.engagement.settings import effective_confidence, reply_automation
 
     settings = await _settings(ts)
+    workspace = await _workspace_email_settings(ts)
     acts_alone, sends_alone = reply_automation(settings, row)
     today = await sent_today(ts, row)
     health = await mailbox_health(ts, row, now=utcnow())
@@ -174,7 +231,9 @@ async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal,
         bounce_rate_7d=health.bounce_rate_7d, health_warning=health.warning,
         owner_name=await _owner_name(ts, row.owner_user_id),
         daily_advised=VOLUME_WARNING_THRESHOLD,
-        writing_style=style or await _writing_style(ts),
+        writing_style=_style_out(merged_settings(workspace, row.style)),
+        own_style=_own_style(row),
+        workspace_style=style or _style_out(workspace),
     )
 
 
@@ -339,6 +398,8 @@ async def update_mailbox(
         changes["auto_actions"] = body.auto_actions
     if body.auto_send_replies is not None:
         changes["auto_send_replies"] = body.auto_send_replies
+    if body.style is not None:
+        changes["style"] = body.style.model_dump()
     try:
         await service.update_mailbox(ts, row, **changes)
     except ValueError as exc:

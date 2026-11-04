@@ -139,6 +139,17 @@ async def run_agent(
         # The draft is signed by whoever asked for it. Unnamed, the model invented one ("Best,
         # Alex" on a live composer draft, 2026-10-01).
         inputs["sender_name"] = await _sender_name(ts, principal.user_id)
+    if agent_name == "messaging" and not inputs.get("mailbox_id"):
+        # Written in the voice of the mailbox it will be sent from (2026-11-04): the one the
+        # composer's Send uses (`outreach.send.resolve_connected_mailbox`). None: the workspace's.
+        from nexus.outreach.send import resolve_connected_mailbox
+
+        try:
+            mailbox = await resolve_connected_mailbox(ts, principal.user_id)
+        except Exception:  # noqa: BLE001 - a style that cannot be read costs the style, not the draft
+            mailbox = None
+        if mailbox is not None:
+            inputs["mailbox_id"] = mailbox.id
     async with metered(ts, capability, user_id=principal.user_id,
                        attrs={"agent": agent_name}):
         result = await get_agent_runtime().run(

@@ -67,7 +67,7 @@ async def list_mailboxes(ts: TenantSession, *, user_id: str, team: bool) -> list
 
 async def update_mailbox(
     ts: TenantSession, connection: MailboxConnection, *, timezone=_UNSET, signature=_UNSET,
-    reply_confidence=_UNSET, auto_actions=_UNSET, auto_send_replies=_UNSET,
+    reply_confidence=_UNSET, auto_actions=_UNSET, auto_send_replies=_UNSET, style=_UNSET,
 ) -> MailboxConnection:
     """Edit the SDR's own settings. Raises ``ValueError`` naming the problem; writes nothing then.
 
@@ -89,6 +89,8 @@ async def update_mailbox(
     if auto_send_replies is True and not settings.auto_send_allowed:
         raise ValueError("Your workspace does not allow the AI to send replies by itself. A "
                          "manager can allow it in Settings, Replies.")
+    if style is not _UNSET:
+        style = clean_mailbox_style(style)
     if timezone is not _UNSET:
         connection.timezone = timezone
     if signature is not _UNSET:
@@ -99,8 +101,43 @@ async def update_mailbox(
         connection.auto_actions = bool(auto_actions)
     if auto_send_replies is not _UNSET:
         connection.auto_send_replies = bool(auto_send_replies)
+    if style is not _UNSET:
+        connection.style = style or None
     await ts.flush()
     return connection
+
+
+def clean_mailbox_style(raw) -> dict:
+    """A mailbox's own style as stored: only the fields it set, trimmed. Raises ``ValueError``
+    naming the problem. Plain text only, as the workspace's: markup would reach the buyer as tags."""
+    import re
+
+    from nexus.agents.email_style import FIRST_ASKS, MAX_SAMPLE_CHARS, MAX_SAMPLES
+
+    raw = raw if isinstance(raw, dict) else {}
+    out: dict = {}
+    tone = str(raw.get("tone") or "").strip()
+    if tone:
+        out["tone"] = tone[:200]
+    length = raw.get("length_words")
+    if length is not None:
+        if isinstance(length, bool) or not isinstance(length, int) or not 40 <= length <= 200:
+            raise ValueError("Length is a number of words between 40 and 200.")
+        out["length_words"] = length
+    ask = raw.get("first_ask")
+    if ask:
+        if ask not in FIRST_ASKS:
+            raise ValueError("A first email asks for interest or a meeting.")
+        out["first_ask"] = ask
+    if isinstance(raw.get("ps_line"), bool):
+        out["ps_line"] = raw["ps_line"]
+    samples = [str(x).strip()[:MAX_SAMPLE_CHARS] for x in (raw.get("samples") or [])
+               if str(x).strip()][:MAX_SAMPLES]
+    if any(re.search(r"<[a-zA-Z/][^>]*>", x) for x in samples):
+        raise ValueError("Sample emails are plain text for now. Remove the HTML tags.")
+    if samples:
+        out["samples"] = samples
+    return out
 
 
 async def disconnect(ts: TenantSession, connection: MailboxConnection, *, actor_user_id: str) -> None:

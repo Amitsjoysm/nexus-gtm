@@ -107,6 +107,9 @@ class MailboxConnection(IdMixin, TimestampMixin, TenantScoped, Base):
     # it (`engagement.settings.reply_automation`). Defaults are today's behaviour.
     auto_actions: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     auto_send_replies: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # The mailbox's own writing style (2026-11-04, migration 0079): tone, length_words, first_ask,
+    # ps_line, samples. A field left out uses the workspace's (`email_style.merged_settings`).
+    style: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class SequenceTemplate(IdMixin, TimestampMixin, TenantScoped, Base):

@@ -2664,8 +2664,28 @@ export interface ConnectedMailbox {
   owner_name?: string;
   /** The daily figure `sent_today` is read against: advice, never a cap (D10). */
   daily_advised?: number;
-  /** The workspace's writing style, which drafts from this mailbox follow (admin edits it). */
-  writing_style?: { tone: string; length_words: number | null; first_ask: string } | null;
+  /** The writing style drafts from this mailbox follow: its own fields over the workspace's. */
+  writing_style?: WritingStyleSummary | null;
+  /** What this mailbox set for itself (2026-11-04); null or empty uses the workspace's. */
+  own_style?: MailboxOwnStyle;
+  /** The workspace defaults a field left unset falls back to. */
+  workspace_style?: WritingStyleSummary | null;
+}
+
+export interface WritingStyleSummary {
+  tone: string;
+  length_words: number | null;
+  first_ask: string;
+  ps_line?: boolean;
+  sample_count?: number;
+}
+
+export interface MailboxOwnStyle {
+  tone: string | null;
+  length_words: number | null;
+  first_ask: "interest" | "meeting" | null;
+  ps_line: boolean | null;
+  samples: string[];
 }
 
 export interface MailboxProviderState {

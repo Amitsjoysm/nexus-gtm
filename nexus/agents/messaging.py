@@ -101,16 +101,22 @@ async def _research_facts(ctx) -> list[str]:
 
 
 async def _email_settings(ctx) -> dict:
-    """This workspace's email settings, for the house style. Never raises: a style that cannot be
-    read must cost the styling, not the draft."""
+    """This workspace's email settings, for the house style, with the sending mailbox's own style
+    over them when the caller names one (`mailbox_id`, 2026-11-04). Never raises: a style that
+    cannot be read must cost the styling, not the draft."""
     try:
+        from nexus.agents.email_style import merged_settings
+        from nexus.models.engagement import MailboxConnection
         from nexus.models.identity import Tenant
 
         ts = getattr(ctx, "ts", None) or getattr(ctx, "session", None)
         if ts is None:
             return {}
         tenant = await ts.session.get(Tenant, ts.tenant_id)
-        return dict(getattr(tenant, "email_settings", None) or {})
+        settings = dict(getattr(tenant, "email_settings", None) or {})
+        mailbox_id = ctx.inputs.get("mailbox_id") if isinstance(ctx.inputs, dict) else None
+        mailbox = await ts.get(MailboxConnection, mailbox_id) if mailbox_id else None
+        return merged_settings(settings, getattr(mailbox, "style", None))
     except Exception:  # noqa: BLE001
         return {}
 

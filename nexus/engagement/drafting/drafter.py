@@ -116,6 +116,8 @@ async def _draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: 
                 "messaging", ts, account_id=account.id, contact_id=contact.id,
                 angle=getattr(step, "angle", "") or "", context_pack=pack.text,
                 personal_facts=pack.facts, touch_kind=kind, automatic_reply=automatic,
+                # The sending mailbox's own style over the workspace's (2026-11-04).
+                mailbox_id=getattr(mailbox, "id", None),
             )
     except QuotaExceeded:
         return Draft(context_pack=pack.text, facts=pack.facts, error="out_of_credits")
@@ -136,11 +138,12 @@ async def _draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: 
         subject = reply_subject(thread.base_subject or subject)
     # The workspace's own length and first-email ask, the same options the agent drafted against
     # (`email_style.draft_options`), or this check would hold a draft the agent was told to write.
-    from nexus.agents.email_style import draft_options
+    from nexus.agents.email_style import draft_options, merged_settings
     from nexus.models.identity import Tenant
 
     tenant = await ts.session.get(Tenant, ts.tenant_id)
-    options = draft_options(getattr(tenant, "email_settings", None) or {})
+    options = draft_options(merged_settings(getattr(tenant, "email_settings", None) or {},
+                                            getattr(mailbox, "style", None)))
     posts = ((contact.custom_fields or {}).get("personalization") or {}).get("recent_posts") \
         if isinstance(contact.custom_fields, dict) else None
     problems = check_draft(subject=subject, body=body, first_name=_first_name(contact),

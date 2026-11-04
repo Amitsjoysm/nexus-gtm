@@ -50,7 +50,7 @@ async def test_the_row_says_which_writing_style_its_drafts_follow(client):
                                                  "first_ask": "meeting", "samples": ["secret"]})
     [row] = (await client.get("/api/engagement/mailboxes", headers=auth(token))).json()
     assert row["writing_style"] == {"tone": "warm and direct", "length_words": 90,
-                                    "first_ask": "meeting"}
+                                    "first_ask": "meeting", "ps_line": False, "sample_count": 1}
     # Samples are the admin's working material; a mailbox row is not where they are read.
     assert "secret" not in str(row)
 
@@ -58,7 +58,8 @@ async def test_the_row_says_which_writing_style_its_drafts_follow(client):
 async def test_a_workspace_with_no_style_reads_the_defaults(client):
     token = await _mailbox(client, "nosty")
     [row] = (await client.get("/api/engagement/mailboxes", headers=auth(token))).json()
-    assert row["writing_style"] == {"tone": "", "length_words": None, "first_ask": "interest"}
+    assert row["writing_style"] == {"tone": "", "length_words": None, "first_ask": "interest",
+                                    "ps_line": False, "sample_count": 0}
 
 
 async def test_a_stored_length_that_is_not_a_number_is_not_passed_on(client):

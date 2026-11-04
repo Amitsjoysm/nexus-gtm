@@ -108,3 +108,37 @@ def style_prompt(settings: dict | None) -> str:
         return "\n".join(parts) + "\n"
     except Exception:  # noqa: BLE001
         return ""
+
+
+# ---- a mailbox's own style (2026-11-04) ----------------------------------------------------------
+#
+# Asked by the SDR team: "signatures and style examples in the mailbox, set independently for each
+# mailbox". Decided with the owner: each mailbox sets its own, and a field it leaves unset uses the
+# workspace's. So the merge is per FIELD: a mailbox that set only its samples keeps the workspace's
+# tone and length. Stored on `mailbox_connections.style` (migration 0079).
+
+#: The fields a mailbox may set for itself; the signature is its own column already.
+MAILBOX_STYLE_KEYS = ("tone", "length_words", "first_ask", "ps_line", "samples")
+
+
+def _is_set(value) -> bool:
+    return value is not None and value != "" and value != []
+
+
+def merged_settings(workspace: dict | None, mailbox_style: dict | None) -> dict:
+    """The workspace's email settings with this mailbox's own style laid over them, field by field.
+
+    What every reader of the style takes (`draft_options`, `style_prompt`, `ps_line_on`,
+    `samples`), so a draft from a mailbox and the check of that draft read the same thing. A
+    mailbox with no style of its own gets the workspace's exactly. Never raises."""
+    settings = dict(workspace or {})
+    try:
+        base = dict(_style(settings))
+        own = mailbox_style if isinstance(mailbox_style, dict) else {}
+        for key in MAILBOX_STYLE_KEYS:
+            if _is_set(own.get(key)):
+                base[key] = own[key]
+        settings["style"] = base
+    except Exception:  # noqa: BLE001 - a malformed blob must cost the mailbox's style, not the draft
+        pass
+    return settings

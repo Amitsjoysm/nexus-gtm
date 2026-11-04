@@ -3,15 +3,16 @@ import { EmailStyleCard, MailboxesCard } from "@/pages/SettingsPage";
 import styles from "@/pages/SettingsPage.module.css";
 
 /**
- * Settings > Email & signature (admin): the workspace's shared SMTP sending mailboxes and how
- * drafts read and sign off. Each rep's own Gmail or Outlook mailbox is Settings > My mailboxes.
+ * Settings > Email defaults (admin; "Email & signature" until 2026-11-04): the workspace's shared
+ * SMTP sending mailboxes, and the signature and writing style a mailbox uses until its owner sets
+ * its own. Each rep's own Gmail or Outlook mailbox, and its own style, is Settings > My mailboxes.
  */
 export function EmailSettingsPage() {
   return (
     <div>
       <PageHeader
-        title="Email & signature"
-        description="Shared sending mailboxes, and how drafts read and sign off when a rep has not set their own."
+        title="Email defaults"
+        description="Shared sending mailboxes, and the signature and writing style a mailbox uses until its owner sets its own in My mailboxes."
       />
       <div className={styles.stack}>
         <MailboxesCard />

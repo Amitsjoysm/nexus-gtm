@@ -68,7 +68,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
     minRole: "admin", title: "Workspace settings",
   },
   {
-    to: "/settings/email", label: "Email & signature", icon: <SendIcon />, group: "workspace",
+    to: "/settings/email", label: "Email defaults", icon: <SendIcon />, group: "workspace",
     minRole: "admin",
   },
   {
