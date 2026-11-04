@@ -545,6 +545,10 @@ def caller_block(name: str, company: str) -> str:
     lines = ["YOU (THE CALLER)"]
     if name:
         lines.append(f"- Name: {name}. Introduce yourself by your first name, {name.split()[0]}.")
+    else:
+        # Measured on the local deploy: told only the company, the model introduced "Alex", a
+        # person nobody in the workspace is. A name nobody gave is a fabrication, spoken live.
+        lines.append("- Name: not known. Never make one up: introduce yourself by the company only.")
     if company:
         lines.append(f"- Company: {company}")
     return "\n".join(lines) + "\n"

@@ -743,6 +743,34 @@ async def test_the_script_prompt_names_the_caller_and_a_bad_script_is_redone_onc
     assert len(out["script"]["first_reactions"]) == 3
 
 
+def test_a_caller_nobody_named_is_never_given_a_name():
+    """Measured on the local deploy: told only the company, the model introduced "Alex"."""
+    from nexus.agents.copy import caller_block
+
+    assert "Never make one up" in caller_block("", "Infojoy")
+    assert "Never make one up" not in caller_block("Sam Rep", "Infojoy")
+    assert caller_block("", "") == ""
+
+
+async def test_an_unowned_call_is_made_by_whoever_opened_it(model):
+    """A queued call with no owner, on an unowned account: the script's caller is the rep who
+    opened it, not a name the model chose."""
+    good = json.loads(json.dumps(_script()).replace("Playbook", "Callscript"))
+    llm = model(json.dumps(good))
+    w = await _world("calleropen")
+    from nexus.calling.service import get_call_queue_service
+    from nexus.models.account import Account
+    from nexus.models.calling import CallTask
+
+    async with tenant_session(w.tid) as ts:
+        (await ts.get(Account, w.account)).owner_user_id = None
+        task = CallTask(tenant_id=w.tid, account_id=w.account, contact_id=w.contact)
+        ts.add(task)
+        await ts.flush()
+        await get_call_queue_service().generate_script(ts, task, opened_by=w.user)
+    assert "- Name: Sam Rep. Introduce yourself by your first name, Sam." in llm.prompts[0]
+
+
 def test_the_api_keeps_the_first_reactions():
     from nexus.api.schemas import CallScriptOut
 

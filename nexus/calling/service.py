@@ -166,7 +166,8 @@ class CallQueueService:
         return list((await ts.session.scalars(stmt)).all())
 
     async def generate_script(
-        self, ts: TenantSession, task: CallTask, *, refresh: bool = False
+        self, ts: TenantSession, task: CallTask, *, refresh: bool = False,
+        opened_by: str | None = None,
     ) -> dict:
         """The call script for this task: today's cached one, or a freshly generated one.
 
@@ -187,12 +188,13 @@ class CallQueueService:
         from nexus.relevance.services import campaign_service
 
         async with campaign_service(ts, await _campaign_id_for(ts, task)):
-            # The caller the task belongs to, so the script introduces a real person rather than
-            # "<your name>" (`call_script._caller`).
+            # The caller the task belongs to, else the rep who opened it, so the script introduces
+            # a real person rather than "<your name>" (`call_script._caller`). A queued call often
+            # has no owner, and on an unowned account the model then named the caller itself.
             result = await get_agent_runtime().run(
                 "call_script", ts, account_id=task.account_id,
                 contact_id=task.contact_id, persist=False,
-                caller_user_id=getattr(task, "owner_user_id", None),
+                caller_user_id=getattr(task, "owner_user_id", None) or opened_by,
             )
         script = dict((result.output or {}).get("script") or {})
         if script:

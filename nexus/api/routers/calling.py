@@ -126,7 +126,7 @@ async def create_call_task(
 async def generate_call_script(
     task_id: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_accounts)),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
     refresh: bool = False,
 ) -> CallScriptOut:
     """Today's script for this call, generated only when there is none. ``refresh=true`` is the
@@ -134,7 +134,8 @@ async def generate_call_script(
     task = await ts.get(CallTask, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Call task not found")
-    script = await get_call_queue_service().generate_script(ts, task, refresh=refresh)
+    script = await get_call_queue_service().generate_script(
+        ts, task, refresh=refresh, opened_by=principal.user_id)
     return CallScriptOut(**{k: script.get(k) for k in CallScriptOut.model_fields if script.get(k) is not None})
 
 
