@@ -101,13 +101,25 @@ def html_to_text(html: str) -> str:
 
 def strip_quoted(text: str) -> str:
     """The reply without the history it quotes. Keeps everything when no marker is found."""
+    return split_quoted(text)[0]
+
+
+def split_quoted(text: str) -> tuple[str, str]:
+    """``(reply, quoted)``: what they wrote, and the history their client quoted under it.
+
+    Mail shows the first and folds the second under "Show quoted text" (2026-11-04), as Outlook
+    does: the trail is our own emails back again, but a person sometimes needs to see what exactly
+    they answered. Both empty for an empty body; ``quoted`` empty when no marker is found."""
     lines = (text or "").splitlines()
+    cut = len(lines)
     for index, line in enumerate(lines):
         if index and any(pattern.match(line) for pattern in _QUOTE_MARKERS):
-            lines = lines[:index]
+            cut = index
             break
-    kept = [line for line in lines if not line.lstrip().startswith(">")]
-    return "\n".join(kept).strip()
+    head, tail = lines[:cut], lines[cut:]
+    kept = [line for line in head if not line.lstrip().startswith(">")]
+    quoted = [line for line in head if line.lstrip().startswith(">")] + tail
+    return "\n".join(kept).strip(), "\n".join(quoted).strip()
 
 
 def _auto_reason(message, subject: str) -> str:

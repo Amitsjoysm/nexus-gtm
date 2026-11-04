@@ -474,7 +474,7 @@ export function App() {
                 <Route
                   path="/engagement/replies"
                   element={
-                    <RequirePage page="/engagement/replies">
+                    <RequirePage page="/engagement/mail">
                       <RequireEngine name="Replies">
                         <RequireCapability capability="module.campaigns" name="Replies">
                           <ReplyDeskPage />
@@ -581,7 +581,7 @@ export function App() {
                   <Route
                     path="/settings/replies"
                     element={
-                      <RequirePage page="/engagement/replies">
+                      <RequirePage page="/engagement/mail">
                         <RequireEngine name="Reply settings">
                           <RequireCapability capability="module.campaigns" name="Reply settings">
                             <EngagementSettingsPage />

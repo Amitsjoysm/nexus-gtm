@@ -182,13 +182,13 @@ async def today(ts, *, user_id: str, now: datetime) -> list[TodayItem]:
         if category == "unclear":
             items.append(TodayItem("decide", f"Decide on {who(r.contact_id)}",
                                    "Their reply needs a person to say what happens next.",
-                                   f"/engagement/replies?reply={r.id}", arrived(r),
+                                   f"/engagement/mail?folder=needs_reply&reply={r.id}", arrived(r),
                                    ref_id=r.id, **person(r.contact_id, r.account_id)))
         else:
             said = {"interested": "They're interested.", "question": "They asked a question.",
                     "referral": "They pointed you to someone else."}.get(category, "They replied.")
             items.append(TodayItem("reply", f"Answer {who(r.contact_id)}", said,
-                                   f"/engagement/replies?reply={r.id}", arrived(r),
+                                   f"/engagement/mail?folder=needs_reply&reply={r.id}", arrived(r),
                                    ref_id=r.id, **person(r.contact_id, r.account_id)))
 
     by_account: dict[str, list] = {}
@@ -199,7 +199,7 @@ async def today(ts, *, user_id: str, now: datetime) -> list[TodayItem]:
         items.append(TodayItem(
             "colleagues", f"Resume or stop {len(rows)} at {name}",
             "A colleague replied, so they are paused until you decide.",
-            "/engagement/replies", min(e.updated_at or e.created_at for e in rows),
+            "/engagement/mail?folder=needs_reply", min(e.updated_at or e.created_at for e in rows),
             count=len(rows), account_id=account_id, account_name=name))
 
     for c in sorted(calls, key=lambda c: _aware(c.due_at) or now):
@@ -239,11 +239,11 @@ async def today(ts, *, user_id: str, now: datetime) -> list[TodayItem]:
         items.append(TodayItem(
             "restart", f"Write again to {n} {'person' if n == 1 else 'people'}",
             "Something happened at their company since they went quiet or asked for later.",
-            "/engagement/replies?tab=restart", restart[0].signal_at, count=n, due="today"))
+            "/engagement/mail?folder=write_again", restart[0].signal_at, count=n, due="today"))
 
     for e in sorted(returning, key=lambda e: _aware(e.snoozed_until)):
         items.append(TodayItem("returning", f"{who(e.contact_id)} comes back today",
-                               "Their sequence resumes on its own.", "/engagement/replies?tab=scheduled",
+                               "Their sequence resumes on its own.", "/engagement/mail?folder=scheduled",
                                e.snoozed_until, ref_id=e.id, **person(e.contact_id, e.account_id)))
 
     for item in items:

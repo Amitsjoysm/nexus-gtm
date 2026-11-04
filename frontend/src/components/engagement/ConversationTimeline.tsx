@@ -23,6 +23,8 @@ export interface TimelineMessage {
   /** Where it came from: a campaign name, or "One-off email". */
   context?: string;
   category?: ReplyCategory | null;
+  /** The history an inbound reply quoted under itself: shown folded, one click away. */
+  quoted?: string;
 }
 
 export interface ConversationTimelineProps {
@@ -52,6 +54,12 @@ export function ConversationTimeline({ messages, empty, clamp = false }: Convers
               </header>
               {m.subject && <p className={styles.subject}>{m.subject}</p>}
               <p className={clamp ? `${styles.body} ${styles.clamped}` : styles.body}>{m.body}</p>
+              {!clamp && m.quoted && (
+                <details className={styles.quoted}>
+                  <summary>Show quoted text</summary>
+                  <p className={styles.quotedBody}>{m.quoted}</p>
+                </details>
+              )}
               {m.context && <p className={styles.context}>{m.context}</p>}
             </article>
           </li>

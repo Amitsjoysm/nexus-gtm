@@ -71,8 +71,10 @@ async def visible_mailboxes(ts, *, user_id: str, team: bool) -> list:
 
 async def threads(ts, *, mailboxes: list, mailbox_id: str | None = None,
                   campaign_id: str | None = None, replied: bool = False, unread: bool = False,
-                  before: datetime | None = None, limit: int = PAGE) -> list[ThreadRow]:
-    """One page of conversations on ``mailboxes``, newest activity first."""
+                  unanswered: bool = False, before: datetime | None = None,
+                  limit: int = PAGE) -> list[ThreadRow]:
+    """One page of conversations on ``mailboxes``, newest activity first. ``unanswered`` is Mail's
+    Sent folder (2026-11-04): conversations where nothing has come back yet."""
     from sqlalchemy import select
 
     from nexus.models.engagement import EngagementEnrollment, EngagementMessage, EngagementThread
@@ -100,6 +102,12 @@ async def threads(ts, *, mailboxes: list, mailbox_id: str | None = None,
                    EngagementMessage.direction == "in", EngagementMessage.status == "received")))
     if unread:
         stmt = stmt.where(EngagementThread.id.in_(_waiting_threads(ts)))
+    if unanswered:
+        stmt = stmt.where(EngagementThread.id.not_in(
+            select(EngagementMessage.thread_id)
+            .where(EngagementMessage.tenant_id == ts.tenant_id,
+                   EngagementMessage.thread_id.is_not(None),
+                   EngagementMessage.direction == "in", EngagementMessage.status == "received")))
     if before is not None:
         stmt = stmt.where(EngagementThread.last_message_at < before)
     # NULLS LAST said out loud: Postgres sorts nulls first in a descending order, SQLite last.
@@ -190,7 +198,7 @@ def _moment(message):
 
 async def thread(ts, thread_id: str, *, mailboxes: list) -> ThreadView | None:
     """One conversation, oldest first, or `None` when it is not on a mailbox the viewer may see."""
-    from nexus.engagement.replies.parse import strip_quoted
+    from nexus.engagement.replies.parse import split_quoted
     from nexus.models.engagement import EngagementMessage, EngagementThread, ReplyClassification
 
     found = await ts.get(EngagementThread, thread_id)
@@ -206,11 +214,12 @@ async def thread(ts, thread_id: str, *, mailboxes: list) -> ThreadView | None:
     for m in messages:
         reading = readings.get(m.id)
         inbound = m.direction == "in"
+        body, quoted = split_quoted(m.body_text or "") if inbound else (m.body_text or "", "")
         view.messages.append({
             "id": m.id, "direction": m.direction, "status": m.status,
             "from_addr": m.from_addr or "", "to_addrs": list(m.to_addrs or []),
             "subject": m.subject or "",
-            "body": strip_quoted(m.body_text or "") if inbound else (m.body_text or ""),
+            "body": body, "quoted": quoted,
             "at": _moment(m),
             "category": (reading.corrected_category or reading.category) if reading else None,
         })

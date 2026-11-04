@@ -166,10 +166,10 @@ async def test_a_thread_reads_oldest_first_and_answers_on_the_reply_desk(client,
     assert view["messages"][1]["body"] == "Reply on waiting.", "the quoted history is left out"
     assert view["messages"][1]["category"] == "interested"
     assert view["reply_open"] is True
-    assert view["reply_link"] == f"/engagement/replies?reply={ids['waiting_reply']}"
+    assert view["reply_link"] == f"/engagement/mail?folder=needs_reply&reply={ids['waiting_reply']}"
     done = (await client.get(f"/api/engagement/inbox/threads/{ids['answered']}",
                              headers=auth(token))).json()
-    assert done["reply_link"] == f"/engagement/replies?tab=handled&reply={ids['answered_reply']}"
+    assert done["reply_link"] == f"/engagement/mail?folder=handled&reply={ids['answered_reply']}"
     quiet = (await client.get(f"/api/engagement/inbox/threads/{ids['quiet']}",
                               headers=auth(token))).json()
     assert quiet["reply_id"] is None and quiet["reply_link"] == ""
@@ -194,3 +194,38 @@ async def test_the_inbox_is_dark_with_the_engine(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "engagement_campaigns_enabled", False)
     token = await signup(client, slug="unidark", email="sam@unidark.com", company="D")
     assert (await client.get("/api/engagement/inbox", headers=auth(token))).status_code == 404
+
+
+# ---- Mail holds the reply desk (2026-11-04) -------------------------------------------------------
+
+def test_a_reply_splits_from_the_history_it_quotes():
+    from nexus.engagement.replies.parse import split_quoted, strip_quoted
+
+    text = "Sounds good, Tuesday works.\n\nOn Mon, Sam <sam@ours.io> wrote:\n> Worth a look?\n> Sam"
+    reply, quoted = split_quoted(text)
+    assert reply == "Sounds good, Tuesday works." == strip_quoted(text)
+    assert quoted.startswith("On Mon, Sam") and "> Worth a look?" in quoted
+    assert split_quoted("Just this.") == ("Just this.", "")
+    assert split_quoted("") == ("", "")
+    inline = split_quoted("Yes please.\n> earlier line\nThanks")
+    assert inline == ("Yes please.\nThanks", "> earlier line")
+
+
+async def test_the_quoted_history_is_kept_folded_not_thrown_away(client, engine_on):
+    token, _rep, ids = await _mail(client, "uniquote")
+    view = (await client.get(f"/api/engagement/inbox/threads/{ids['waiting']}",
+                             headers=auth(token))).json()
+    reply = view["messages"][1]
+    assert reply["body"] == "Reply on waiting."
+    assert reply["quoted"].startswith("On Mon, someone") and "> Opening" in reply["quoted"]
+    assert view["messages"][0]["quoted"] == "", "what we sent is shown whole"
+    desk = (await client.get(f"/api/engagement/desk/{ids['waiting_reply']}",
+                             headers=auth(token))).json()
+    inbound = [m for m in desk["conversation"] if m["direction"] == "in"][0]
+    assert inbound["body"] == "Reply on waiting." and "> Opening" in inbound["quoted"]
+
+
+async def test_the_sent_folder_is_what_nothing_came_back_on(client, engine_on):
+    token, _rep, ids = await _mail(client, "unisent")
+    assert [r["thread_id"] for r in (await _list(client, token, unanswered=True))["threads"]] == \
+        [ids["quiet"]]

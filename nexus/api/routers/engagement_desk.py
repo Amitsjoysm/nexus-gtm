@@ -66,7 +66,21 @@ class ConversationMessageOut(BaseModel):
     direction: str
     subject: str
     body: str
+    #: The history an inbound reply quoted under itself, folded away on screen (2026-11-04).
+    quoted: str = ""
     at: datetime | None
+
+
+def _conversation_message(m) -> ConversationMessageOut:
+    """One message of a desk conversation: an inbound one split from the history it quotes, the
+    trail of our own emails that buried the reply (`parse.split_quoted`)."""
+    from nexus.engagement.replies.parse import split_quoted
+
+    body, quoted = (split_quoted(m.body_text or "") if m.direction == "in"
+                    else (m.body_text or "", ""))
+    return ConversationMessageOut(id=m.id, direction=m.direction, subject=m.subject or "",
+                                  body=body, quoted=quoted,
+                                  at=m.sent_at or m.received_at or m.created_at)
 
 
 class ColleagueOut(BaseModel):
@@ -245,9 +259,7 @@ async def read_item(
         **_row(classification, detail.message, names),
         body=getattr(detail.message, "body_text", "") or "",
         suggested_response=classification.suggested_response,
-        conversation=[ConversationMessageOut(
-            id=m.id, direction=m.direction, subject=m.subject or "", body=m.body_text or "",
-            at=m.sent_at or m.received_at or m.created_at) for m in detail.conversation],
+        conversation=[_conversation_message(m) for m in detail.conversation],
         paused_colleagues=[ColleagueOut(
             enrollment_id=e.id, contact_id=e.contact_id, campaign_id=e.campaign_id,
             contact_name=getattr(names.contact(e.contact_id), "full_name", "") or "",

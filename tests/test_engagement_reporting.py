@@ -282,7 +282,7 @@ async def test_today_puts_waiting_buyers_first_and_returning_people_last(client,
     kinds = [i["kind"] for i in r.json()]
     assert kinds == ["reply", "decide", "colleagues", "call", "review", "returning"]
     first = r.json()[0]
-    assert first["title"] == "Answer P5 at Acme" and first["link"].startswith("/engagement/replies?reply=")
+    assert first["title"] == "Answer P5 at Acme" and first["link"].startswith("/engagement/mail?folder=needs_reply&reply=")
 
 
 async def test_within_a_kind_today_ranks_by_reply_likelihood_then_age(client, engine_on):

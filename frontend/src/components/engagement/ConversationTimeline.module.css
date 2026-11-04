@@ -92,3 +92,30 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+
+/* What an inbound reply quoted under itself (our own emails, mostly), folded like Outlook's
+   "show trimmed content" (2026-11-04). */
+.quoted {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.quoted > summary {
+  cursor: pointer;
+  width: fit-content;
+  color: var(--accent);
+}
+
+.quoted > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.quotedBody {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

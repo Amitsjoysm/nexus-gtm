@@ -2993,6 +2993,8 @@ export interface DeskConversationMessage {
   direction: "out" | "in";
   subject: string;
   body: string;
+  /** The history an inbound reply quoted under itself; folded away on screen. */
+  quoted?: string;
   at: string | null;
 }
 
@@ -3165,6 +3167,8 @@ export interface InboxMessage {
   to_addrs: string[];
   subject: string;
   body: string;
+  /** The history an inbound reply quoted under itself; folded away on screen. */
+  quoted?: string;
   at: string | null;
   category: string | null;
 }
@@ -3184,6 +3188,8 @@ export interface InboxFilters {
   campaign_id?: string;
   replied?: boolean;
   unread?: boolean;
+  /** Mail's Sent folder: conversations nothing has come back on yet. */
+  unanswered?: boolean;
 }
 
 // ---- engagement: insights (phase 13) -----------------------------------------------------------

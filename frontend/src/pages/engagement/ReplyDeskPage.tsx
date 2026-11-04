@@ -1,39 +1,31 @@
-import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { PageHeader } from "@/components/layout/PageHeader";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { Navigate, useSearchParams } from "react-router-dom";
 import {
-  Badge, Button, ButtonLink, DataTable, EmptyState, ErrorState, Field, Icons, Input, Modal, Select, Skeleton,
-  TabPanel, Tabs, Textarea, WorkingIndicator,
+  Badge, Button, DataTable, EmptyState, ErrorState, Field, Icons, Input, Modal, Select, Skeleton,
+  Textarea, WorkingIndicator,
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import { ConversationTimeline } from "@/components/engagement/ConversationTimeline";
-import { ResponseTimes } from "@/components/engagement/ResponseTimes";
 import { CATEGORY, CATEGORY_OPTIONS, reasonText, when, whenDay } from "@/components/engagement/labels";
 import { useApi } from "@/hooks/useApi";
 import type { AsyncState } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
-import { useEngagementStatus } from "@/app/EngagementContext";
 import { ApiError } from "@/lib/api";
 import type {
   DeskDecision, DeskItemDetail, DeskQueueItem, DeskScheduledItem, Member, ReplyCategory,
-  RestartSuggestion,
 } from "@/lib/types";
 import styles from "./Engagement.module.css";
 import { ReferralPanel } from "./ReferralPanel";
-import { WriteAgain } from "./WriteAgain";
 
 /**
- * The reply desk (spec §9, D22): every reply to a campaign, read and sorted, and nothing sent
- * without a person pressing Send.
- *
- * Needs action holds what a person must answer or decide. Scheduled holds people who asked to hear
- * back on a date or are out of office; their date can be moved or cancelled. Write again holds people
- * who went quiet or asked for later, at a company where something has happened since (§19). Handled
- * is the record of who declined, unsubscribed or was closed, and why.
+ * The reply desk's parts (spec §9, D22): every reply to a campaign, read and sorted, and nothing
+ * sent without a person pressing Send. Since 2026-11-04 they are folders of Mail (`MailPage`), one
+ * screen for everything an SDR reads and answers: Needs reply holds what a person must answer or
+ * decide; Scheduled, people who asked to hear back on a date or are out of office; Write again,
+ * people who went quiet at a company where something has happened since (§19); Handled, the record
+ * of who declined, unsubscribed or was closed, and why.
  */
-
-type TabKey = "needs_action" | "scheduled" | "restart" | "handled";
 
 function replySubject(subject: string): string {
   const s = subject.trim();
@@ -47,96 +39,20 @@ function splitSuggestion(text: string | null, fallbackSubject: string): { subjec
   return rest.length ? { subject: first, body: rest.join("\n\n") } : { subject: replySubject(fallbackSubject), body: first };
 }
 
+/** Replies became Mail's folders (2026-11-04): old links, alerts and bookmarks land there. */
 export function ReplyDeskPage() {
-  const api = useApiClient();
-  const status = useEngagementStatus();
-  const [params, setParams] = useSearchParams();
-  const tab = (params.get("tab") as TabKey) || "needs_action";
-  const selected = params.get("reply");
-  const [team, setTeam] = useState(false);
-
-  const open = useApi<DeskQueueItem[]>((s) => api.deskQueue("needs_action", team, s), [team]);
-  const handled = useApi<DeskQueueItem[]>(
-    (s) => (tab === "handled" ? api.deskQueue("handled", team, s) : Promise.resolve([])), [tab, team],
-  );
-  const scheduled = useApi<DeskScheduledItem[]>((s) => api.deskScheduled(team, s), [team]);
-  const restart = useApi<RestartSuggestion[]>((s) => api.restartSuggestions(s), []);
-
-  function go(next: Partial<{ tab: TabKey; reply: string | null }>) {
-    const p = new URLSearchParams(params);
-    if (next.tab) p.set("tab", next.tab);
-    if (next.reply === null) p.delete("reply");
-    else if (next.reply) p.set("reply", next.reply);
-    setParams(p, { replace: true });
-  }
-
-  const tabs = [
-    { value: "needs_action", label: "Needs action", count: open.data?.length },
-    { value: "scheduled", label: "Scheduled", count: scheduled.data?.length },
-    { value: "restart", label: "Write again", count: restart.data?.length },
-    { value: "handled", label: "Handled" },
-  ];
-
-  return (
-    <div className={styles.page}>
-      <PageHeader
-        title="Replies"
-        description="Answers to your campaigns, read and sorted for you. Nothing is sent until you press Send."
-        actions={
-          <>
-            {status?.can_manage && (
-              <>
-                <Button variant="secondary" size="sm" iconLeft={<Icons.UsersIcon />}
-                  aria-pressed={team} onClick={() => setTeam((t) => !t)}>
-                  {team ? "Show mine" : "Show team"}
-                </Button>
-                <ButtonLink to="/settings/replies" size="sm" iconLeft={<Icons.SettingsIcon />}>
-                  Reply settings
-                </ButtonLink>
-              </>
-            )}
-          </>
-        }
-      />
-
-      <ResponseTimes team={team} />
-
-      <Tabs items={tabs} value={tab} onChange={(v) => go({ tab: v as TabKey, reply: null })} idPrefix="desk" />
-
-      <TabPanel id="desk-panel-needs_action" active={tab === "needs_action"}>
-        <Queue
-          state={open} selected={selected} onSelect={(id) => go({ reply: id })}
-          onBack={() => go({ reply: null })}
-          onDone={() => { open.refetch(); scheduled.refetch(); go({ reply: null }); }}
-          canAssign={Boolean(status?.can_manage)}
-          emptyTitle="Nothing needs you right now"
-          emptyText="When someone replies with interest, a question or a referral, or a reply needs your decision, it waits here."
-        />
-      </TabPanel>
-
-      <TabPanel id="desk-panel-scheduled" active={tab === "scheduled"}>
-        <Scheduled state={scheduled} onChanged={scheduled.refetch} />
-      </TabPanel>
-
-      <TabPanel id="desk-panel-restart" active={tab === "restart"}>
-        <WriteAgain state={restart} onChanged={restart.refetch} />
-      </TabPanel>
-
-      <TabPanel id="desk-panel-handled" active={tab === "handled"}>
-        <Queue
-          state={handled} selected={selected} onSelect={(id) => go({ reply: id })}
-          onBack={() => go({ reply: null })} onDone={handled.refetch} canAssign={false}
-          emptyTitle="Nothing handled yet"
-          emptyText="Replies you have closed, and people who declined or unsubscribed, are kept here as the record of why."
-        />
-      </TabPanel>
-    </div>
-  );
+  const [params] = useSearchParams();
+  const folder = ({ scheduled: "scheduled", restart: "write_again", handled: "handled" } as
+    Record<string, string>)[params.get("tab") ?? ""] ?? "needs_reply";
+  const next = new URLSearchParams({ folder });
+  const reply = params.get("reply");
+  if (reply) next.set("reply", reply);
+  return <Navigate to={`/engagement/mail?${next.toString()}`} replace />;
 }
 
 /* ---- the queue and one reply --------------------------------------------------------------- */
 
-function Queue({
+export function Queue({
   state, selected, onSelect, onBack, onDone, canAssign, emptyTitle, emptyText,
 }: {
   state: AsyncState<DeskQueueItem[]>;
@@ -177,6 +93,7 @@ function Queue({
                 className={styles.deskItem}
                 aria-current={r.id === current ? "true" : undefined}
                 onClick={() => onSelect(r.id)}
+                onKeyDown={(e) => stepThrough(e, state.data ?? [], r.id, onSelect)}
               >
                 <span className={styles.deskItemHead}>
                   <span className={styles.personName}>{r.contact_name || r.contact_email}</span>
@@ -205,11 +122,28 @@ function Queue({
   );
 }
 
+/** Up and Down move to the previous or next item and open it, as in Outlook. */
+export function stepThrough<T extends { id: string }>(
+  e: KeyboardEvent<HTMLElement>, items: T[], id: string, open: (id: string) => void,
+) {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  const at = items.findIndex((x) => x.id === id);
+  const next = items[at + (e.key === "ArrowDown" ? 1 : -1)];
+  if (!next) return;
+  e.preventDefault();
+  open(next.id);
+  const list = e.currentTarget.closest("ul");
+  window.requestAnimationFrame(() => {
+    const buttons = list?.querySelectorAll<HTMLButtonElement>("li > button");
+    buttons?.[at + (e.key === "ArrowDown" ? 1 : -1)]?.focus();
+  });
+}
+
 function decisionLabel(d: DeskDecision): string {
   return { reengage: "Coming back later", block: "Blocked", close: "Closed", meeting: "Meeting booked" }[d];
 }
 
-function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () => void; canAssign: boolean }) {
+export function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () => void; canAssign: boolean }) {
   const api = useApiClient();
   const toast = useToast();
   const item = useApi<DeskItemDetail>((s) => api.deskItem(id, s), [id]);
@@ -235,6 +169,7 @@ function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () => void
 
   const conversation = useMemo(() => (d?.conversation ?? []).map((m) => ({
     id: m.id, direction: m.direction, subject: m.subject, body: m.body, at: m.at,
+    quoted: m.quoted,
     category: m.id === d?.message_id ? ((d?.corrected_category ?? d?.category) as ReplyCategory) : null,
   })), [d]);
 
@@ -492,7 +427,7 @@ function toLocalInput(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function Scheduled({ state, onChanged }: {
+export function Scheduled({ state, onChanged }: {
   state: AsyncState<DeskScheduledItem[]>;
   onChanged: () => void;
 }) {

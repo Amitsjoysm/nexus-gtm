@@ -61,6 +61,8 @@ class InboxMessageOut(BaseModel):
     to_addrs: list[str]
     subject: str
     body: str
+    #: The history an inbound reply quoted under itself, folded away on screen (2026-11-04).
+    quoted: str = ""
     at: datetime | None
     category: str | None
 
@@ -77,7 +79,8 @@ class InboxThreadDetailOut(BaseModel):
 @router.get("", response_model=InboxListOut)
 async def list_threads(
     team: bool = False, mailbox_id: str | None = None, campaign_id: str | None = None,
-    replied: bool = False, unread: bool = False, before: datetime | None = None,
+    replied: bool = False, unread: bool = False, unanswered: bool = False,
+    before: datetime | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.run_engagement)),
@@ -88,7 +91,8 @@ async def list_threads(
     whole_team = team and _is_manager(principal)
     mailboxes = await visible_mailboxes(ts, user_id=principal.user_id, team=whole_team)
     rows = await threads(ts, mailboxes=mailboxes, mailbox_id=mailbox_id, campaign_id=campaign_id,
-                         replied=replied, unread=unread, before=before, limit=limit)
+                         replied=replied, unread=unread, unanswered=unanswered,
+                         before=before, limit=limit)
     where = [] if whole_team else [EngagementCampaign.owner_user_id == principal.user_id]
     campaigns = sorted(await ts.list(EngagementCampaign, *where), key=lambda c: c.name or "")
     return InboxListOut(
@@ -115,8 +119,8 @@ async def read_thread(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
     link = ""
     if view.reply_id:
-        link = (f"/engagement/replies?reply={view.reply_id}" if view.reply_open
-                else f"/engagement/replies?tab=handled&reply={view.reply_id}")
+        link = (f"/engagement/mail?folder=needs_reply&reply={view.reply_id}" if view.reply_open
+                else f"/engagement/mail?folder=handled&reply={view.reply_id}")
     return InboxThreadDetailOut(
         thread=InboxThreadOut(**view.row.as_dict()),
         messages=[InboxMessageOut(**m) for m in view.messages],

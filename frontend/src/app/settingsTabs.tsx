@@ -56,7 +56,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
   },
   {
     to: "/settings/replies", label: "Replies", icon: <MessageIcon />, group: "team",
-    capability: "module.campaigns", engine: "on", page: "/engagement/replies",
+    capability: "module.campaigns", engine: "on", page: "/engagement/mail",
     title: "Reply settings",
   },
   {

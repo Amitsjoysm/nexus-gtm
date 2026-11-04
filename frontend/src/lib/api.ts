@@ -1816,7 +1816,8 @@ export class ApiClient {
       query: {
         team: filters.team || undefined, mailbox_id: filters.mailbox_id,
         campaign_id: filters.campaign_id, replied: filters.replied || undefined,
-        unread: filters.unread || undefined, limit: MAIL_PAGE,
+        unread: filters.unread || undefined, unanswered: filters.unanswered || undefined,
+        limit: MAIL_PAGE,
       },
       signal,
     });

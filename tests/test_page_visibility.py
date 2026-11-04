@@ -167,8 +167,9 @@ def test_every_route_of_a_hideable_page_redirects_when_hidden():
                 continue  # an old address forwarding to a Settings tab renders nothing itself
             assert f'<RequirePage page="{page.path}"' in element, f"{path} ignores a hidden page"
     # A Settings tab that moved from elsewhere keeps its page's switch (Notifications: Alerts).
+    # Replies is Mail's since 2026-11-04, so its settings follow Mail's switch.
     for tab, page in (("/settings/notifications", "/alerts"), ("/settings/replies",
-                                                              "/engagement/replies")):
+                                                              "/engagement/mail")):
         element = next(e for p, e in routes if p == tab)
         assert f'<RequirePage page="{page}"' in element, f"{tab} ignores a hidden {page}"
     guard = (SRC / "app" / "RequirePage.tsx").read_text(encoding="utf-8")

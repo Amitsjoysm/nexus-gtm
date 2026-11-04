@@ -29,8 +29,12 @@ def _nav_block(route: str) -> str:
 def test_the_engagement_screens_are_the_only_campaign_screens():
     """Since the cutover (spec §13) the old Campaigns and Cadences are gone. Their addresses forward,
     because bookmarks and old links still arrive at them."""
-    for route in ("/engagement/campaigns", "/engagement/replies", "/engagement/templates"):
+    for route in ("/engagement/campaigns", "/engagement/mail", "/engagement/templates"):
         assert 'engine: "on"' in _nav_block(route), f"{route} must leave when the engine is off"
+    # Replies became Mail's folders (2026-11-04): it left the menu, and its address forwards.
+    assert 'to: "/engagement/replies"' not in _read(NAV)
+    assert '<Navigate to={`/engagement/mail?${next.toString()}`} replace />' in _read(
+        PAGES / "ReplyDeskPage.tsx")
     nav = _read(NAV)
     assert 'to: "/campaigns"' not in nav and 'to: "/cadences"' not in nav
     app = _read(APP)
@@ -181,8 +185,8 @@ def test_a_referral_reply_offers_the_intro_and_nothing_else_does():
 
 
 def test_writing_again_is_its_own_tab_and_sends_only_on_send():
-    desk = _read(PAGES / "ReplyDeskPage.tsx")
-    assert '{ value: "restart", label: "Write again"' in desk
+    mail = _read(PAGES / "MailPage.tsx")
+    assert '{ key: "write_again", label: "Write again"' in mail
     again = _read(PAGES / "WriteAgain.tsx")
     assert again.count("api.restartSend(") == 1
     assert "onClick={send}" in again
@@ -230,10 +234,10 @@ def test_finished_old_campaigns_are_listed_and_never_opened():
 def test_the_reply_desk_actions_are_one_set_of_buttons():
     """Reported 2026-09-30: the desk mixed a hand-styled link, secondary buttons and ghost buttons in
     one row. Every action is now a Button or a ButtonLink; ghost is only a dialog's Cancel."""
-    for name in ("ReplyDeskPage.tsx", "ReferralPanel.tsx"):
+    for name in ("ReplyDeskPage.tsx", "ReferralPanel.tsx", "MailPage.tsx"):
         src = _read(PAGES / name)
         assert "styles.buttonLink" not in src, name
         for at in [i for i in range(len(src)) if src.startswith('variant="ghost"', i)]:
             label = src[at:src.index("</Button>", at)]
             assert label.rstrip().endswith("Cancel"), f"{name}: ghost button that is not Cancel"
-    assert "<ButtonLink" in _read(PAGES / "ReplyDeskPage.tsx")
+    assert "<ButtonLink" in _read(PAGES / "MailPage.tsx")
