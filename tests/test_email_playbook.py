@@ -211,7 +211,7 @@ class _Capturing(LLMProvider):
         return LLMResponse(text=f"Subject: series b\n\n{ACME}", tokens=10)
 
 
-async def _world():
+async def _world(channels=("email",) * 5):
     from nexus.models.account import Account, Contact
     from nexus.models.engagement import (
         EngagementCampaign,
@@ -246,8 +246,8 @@ async def _world():
         ts.add(campaign)
         await ts.flush()
         steps = []
-        for index in range(5):
-            step = EngagementStep(campaign_id=campaign.id, step_index=index, channel="email")
+        for index, channel in enumerate(channels):
+            step = EngagementStep(campaign_id=campaign.id, step_index=index, channel=channel)
             ts.add(step)
             steps.append(step)
         enrollment = EngagementEnrollment(campaign_id=campaign.id, contact_id=contact.id,
@@ -316,6 +316,20 @@ async def test_each_follow_up_prompt_names_its_place_and_what_it_adds(capturing)
         assert f"This is email {number} of 5." in prompt and instruction in prompt, number
         assert "Write a follow-up email" in prompt
         assert EMAIL_CTA_RULE in prompt and SUBJECT_RULE not in prompt
+
+
+async def test_call_steps_are_not_counted_as_emails(capturing):
+    """A call may be any step (W3): "email N of M" counts emails, or the third email of three, sat
+    behind two calls, was told it was the fifth of five."""
+    from nexus.engagement.drafting.context import FOLLOWUP_BY_TOUCH, LAST_TOUCH
+
+    tid, *ids = await _world(channels=("call", "email", "email", "call", "email"))
+    await _draft(tid, ids, kind="followup", step_number=3)
+    assert "This is email 2 of 3." in capturing.prompts[-1]
+    assert FOLLOWUP_BY_TOUCH[2] in capturing.prompts[-1]
+    await _draft(tid, ids, kind="followup", step_number=5)
+    assert "This is email 3 of 3." in capturing.prompts[-1]
+    assert LAST_TOUCH in capturing.prompts[-1]
 
 
 async def test_a_reply_prompt_offers_times_instead_of_the_cold_ask(capturing):

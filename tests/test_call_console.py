@@ -111,11 +111,35 @@ async def test_and_never_a_guess_when_neither_says(client):
 
 async def test_the_brief_maps_our_value_props_to_their_likely_pains(client):
     token, task_id = await _call(client, "vfit", country="United States")
+    from nexus.personalization.brief import role_profile
+
     brief = (await client.get(f"/api/calling/tasks/{task_id}/brief", headers=auth(token))).json()
-    assert brief["likely_pain"] == OPS
-    assert brief["value_fit"][0]["name"] == "Clean shipment data"
-    assert brief["value_fit"][0]["matched"] == ["Bad data quality in the TMS"]
-    assert brief["value_fit"][0]["description"] == "Dedupes carrier records."
+    # A VP of Operations runs operations (W7's whole-word roles: it used to read as RevOps), and
+    # the pains that are theirs are matched on their function's own words, not only the prose angle.
+    assert brief["likely_pain"] == role_profile("VP Operations", None)["angle"]
+    assert brief["value_fit"][0]["name"] == "Tooling fit"
+    assert brief["value_fit"][0]["matched"] == ["Process efficiency across tools"]
+    assert brief["value_fit"][0]["description"] == "Connectors for the TMS you run."
+
+
+async def test_the_brief_pitches_the_service_that_found_the_account(client):
+    """W8 meets 6.3: the value props are the account's service's, not the main service's."""
+    from nexus.core.security import decode_access_token
+    from nexus.models.account import Account
+    from nexus.models.relevance import IcpService
+
+    token, task_id = await _call(client, "vsvc", country="United States")
+    tid = decode_access_token(token)["tid"]
+    async with tenant_session(tid) as ts:
+        service = IcpService(tenant_id=tid, name="Freight audit", icp={}, product_context="",
+                             value_props=[{"name": "Freight audit", "description": "Audits bills.",
+                                           "pains_solved": ["Bad data quality in the TMS"]}])
+        ts.add(service)
+        await ts.flush()
+        account = await ts.first(Account, Account.name == "Globex")
+        account.service_id = service.id
+    brief = (await client.get(f"/api/calling/tasks/{task_id}/brief", headers=auth(token))).json()
+    assert [v["name"] for v in brief["value_fit"]] == ["Freight audit"]
 
 
 async def test_a_workspace_with_no_value_props_gets_an_empty_list_not_an_error(client):

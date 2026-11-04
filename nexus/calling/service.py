@@ -186,13 +186,7 @@ class CallQueueService:
         # found the account (the runtime resolves that itself).
         from nexus.relevance.services import campaign_service
 
-        campaign_id = None
-        if getattr(task, "engagement_enrollment_id", None):
-            from nexus.models.engagement import EngagementEnrollment
-
-            enrollment = await ts.get(EngagementEnrollment, task.engagement_enrollment_id)
-            campaign_id = enrollment.campaign_id if enrollment is not None else None
-        async with campaign_service(ts, campaign_id):
+        async with campaign_service(ts, await _campaign_id_for(ts, task)):
             # The caller the task belongs to, so the script introduces a real person rather than
             # "<your name>" (`call_script._caller`).
             result = await get_agent_runtime().run(
@@ -321,10 +315,14 @@ class CallQueueService:
         )
 
         from nexus.calling.value_fit import value_fit
+        from nexus.personalization.brief import role_words
 
-        props = await _value_props_for(ts, task)
+        props = await _value_props_for(ts, task, account)
+        # The function's own problem words as well as the angle: the angle is prose for a model
+        # ("uptime, safety and running the operation ..."), and matched no pain on its own.
         fit = value_fit(props, person_context=[
             contact.title if contact else None, person.role_angle if person else None,
+            role_words(contact.title, contact.seniority) if contact else None,
             getattr(account, "industry", None), *[s["title"] for s in signals],
         ])
 
@@ -568,14 +566,25 @@ def _account_source_label(account) -> str:
     }.get(src, src.replace("_", " ").title() if src else "Web enrichment")
 
 
-async def _value_props_for(ts: TenantSession, task: CallTask) -> list:
-    """The value props a call pitches: the workspace's. The one place to read them, so a campaign
-    that pitches one service (W8) changes this function and nothing in the brief. Never raises:
-    the brief must open even when the profile cannot be read."""
-    from nexus.relevance.engine import get_profile
+async def _campaign_id_for(ts: TenantSession, task: CallTask) -> str | None:
+    """The engagement campaign a call task belongs to, or None for a call outside one."""
+    if not getattr(task, "engagement_enrollment_id", None):
+        return None
+    from nexus.models.engagement import EngagementEnrollment
+
+    enrollment = await ts.get(EngagementEnrollment, task.engagement_enrollment_id)
+    return enrollment.campaign_id if enrollment is not None else None
+
+
+async def _value_props_for(ts: TenantSession, task: CallTask, account=None) -> list:
+    """The value props a call pitches: those of the service its campaign pitches (W8), else of the
+    service that found the account, else the workspace's main service. The one place the brief
+    reads them. Never raises: the brief must open even when the profile cannot be read."""
+    from nexus.relevance.services import campaign_service, resolve_profile
 
     try:
-        profile = await get_profile(ts)
+        async with campaign_service(ts, await _campaign_id_for(ts, task)):
+            profile = await resolve_profile(ts, account=account)
     except Exception:  # noqa: BLE001 - a missing profile costs one panel, never the call
         return []
     return list(getattr(profile, "value_props", None) or [])

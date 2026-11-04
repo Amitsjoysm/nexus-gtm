@@ -263,9 +263,14 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
     if kind == "followup" and step is not None:
         from nexus.models.engagement import EngagementStep
 
-        touch = int(getattr(step, "step_index", 0) or 0) + 1
-        total = len(await _rows(ts, ts.select(
-            EngagementStep, EngagementStep.campaign_id == step.campaign_id)))
+        # Emails only: a call may be any step now (W3), and "email 3 of 4" counted a call before it
+        # as a touch, so the follow-up was told to close the loop one email early.
+        emails = [s for s in await _rows(ts, ts.select(
+            EngagementStep, EngagementStep.campaign_id == step.campaign_id))
+            if (getattr(s, "channel", None) or "email") == "email"]
+        here = int(getattr(step, "step_index", 0) or 0)
+        touch = max(1, sum(1 for s in emails if int(s.step_index or 0) <= here))
+        total = max(len(emails), touch)
         touch_line = f" This is email {touch} of {total}. " + followup_instruction(touch, total)
     instructions = {
         "first": "This is the FIRST email to this person." + (
