@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, or_, select
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictBool
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.api.schemas import (
@@ -342,6 +342,164 @@ async def company_domain(
                             source="search")
 
 
+# ---- bulk delete (SDR round 2, 5.5) --------------------------------------------------------------
+
+#: Most accounts one request may delete. A selection on the Accounts page is at most a page or two.
+BULK_DELETE_MAX = 500
+
+
+class BulkIdsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    ids: list[str] = Field(min_length=1, max_length=BULK_DELETE_MAX)
+
+
+class AccountBulkDeleteIn(BulkIdsIn):
+    #: "Don't suggest these again here": Populate and the daily sweep skip their domains.
+    suppress: StrictBool = False
+    #: "Report wrong company data": flag each one's shared company row for review.
+    report_wrong: StrictBool = False
+    reason: str = Field(default="", max_length=500)
+
+
+class BulkDeleteBlockedOut(BaseModel):
+    id: str
+    name: str
+    campaigns: list[str]
+
+
+class AccountBulkDeletePreviewOut(BaseModel):
+    accounts: int
+    #: Their contacts, deleted with them.
+    contacts: int
+    #: Accounts someone in a running campaign is at; the delete is refused while any is chosen.
+    in_running_campaigns: list[BulkDeleteBlockedOut] = []
+    #: Accounts with a website, whose shared company record stays for other workspaces.
+    with_shared_record: int
+
+
+class AccountBulkDeleteOut(BaseModel):
+    deleted: int
+    contacts_deleted: int
+    suppressed: int = 0
+    reported: int = 0
+    #: Shared company records kept (linked first) for the accounts deleted.
+    shared_records_kept: int = 0
+
+
+async def _bulk_targets(ts: TenantSession, ids: list[str]) -> list:
+    """(id, name, domain, company_id) for the ids that are this workspace's accounts. Columns, not
+    ORM rows: the purge deletes with Core statements, and a loaded row would be a stale object."""
+    rows = await ts.session.execute(
+        select(Account.id, Account.name, Account.domain, Account.company_id)
+        .where(Account.tenant_id == ts.tenant_id, Account.id.in_(list(dict.fromkeys(ids)))))
+    return list(rows.all())
+
+
+async def _blocked(ts: TenantSession, targets) -> list[BulkDeleteBlockedOut]:
+    from nexus.accounts.purge import in_running_campaigns
+
+    running = await in_running_campaigns(ts, [t.id for t in targets])
+    return [BulkDeleteBlockedOut(id=t.id, name=t.name, campaigns=running[t.id])
+            for t in targets if t.id in running]
+
+
+@router.post("/bulk-delete/preview", response_model=AccountBulkDeletePreviewOut)
+async def preview_bulk_delete(
+    body: BulkIdsIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.delete_records)),
+) -> AccountBulkDeletePreviewOut:
+    """What deleting these accounts would remove, for the confirmation. Changes nothing."""
+    from nexus.companies.resolution import normalise_domain
+
+    targets = await _bulk_targets(ts, body.ids)
+    contacts = 0
+    if targets:
+        contacts = await ts.session.scalar(select(func.count()).select_from(Contact).where(
+            Contact.tenant_id == ts.tenant_id,
+            Contact.account_id.in_([t.id for t in targets]))) or 0
+    return AccountBulkDeletePreviewOut(
+        accounts=len(targets), contacts=int(contacts),
+        in_running_campaigns=await _blocked(ts, targets),
+        with_shared_record=sum(1 for t in targets if normalise_domain(t.domain)),
+    )
+
+
+@router.post("/bulk-delete", response_model=AccountBulkDeleteOut)
+async def bulk_delete_accounts(
+    body: AccountBulkDeleteIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.delete_records)),
+) -> AccountBulkDeleteOut:
+    """Delete accounts for good, with their contacts (owner decision 2026-10-29). Manager+.
+
+    Unlike ``DELETE /{account_id}`` (an archive), this removes the rows and what belongs to them
+    (`accounts.purge`): a person chose the selection and confirmed the count. What it keeps:
+
+    * **The shared company record.** Each account is linked to it first and its firmographics
+      folded in (`companies.backfill.link_accounts`), so other workspaces' Populates, and this
+      one's later campaigns, still have the company.
+    * **Records that are somebody else's**: an AI run and its charge, a do-not-contact block (it
+      holds the address), the mailbox's own threads and replies. They lose the pointer, not the row.
+
+    **Refused (409) while any chosen account has someone in a running campaign**, naming them, and
+    nothing is deleted: a campaign about to email a deleted person would email nobody. The options
+    are workspace-only: "don't suggest these again" suppresses the domains for this workspace's
+    discovery, and "report wrong company data" flags the shared row for review and never
+    quarantines a row every workspace reads.
+    """
+    from nexus.accounts.purge import PurgeIncomplete, purge_accounts
+    from nexus.accounts.suppression import suppress
+    from nexus.companies.backfill import link_accounts
+    from nexus.companies.reports import report_wrong
+
+    if body.report_wrong and not body.reason.strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Say what is wrong with the company data, so it can be checked.")
+    targets = await _bulk_targets(ts, body.ids)
+    if not targets:
+        return AccountBulkDeleteOut(deleted=0, contacts_deleted=0)
+    blocked = await _blocked(ts, targets)
+    if blocked:
+        names = ", ".join(b.name for b in blocked[:5]) + (
+            f" and {len(blocked) - 5} more" if len(blocked) > 5 else "")
+        campaigns = sorted({c for b in blocked for c in b.campaigns})
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={
+            "error": "in_running_campaign",
+            "message": (f"{names} {'is' if len(blocked) == 1 else 'are'} in a running campaign "
+                        f"({', '.join(campaigns[:3])}). Nothing was deleted. Remove them from the "
+                        "campaign, or leave them out of this delete."),
+            "accounts": [b.model_dump() for b in blocked],
+        })
+
+    ids = [t.id for t in targets]
+    # Shared rows first, on their own platform session, before this request's transaction writes
+    # anything (the order the shared stores need; SQLite would otherwise lock).
+    linked = await link_accounts(ids)
+    reported = 0
+    if body.report_wrong:
+        companies = set(linked.values()) | {t.company_id for t in targets if t.company_id}
+        reported = await report_wrong(companies, tenant_id=ts.tenant_id,
+                                      user_id=principal.user_id, reason=body.reason)
+
+    suppressed = 0
+    if body.suppress:
+        suppressed = await suppress(ts, [t.domain for t in targets], user_id=principal.user_id)
+    try:
+        counts = await purge_accounts(ts, ids)
+    except PurgeIncomplete as exc:
+        logger.error("bulk delete refused: %s", exc)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            "Nothing was deleted: a record still points at these accounts.") from exc
+    await ts.commit()
+    return AccountBulkDeleteOut(
+        deleted=counts.get("accounts", 0), contacts_deleted=counts.get("contacts", 0),
+        suppressed=suppressed, reported=reported,
+        shared_records_kept=len(set(linked) | {t.id for t in targets if t.company_id}),
+    )
+
+
 @router.get("/{account_id}", response_model=AccountOut)
 async def get_account(
     account_id: str,
@@ -505,6 +663,12 @@ async def create_contact(
     account = await ts.get(Account, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    return _contact_out(await _new_contact(ts, account, body))
+
+
+async def _new_contact(ts: TenantSession, account: Account, body: ContactIn) -> Contact:
+    """A contact a person typed, on ``account``: the one write both add-contact paths share, so the
+    profile rule and the provenance cannot differ between them."""
     contact = Contact(
         tenant_id=ts.tenant_id,
         account_id=account.id,
@@ -520,7 +684,33 @@ async def create_contact(
     record_present(contact, "manual", detail="typed by a person in this workspace")
     ts.add(contact)
     await ts.flush()
-    return _contact_out(contact)
+    return contact
+
+
+async def _find_or_create_account(
+    ts: TenantSession, *, name: str, domain: str | None, owner_user_id: str, source: str,
+) -> tuple[Account, bool]:
+    """The account a person named for a contact: the workspace's own when it has the company
+    (`find_existing_account`, domain first), otherwise a new one they own. An archived match comes
+    back into the working list. Returns the account and whether it was created."""
+    from nexus.accounts.dedupe import find_existing_account, normalise_on_write
+
+    account = await find_existing_account(ts, domain=domain, name=name)
+    if account is None:
+        account = Account(
+            tenant_id=ts.tenant_id, name=name, domain=normalise_on_write(domain),
+            source=source, owner_user_id=owner_user_id,
+        )
+        ts.add(account)
+        await ts.flush()
+        # Enqueued, never inline — the same rule `create_account` and `add_from_lookalike`
+        # follow, for the same 48-second reason.
+        await _enqueue_first_ingest(ts.tenant_id, account.id)
+        return account, True
+    if account.is_archived:
+        account.set_archived(False)
+        await ts.flush()
+    return account, False
 
 
 @router.get("/{account_id}/contacts", response_model=list[ContactOut])
@@ -750,8 +940,6 @@ async def add_similar_person(
       writing the row the rep picked from them is not a second purchase. Finding their email is a
       separate, metered act the client offers next.
     """
-    from nexus.accounts.dedupe import find_existing_account, normalise_on_write
-
     full_name = " ".join(body.full_name.split())
     _profile_or_422(body.linkedin_url)  # before anything is created for it
     profile = _profile_key(body.linkedin_url)
@@ -790,21 +978,9 @@ async def add_similar_person(
         # NOT resolved here: it usually means the rep cleared a suggestion they judged wrong, and
         # filling it back unseen would file the account under a domain a person already refused.
         domain = (body.new_account_domain or "").strip() or None
-        account = await find_existing_account(ts, domain=domain, name=name)
-        if account is None:
-            account = Account(
-                tenant_id=ts.tenant_id, name=name, domain=normalise_on_write(domain),
-                source="lookalike", owner_user_id=principal.user_id,
-            )
-            ts.add(account)
-            await ts.flush()
-            account_created = True
-            # Enqueued, never inline — the same rule `create_account` and `add_from_lookalike`
-            # follow, for the same 48-second reason.
-            await _enqueue_first_ingest(ts.tenant_id, account.id)
-        elif account.is_archived:
-            account.set_archived(False)
-            await ts.flush()
+        account, account_created = await _find_or_create_account(
+            ts, name=name, domain=domain, owner_user_id=principal.user_id, source="lookalike",
+        )
 
     if not profile:
         wanted = full_name.lower()
@@ -820,6 +996,102 @@ async def add_similar_person(
     )
     ts.add(contact)
     await ts.flush()
+    return SimilarPersonAddedOut(
+        contact=_contact_out(contact), account_id=account.id, account_name=account.name,
+        account_domain=account.domain, created=True, account_created=account_created,
+    )
+
+
+class NewContactIn(BaseModel):
+    """One contact typed on the Contacts page, with the account it belongs to: one the workspace
+    has (``account_id``), or a company named by its website."""
+
+    model_config = {"extra": "forbid"}
+
+    contact: ContactIn
+    account_id: str | None = None
+    new_account_domain: str | None = None
+    new_account_name: str | None = None
+
+
+@router.post("/contacts", response_model=SimilarPersonAddedOut,
+             status_code=status.HTTP_201_CREATED)
+async def add_contact(
+    body: NewContactIn,
+    response: Response,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> SimilarPersonAddedOut:
+    """Add one person from the Contacts page. 201 if added, 200 if they were already here.
+
+    The contact is written by the same code as ``POST /{account_id}/contacts`` (the profile must be
+    the person's own, the provenance says a person typed it); the account is found or created by
+    the same code as the similar-person add, domain first. Two things are this path's own:
+
+    * **A new company is named by its website**, normalised, because the website is what identifies
+      a company here; a name alone would make a second Acme. The name defaults to the domain.
+    * **The person is not added twice.** The same email or LinkedIn profile anywhere in the
+      workspace returns that contact (a deleted one restored) rather than a second row, which
+      would split their history and email them twice.
+
+    Free: nothing is bought. Finding or verifying their email is the separate, charged act it was.
+    """
+    from nexus.companies.resolution import normalise_domain
+
+    full_name = " ".join(body.contact.full_name.split())
+    if not full_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Type the person's name.")
+    email = (body.contact.email or "").strip().lower() or None
+    if email and (email.count("@") != 1 or "." not in email.split("@")[1]):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "That is not an email address, like sam@acme.com.")
+    _profile_or_422(body.contact.linkedin_url)  # before anything is created for it
+    fields = body.contact.model_copy(update={
+        "full_name": full_name, "email": email,
+        "title": (body.contact.title or "").strip() or None,
+        "phone": (body.contact.phone or "").strip() or None,
+    })
+
+    existing = None
+    if email:
+        existing = await ts.first(Contact, func.lower(Contact.email) == email)
+    profile = _profile_key(body.contact.linkedin_url)
+    if existing is None and profile:
+        existing = await _contact_by_profile(ts, profile)
+    if existing is not None:
+        if existing.deleted_at is not None:
+            existing.deleted_at = None
+            await ts.flush()
+        held = await ts.get(Account, existing.account_id)
+        response.status_code = status.HTTP_200_OK
+        return SimilarPersonAddedOut(
+            contact=_contact_out(existing), account_id=existing.account_id,
+            account_name=held.name if held else "", account_domain=held.domain if held else None,
+            created=False, account_created=False,
+        )
+
+    account_created = False
+    if body.account_id:
+        account = await ts.get(Account, body.account_id)
+        if account is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Account not found")
+    else:
+        domain = normalise_domain(body.new_account_domain or "")
+        if not domain:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Choose an account, or type the company's website, like acme.com.",
+            )
+        name = " ".join((body.new_account_name or "").split()) or domain
+        account, account_created = await _find_or_create_account(
+            ts, name=name, domain=domain, owner_user_id=principal.user_id, source="manual",
+        )
+        if account_created:
+            from nexus.integrations.provenance import record_present
+
+            record_present(account, "manual", detail="typed by a person in this workspace")
+
+    contact = await _new_contact(ts, account, fields)
     return SimilarPersonAddedOut(
         contact=_contact_out(contact), account_id=account.id, account_name=account.name,
         account_domain=account.domain, created=True, account_created=account_created,

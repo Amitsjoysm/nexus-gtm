@@ -1,0 +1,14 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: var(--text-base);
+  line-height: var(--leading);
+  color: var(--text);
+}
+.body p {
+  margin: 0;
+}
+.note {
+  color: var(--text-muted);
+}

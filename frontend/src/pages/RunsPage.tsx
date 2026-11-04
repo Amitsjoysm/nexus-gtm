@@ -8,6 +8,7 @@ import {
   Card,
   EmptyState,
   Field,
+  IconButton,
   Icons,
   Input,
   Modal,
@@ -16,6 +17,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { DataState } from "@/components/DataState";
+import { DeleteRunDialog } from "@/components/runs/DeleteRunDialog";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -25,6 +27,7 @@ import {
   RUN_STATUS_LABEL,
   RUN_STATUS_TONE,
   goalLabel,
+  isRunActive,
 } from "@/lib/runStatus";
 import type { Account, Run, RunGoal } from "@/lib/types";
 import styles from "./RunsPage.module.css";
@@ -47,6 +50,7 @@ export function RunsPage() {
   const [accountId, setAccountId] = useState("");
   const [sequence, setSequence] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState<Run | null>(null);
 
   const accountOptions = useMemo(
     () => (accounts.data ?? []).map((a) => ({ value: a.id, label: a.name })),
@@ -141,11 +145,20 @@ export function RunsPage() {
         {(rows) => (
           <div className={styles.list}>
             {rows.map((run) => (
-              <RunRow key={run.id} run={run} />
+              <RunRow key={run.id} run={run} onDelete={() => setDeleting(run)} />
             ))}
           </div>
         )}
       </DataState>
+
+      <DeleteRunDialog
+        runId={deleting?.id ?? null}
+        label={deleting ? goalLabel(deleting.goal) : undefined}
+        active={deleting ? isRunActive(deleting.status) : false}
+        onClose={() => setDeleting(null)}
+        // Off the list in place: a refetch would flash the skeleton for one row going.
+        onDeleted={(id) => runs.setData((prev) => (prev ?? []).filter((r) => r.id !== id))}
+      />
 
       <Modal
         open={open}
@@ -207,7 +220,7 @@ export function RunsPage() {
   );
 }
 
-function RunRow({ run }: { run: Run }) {
+function RunRow({ run, onDelete }: { run: Run; onDelete: () => void }) {
   // The list endpoint does not carry each run's full step list — one "3/5" label is not worth
   // shipping every step's output blob — so it sends the counts instead. Reading `steps.length`
   // here made every finished run render "0/0 steps". Falls back to the array for the detail view
@@ -234,6 +247,13 @@ function RunRow({ run }: { run: Run }) {
           <span>{timeAgo(run.created_at)}</span>
         </div>
       </div>
+      <IconButton
+        size="sm"
+        className={styles.rowAction}
+        label={`Delete run: ${goalLabel(run.goal)}, ${timeAgo(run.created_at)}`}
+        icon={<Icons.TrashIcon />}
+        onClick={onDelete}
+      />
       <Icons.ChevronRightIcon className={styles.chevron} aria-hidden="true" />
     </Card>
   );

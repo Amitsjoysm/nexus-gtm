@@ -21,6 +21,7 @@ import {
 import type { Column } from "@/components/ui";
 import { ProviderIcon } from "@/components/ui/providerIcons";
 import { AddSimilarPerson, lookalikeFromAdded } from "@/components/AddSimilarPerson";
+import { AddContactModal } from "@/components/contacts/AddContactModal";
 import { CallConsole } from "@/components/CallConsole";
 import { EmailComposer } from "@/components/EmailComposer";
 import { DncBadge, useDoNotContact } from "@/components/engagement/DncBadge";
@@ -28,7 +29,7 @@ import { AddToListModal } from "@/components/lists/AddToListModal";
 import { SourceNote, sourceLabel } from "@/components/provenance/SourceNote";
 import { useApi } from "@/hooks/useApi";
 import { useSelection } from "@/hooks/useSelection";
-import { useApiClient } from "@/app/AuthContext";
+import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
 import { strengthMeta } from "@/lib/display";
 import { describeReverify } from "@/lib/reverify";
@@ -38,6 +39,7 @@ import type {
   ContactLookalike,
   LookalikeMode,
   SimilarPersonAdded,
+  Role,
   WorkspaceContact,
 } from "@/lib/types";
 import styles from "./ContactsPage.module.css";
@@ -68,6 +70,9 @@ function reachableFromLookalike(p: ContactLookalike): Reachable {
 }
 
 const ALL = "__all__";
+
+/** Bulk delete is manager+ on the server (`delete_records`); a rep is not offered it. */
+const DELETES_IN_BULK: Role[] = ["manager", "admin", "owner"];
 
 const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral" | "info"> = {
   valid: "success",
@@ -115,6 +120,8 @@ export function ContactsPage() {
   const api = useApiClient();
   const navigate = useNavigate();
   const toast = useToast();
+  const { session } = useAuth();
+  const canBulkDelete = !!session && DELETES_IN_BULK.includes(session.role);
   const contacts = useApi<WorkspaceContact[]>((signal) => api.listWorkspaceContacts(undefined, signal), []);
   // Blocked addresses, checked in one request for the loaded rows (spec §9 contact badge).
   const blocked = useDoNotContact((contacts.data ?? []).map((c) => c.email));
@@ -221,6 +228,42 @@ export function ContactsPage() {
   const visibleIds = useMemo(() => visible.map((c) => c.id), [visible]);
   const selection = useSelection(visibleIds);
   const [listOpen, setListOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  /** Soft delete, as one contact's is: hidden, history kept, and the toast offers Undo. */
+  async function deleteSelected() {
+    const ids = selection.ids;
+    setBulkDeleting(true);
+    try {
+      const res = await api.bulkDeleteContacts(ids);
+      setConfirmBulk(false);
+      selection.clear();
+      contacts.refetch();
+      toast.toast({
+        tone: "success",
+        title: `${formatNumber(res.deleted)} contact${res.deleted === 1 ? "" : "s"} deleted`,
+        description: "Hidden from your list. Their history is kept.",
+        durationMs: 10000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await api.bulkRestoreContacts(ids);
+              contacts.refetch();
+            } catch (err) {
+              toast.error("Couldn't restore", err instanceof ApiError ? err.detail : "Try again.");
+            }
+          },
+        },
+      });
+    } catch (err) {
+      toast.error("Couldn't delete", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
 
   async function reverifyAll() {
     setReverifying(true);
@@ -601,6 +644,9 @@ export function ContactsPage() {
         description="Every person across this workspace. Click a row to open their account."
         actions={
           <>
+            <Button iconLeft={<Icons.PlusIcon />} onClick={() => setAddOpen(true)}>
+              Add contact
+            </Button>
             <Button
               variant="secondary"
               iconLeft={<Icons.UploadIcon />}
@@ -625,6 +671,12 @@ export function ContactsPage() {
         entity="contacts"
         onClose={() => setImportOpen(false)}
         onImported={() => void contacts.refetch()}
+      />
+
+      <AddContactModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onAdded={() => contacts.refetch()}
       />
 
       <div className={styles.toolbar}>
@@ -680,9 +732,43 @@ export function ContactsPage() {
             <Button size="sm" variant="secondary" iconLeft={<Icons.ListIcon />} onClick={() => setListOpen(true)}>
               Add to list
             </Button>
+            {canBulkDelete && (
+              <Button
+                size="sm"
+                variant="danger"
+                iconLeft={<Icons.TrashIcon />}
+                disabled={selection.selected.size > 500}
+                title={selection.selected.size > 500 ? "Delete up to 500 at a time" : undefined}
+                onClick={() => setConfirmBulk(true)}
+              >
+                Delete
+              </Button>
+            )}
           </div>
         </div>
       )}
+
+      <Modal
+        open={confirmBulk}
+        onClose={() => setConfirmBulk(false)}
+        size="sm"
+        title={`Delete ${formatNumber(selection.selected.size)} contact${selection.selected.size === 1 ? "" : "s"}?`}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmBulk(false)} disabled={bulkDeleting}>
+              Cancel
+            </Button>
+            <Button variant="danger" loading={bulkDeleting} onClick={() => void deleteSelected()}>
+              Delete {formatNumber(selection.selected.size)}
+            </Button>
+          </>
+        }
+      >
+        <p className={styles.confirmText}>
+          They leave your list, and what was sent to them or logged against them is kept. You can
+          undo this right after.
+        </p>
+      </Modal>
 
       <AddToListModal
         open={listOpen}

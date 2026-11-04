@@ -165,6 +165,50 @@ export interface SimilarPersonAdded {
   account_created: boolean;
 }
 
+/** `POST /accounts/contacts`: one person typed on the Contacts page. The account is one the
+ *  workspace has, or a company named by its website (found or created, domain first). */
+export interface NewContactInput {
+  contact: {
+    full_name: string;
+    email?: string | null;
+    title?: string | null;
+    phone?: string | null;
+    linkedin_url?: string | null;
+  };
+  account_id?: string;
+  new_account_domain?: string;
+  new_account_name?: string;
+}
+
+/** An account a running campaign is still working, which bulk delete refuses. */
+export interface BulkDeleteBlocked {
+  id: string;
+  name: string;
+  campaigns: string[];
+}
+
+export interface AccountBulkDeletePreview {
+  accounts: number;
+  contacts: number;
+  in_running_campaigns: BulkDeleteBlocked[];
+  with_shared_record: number;
+}
+
+export interface AccountBulkDeleteInput {
+  ids: string[];
+  suppress?: boolean;
+  report_wrong?: boolean;
+  reason?: string;
+}
+
+export interface AccountBulkDeleteResult {
+  deleted: number;
+  contacts_deleted: number;
+  suppressed: number;
+  reported: number;
+  shared_records_kept: number;
+}
+
 /** Which question "find similar people" is answering. */
 export type LookalikeMode = "existing" | "new";
 
@@ -2193,6 +2237,39 @@ export interface RecordImportResult {
   skipped: number;
   total_rows: number;
   errors: string[];
+  /** The rows this import wrote (at most 1,000), for the actions offered after it. A CRM pull
+   *  sends none. */
+  account_ids?: string[];
+  contact_ids?: string[];
+}
+
+/** What a required import field needs, the same sentence the sample file's guide line carries. */
+export interface ImportRequiredField {
+  field: string;
+  note: string;
+}
+
+export type ImportAction = "verify_emails" | "fill_firmographics";
+
+/** `POST /imports/actions/quote`: the price of an after-import action, before it runs. */
+export interface ImportActionQuote {
+  action: ImportAction;
+  /** Rows it would act on; the rest of the selection needs nothing. */
+  count: number;
+  /** Of those, the ones charged (Prospector-delivered addresses verify free). */
+  charged: number;
+  credits_per_row: number;
+  total_credits: number;
+  balance: number | null;
+  allowed: boolean;
+  reason: string;
+}
+
+export interface ImportActionResult {
+  action: ImportAction;
+  mode: "inline" | "queued";
+  count: number;
+  charged: number;
 }
 
 /** `GET /imports/fields` — the mapping picker builds itself from the server rather than from a
@@ -2216,6 +2293,8 @@ export interface ImportFields {
   max_rows: number;
   default_limit: number;
   max_upload_bytes: number;
+  account_required?: ImportRequiredField[];
+  contact_required?: ImportRequiredField[];
   /** The target that means "drop this column". Sent by the server so the sentinel the picker
    *  offers and the one the server honours cannot drift apart. */
   skip_target?: string;

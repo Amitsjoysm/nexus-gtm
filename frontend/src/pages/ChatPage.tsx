@@ -11,6 +11,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { ChatComposer, ChatThread, useChatSession } from "@/components/chat";
+import { DeleteRunDialog } from "@/components/runs/DeleteRunDialog";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient, useAuth } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -261,6 +262,7 @@ function Conversation({
 
   const [draft, setDraft] = useState("");
   const [savingIcp, setSavingIcp] = useState(false);
+  const [deletingRun, setDeletingRun] = useState<string | null>(null);
 
   const icpReady = useMemo(
     () =>
@@ -353,6 +355,7 @@ function Conversation({
         messages={messages}
         onChip={(text) => setDraft(text)}
         onOpenRun={(runId) => navigate(`/runs/${runId}`)}
+        onDeleteRun={setDeletingRun}
       />
 
       <div className={styles.composer}>
@@ -363,6 +366,14 @@ function Conversation({
           busy={sending}
         />
       </div>
+
+      <DeleteRunDialog
+        runId={deletingRun}
+        label="this discovery run"
+        onClose={() => setDeletingRun(null)}
+        // Re-read the conversation: the server marks the run's card deleted.
+        onDeleted={() => reload()}
+      />
     </div>
   );
 }

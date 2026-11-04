@@ -39,6 +39,10 @@ class Permission(str, enum.Enum):
     # manager+: the workspace confidence bar and its range (D23), the team's reply desk, reassigning
     # a reply, lifting a do-not-contact block.
     manage_engagement = "manage_engagement"
+    # manager+: delete accounts and contacts in bulk (SDR round 2, 5.5). An account delete is
+    # permanent, with its contacts, so it stops at the people who manage the book; one contact's
+    # soft delete stays a rep's.
+    delete_records = "delete_records"
 
 
 _MIN_ROLE: dict[Permission, Role] = {
@@ -55,6 +59,7 @@ _MIN_ROLE: dict[Permission, Role] = {
     Permission.assign_accounts: Role.manager,
     Permission.run_engagement: Role.rep,
     Permission.manage_engagement: Role.manager,
+    Permission.delete_records: Role.manager,
 }
 
 

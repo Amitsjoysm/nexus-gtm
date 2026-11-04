@@ -268,6 +268,7 @@ async def store_companies(companies, *, vetted: bool = False) -> dict[str, str]:
 
 def _matching(ts, q: ProspectQuery, taken: set[str]):
     """Shared companies matching the query's codes that this workspace does not hold."""
+    from nexus.accounts.suppression import not_suppressed
     from nexus.models.account import Account
     from nexus.models.company import Company, CompanyCountry
 
@@ -276,6 +277,8 @@ def _matching(ts, q: ProspectQuery, taken: set[str]):
         .where(Company.linkedin_industry_id.in_(sorted(descendants(q.industry_ids))))
         .where(~exists(select(Account.id).where(
             Account.tenant_id == ts.tenant_id, Account.domain == Company.domain)))
+        # Nor one it deleted and asked not to be offered again (`accounts.suppression`).
+        .where(not_suppressed(ts, Company.domain))
         # A label that was an ICP's own words stamped onto a web find is not offered to anybody
         # until a LinkedIn read labels the row (`scripts/quarantine_stamped_companies.py`).
         .where(Company.labels_quarantined_at.is_(None))
@@ -396,6 +399,8 @@ async def _from_shared(ts, q: ProspectQuery, limit: int, taken: set[str],
 
 
 async def _held(ts, domains) -> set[str]:
+    """The domains this workspace holds, or deleted and asked not to be offered again."""
+    from nexus.accounts.suppression import suppressed
     from nexus.models.account import Account
 
     domains = sorted({d for d in domains if d})
@@ -403,7 +408,7 @@ async def _held(ts, domains) -> set[str]:
         return set()
     rows = await ts.session.scalars(select(Account.domain).where(
         Account.tenant_id == ts.tenant_id, Account.domain.in_(domains)))
-    return {d for d in rows.all() if d}
+    return {d for d in rows.all() if d} | await suppressed(ts, domains)
 
 
 # ---- step 2: LinkedIn --------------------------------------------------------------------------

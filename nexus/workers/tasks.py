@@ -60,7 +60,9 @@ async def handle_run_orchestration(payload: dict) -> dict:
 
     async with tenant_session(tenant_id) as ts:
         run = await ts.get(OrchestrationRun, run_id)
-        if run is None:
+        # A deleted run is gone for the driver too: resuming it would work on something nobody can
+        # see any more.
+        if run is None or run.deleted_at is not None:
             return {"error": "run_not_found", "run_id": run_id}
         await get_orchestration_engine().execute_run(ts, run)
         return {"run_id": run.id, "status": run.status}
@@ -689,6 +691,35 @@ async def handle_prospector_verify_contacts(payload: dict) -> dict:
                 checked += out["checked"]
                 charged += out["charged"]
     return {"checked": checked, "charged": charged}
+
+
+async def handle_fill_firmographics(payload: dict) -> dict:
+    """Fill blank firmographics on accounts a person chose (after an import), one at a time.
+
+    The enricher the account page's Enrich runs, with ``force`` for the same reason (a person asked)
+    and its own per-account charge. ``raise_on_block`` stays off: the request already checked the
+    balance for all of them, and an account the balance no longer covers part way is skipped by the
+    enricher rather than failing the rest. One transaction per account, so a failure keeps what was
+    already filled.
+    """
+    from nexus.enrichment.account import get_account_enricher
+
+    tenant_id = payload.get("tenant_id") or ""
+    ids = [str(i) for i in (payload.get("account_ids") or [])][:1000]
+    user_id = payload.get("user_id")
+    filled = failed = 0
+    for account_id in ids:
+        try:
+            async with tenant_session(tenant_id) as ts:
+                account = await ts.get(Account, account_id)
+                if account is None or account.archived_at is not None:
+                    continue
+                if await get_account_enricher().enrich(ts, account, user_id=user_id, force=True):
+                    filled += 1
+        except Exception:
+            failed += 1
+            logger.warning("filling firmographics failed for %s", account_id, exc_info=True)
+    return {"accounts": len(ids), "filled": filled, "failed": failed}
 
 
 async def handle_prune_prospector_pages(payload: dict) -> dict:
@@ -1483,6 +1514,7 @@ HANDLERS: dict[str, Handler] = {
     "prune_web_cache": handle_prune_web_cache,
     "prune_prospector_pages": handle_prune_prospector_pages,
     "prospector_verify_contacts": handle_prospector_verify_contacts,
+    "fill_firmographics": handle_fill_firmographics,
     "roll_billing_periods": handle_roll_billing_periods,
     "dunning_sweep": handle_dunning_sweep,
     "billing_reconcile": handle_billing_reconcile,
@@ -1602,6 +1634,13 @@ async def enqueue_prospector_verify(tenant_id: str, user_id: str | None, contact
     queue = queue or get_task_queue()
     await queue.enqueue(Job(name="prospector_verify_contacts", payload={
         "tenant_id": tenant_id, "user_id": user_id, "contact_ids": list(contact_ids)}))
+
+
+async def enqueue_fill_firmographics(tenant_id: str, user_id: str | None, account_ids: list[str],
+                                    *, queue: TaskQueue | None = None) -> None:
+    queue = queue or get_task_queue()
+    await queue.enqueue(Job(name="fill_firmographics", payload={
+        "tenant_id": tenant_id, "user_id": user_id, "account_ids": list(account_ids)}))
 
 
 async def enqueue_roll_billing_periods(*, queue: TaskQueue | None = None) -> None:

@@ -19,6 +19,7 @@ import {
 import { ChatComposer, ChatThread, useChatSession } from "@/components/chat";
 import { ResultsPanel } from "@/components/discovery";
 import { DataState } from "@/components/DataState";
+import { DeleteRunDialog } from "@/components/runs/DeleteRunDialog";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
@@ -91,7 +92,9 @@ function RunConsole({
 }) {
   const api = useApiClient();
   const toast = useToast();
+  const navigate = useNavigate();
   const [cancelling, setCancelling] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const active = isRunActive(run.status);
   const isDiscovery = run.goal === "discover" || !!run.blackboard.discovery;
@@ -154,8 +157,23 @@ function RunConsole({
                 Cancel run
               </Button>
             )}
+            <Button
+              variant="ghost"
+              iconLeft={<Icons.TrashIcon />}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete
+            </Button>
           </div>
         }
+      />
+
+      <DeleteRunDialog
+        runId={confirmDelete ? run.id : null}
+        label={goalLabel(run.goal)}
+        active={active}
+        onClose={() => setConfirmDelete(false)}
+        onDeleted={() => navigate("/runs", { replace: true })}
       />
 
       {chatSessionId && (
