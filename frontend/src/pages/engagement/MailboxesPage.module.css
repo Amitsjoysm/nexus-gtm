@@ -57,14 +57,14 @@
   text-transform: uppercase;
   letter-spacing: var(--tracking-wide);
   color: var(--text-muted);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
   background: var(--surface);
 }
 
 .row td {
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
   color: var(--text);
   vertical-align: middle;
@@ -91,8 +91,8 @@
 /* The address IS the disclosure: the whole cell is the hit target, so the row opens wherever the
    rep aims, and the chevron says it will. */
 .row td.addressCell {
-  padding-left: var(--space-2);
-  min-width: 240px;
+  padding-left: var(--space-1);
+  min-width: 190px;
 }
 
 .disclose {
@@ -156,22 +156,24 @@
 }
 
 .statusCell {
-  max-width: 280px;
+  min-width: 150px;
+  max-width: 220px;
 }
 
 .statusCell > * + * {
   margin-top: var(--space-1);
 }
 
-/* The reason under a status: one line in the row, the whole sentence in its title and in the
+/* The reason under a status: two lines in the row, the whole sentence in its title and in the
    row's detail, where `last_error` is shown again in full. */
 .reason {
-  display: block;
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-muted);
 }
 
 .today {
@@ -196,7 +198,7 @@
 
 /* ---- A row's detail, in place under it ---- */
 .detailRow > td {
-  padding: 0 var(--space-4) var(--space-5) calc(var(--space-4) + 26px);
+  padding: 0 var(--space-4) var(--space-5) calc(var(--space-3) + 26px);
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
 }
@@ -226,6 +228,13 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+/* Disconnect, kept apart from Save so it is never the button pressed by habit. */
+.dangerRow {
+  display: flex;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
 }
 
 .sideTitle {

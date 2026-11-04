@@ -12,9 +12,16 @@ import type { Column } from "@/components/ui";
 import { CallConsole } from "@/components/CallConsole";
 import { useApi } from "@/hooks/useApi";
 import { useApiClient } from "@/app/AuthContext";
+import { formatDate } from "@/lib/format";
 import type { CallTask } from "@/lib/types";
 import styles from "./CallsPage.module.css";
 
+/**
+ * The call queue, and the call itself. They are never on screen together (6.3, 2026-10-29): the
+ * queue is what the rep picks from BETWEEN calls, and once a call is open the console takes the
+ * whole screen, so nothing the rep needs during it sits below a list of other people. Logging the
+ * outcome, or Esc, comes back to the queue.
+ */
 export function CallsPage() {
   const api = useApiClient();
   const queue = useApi<CallTask[]>((signal) => api.callQueue("open", false, signal), []);
@@ -29,7 +36,12 @@ export function CallsPage() {
         key: "contact_name",
         header: "Contact",
         sortValue: (t) => t.contact_name,
-        render: (t) => <span className={styles.name}>{t.contact_name ?? "—"}</span>,
+        render: (t) => (
+          <span className={styles.person}>
+            <span className={styles.name}>{t.contact_name ?? "—"}</span>
+            {t.title && <span className={styles.muted}>{t.title}</span>}
+          </span>
+        ),
       },
       {
         key: "account_name",
@@ -38,12 +50,25 @@ export function CallsPage() {
         render: (t) => <span className={styles.muted}>{t.account_name}</span>,
       },
       {
+        key: "reason",
+        header: "Why",
+        hideOnMobile: true,
+        render: (t) => <span className={styles.reason}>{t.reason || "—"}</span>,
+      },
+      {
         key: "phone",
         header: "Phone",
         hideOnMobile: true,
         sortValue: (t) => t.phone,
         render: (t) =>
           t.phone ? <span className={styles.mono}>{t.phone}</span> : <span className={styles.muted}>no number</span>,
+      },
+      {
+        key: "due_at",
+        header: "Due",
+        hideOnMobile: true,
+        sortValue: (t) => t.due_at,
+        render: (t) => <span className={styles.muted}>{t.due_at ? formatDate(t.due_at) : "Now"}</span>,
       },
       {
         key: "priority",
@@ -60,56 +85,51 @@ export function CallsPage() {
     [],
   );
 
+  if (selected) {
+    return (
+      <CallConsole
+        task={selected}
+        layout="screen"
+        autoGenerate
+        onExit={() => setSelectedId(null)}
+        onLogged={() => {
+          setSelectedId(null);
+          queue.refetch();
+        }}
+      />
+    );
+  }
+
   return (
     <div>
       <PageHeader
         title="Calls"
-        description="Your prioritized call list. Open a call for an AI script, dial, and log the outcome."
+        description="Your prioritized call list. Open a call for the person, the script and the outcome on one screen."
         actions={<span className={styles.count}>{rows.length} to call</span>}
       />
 
-      <div className={styles.layout}>
-        <Card padding="none" className={styles.queue}>
-          {queue.error && !queue.data ? (
-            <ErrorState title="Couldn't load the call queue" message={queue.error.detail} onRetry={queue.refetch} />
-          ) : (
-            <DataTable<CallTask>
-              columns={columns}
-              rows={rows}
-              getRowKey={(t) => t.id}
-              loading={queue.loading && !queue.data}
-              skeletonRows={6}
-              onRowClick={(t) => setSelectedId(t.id)}
-              caption="Call queue"
-              empty={
-                <EmptyState
-                  icon={<Icons.PhoneIcon />}
-                  title="No calls queued"
-                  description="Calls appear here from campaigns with a call step, or from the Call button on a contact."
-                />
-              }
-            />
-          )}
-        </Card>
-
-        <Card className={styles.panel}>
-          {selected ? (
-            <CallConsole
-              task={selected}
-              autoGenerate
-              onLogged={() => {
-                setSelectedId(null);
-                queue.refetch();
-              }}
-            />
-          ) : (
-            <div className={styles.placeholder}>
-              <Icons.PhoneIcon />
-              <p>Select a call to see the AI script and log the outcome.</p>
-            </div>
-          )}
-        </Card>
-      </div>
+      <Card padding="none" className={styles.queue}>
+        {queue.error && !queue.data ? (
+          <ErrorState title="Couldn't load the call queue" message={queue.error.detail} onRetry={queue.refetch} />
+        ) : (
+          <DataTable<CallTask>
+            columns={columns}
+            rows={rows}
+            getRowKey={(t) => t.id}
+            loading={queue.loading && !queue.data}
+            skeletonRows={6}
+            onRowClick={(t) => setSelectedId(t.id)}
+            caption="Call queue. Open a call to start it."
+            empty={
+              <EmptyState
+                icon={<Icons.PhoneIcon />}
+                title="No calls queued"
+                description="Calls appear here from campaigns with a call step, or from the Call button on a contact."
+              />
+            }
+          />
+        )}
+      </Card>
     </div>
   );
 }

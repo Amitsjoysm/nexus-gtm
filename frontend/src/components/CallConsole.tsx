@@ -1,4 +1,13 @@
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   Badge,
   Button,
@@ -7,12 +16,16 @@ import {
   Input,
   Select,
   Skeleton,
+  SkeletonText,
   Textarea,
   useToast,
 } from "@/components/ui";
+import type { BadgeTone } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import type {
+  CallActivity,
   CallTaskCampaignScript,
   DispositionCategory,
   CallBrief,
@@ -21,8 +34,8 @@ import type {
   CallTask,
   TelephonyStatus,
 } from "@/lib/types";
-import { formatNumber, humanize, signalWhen, signalWhenTitle } from "@/lib/format";
-import { emailStatusMeta, strengthMeta } from "@/lib/display";
+import { formatDate, formatNumber, humanize, signalWhen, signalWhenTitle, timeAgo } from "@/lib/format";
+import { strengthMeta } from "@/lib/display";
 import styles from "./CallConsole.module.css";
 
 /** What logging a disposition does besides recording it, said before the rep presses Log (D11). */
@@ -33,6 +46,22 @@ const ACTION_HINT: Record<string, string> = {
   dated_task: "Keeps this call open, due when you say.",
   flag_account: "Flags the account. Nothing is deleted.",
   find_right_contact: "Adds an Inbox task to find the right contact.",
+};
+
+/** A past call's outcome, toned by its category so a column of them reads at a glance. The label
+ *  always says the outcome too: colour is never the only signal. */
+const CATEGORY_TONE: Record<string, BadgeTone> = {
+  positive: "success",
+  follow_up: "info",
+  negative: "danger",
+  compliance: "danger",
+  contact_issues: "warning",
+};
+
+/** The first-reaction lines a call script carries ("who's this?", "send me an email", "I'm busy").
+ *  Read when the server sends them; a script written before they existed simply has none. */
+type ScriptWithReactions = CallScript & {
+  first_reactions?: { reaction: string; response: string }[];
 };
 
 function telHref(phone: string | null): string | null {
@@ -50,23 +79,111 @@ function normalizeNumber(value: string): string {
   return value.replace(/[\s().\-/]/g, "");
 }
 
+/**
+ * The one-screen console's own size (6.3). It is laid out as a fixed grid only where it fits:
+ * a desktop viewport, with the app's sidebar beside it. Below that it stacks and the page scrolls,
+ * which beats squeezing a script into a 200px column. Mirrored by the `.screen` media query.
+ */
+const SCREEN_QUERY = "(min-width: 1200px) and (min-height: 640px)";
+/** Never shorter than this, or the panels stop being readable; past it the page scrolls instead. */
+const MIN_SCREEN_HEIGHT = 560;
+/** Space kept under the console, between its last row and the bottom of the window. */
+const SCREEN_GAP = 16;
+
+/**
+ * Size the console to exactly the space left in the content scroller, so nothing on it scrolls the
+ * page. Measured rather than written as `100dvh - ...`, because what sits above it (the topbar, an
+ * impersonation banner, the frame's padding) is not this component's to know. The frame's bottom
+ * padding is pulled back with a negative margin, or it alone would add a scrollbar.
+ */
+function useFitToScroller(ref: RefObject<HTMLElement>, active: boolean) {
+  const [box, setBox] = useState<{ height: number; pull: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const scroller = el?.closest("main");
+    if (!active || !el || !scroller) {
+      setBox(null);
+      return;
+    }
+    const media = window.matchMedia(SCREEN_QUERY);
+    const frame = scroller.firstElementChild as HTMLElement | null;
+    scroller.scrollTo({ top: 0 });
+    const measure = () => {
+      if (!media.matches) {
+        setBox(null);
+        return;
+      }
+      const padBottom = frame ? parseFloat(getComputedStyle(frame).paddingBottom) || 0 : 0;
+      const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+        + scroller.scrollTop;
+      const height = Math.floor(scroller.clientHeight - top - SCREEN_GAP) - 1;
+      setBox({ height: Math.max(MIN_SCREEN_HEIGHT, height), pull: Math.max(0, padBottom - SCREEN_GAP) });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    media.addEventListener("change", measure);
+    return () => {
+      observer.disconnect();
+      media.removeEventListener("change", measure);
+    };
+  }, [ref, active]);
+  return box;
+}
+
+/** The current time, re-read every `everyMs`, for clocks that must keep moving. */
+function useNow(everyMs: number, active = true): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), everyMs);
+    return () => window.clearInterval(id);
+  }, [everyMs, active]);
+  return now;
+}
+
+function clock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 export interface CallConsoleProps {
   task: CallTask;
   /** Auto-generate the AI script as soon as the task is shown (great for the account modal). */
   autoGenerate?: boolean;
   /** Called after a disposition is logged (close the modal / refresh the queue). */
   onLogged?: (disposition: string) => void;
+  /**
+   * "stacked" (default): one column, for the Call modal on an account or a contact.
+   * "screen": the Calls page's console, one fixed grid sized to the window with nothing to scroll
+   * on the page (6.3), and keys for the call: C call, E end, 1-9 outcome, Ctrl+Enter log, Esc queue.
+   */
+  layout?: "stacked" | "screen";
+  /** Screen layout: leave the call for the queue (Esc). */
+  onExit?: () => void;
 }
 
 /**
  * The full single-call workspace: click-to-dial, the AI talk track, and one-tap disposition
  * logging. Shared by the Calls power-list and the per-contact "Call" modal on an account, so the
  * SDR gets the exact same calling experience wherever they start the call.
+ *
+ * On the Calls page it is ONE screen (6.3, 2026-10-29): the rep is prepared before the call and
+ * never scrolls during it. The person and how to reach them across the top; who they are and what
+ * happened before on the left; the campaign's own script in the middle, read as written; the AI's
+ * talking points, where our value props meet their likely pains, and what to say when they push
+ * back on the right; the outcome along the bottom. Long text scrolls inside its own panel.
  */
-export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) {
+export function CallConsole({ task, autoGenerate, onLogged, layout = "stacked", onExit }: CallConsoleProps) {
   const api = useApiClient();
   const toast = useToast();
-  const [script, setScript] = useState<CallScript | null>(null);
+  const screen = layout === "screen";
+  const rootRef = useRef<HTMLDivElement>(null);
+  const fit = useFitToScroller(rootRef, screen);
+  const [script, setScript] = useState<ScriptWithReactions | null>(null);
   const [scriptBusy, setScriptBusy] = useState(false);
   const [brief, setBrief] = useState<CallBrief | null>(null);
   const [briefBusy, setBriefBusy] = useState(false);
@@ -81,6 +198,18 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
   const [followUpAt, setFollowUpAt] = useState("");
   const inCategory = catalog.find((c) => c.key === category)?.dispositions ?? [];
   const chosen = inCategory.find((d) => d.code === dispositionCode) ?? null;
+  // Calls already made to this person, newest first (`/calling/contacts/{id}/activities`).
+  const [history, setHistory] = useState<CallActivity[] | null>(null);
+  const [historyError, setHistoryError] = useState(false);
+  // When the rep started and ended this call, for the clock in the header. Shown, never sent: the
+  // minutes a platform call is charged for are Twilio's measured ones.
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [endedAt, setEndedAt] = useState<number | null>(null);
+  const onCall = startedAt !== null && endedAt === null;
+  const now = useNow(1000, onCall);
+  const dialLinkRef = useRef<HTMLAnchorElement>(null);
+  const notesRef = useRef<HTMLTextAreaElement>(null);
+  const nameId = useId();
   // The campaign's own script for this call, when it has one (404 otherwise: the AI one is used).
   const [ownScript, setOwnScript] = useState<CallTaskCampaignScript | null>(null);
   useEffect(() => {
@@ -141,6 +270,8 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
     setDispositionCode("");
     setFollowUpAt("");
     setLiveCallId(null);
+    setStartedAt(null);
+    setEndedAt(null);
     if (autoGenerate) void generate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
@@ -161,6 +292,28 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // What happened on earlier calls to this person: the rep should not open as a stranger to
+  // someone who said "call me in June" last time.
+  useEffect(() => {
+    let active = true;
+    const ctrl = new AbortController();
+    setHistory(null);
+    setHistoryError(false);
+    if (!task.contact_id) {
+      setHistory([]);
+      return;
+    }
+    api
+      .contactCallActivities(task.contact_id, ctrl.signal)
+      .then((rows) => active && setHistory(rows))
+      .catch(() => active && setHistoryError(true));
+    return () => {
+      active = false;
+      ctrl.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.contact_id]);
+
   async function dialLive() {
     const number = normalizeNumber(callbackNumber);
     if (!E164.test(number)) {
@@ -175,6 +328,8 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
       // second billable call, while a deliberate retry after hanging up still dials.
       const result = await api.dialCallTask(task.id, number, crypto.randomUUID());
       setLiveCallId(result.provider_call_id);
+      setStartedAt(Date.now());
+      setEndedAt(null);
       toast.success("Calling you now", `Answer your phone to connect to ${task.contact_name ?? "the contact"}.`);
     } catch (err) {
       toast.error("Couldn't place the call", err instanceof ApiError ? err.detail : "Try again.");
@@ -224,159 +379,325 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
 
   const dial = telHref(task.phone);
 
+  /** C: dial. Live telephony places the bridge; otherwise the `tel:` link opens the rep's phone. */
+  function startCall() {
+    if (!dial || onCall || dialing) return;
+    if (isLive) {
+      void dialLive();
+      return;
+    }
+    dialLinkRef.current?.click();
+  }
+
+  /** E: the call is over (the rep hangs up on their phone); stop the clock and go to the notes. */
+  function endCall() {
+    if (!onCall) return;
+    setEndedAt(Date.now());
+    notesRef.current?.focus();
+  }
+
+  /** 1-9: a category, then a disposition inside it. Backspace goes back to the categories. */
+  function pickByNumber(n: number) {
+    if (!category) {
+      const target = catalog[n - 1];
+      if (target) pickCategory(target.key);
+      return;
+    }
+    const target = inCategory[n - 1];
+    if (target) {
+      setDispositionCode(target.code);
+      setFollowUpAt("");
+    }
+  }
+
+  function submit() {
+    if (chosen && !logging) void logDisposition(chosen.code);
+  }
+
+  // The keys read the latest state through a ref, so the listener is registered once per call.
+  const keys = useRef({ startCall, endCall, pickByNumber, submit, pickCategory, category, onExit });
+  keys.current = { startCall, endCall, pickByNumber, submit, pickCategory, category, onExit };
+  useEffect(() => {
+    if (!screen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.defaultPrevented || e.repeat) return;
+      const k = keys.current;
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        k.submit();
+        return;
+      }
+      const target = e.target instanceof Element ? e.target : null;
+      // Typing in a field, or a dialog open over the console, owns the keyboard.
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      const key = e.key.toLowerCase();
+      if (key === "c") {
+        e.preventDefault();
+        k.startCall();
+      } else if (key === "e") {
+        e.preventDefault();
+        k.endCall();
+      } else if (/^[1-9]$/.test(key)) {
+        e.preventDefault();
+        k.pickByNumber(Number(key));
+      } else if (key === "backspace" && k.category) {
+        e.preventDefault();
+        k.pickCategory("");
+      } else if (key === "escape" && k.onExit) {
+        e.preventDefault();
+        k.onExit();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [screen]);
+
+  const dispositionLabels = useMemo(() => {
+    const map = new Map<string, { label: string; category: string }>();
+    for (const c of catalog) for (const d of c.dispositions) map.set(d.code, { label: d.label, category: c.key });
+    return map;
+  }, [catalog]);
+
+  const NameHeading = screen ? "h2" : "h3";
+  const numbered = (i: number, label: string) => (screen ? `${i + 1}. ${label}` : label);
+
+  const dialControl = !dial ? (
+    <Badge tone="warning" dot>No number</Badge>
+  ) : onCall ? (
+    <>
+      <span className={styles.timer} role="timer" aria-live="off">
+        <span className={styles.liveDot} aria-hidden="true" />
+        On call {clock(now - (startedAt ?? now))}
+      </span>
+      <Button variant="secondary" onClick={endCall}>
+        End call{screen && <kbd className={styles.kbd}>E</kbd>}
+      </Button>
+    </>
+  ) : isLive ? (
+    <Button onClick={dialLive} loading={dialing} disabled={dialing} iconLeft={<Icons.PhoneIcon />}>
+      Start call{screen && <kbd className={styles.kbd}>C</kbd>}
+    </Button>
+  ) : (
+    <a
+      ref={dialLinkRef}
+      className={styles.dialBtn}
+      href={dial}
+      onClick={() => {
+        setStartedAt(Date.now());
+        setEndedAt(null);
+      }}
+    >
+      <Icons.PhoneIcon /> Call {task.phone}
+      {screen && <kbd className={styles.kbd}>C</kbd>}
+    </a>
+  );
+
+  const aiScriptBody = (
+    <>
+      {scriptBusy && !script && <SkeletonText lines={6} />}
+      {!scriptBusy && !script && (
+        <p className={styles.note}>No script yet. Generate one for this person.</p>
+      )}
+      {script && (
+        <div className={styles.script}>
+          <p><strong>Opener.</strong> {script.opener}</p>
+          <p><strong>Hook.</strong> {script.hook}</p>
+          <p><strong>Value.</strong> {script.value_prop}</p>
+          {script.discovery_questions.length > 0 && (
+            <div>
+              <strong>Discovery</strong>
+              <ul>{script.discovery_questions.map((q, i) => <li key={i}>{q}</li>)}</ul>
+            </div>
+          )}
+          <p><strong>Ask.</strong> {script.cta}</p>
+          <p className={styles.vm}><strong>Voicemail.</strong> {script.voicemail}</p>
+        </div>
+      )}
+    </>
+  );
+
+  const scriptActions = (
+    <span className={styles.scriptActions}>
+      {script?.generated_at && (
+        <span className={styles.panelAside}>
+          Written{" "}
+          {new Date(script.generated_at).toLocaleTimeString([], {
+            hour: "numeric",
+            minute: "2-digit",
+          })}{" "}
+          today
+        </span>
+      )}
+      <Button
+        size="sm"
+        variant="secondary"
+        loading={scriptBusy}
+        onClick={() => generate(Boolean(script))}
+      >
+        {script ? "Regenerate" : "Generate script"}
+      </Button>
+    </span>
+  );
+
+  const ownScriptPanel = ownScript && (
+    // The team's own script, read out as written (D10), with the AI's track under it to borrow from.
+    <Panel
+      area="script"
+      scroll={screen}
+      title="Your script"
+      aside={<span className={styles.panelAside}>{ownScript.campaign_name}</span>}
+    >
+      <pre className={styles.ownScript}>{ownScript.text}</pre>
+      <section className={styles.reference} aria-label="AI talk track, for reference">
+        <div className={styles.referenceHead}>
+          <h5 className={styles.subTitle}>AI talk track, for reference</h5>
+          {scriptActions}
+        </div>
+        {aiScriptBody}
+      </section>
+    </Panel>
+  );
+
   return (
-    <div className={styles.call}>
-      <header className={styles.callHead}>
-        <div>
-          <h3 className={styles.callName}>{task.contact_name ?? "Unknown contact"}</h3>
+    <div
+      ref={rootRef}
+      className={cn(styles.console, screen ? styles.screen : styles.stacked)}
+      style={fit ? { height: fit.height, marginBottom: -fit.pull } : undefined}
+      aria-labelledby={nameId}
+      role={screen ? "region" : undefined}
+    >
+      <header className={styles.head}>
+        <div className={styles.who}>
+          <NameHeading id={nameId} className={styles.callName}>
+            {task.contact_name ?? "Unknown contact"}
+          </NameHeading>
           <p className={styles.callMeta}>
             {task.title ? `${task.title} · ` : ""}{task.account_name}
           </p>
         </div>
-        {!dial ? (
-          <Badge tone="warning" dot>No number</Badge>
-        ) : isLive ? (
-          <Button onClick={dialLive} loading={dialing} disabled={dialing}>
-            <Icons.PhoneIcon /> Start call
-          </Button>
-        ) : (
-          <a className={styles.dialBtn} href={dial}>
-            <Icons.PhoneIcon /> Call {task.phone}
-          </a>
+        <ul className={styles.facts} aria-label="Reaching them">
+          <li><LocalTime zone={brief?.local_timezone} source={brief?.timezone_source} loading={briefBusy && !brief} /></li>
+          {task.phone && (
+            <li className={styles.phone}>
+              <Icons.PhoneIcon aria-hidden="true" /> {task.phone}
+            </li>
+          )}
+          {brief?.contact?.linkedin_url && (
+            <li>
+              <a className={styles.link} href={brief.contact.linkedin_url} target="_blank" rel="noreferrer">
+                <Icons.ExternalLinkIcon aria-hidden="true" /> LinkedIn
+              </a>
+            </li>
+          )}
+        </ul>
+        <div className={styles.callActions}>
+          {dialControl}
+          {onExit && (
+            <Button variant="ghost" iconLeft={<Icons.ChevronLeftIcon />} onClick={onExit}>
+              Queue{screen && <kbd className={styles.kbd}>Esc</kbd>}
+            </Button>
+          )}
+        </div>
+        {dial && isLive && (
+          <div className={styles.bridge}>
+            <Field
+              label="Your phone"
+              hint={`We ring this number first, then connect you to ${task.contact_name ?? "the contact"} at ${task.phone}.`}
+              error={callbackError ?? undefined}
+            >
+              <Input
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={callbackNumber}
+                onChange={(e) => {
+                  setCallbackNumber(e.target.value);
+                  if (callbackError) setCallbackError(null);
+                }}
+                placeholder="+15551234567"
+              />
+            </Field>
+            <p className={styles.bridgeMeta} role="status">
+              {liveCallId ? (
+                <>
+                  <Badge tone="info" dot>In progress</Badge>
+                  {telephony?.record_calls
+                    ? " Recording and transcript attach to the outcome you log below."
+                    : " Log the outcome below when you hang up."}
+                </>
+              ) : (
+                <>
+                  Calls show as {telephony?.from_number || "your workspace number"} to the contact.
+                  {telephony?.source === "platform" && " Each minute uses credits."}{" "}
+                  <a className={styles.link} href={dial}>
+                    Dial from this device instead
+                  </a>
+                </>
+              )}
+            </p>
+          </div>
         )}
       </header>
 
-      {dial && isLive && (
-        <section className={styles.bridge}>
-          <Field
-            label="Your phone"
-            hint={`We ring this number first, then connect you to ${task.contact_name ?? "the contact"} at ${task.phone}.`}
-            error={callbackError ?? undefined}
-          >
-            <Input
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              value={callbackNumber}
-              onChange={(e) => {
-                setCallbackNumber(e.target.value);
-                if (callbackError) setCallbackError(null);
-              }}
-              placeholder="+15551234567"
+      <Panel area="them" scroll={screen} title="Who they are">
+        <ThemBody task={task} brief={brief} busy={briefBusy} error={briefError} />
+      </Panel>
+
+      <Panel area="past" scroll={screen} title="Past calls">
+        <PastCalls
+          history={history}
+          error={historyError}
+          firstName={(task.contact_name ?? "").split(" ")[0] || "them"}
+          labels={dispositionLabels}
+        />
+      </Panel>
+
+      {ownScriptPanel ?? (
+        <Panel area="script" scroll={screen} title="AI call script" aside={scriptActions}>
+          {aiScriptBody}
+        </Panel>
+      )}
+
+      <Panel area="talk" scroll={screen} title="Where we help">
+        <ValueFit brief={brief} busy={briefBusy} />
+        <TalkingPoints brief={brief} busy={briefBusy} />
+      </Panel>
+
+      <Panel area="reply" scroll={screen} title="If they say…">
+        <IfTheySay script={script} busy={scriptBusy} />
+      </Panel>
+
+      <section className={styles.log} aria-label="Log the outcome">
+        {!screen && <h4 className={styles.logTitle}>Log the outcome</h4>}
+        <div className={styles.logFields}>
+          <Field label="Notes" className={styles.notesField}>
+            <Textarea
+              ref={notesRef}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="What they said, in a line or two"
+              rows={2}
             />
           </Field>
-          <p className={styles.bridgeMeta} role="status">
-            {liveCallId ? (
-              <>
-                <Badge tone="info" dot>In progress</Badge>
-                {telephony?.record_calls
-                  ? " Recording and transcript attach to the outcome you log below."
-                  : " Log the outcome below when you hang up."}
-              </>
-            ) : (
-              <>
-                Calls show as {telephony?.from_number || "your workspace number"} to the contact.
-                {telephony?.source === "platform" && " Each minute uses credits."}{" "}
-                <a className={styles.link} href={dial}>
-                  Dial from this device instead
-                </a>
-              </>
-            )}
-          </p>
-        </section>
-      )}
-
-      {task.reason && <p className={styles.reason}>{task.reason}</p>}
-
-      <BriefPanel brief={brief} busy={briefBusy} error={briefError} />
-
-      {/* The team's own script, read out as written (D10); the brief above is its side panel. */}
-      {ownScript && (
-        <div className={styles.scriptBlock}>
-          <div className={styles.scriptHead}>
-            <h4>Your script</h4>
-            <span className={styles.scriptWhen}>{ownScript.campaign_name}</span>
-          </div>
-          <pre className={styles.ownScript}>{ownScript.text}</pre>
-        </div>
-      )}
-
-      <div className={styles.scriptBlock}>
-        <div className={styles.scriptHead}>
-          <h4>{ownScript ? "AI talk track (for reference)" : "AI call script"}</h4>
-          {script?.generated_at && (
-            <span className={styles.scriptWhen}>
-              Written{" "}
-              {new Date(script.generated_at).toLocaleTimeString([], {
-                hour: "numeric",
-                minute: "2-digit",
-              })}{" "}
-              today
-            </span>
-          )}
-          <Button
-            size="sm"
-            variant="secondary"
-            loading={scriptBusy}
-            onClick={() => generate(Boolean(script))}
-          >
-            {script ? "Regenerate" : "Generate script"}
-          </Button>
-        </div>
-        {scriptBusy && !script && <Skeleton width="100%" height={140} />}
-        {script && (
-          <div className={styles.script}>
-            <p><strong>Opener.</strong> {script.opener}</p>
-            <p><strong>Hook.</strong> {script.hook}</p>
-            <p><strong>Value.</strong> {script.value_prop}</p>
-            {script.discovery_questions.length > 0 && (
-              <div>
-                <strong>Discovery</strong>
-                <ul>{script.discovery_questions.map((q, i) => <li key={i}>{q}</li>)}</ul>
-              </div>
-            )}
-            {script.objections.length > 0 && (
-              <div>
-                <strong>Objections</strong>
-                <ul>
-                  {script.objections.map((o, i) => (
-                    <li key={i}><em>{o.objection}</em> → {o.response}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            <p><strong>Ask.</strong> {script.cta}</p>
-            <p className={styles.vm}><strong>Voicemail.</strong> {script.voicemail}</p>
-          </div>
-        )}
-      </div>
-
-      <div className={styles.logBlock}>
-        <h4>Log the outcome</h4>
-        <Textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Call notes…"
-          rows={2}
-          aria-label="Call notes"
-        />
-        <Input
-          value={nextStep}
-          onChange={(e) => setNextStep(e.target.value)}
-          placeholder="Next step (e.g. demo Tue 2pm)"
-          aria-label="Next step"
-        />
-        <div className={styles.dispoPick}>
-          <Field label="Category">
+          <Field label="Next step" className={styles.nextField}>
+            <Input
+              value={nextStep}
+              onChange={(e) => setNextStep(e.target.value)}
+              placeholder="e.g. demo Tue 2pm"
+            />
+          </Field>
+          <Field label="Category" className={styles.pickField}>
             <Select
               value={category}
               onChange={(e) => pickCategory(e.target.value)}
               placeholder="Choose a category"
-              options={catalog.map((c) => ({ value: c.key, label: c.label }))}
+              options={catalog.map((c, i) => ({ value: c.key, label: numbered(i, c.label) }))}
               disabled={!catalog.length || !!logging}
             />
           </Field>
-          <Field label="Disposition">
+          <Field label="Disposition" className={styles.pickField}>
             <Select
               value={dispositionCode}
               onChange={(e) => {
@@ -384,12 +705,12 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
                 setFollowUpAt("");
               }}
               placeholder={category ? "Choose an outcome" : "Choose a category first"}
-              options={inCategory.map((d) => ({ value: d.code, label: d.label }))}
+              options={inCategory.map((d, i) => ({ value: d.code, label: numbered(i, d.label) }))}
               disabled={!category || !!logging}
             />
           </Field>
           {chosen?.needs_date && (
-            <Field label="Follow up on" hint="Optional. The call stays in your queue either way.">
+            <Field label="Follow up on" className={styles.pickField}>
               <Input
                 type="datetime-local"
                 value={followUpAt}
@@ -397,67 +718,177 @@ export function CallConsole({ task, autoGenerate, onLogged }: CallConsoleProps) 
               />
             </Field>
           )}
+          <Button
+            variant="primary"
+            className={styles.logBtn}
+            loading={!!logging}
+            disabled={!chosen || !!logging}
+            onClick={submit}
+          >
+            Log outcome
+          </Button>
         </div>
-        {chosen && ACTION_HINT[chosen.action] && (
-          <p className={styles.dispoHint}>{ACTION_HINT[chosen.action]}</p>
-        )}
-        <Button
-          variant="primary"
-          loading={!!logging}
-          disabled={!chosen || !!logging}
-          onClick={() => chosen && logDisposition(chosen.code)}
-        >
-          Log outcome
-        </Button>
-      </div>
+        <div className={styles.logFoot}>
+          <p className={styles.dispoHint} role="status">
+            {chosen && ACTION_HINT[chosen.action]
+              ? ACTION_HINT[chosen.action]
+              : chosen?.needs_date
+                ? "Optional date. The call stays in your queue either way."
+                : ""}
+          </p>
+          {screen && (
+            <p className={styles.keys}>
+              <kbd className={styles.kbd}>C</kbd> call <kbd className={styles.kbd}>E</kbd> end{" "}
+              <kbd className={styles.kbd}>1</kbd>–<kbd className={styles.kbd}>9</kbd> outcome{" "}
+              <kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Enter</kbd> log
+            </p>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
 
-/** Deliverability verdict → badge tone for the contact's email. */
-function emailTone(status: string | null): "success" | "warning" | "danger" | "neutral" | "info" {
-  switch (status) {
-    case "valid":
-      return "success";
-    case "catch_all":
-      return "info";
-    case "risky":
-      return "warning";
-    case "invalid":
-    case "bad_number":
-      return "danger";
-    default:
-      return "neutral";
-  }
-}
-
-/** A labelled subsection of the brief, with optional source attribution on the right. */
-function BriefSub({
+/** A titled panel of the console. On the Calls page its body scrolls on its own, never the page;
+ *  the scroller takes keyboard focus so it can be read without a mouse. */
+function Panel({
+  area,
   title,
-  source,
+  aside,
+  scroll,
   children,
 }: {
+  area: "them" | "past" | "script" | "talk" | "reply";
   title: string;
-  source?: string | null;
+  aside?: ReactNode;
+  scroll: boolean;
   children: ReactNode;
 }) {
+  const id = useId();
   return (
-    <section className={styles.briefSub}>
-      <div className={styles.briefSubHead}>
-        <h5 className={styles.briefSubTitle}>{title}</h5>
-        {source && <span className={styles.briefSource}>Source: {source}</span>}
+    <section className={cn(styles.panel, styles[area])} aria-labelledby={id}>
+      <div className={styles.panelHead}>
+        <h4 id={id} className={styles.panelTitle}>{title}</h4>
+        {aside}
       </div>
-      {children}
+      <div className={styles.panelBody} tabIndex={scroll ? 0 : undefined}
+        role={scroll ? "group" : undefined} aria-labelledby={scroll ? id : undefined}>
+        {children}
+      </div>
     </section>
   );
 }
 
-/** One label/value row inside a brief subsection. */
-function KV({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * Their local time, with a word when it is outside a working day there. From the contact's own
+ * timezone, else the account's location; when neither says, it says so rather than guess.
+ */
+function LocalTime({ zone, source, loading }: { zone?: string | null; source?: string | null; loading: boolean }) {
+  const now = useNow(30_000, Boolean(zone));
+  if (loading) return <Skeleton width={150} height={14} />;
+  if (!zone) {
+    return (
+      <span className={styles.factMuted}>
+        <Icons.ClockIcon aria-hidden="true" /> Local time unknown
+      </span>
+    );
+  }
+  let time = "";
+  let off = false;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone, hour: "numeric", hourCycle: "h23", weekday: "short",
+    }).formatToParts(now);
+    const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 12);
+    const weekday = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+    off = weekday === "Sat" || weekday === "Sun" || hour < 8 || hour >= 18;
+    time = new Intl.DateTimeFormat([], { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(now);
+  } catch {
+    return (
+      <span className={styles.factMuted}>
+        <Icons.ClockIcon aria-hidden="true" /> Local time unknown
+      </span>
+    );
+  }
+  const place = zone.split("/").pop()?.replace(/_/g, " ");
+  const from = source === "contact" ? "their own timezone" : "where the company is";
   return (
-    <div className={styles.kv}>
-      <dt className={styles.kvLabel}>{label}</dt>
-      <dd className={styles.kvValue}>{children}</dd>
+    <span className={styles.localTime} title={`${zone}, from ${from}`}>
+      <Icons.ClockIcon aria-hidden="true" />
+      <span>
+        <strong>{time}</strong> their time{place ? ` · ${place}` : ""}
+      </span>
+      {off && <Badge tone="warning">Outside 8am–6pm</Badge>}
+    </span>
+  );
+}
+
+/** Why this call, the account facts worth knowing, the signals worth mentioning, and what the
+ *  person says about themselves. Every block carries its source. */
+function ThemBody({
+  task,
+  brief,
+  busy,
+  error,
+}: {
+  task: CallTask;
+  brief: CallBrief | null;
+  busy: boolean;
+  error: boolean;
+}) {
+  if (busy && !brief) return <SkeletonText lines={7} />;
+  const account = brief?.account ?? null;
+  const insights = brief?.insights ?? null;
+  const signals = (brief?.signals ?? []).slice(0, 3);
+  const size = account?.employee_count != null ? `${formatNumber(account.employee_count)} employees` : null;
+  // Firmographics in one line: a glance, not a form. The signals below are what gets said.
+  const facts = account ? [account.industry, size, account.country].filter(Boolean).join(" · ") : "";
+  return (
+    <div className={styles.stack}>
+      {task.reason && <p className={styles.reason}><strong>Why this call.</strong> {task.reason}</p>}
+      {error && !brief && (
+        <p className={styles.note}>Couldn't load the research brief. The call still works.</p>
+      )}
+      {account && (facts || account.domain) && (
+        <p className={styles.factsLine}>
+          {facts}
+          {account.domain && (
+            <>
+              {facts && <span aria-hidden="true"> · </span>}
+              <a className={styles.link} href={`https://${account.domain}`} target="_blank" rel="noreferrer">
+                {account.domain}
+              </a>
+            </>
+          )}
+        </p>
+      )}
+      {account?.fit_score != null && (
+        <p className={styles.fitLine}>
+          <Badge tone={strengthMeta(account.fit_score / 100).tone} dot>ICP fit {account.fit_score}/100</Badge>
+          {account.fit_rationale && <span className={styles.rationale}>{account.fit_rationale}</span>}
+        </p>
+      )}
+      {signals.length > 0 && (
+        <section className={styles.sub} aria-label="Worth mentioning">
+          <h5 className={styles.subTitle}>Worth mentioning</h5>
+          <ul className={styles.signals}>
+            {signals.map((sig, i) => <SignalRow key={i} sig={sig} />)}
+          </ul>
+        </section>
+      )}
+      {account?.source && <p className={styles.source}>Company data: {account.source}</p>}
+      {insights?.headline && (
+        <section className={styles.sub} aria-label="In their words">
+          <h5 className={styles.subTitle}>In their words</h5>
+          <p className={styles.headline}>“{insights.headline}”</p>
+          {insights.source && <p className={styles.source}>Source: {insights.source}</p>}
+        </section>
+      )}
+      {brief && !account && !signals.length && !insights && !task.reason && (
+        <p className={styles.note}>
+          No research yet. Refresh the account to fill its firmographics and signals.
+        </p>
+      )}
     </div>
   );
 }
@@ -466,223 +897,154 @@ function SignalRow({ sig }: { sig: CallBriefSignal }) {
   const meta = strengthMeta(sig.strength);
   return (
     <li className={styles.signal}>
-      <Badge tone={meta.tone} dot>
-        {meta.label}
-      </Badge>
-      <div className={styles.signalBody}>
-        <div className={styles.signalTitle}>
-          {sig.title}
-          {sig.is_personal && <span className={styles.personTag}>About them</span>}
-        </div>
-        {sig.body && <p className={styles.signalText}>{sig.body}</p>}
-        <div className={styles.signalMeta}>
-          {sig.kind && <span>{humanize(sig.kind)}</span>}
-          {sig.source && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span>{sig.source}</span>
-            </>
-          )}
-          {sig.occurred_at && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span title={signalWhenTitle(sig)}>{signalWhen(sig)}</span>
-            </>
-          )}
-          {sig.url && (
-            <>
-              <span aria-hidden="true">·</span>
-              <a className={styles.link} href={sig.url} target="_blank" rel="noreferrer">
-                Source
-              </a>
-            </>
-          )}
-        </div>
+      <div className={styles.signalTitle}>
+        {sig.title}
+        {sig.is_personal && <span className={styles.personTag}>About them</span>}
+      </div>
+      <div className={styles.signalMeta}>
+        <Badge tone={meta.tone} dot>{meta.label}</Badge>
+        {sig.kind && <span>{humanize(sig.kind)}</span>}
+        {sig.occurred_at && (
+          <>
+            <span aria-hidden="true">·</span>
+            <span title={signalWhenTitle(sig)}>{signalWhen(sig)}</span>
+          </>
+        )}
+        {sig.url ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <a className={styles.link} href={sig.url} target="_blank" rel="noreferrer">
+              {sig.source || "Source"}
+            </a>
+          </>
+        ) : sig.source ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <span>{sig.source}</span>
+          </>
+        ) : null}
       </div>
     </li>
   );
 }
 
-/**
- * The pre-call research dossier — the person, their company, social insights, and the buying
- * signals (each with its source), plus grounded talking points. So the SDR is fully researched
- * before they dial, with everything citable on the call. Owns its own loading/empty/error states.
- */
-function BriefPanel({
-  brief,
-  busy,
+/** Earlier calls to this person, newest first: when, the outcome, and what was noted. */
+function PastCalls({
+  history,
   error,
+  firstName,
+  labels,
 }: {
-  brief: CallBrief | null;
-  busy: boolean;
+  history: CallActivity[] | null;
   error: boolean;
+  firstName: string;
+  labels: Map<string, { label: string; category: string }>;
 }) {
-  if (busy && !brief) {
-    return (
-      <section className={styles.briefBlock} aria-busy="true">
-        <h4>Pre-call research</h4>
-        <Skeleton width="100%" height={96} />
-      </section>
-    );
-  }
-  if (error && !brief) {
-    return (
-      <section className={styles.briefBlock}>
-        <h4>Pre-call research</h4>
-        <p className={styles.briefNote}>Couldn't load the research brief. The call still works.</p>
-      </section>
-    );
-  }
-  if (!brief) return null;
-
-  const { contact, account, insights, signals, talking_points } = brief;
-  const isEmpty =
-    !talking_points.length && !contact && !account && !insights && !signals.length;
-  if (isEmpty) {
-    return (
-      <section className={styles.briefBlock}>
-        <h4>Pre-call research</h4>
-        <p className={styles.briefNote}>
-          No research yet. Run the account pipeline to enrich firmographics, signals, and contacts.
-        </p>
-      </section>
-    );
-  }
-
+  if (error) return <p className={styles.note}>Couldn't load earlier calls.</p>;
+  if (history === null) return <SkeletonText lines={3} />;
+  if (!history.length) return <p className={styles.note}>First call to {firstName}.</p>;
   return (
-    <section className={styles.briefBlock}>
-      <h4>Pre-call research</h4>
+    <ol className={styles.history}>
+      {history.map((a) => {
+        const known = labels.get(a.disposition);
+        return (
+          <li key={a.id} className={styles.historyItem}>
+            <div className={styles.historyHead}>
+              <Badge tone={CATEGORY_TONE[known?.category ?? ""] ?? "neutral"} dot>
+                {known?.label ?? humanize(a.disposition)}
+              </Badge>
+              <span className={styles.historyWhen} title={new Date(a.occurred_at).toLocaleString()}>
+                {formatDate(a.occurred_at)} · {timeAgo(a.occurred_at)}
+              </span>
+            </div>
+            {a.notes && <p className={styles.historyNote}>{a.notes}</p>}
+            {a.next_step && <p className={styles.historyNext}>Next: {a.next_step}</p>}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
-      {talking_points.length > 0 && (
-        <div className={styles.tps}>
-          {talking_points.map((tp, i) => (
-            <p key={i} className={styles.tp}>
-              {tp}
-            </p>
+/** The brief's grounded talking points, built only from real data. */
+function TalkingPoints({ brief, busy }: { brief: CallBrief | null; busy: boolean }) {
+  const points = brief?.talking_points ?? [];
+  if ((busy && !brief) || !points.length) return null;
+  return (
+    <section className={styles.sub} aria-label="Talking points">
+      <h5 className={styles.subTitle}>Talking points</h5>
+      <ul className={styles.tps}>
+        {points.map((tp, i) => <li key={i} className={styles.tp}>{tp}</li>)}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * Where our value props meet what this person likely cares about. The pains are the workspace's
+ * own (`value_props[].pains_solved`); a tick marks one that shares words with their title, role or
+ * signals. That is a likely match, worded as one, never a claim about them.
+ */
+function ValueFit({ brief, busy }: { brief: CallBrief | null; busy: boolean }) {
+  if (busy && !brief) return <SkeletonText lines={5} />;
+  if (!brief) return <p className={styles.note}>Couldn't load the research brief.</p>;
+  const props = brief.value_fit ?? [];
+  return (
+    <section className={styles.sub} aria-label="Our value props and their likely pains">
+      {brief.likely_pain && (
+        <p className={styles.likely}>
+          {brief.contact?.title ? `As ${brief.contact.title}, they` : "They"} likely care
+          about {brief.likely_pain}.
+        </p>
+      )}
+      {props.length > 0 ? (
+        <ul className={styles.props}>
+          {props.map((vp) => (
+            <li key={vp.name} className={styles.prop}>
+              <span className={styles.propName}>{vp.name}</span>
+              {vp.description && <span className={styles.propDesc}>{vp.description}</span>}
+              {vp.pains.length > 0 && (
+                <ul className={styles.pains} aria-label={`Pains ${vp.name} solves`}>
+                  {vp.pains.map((p) => {
+                    const theirs = vp.matched.includes(p);
+                    return (
+                      <li key={p} className={cn(styles.pain, theirs && styles.painTheirs)}>
+                        {theirs && <Icons.CheckIcon aria-hidden="true" />}
+                        {p}
+                        {theirs && <span className="sr-only"> (likely theirs)</span>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </li>
           ))}
-        </div>
-      )}
-
-      {contact && (
-        <BriefSub title="Person" source={contact.source}>
-          <dl className={styles.kvList}>
-            {contact.role_angle && <KV label="Cares about">{contact.role_angle}</KV>}
-            {(contact.title || contact.seniority) && (
-              <KV label="Role">
-                {[contact.title, contact.seniority && humanize(contact.seniority)]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </KV>
-            )}
-            {contact.email && (
-              <KV label="Email">
-                <a className={styles.link} href={`mailto:${contact.email}`}>
-                  {contact.email}
-                </a>
-                {contact.email_status && (
-                  <Badge tone={emailTone(contact.email_status)}>
-                    {emailStatusMeta(contact.email_status).label}
-                  </Badge>
-                )}
-              </KV>
-            )}
-            {contact.linkedin_url && (
-              <KV label="LinkedIn">
-                <a
-                  className={styles.link}
-                  href={contact.linkedin_url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  View profile
-                </a>
-              </KV>
-            )}
-          </dl>
-        </BriefSub>
-      )}
-
-      {insights && (
-        <BriefSub title="Social insights" source={insights.source || undefined}>
-          {insights.headline && <p className={styles.headline}>“{insights.headline}”</p>}
-          {insights.recent_posts.length > 0 && (
-            <ul className={styles.posts}>
-              {insights.recent_posts.map((p, i) => (
-                <li key={i}>{p}</li>
-              ))}
-            </ul>
-          )}
-          {insights.interests.length > 0 && (
-            <div className={styles.chips}>
-              {insights.interests.map((it) => (
-                <Badge key={it} tone="neutral">
-                  {it}
-                </Badge>
-              ))}
-            </div>
-          )}
-        </BriefSub>
-      )}
-
-      {account && (
-        <BriefSub title="Company" source={account.source}>
-          <dl className={styles.kvList}>
-            <KV label="Firmographics">
-              {[
-                account.industry,
-                account.employee_count != null
-                  ? `${formatNumber(account.employee_count)} employees`
-                  : null,
-                account.country,
-              ]
-                .filter(Boolean)
-                .join(" · ") || "—"}
-            </KV>
-            {account.domain && (
-              <KV label="Website">
-                <a
-                  className={styles.link}
-                  href={`https://${account.domain}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {account.domain}
-                </a>
-              </KV>
-            )}
-            {account.fit_score != null && (
-              <KV label="ICP fit">
-                <Badge tone={strengthMeta(account.fit_score / 100).tone} dot>
-                  {account.fit_score}/100
-                </Badge>
-                {account.fit_rationale && (
-                  <span className={styles.rationale}>{account.fit_rationale}</span>
-                )}
-              </KV>
-            )}
-          </dl>
-          {account.tech_stack.length > 0 && (
-            <div className={styles.chips}>
-              {account.tech_stack.map((t) => (
-                <Badge key={t} tone="neutral">
-                  {t}
-                </Badge>
-              ))}
-            </div>
-          )}
-        </BriefSub>
-      )}
-
-      {signals.length > 0 && (
-        <BriefSub title="Why now — signals">
-          <ul className={styles.signals}>
-            {signals.map((sig, i) => (
-              <SignalRow key={i} sig={sig} />
-            ))}
-          </ul>
-        </BriefSub>
+        </ul>
+      ) : (
+        <p className={styles.note}>Add value props in Relevance to see where they meet this person.</p>
       )}
     </section>
+  );
+}
+
+/** What to say when they push back: first reactions, then the objections the script prepared. */
+function IfTheySay({ script, busy }: { script: ScriptWithReactions | null; busy: boolean }) {
+  if (busy && !script) return <SkeletonText lines={4} />;
+  const reactions = script?.first_reactions ?? [];
+  const objections = script?.objections ?? [];
+  if (!reactions.length && !objections.length) {
+    return <p className={styles.note}>The AI script lists objections and replies once it is written.</p>;
+  }
+  return (
+    <dl className={styles.replies}>
+      {[...reactions.map((r) => ({ said: r.reaction, reply: r.response })),
+        ...objections.map((o) => ({ said: o.objection, reply: o.response }))].map((r, i) => (
+        <div key={i} className={styles.replyItem}>
+          <dt className={styles.said}>“{r.said}”</dt>
+          <dd className={styles.reply}>{r.reply}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 

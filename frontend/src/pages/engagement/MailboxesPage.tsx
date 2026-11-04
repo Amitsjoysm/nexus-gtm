@@ -385,6 +385,8 @@ function MailboxRow({
             <span className={styles.of}> of {advised}</span>
           </span>
         </td>
+        {/* The one thing to do to this mailbox now. Disconnect is in its detail: a destructive
+            action is one deliberate step away, not beside Check in every row. */}
         <td className={styles.rowActions}>
           {mailbox.mine && (mailbox.status === "needs_reauth" || mailbox.status === "revoked") && (
             <Button size="sm" variant="secondary" onClick={onReconnect}>Reconnect</Button>
@@ -394,9 +396,6 @@ function MailboxRow({
               Check
             </Button>
           )}
-          {canDisconnect && mailbox.status !== "revoked" && (
-            <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>Disconnect</Button>
-          )}
         </td>
       </tr>
 
@@ -405,6 +404,7 @@ function MailboxRow({
           <td colSpan={7} id={panelId}>
             <div className={styles.detail}>
               <section className={styles.detailMain} aria-label={`Settings for ${mailbox.email}`}>
+                {mailbox.last_error && <p className={styles.warning} role="status">{mailbox.last_error}</p>}
                 {mailbox.volume_warning && (
                   <p className={styles.warning} role="status">{mailbox.volume_warning}</p>
                 )}
@@ -450,6 +450,11 @@ function MailboxRow({
                       ? "Reconnect this mailbox to change its settings."
                       : `Only ${mailbox.owner_name || "its owner"} can change this mailbox's signature and switches.`}
                   </p>
+                )}
+                {canDisconnect && mailbox.status !== "revoked" && (
+                  <div className={styles.dangerRow}>
+                    <Button variant="ghost" onClick={() => setConfirming(true)}>Disconnect this mailbox</Button>
+                  </div>
                 )}
               </section>
 
