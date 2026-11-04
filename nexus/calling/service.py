@@ -309,12 +309,35 @@ class CallQueueService:
                 "source": contact.enrichment_source,
             }
 
+        # Their local time, shown beside the number (6.3). The contact's own zone, else the
+        # account's place; never the rep's own, which would read as theirs and be wrong.
+        from nexus.engagement.timekeeping import zone_for_place, zone_or_none
+
+        own_tz = ((contact.custom_fields or {}).get("timezone") if contact else None) or ""
+        place_tz = zone_for_place(getattr(account, "country", None), getattr(account, "region", None))
+        local_tz, tz_source = (
+            (str(own_tz).strip(), "contact") if zone_or_none(own_tz) is not None
+            else (place_tz, "account") if place_tz else (None, None)
+        )
+
+        from nexus.calling.value_fit import value_fit
+
+        props = await _value_props_for(ts, task)
+        fit = value_fit(props, person_context=[
+            contact.title if contact else None, person.role_angle if person else None,
+            getattr(account, "industry", None), *[s["title"] for s in signals],
+        ])
+
         return {
             "contact": contact_block,
             "account": account_block,
             "insights": insights,
             "signals": signals,
             "talking_points": _talking_points(person, score, account),
+            "local_timezone": local_tz,
+            "timezone_source": tz_source,
+            "likely_pain": person.role_angle if person else "",
+            "value_fit": fit,
         }
 
     async def place_call(
@@ -543,6 +566,19 @@ def _account_source_label(account) -> str:
         "auto_discovery": "ICP auto-discovery",
         "discovery": "Web discovery",
     }.get(src, src.replace("_", " ").title() if src else "Web enrichment")
+
+
+async def _value_props_for(ts: TenantSession, task: CallTask) -> list:
+    """The value props a call pitches: the workspace's. The one place to read them, so a campaign
+    that pitches one service (W8) changes this function and nothing in the brief. Never raises:
+    the brief must open even when the profile cannot be read."""
+    from nexus.relevance.engine import get_profile
+
+    try:
+        profile = await get_profile(ts)
+    except Exception:  # noqa: BLE001 - a missing profile costs one panel, never the call
+        return []
+    return list(getattr(profile, "value_props", None) or [])
 
 
 def _talking_points(person, score, account) -> list[str]:

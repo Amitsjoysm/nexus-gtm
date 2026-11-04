@@ -425,6 +425,20 @@ export interface CallBrief {
   insights: CallBriefInsights | null;
   signals: CallBriefSignal[];
   talking_points: string[];
+  /** Their IANA zone: the contact's own, else the account's place. Null when neither says. */
+  local_timezone?: string | null;
+  timezone_source?: "contact" | "account" | null;
+  /** What a person with their title usually cares about (the role angle). */
+  likely_pain?: string;
+  /** The workspace's value props, best fit first, with which pains look like theirs. */
+  value_fit?: CallBriefValueFit[];
+}
+
+export interface CallBriefValueFit {
+  name: string;
+  description: string;
+  pains: string[];
+  matched: string[];
 }
 
 export interface CallActivity {
@@ -2638,6 +2652,12 @@ export interface ConnectedMailbox {
   bounce_rate_7d: number;
   health_warning: string;
   created_at: string;
+  /** The owner in words, for the team view. */
+  owner_name?: string;
+  /** The daily figure `sent_today` is read against: advice, never a cap (D10). */
+  daily_advised?: number;
+  /** The workspace's writing style, which drafts from this mailbox follow (admin edits it). */
+  writing_style?: { tone: string; length_words: number | null; first_ask: string } | null;
 }
 
 export interface MailboxProviderState {

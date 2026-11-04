@@ -32,6 +32,12 @@ router = APIRouter(prefix="/engagement/mailboxes", tags=["engagement"])
 PROVIDERS = ("google", "microsoft")
 
 
+class WritingStyleOut(BaseModel):
+    tone: str = ""
+    length_words: int | None = None
+    first_ask: str = "interest"
+
+
 class MailboxOut(BaseModel):
     id: str
     provider: str
@@ -67,6 +73,12 @@ class MailboxOut(BaseModel):
     bounced_7d: int = 0
     bounce_rate_7d: float = 0.0
     health_warning: str = ""
+    # The mailbox table (6.2): whose it is in words, the daily figure `sent_today` is read against
+    # (advice, not a cap: `sending/limits.py`), and the workspace's writing style the drafts from
+    # it follow. The style is the workspace's, edited by an admin; the row only says what it is.
+    owner_name: str = ""
+    daily_advised: int = 50
+    writing_style: WritingStyleOut | None = None
 
 
 class ProviderStateOut(BaseModel):
@@ -104,10 +116,39 @@ async def _settings(ts: TenantSession):
     return read_settings(getattr(tenant, "email_settings", None))
 
 
-async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal) -> MailboxOut:
+async def _writing_style(ts: TenantSession) -> WritingStyleOut:
+    """What `GET /workspace/email/style` would say, minus samples and signature: that endpoint is
+    admin-only, and an SDR is still owed the sentence describing how their drafts are written."""
+    from nexus.agents.email_style import draft_options
+    from nexus.models.identity import Tenant
+
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    settings = dict(getattr(tenant, "email_settings", None) or {})
+    style = settings.get("style") if isinstance(settings.get("style"), dict) else {}
+    length = style.get("length_words")
+    return WritingStyleOut(
+        tone=str(style.get("tone") or ""),
+        length_words=length if isinstance(length, int) and not isinstance(length, bool) else None,
+        first_ask=draft_options({"style": style})["first_ask"],
+    )
+
+
+async def _owner_name(ts: TenantSession, user_id: str) -> str:
+    from nexus.models.identity import User
+
+    person = await ts.session.get(User, user_id)
+    return (getattr(person, "full_name", "") or getattr(person, "email", "") or "").strip()
+
+
+async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal,
+               *, style: WritingStyleOut | None = None) -> MailboxOut:
     from nexus.core.db import utcnow
     from nexus.engagement.reports.health import mailbox_health
-    from nexus.engagement.sending.limits import sent_today, volume_warning
+    from nexus.engagement.sending.limits import (
+        VOLUME_WARNING_THRESHOLD,
+        sent_today,
+        volume_warning,
+    )
     from nexus.engagement.settings import effective_confidence, reply_automation
 
     settings = await _settings(ts)
@@ -131,6 +172,9 @@ async def _out(ts: TenantSession, row: MailboxConnection, principal: Principal) 
         volume_warning=volume_warning(row.email, today),
         sent_7d=health.sent_7d, bounced_7d=health.bounced_7d,
         bounce_rate_7d=health.bounce_rate_7d, health_warning=health.warning,
+        owner_name=await _owner_name(ts, row.owner_user_id),
+        daily_advised=VOLUME_WARNING_THRESHOLD,
+        writing_style=style or await _writing_style(ts),
     )
 
 
@@ -158,7 +202,8 @@ async def list_mailboxes(
     if team and not _is_manager(principal):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only managers can see the team's mailboxes")
     rows = await _list(ts, user_id=principal.user_id, team=team)
-    return [await _out(ts, r, principal) for r in rows]
+    style = await _writing_style(ts)
+    return [await _out(ts, r, principal, style=style) for r in rows]
 
 
 @router.get("/providers", response_model=list[ProviderStateOut])
