@@ -96,7 +96,7 @@ export const NAV_ITEMS: NavItem[] = [
     capability: "module.campaigns", engine: "on",
   },
   {
-    to: "/engagement/templates", label: "Sequence templates", icon: <FileTextIcon />,
+    to: "/engagement/templates", label: "Cadences", icon: <FileTextIcon />,
     capability: "module.cadences", engine: "on",
   },
   { to: "/network", label: "Network", icon: <NetworkIcon />, capability: "module.network" },

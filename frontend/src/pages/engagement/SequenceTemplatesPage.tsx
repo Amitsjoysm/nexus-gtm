@@ -44,7 +44,7 @@ export function SequenceTemplatesPage() {
   const [deleting, setDeleting] = useState<SequenceTemplate | null>(null);
   const [busyDelete, setBusyDelete] = useState(false);
 
-  const problem = draft ? (!draft.name.trim() ? "Give the template a name." : stepsProblem(draft.steps)) : null;
+  const problem = draft ? (!draft.name.trim() ? "Give the cadence a name." : stepsProblem(draft.steps)) : null;
 
   async function save() {
     if (!draft || problem) return;
@@ -53,12 +53,12 @@ export function SequenceTemplatesPage() {
       const body = { name: draft.name.trim(), description: draft.description.trim(), steps: draft.steps };
       if (draft.id) await api.updateSequenceTemplate(draft.id, body);
       else await api.createSequenceTemplate(body);
-      toast.success(draft.id ? "Template saved" : "Template created",
+      toast.success(draft.id ? "Cadence saved" : "Cadence created",
         "New campaigns can start from it. Running campaigns keep their own steps.");
       setDraft(null);
       templates.refetch();
     } catch (err) {
-      toast.error("Template not saved", err instanceof ApiError ? err.detail : "Please try again.");
+      toast.error("Cadence not saved", err instanceof ApiError ? err.detail : "Please try again.");
     } finally {
       setSaving(false);
     }
@@ -69,7 +69,7 @@ export function SequenceTemplatesPage() {
     setBusyDelete(true);
     try {
       await api.deleteSequenceTemplate(deleting.id);
-      toast.success("Template deleted", "Campaigns created from it are unchanged.");
+      toast.success("Cadence deleted", "Campaigns created from it are unchanged.");
       setDeleting(null);
       templates.refetch();
     } catch (err) {
@@ -84,16 +84,16 @@ export function SequenceTemplatesPage() {
   return (
     <div className={styles.page}>
       <PageHeader
-        title="Sequence templates"
-        description="Reusable steps a campaign can start from. A campaign copies them when it is created, so changing a template never changes one that is running."
+        title="Cadences"
+        description="Reusable sequences of emails and calls a campaign can start from. A campaign copies the steps when it is created, so changing a cadence never changes one that is running."
         actions={!draft && (
-          <Button iconLeft={<Icons.PlusIcon />} onClick={newTemplate}>New template</Button>
+          <Button iconLeft={<Icons.PlusIcon />} onClick={newTemplate}>New cadence</Button>
         )}
       />
 
       {draft && (
         <Card padding="lg" className={styles.section}>
-          <h2 className={styles.sectionTitle}>{draft.id ? "Edit template" : "New template"}</h2>
+          <h2 className={styles.sectionTitle}>{draft.id ? "Edit cadence" : "New cadence"}</h2>
           <div className={styles.fields}>
             <Field label="Name" required>
               <Input value={draft.name} maxLength={200} autoFocus
@@ -110,14 +110,14 @@ export function SequenceTemplatesPage() {
           <div className={styles.formActions}>
             <Button variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
             <Button onClick={save} loading={saving} disabled={Boolean(problem)}>
-              {draft.id ? "Save template" : "Create template"}
+              {draft.id ? "Save cadence" : "Create cadence"}
             </Button>
           </div>
         </Card>
       )}
 
       {templates.error ? (
-        <ErrorState title="Couldn't load templates" message={templates.error.detail} onRetry={templates.refetch} />
+        <ErrorState title="Couldn't load cadences" message={templates.error.detail} onRetry={templates.refetch} />
       ) : !templates.data ? (
         <div className={styles.stack}>
           <Skeleton width="100%" height={96} />
@@ -127,9 +127,9 @@ export function SequenceTemplatesPage() {
         !draft && (
           <EmptyState
             icon={<Icons.FileTextIcon />}
-            title="No templates yet"
+            title="No cadences yet"
             description="Save the steps that work for your team once, and start every campaign from them."
-            action={<Button iconLeft={<Icons.PlusIcon />} onClick={newTemplate}>New template</Button>}
+            action={<Button iconLeft={<Icons.PlusIcon />} onClick={newTemplate}>New cadence</Button>}
           />
         )
       ) : (
@@ -175,12 +175,12 @@ export function SequenceTemplatesPage() {
       <Modal
         open={deleting !== null}
         onClose={() => setDeleting(null)}
-        title={`Delete ${deleting?.name ?? "this template"}?`}
+        title={`Delete ${deleting?.name ?? "this cadence"}?`}
         description="Campaigns already created from it keep their steps."
         footer={
           <>
             <Button variant="ghost" onClick={() => setDeleting(null)}>Cancel</Button>
-            <Button variant="danger" loading={busyDelete} onClick={remove}>Delete template</Button>
+            <Button variant="danger" loading={busyDelete} onClick={remove}>Delete cadence</Button>
           </>
         }
       >

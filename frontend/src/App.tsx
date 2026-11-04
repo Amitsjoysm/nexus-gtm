@@ -499,8 +499,8 @@ export function App() {
                   path="/engagement/templates"
                   element={
                     <RequirePage page="/engagement/templates">
-                      <RequireEngine name="Sequence templates">
-                        <RequireCapability capability="module.cadences" name="Sequence templates">
+                      <RequireEngine name="Cadences">
+                        <RequireCapability capability="module.cadences" name="Cadences">
                           <SequenceTemplatesPage />
                         </RequireCapability>
                       </RequireEngine>
