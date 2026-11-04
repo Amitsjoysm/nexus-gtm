@@ -5,14 +5,24 @@ from nexus.agents.copy import (
     OUTPUT_CONTRACT,
     account_facts,
     email_rules,
+    extra_fact_lines,
     format_pains,
+    pick_anchor,
+    product_line,
     select_value_prop,
     sender_block,
+    shape_for,
     signal_facts,
+    split_ps,
     today_line,
 )
-from nexus.agents.email_quality import check_draft
-from nexus.agents.email_style import draft_options, style_prompt
+from nexus.agents.email_quality import (
+    check_draft,
+    quoted_activity,
+    unverified_in_draft,
+    unverified_terms,
+)
+from nexus.agents.email_style import draft_options, ps_line_on, style_prompt
 from nexus.agents.llm import LLMMessage
 from nexus.agents.runtime import AgentContext, BaseAgent, register_agent
 
@@ -53,19 +63,41 @@ def _first_name(contact) -> str:
     return full.split()[0] if full else ""
 
 
-def retry_instruction(problems: list[str]) -> str:
-    """The corrective turn: what was wrong, in the model's own terms.
+def retry_instruction(problems: list[str], previous: str = "") -> str:
+    """The corrective turn: what was wrong, in the model's own terms, and the draft it was wrong in.
 
     Naming the faults is the whole point. "Try again" re-rolls the same dice; "there is no greeting
-    and no sign-off" is a brief.
+    and no sign-off" is a brief. And "keep everything else the same" means nothing to a model that
+    is not shown what it wrote, which it was not until 2026-10-29: the retry was a fresh roll with a
+    list of complaints attached, so it fixed one thing and changed five others.
     """
     joined = "\n".join(f"- {p}" for p in problems)
+    shown = (f"Your previous draft:\n-----\n{previous.strip()}\n-----\n"
+             if (previous or "").strip() else "")
     return (
-        "Your previous draft had these problems:\n"
+        f"{shown}"
+        "That draft had these problems:\n"
         f"{joined}\n"
         "Rewrite the whole email, fixing every one of them and keeping everything else the same. "
         "Return it in the same format: 'Subject: ...', a blank line, then the body."
     )
+
+
+async def _research_facts(ctx) -> list[str]:
+    """The highlights of this account's latest research brief, which the research agent stored and
+    no draft read. Never raises: a brief that cannot be read costs the extra facts, not the draft."""
+    try:
+        from nexus.models.intelligence import AgentRun
+
+        ts = ctx.ts
+        stmt = (ts.select(AgentRun, AgentRun.agent == "research",
+                          AgentRun.account_id == ctx.account.id,
+                          AgentRun.status == "completed")
+                .order_by(AgentRun.created_at.desc()).limit(1))
+        run = (await ts.session.scalars(stmt)).first()
+        return [str(f) for f in ((run.output or {}).get("facts") or [])] if run else []
+    except Exception:  # noqa: BLE001
+        return []
 
 
 async def _email_settings(ctx) -> dict:
@@ -128,29 +160,37 @@ class MessagingAgent(BaseAgent):
             contact = next((c for c in ctx.contacts if c.id == cid), None)
         contact = contact or (ctx.contacts[0] if ctx.contacts else None)
 
-        # Choose the strongest recent signal as the hook.
-        trigger_signal = max(signals, key=lambda s: s.strength, default=None)
-        trigger = trigger_signal.title if trigger_signal else "your current priorities"
+        # ONE ANCHOR, PICKED ONCE (content writers, 2026-10-29). It drives the hook, the value prop
+        # and `trigger_signal_id`; they were three separate picks, so one email could open on a
+        # funding round, pitch the hiring value prop and log a third signal as its reason.
+        anchor = pick_anchor(signals, contact)
+        trigger = anchor.title if anchor else "your current priorities"
+
+        # Person-level personalization: write to the individual (role and function, the same
+        # anchor, and any social insights), not just the account.
+        from nexus.core.config import get_settings
+        from nexus.personalization.brief import build_person_brief, role_words
+
+        brief = build_person_brief(contact, ctx.account, signals, anchor=anchor) \
+            if contact else None
+        hook = trigger
 
         vps = ctx.relevance_context.value_props
-        # MATCHED to what triggered the outreach, not always the first one. Pitching value_props[0]
-        # at every account regardless of the trigger is the mail-merge failure in its purest form:
-        # a hiring signal should pull the value prop about ramping new hires.
-        vp = select_value_prop(vps, signals)
+        # MATCHED to the anchor (its words and its kind), with the person's function as the
+        # tie-break, not always the first one. Pitching value_props[0] at every account regardless
+        # of the trigger is the mail-merge failure in its purest form.
+        vp = select_value_prop(vps, [anchor] if anchor else [],
+                               role=role_words(contact.title, contact.seniority) if contact else "")
         # Nouns, formatted to sit inside a sentence — see nexus/agents/copy.py for the
         # garbled email this replaced.
         pains = format_pains(vp.get("pains_solved", []))
-
-        # Person-level personalization: write to the individual (role/seniority, a signal tied to
-        # them when available, and any social insights), not just the account.
-        from nexus.core.config import get_settings
-        from nexus.personalization.brief import build_person_brief
-
-        brief = build_person_brief(contact, ctx.account, signals) if contact else None
-        hook = brief.signal_title if (brief and brief.signal_title) else trigger
+        what = product_line(vp)
 
         angle = (ctx.inputs.get("angle") or "").strip()
         touch = _touch(ctx)
+        # This contact's seeded opener, ask and subject style (`copy.shape_for`): stable for them,
+        # varied across a list, and logged on the message.
+        shape = shape_for(contact.id if contact else ctx.account.id)
         # Facts first, then the task, then the rules, then the output contract. The facts have to
         # precede the rules or "use only facts given above" refers to nothing.
         who = contact.full_name if contact else "the buyer"
@@ -159,10 +199,6 @@ class MessagingAgent(BaseAgent):
         # `account.name` and nothing else, so the model could not tell a 40-person fintech from a
         # 6,000-person manufacturer and wrote copy that fitted neither.
         facts = account_facts(ctx.account, ctx.relevance_context.icp)
-        # The signals WITH their bodies. Only `title` used to reach the model: we crawl "raised
-        # $40M led by Sequoia to expand European operations", store it, bill for it, and then sent
-        # the headline "Acme raises Series B". The specifics a rep opens on were being discarded.
-        recent = signal_facts(signals)
 
         content = (
             # First, because everything after it is dated relative to now: the signal ages, and the
@@ -172,18 +208,32 @@ class MessagingAgent(BaseAgent):
             f"{f', {role},' if role else ''} at {ctx.account.name}.\n\n"
             f"WHAT WE KNOW ABOUT THEM:\n{facts}\n"
         )
-        if recent:
-            content += f"\nRECENT SIGNALS (strongest first):\n{recent}\n"
+        # The anchor WITH its body. Only `title` used to reach the model: we crawl "raised $40M led
+        # by Sequoia to expand European operations", store it, bill for it, and then sent the
+        # headline. The other signals are background, labelled so, and left out when the context
+        # pack already lists them.
+        context_pack = (ctx.inputs.get("context_pack") or "").strip()
+        if anchor is not None:
+            content += f"\nTHE TRIGGER (the one signal this email is about):\n" \
+                       f"{signal_facts([anchor], limit=1)}\n"
+            others = [s for s in signals if s is not anchor]
+            if others and "LIVE SIGNALS" not in context_pack:
+                content += ("\nOTHER SIGNALS (background only; do not open on them):\n"
+                            f"{signal_facts(others)}\n")
+        extra = extra_fact_lines(research=await _research_facts(ctx),
+                                 fit=ctx.relevance_context.account_fit)
+        if extra:
+            content += f"\n{extra}\n"
         # The engagement engine's context pack (spec §7): the date in the buyer's timezone, the
         # whole conversation so far and every other conversation with this person. Placed with
         # the facts, before the rules, so "use only facts given above" covers it too.
-        context_pack = (ctx.inputs.get("context_pack") or "").strip()
         if context_pack:
             content += f"\n{context_pack}\n"
         # Who is sending, for callers without a context pack (the contact composer passes the
         # signed-in rep). Without it the model invents a name to sign with ("Best, Alex").
+        sender_name = str(ctx.inputs.get("sender_name") or "")
         if "YOU (THE SENDER)" not in context_pack:
-            sender = sender_block(str(ctx.inputs.get("sender_name") or ""))
+            sender = sender_block(sender_name)
             if sender:
                 content += f"\n{sender}"
         facts_to_use = [f for f in (ctx.inputs.get("personal_facts") or []) if f]
@@ -192,12 +242,19 @@ class MessagingAgent(BaseAgent):
             f"The value proposition to land: {vp.get('name')}\n"
             f"The problems it removes: {pains}\n"
         )
+        if what:
+            # What the product IS, for the one plain sentence `STRUCTURE_RULE` asks for. Drafts
+            # described the problem and never said what was on offer.
+            content += f"What we do (say it in one plain sentence, in a buyer's words): {what}\n"
         if brief is not None:
             content += brief.to_prompt(max_posts=get_settings().personalization_max_posts) + "\n"
         if angle:
             # Per-touch cadence angle: shape this specific touch (e.g. a follow-up nudge,
             # a case-study share) so successive touches don't repeat the same message.
             content += f"Angle for this specific touch: {angle}\n"
+        # What the verifier accepts as given: the system grounding and every fact above. NOT the
+        # house-style samples below: a sample's customer and metric belong to another deal.
+        grounding = f"{ctx.system_message().content}\n{content}"
         # The workspace's own voice: tone, length and its sample emails, offered as STRUCTURE only.
         # Placed after the facts and before the rules, so the rules — including "use only facts
         # given above" — are still the last word on what may be claimed.
@@ -213,13 +270,37 @@ class MessagingAgent(BaseAgent):
             # Reviewer redraft instructions from the approval gate take precedence — they are
             # an explicit human steer on this exact message ("make it shorter", "mention SOC2").
             content += f"Revise per the reviewer's instructions: {guidance}\n"
+            grounding += f"\n{guidance}"
         # Rules last so they are the final thing before generation, and the reviewer's steer above
         # is never buried under them.
         # The rules for THIS touch (`copy.email_rules`): a reply offers times, an unanswered email
         # asks one interest question, a threaded one keeps the thread's subject.
         # A reply the AI sends by itself asks for a day instead of offering times (`auto_reply`).
         automatic = bool(ctx.inputs.get("automatic_reply"))
-        content += f"\n{email_rules(touch, automatic=automatic, **options)}\n{OUTPUT_CONTRACT}"
+        # The optional P.S. only on a first email, which a person always reviews (D4), and only
+        # when the workspace switched it on.
+        wants_ps = ps_line_on(email_settings) and touch == "first" and not automatic
+        content += (f"\n{email_rules(touch, automatic=automatic, shape=shape, ps=wants_ps, **options)}"
+                    f"\n{OUTPUT_CONTRACT}")
+        allow = [n for n in (who if contact else "", ctx.account.name, sender_name) if n]
+        posts = brief.posts if brief is not None else []
+
+        def checked(subject: str, body: str) -> list[str]:
+            return check_draft(
+                subject=subject, body=body, first_name=_first_name(contact),
+                facts=facts_to_use, company_name=ctx.account.name or "", touch=touch,
+                context=grounding, allow=allow, activity=posts, **options,
+            )
+
+        variables = {
+            "account": ctx.account.name,
+            "contact": contact.full_name if contact else "there",
+            "value_prop": vp.get("name", "our platform"),
+            "trigger": trigger,
+            "pain": pains,
+            "what": what,
+            "shape": shape,
+        }
         user = LLMMessage(role="user", content=content)
         message = await ctx.complete(
             [ctx.system_message(), user],
@@ -239,47 +320,39 @@ class MessagingAgent(BaseAgent):
             # reason and has never shown the fault. Sized to the same shape rather than to the
             # email's own length, because what needs the headroom is the thinking, not the output.
             max_tokens=1500,
-            variables={
-                "account": ctx.account.name,
-                "contact": contact.full_name if contact else "there",
-                "value_prop": vp.get("name", "our platform"),
-                "trigger": trigger,
-                "pain": pains,
-            },
+            variables=variables,
         )
         subject, body = _split_subject(message)
+        # A P.S. never rides in the body: it is a separate field a person confirms on Review
+        # (`copy.PS_RULE`), so one a model added unasked is taken off and dropped.
+        body, ps = split_ps(body)
         # CHECK IT, THEN FIX IT ONCE. A rule in a prompt is a request: the same instruction is
         # followed on one generation and dropped on the next, which is how drafts reached reps with
-        # no greeting at all (reported 2026-09-16). One retry, carrying the specific complaints —
-        # a second blind attempt would be a coin flip, and more than one turns every draft into
-        # three completions nobody asked to pay for.
-        problems = check_draft(
-            subject=subject, body=body, first_name=_first_name(contact),
-            facts=facts_to_use, company_name=ctx.account.name or "", touch=touch, **options,
-        )
+        # no greeting at all (reported 2026-09-16). One retry, carrying the specific complaints and
+        # the draft they are about — a second blind attempt would be a coin flip, and more than one
+        # turns every draft into three completions nobody asked to pay for.
+        problems = checked(subject, body)
         if problems:
             retry = LLMMessage(
-                role="user", content=f"{content}\n\n{retry_instruction(problems)}"
+                role="user",
+                content=f"{content}\n\n"
+                        f"{retry_instruction(problems, previous=f'Subject: {subject}{chr(10)*2}{body}')}",
             )
             second = await ctx.complete(
                 [ctx.system_message(), retry], purpose="outreach_message", max_tokens=1500,
-                variables={
-                    "account": ctx.account.name,
-                    "contact": contact.full_name if contact else "there",
-                    "value_prop": vp.get("name", "our platform"),
-                    "trigger": trigger,
-                    "pain": pains,
-                },
+                variables=variables,
             )
             retry_subject, retry_body = _split_subject(second)
+            retry_body, retry_ps = split_ps(retry_body)
             # Keep the retry only when it is genuinely better: a second attempt that is empty, or
             # that breaks MORE rules than the first, is not an improvement worth showing.
-            if retry_body.strip() and len(
-                check_draft(subject=retry_subject, body=retry_body,
-                            first_name=_first_name(contact), facts=facts_to_use,
-                            company_name=ctx.account.name or "", touch=touch, **options)
-            ) < len(problems):
-                message, subject, body = second, retry_subject, retry_body
+            if retry_body.strip() and len(checked(retry_subject, retry_body)) < len(problems):
+                message, subject, body, ps = second, retry_subject, retry_body, retry_ps
+        # A P.S. is kept only when asked for, and only when it says nothing the verifier cannot
+        # find and quotes nothing: it sits below the signature with a person's word on it.
+        if not wants_ps or unverified_terms(ps, grounding, allow=allow, strict=True) \
+                or quoted_activity(ps, posts):
+            ps = ""
         # A BLANK COMPLETION IS NOT A DRAFT. Observed live 2026-09-08: the provider returned an
         # empty string, `_split_subject("")` yielded two empty strings, and the run reported
         # `status: completed` with an empty subject and an empty body — which reaches the approval
@@ -304,7 +377,14 @@ class MessagingAgent(BaseAgent):
             "subject": subject,
             "body": body,
             "message": message,
-            "trigger_signal_id": trigger_signal.id if trigger_signal else None,
+            "trigger_signal_id": anchor.id if anchor is not None else None,
+            "value_prop": vp.get("name"),
+            "shape": shape,
+            "ps": ps,
+            # What the fact verifier could not find in the grounding, for the drafter: it holds an
+            # automatic follow-up whose body still names one (`drafting/drafter.py`).
+            "unverified": unverified_in_draft(subject=subject, body=body, context=grounding,
+                                              allow=allow),
         }
 
 

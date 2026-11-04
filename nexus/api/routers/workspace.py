@@ -649,7 +649,14 @@ async def get_email_style(
         length_words=style.get("length_words"),
         samples=[str(s) for s in (style.get("samples") or []) if str(s).strip()],
         first_ask=_first_ask(style),
+        ps_line=_ps_line(style),
     )
+
+
+def _ps_line(style: dict) -> bool:
+    from nexus.agents.email_style import ps_line_on
+
+    return ps_line_on({"style": style})
 
 
 def _first_ask(style: dict) -> str:
@@ -681,6 +688,7 @@ async def set_email_style(
         "samples": samples,
         # Omitted keeps what is saved, so a client from before the field cannot reset it.
         "first_ask": body.first_ask or _first_ask(previous),
+        "ps_line": body.ps_line if body.ps_line is not None else _ps_line(previous),
     }
     tenant.email_settings = settings
     await ts.flush()
@@ -690,6 +698,7 @@ async def set_email_style(
         length_words=settings["style"]["length_words"],
         samples=samples,
         first_ask=settings["style"]["first_ask"],
+        ps_line=settings["style"]["ps_line"],
     )
 
 

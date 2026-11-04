@@ -100,8 +100,16 @@ def compose_message_text(body: str, signature: str, sender_name: str = "") -> st
     not keeps the model's closing word ("Best,") above it. Either way the model's name line goes: it
     is a guess, and the signature carries the real name. With no signature, the closing is kept and
     signed with the sender's first name. Idempotent: text that already holds the signature is left
-    as it is, so a draft shown in the composer and then sent gains nothing."""
+    as it is, so a draft shown in the composer and then sent gains nothing.
+
+    A P.S. a rep confirmed on Review (`copy.PS_RULE`) ends the body; it is moved below the
+    signature, where a P.S. belongs, and the closing is found above it."""
+    from nexus.agents.copy import PS_PREFIX, split_ps
+
     text = _OPT_OUT.sub("", tidy_text(body or "")).rstrip()
+    text, ps = split_ps(text)
+    if ps:
+        return f"{compose_message_text(text, signature, sender_name)}\n\n{PS_PREFIX} {ps}"
     signature = tidy_text(signature or "").strip()
     if signature:
         if signature in text:

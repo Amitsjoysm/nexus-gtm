@@ -278,6 +278,19 @@ export function EmailStyleCard() {
                 />
               </Field>
               <Field
+                label="P.S. on first emails"
+                hint="The AI may add one P.S. built on a fact it was given. It is never sent until the rep ticks “I confirm this is true” on Review, and never on automatic follow-ups."
+              >
+                <Select
+                  value={value.ps_line ? "offer" : "off"}
+                  onChange={(e) => set("ps_line", e.target.value === "offer")}
+                  options={[
+                    { value: "off", label: "No P.S. (default)" },
+                    { value: "offer", label: "Offer one for the rep to confirm" },
+                  ]}
+                />
+              </Field>
+              <Field
                 label="Example emails"
                 hint="Up to 3. The agent copies their structure and voice only — never their customer names, metrics or claims."
               >

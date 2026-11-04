@@ -193,9 +193,12 @@ class CallQueueService:
             enrollment = await ts.get(EngagementEnrollment, task.engagement_enrollment_id)
             campaign_id = enrollment.campaign_id if enrollment is not None else None
         async with campaign_service(ts, campaign_id):
+            # The caller the task belongs to, so the script introduces a real person rather than
+            # "<your name>" (`call_script._caller`).
             result = await get_agent_runtime().run(
                 "call_script", ts, account_id=task.account_id,
                 contact_id=task.contact_id, persist=False,
+                caller_user_id=getattr(task, "owner_user_id", None),
             )
         script = dict((result.output or {}).get("script") or {})
         if script:

@@ -65,6 +65,16 @@ def draft_options(settings: dict | None) -> dict:
         return {"word_cap": None, "first_ask": "interest"}
 
 
+def ps_line_on(settings: dict | None) -> bool:
+    """Whether first emails may carry the optional verified P.S. (`copy.PS_RULE`). Off unless the
+    workspace switched it on, and only a real boolean counts: the panel posts JSON, and the string
+    "false" is truthy in Python."""
+    try:
+        return _style(settings).get("ps_line") is True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def style_prompt(settings: dict | None) -> str:
     """The style block for the messaging prompt, or "" when the workspace has configured nothing.
 

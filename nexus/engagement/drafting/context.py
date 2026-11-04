@@ -253,7 +253,11 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
     parts.append("THE COMPANY\n" + account_facts(account, icp) + "\n")
     rendered_signals = signal_facts(signals)
     if rendered_signals:
-        parts.append("LIVE SIGNALS (strongest first)\n" + rendered_signals + "\n")
+        # Background: the draft opens on ONE anchor, which the messaging agent picks and names as
+        # THE TRIGGER (`copy.pick_anchor`, 2026-10-29). Labelled so, or the model reads a second
+        # list of "signals to use" and opens on whichever it saw first.
+        parts.append("LIVE SIGNALS (background; open only on the trigger named in this prompt)\n"
+                     + rendered_signals + "\n")
 
     touch_line = ""
     if kind == "followup" and step is not None:

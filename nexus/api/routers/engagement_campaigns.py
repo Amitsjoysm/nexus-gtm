@@ -116,6 +116,9 @@ class ApproveIn(BaseModel):
 
     subject: str | None = None
     body: str | None = None
+    #: The rep ticked "I confirm this is true" for the draft's P.S. (`copy.PS_RULE`). Only then is
+    #: it added to the email; approving without it sends the email with no P.S.
+    confirm_ps: bool = False
 
 
 class MoveIn(BaseModel):
@@ -581,8 +584,20 @@ async def approve_message(
     from nexus.engagement.sequences.service import CampaignError, approve
 
     message = await _message(ts, message_id, principal)
+    text = body.body
+    ps = next((str(f.get("label") or "") for f in (message.draft_facts or [])
+               if isinstance(f, dict) and f.get("kind") == "ps"), "")
+    if body.confirm_ps and ps and message.status == "draft":
+        # The P.S. a person vouched for joins the email (below the signature at send,
+        # `sending/mime.compose_message_text`). The AI wrote it, so it joins the AI's text too:
+        # confirming it is not an edit of the draft.
+        from nexus.agents.copy import with_ps
+
+        text = with_ps(text if text is not None else message.body_text, ps)
+        if message.ai_body is not None:
+            message.ai_body = with_ps(message.ai_body, ps)
     try:
-        await approve(ts, message, user_id=principal.user_id, subject=body.subject, body=body.body)
+        await approve(ts, message, user_id=principal.user_id, subject=body.subject, body=text)
     except CampaignError as exc:
         raise _refuse(exc) from exc
 

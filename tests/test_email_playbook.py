@@ -49,7 +49,10 @@ def test_a_cold_email_asks_for_interest_not_a_meeting():
 
     assert EMAIL_CTA_RULE in EMAIL_RULES
     lowered = EMAIL_CTA_RULE.lower()
-    assert "worth a look?" in lowered
+    # Described, no longer quoted (content writers, 2026-10-29): the quoted 'Worth a look?' closed
+    # most drafts word for word. `tests/test_copy_upgrade.py` refuses examples in the rules.
+    assert "interest-based question" in lowered and "yes or no" in lowered
+    assert "worth a look?" not in lowered
     assert "do not ask for a meeting" in lowered and "duration" in lowered
 
 

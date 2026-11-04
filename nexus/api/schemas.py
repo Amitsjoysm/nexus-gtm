@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StrictBool
 
 
 # ---- auth ----
@@ -410,6 +410,9 @@ class CallScriptOut(BaseModel):
     value_prop: str = ""
     discovery_questions: list[str] = Field(default_factory=list)
     objections: list[dict] = Field(default_factory=list)
+    #: Answers to the three first reactions ("Who is this?", "Just send me an email.", "I'm
+    #: busy."), each ``{reaction, response}`` (`copy.FIRST_REACTIONS`, 2026-10-29).
+    first_reactions: list[dict] = Field(default_factory=list)
     cta: str = ""
     voicemail: str = ""
     #: When this script was written. The console shows it, and a script is reused only on that day.
@@ -948,6 +951,9 @@ class EmailStyleIn(BaseModel):
     #: What a first email asks for: the playbook's one-word interest question (default), or a short
     #: meeting. Optional so a client that predates the field keeps what is saved.
     first_ask: Literal["interest", "meeting"] | None = None
+    #: Offer an optional P.S. on first emails, which a rep must confirm before it is sent
+    #: (`copy.PS_RULE`). Optional so a client that predates the field keeps what is saved.
+    ps_line: StrictBool | None = None
 
 
 class EmailStyleOut(BaseModel):
@@ -956,6 +962,7 @@ class EmailStyleOut(BaseModel):
     length_words: int | None = None
     samples: list[str] = Field(default_factory=list)
     first_ask: str = "interest"
+    ps_line: bool = False
 
 
 class MailboxOut(BaseModel):
