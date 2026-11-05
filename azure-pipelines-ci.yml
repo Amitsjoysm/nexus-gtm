@@ -107,6 +107,12 @@ stages:
               backend=false; frontend=false
               echo "$CHANGED" | grep -qE '^(nexus/|tests/|tests_integration/|migrations/|scripts/|pyproject\.toml|constraints\.txt|alembic\.ini|deploy/Dockerfile|Dockerfile)' && backend=true
               echo "$CHANGED" | grep -qE '^frontend/' && frontend=true
+              # A branch build (a push to master/main) runs every stage. HEAD~1 is only the LAST
+              # commit of the push: a push whose last commit touched only this file skipped ruff,
+              # the tests and the type check for every code commit under it, and reported green
+              # (build 50, 2026-11-05). Azure gives a push no "before" commit to diff from, and a
+              # master build is what the CD pipeline deploys, so it must test everything.
+              if [ "${BUILD_REASON}" != "PullRequest" ]; then backend=true; frontend=true; fi
 
               # The image bakes the SPA in, so a frontend change is also an image change.
               echo "##vso[task.setvariable variable=backend;isOutput=true]$backend"
