@@ -142,7 +142,7 @@ def followup_instruction(touch: int, total: int) -> str:
 
 async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
                         kind: str = "first", now: datetime | None = None,
-                        thread=None) -> ContextPack:
+                        thread=None, automatic: bool = False) -> ContextPack:
     """The pack for one draft. Reads only this tenant's rows, through the tenant session.
 
     ``thread`` is the conversation being answered or continued, when the caller knows it. It wins
@@ -281,7 +281,14 @@ async def build_context(ts, *, enrollment, contact, account, mailbox, step=None,
                      "write that you are just following up or bumping this." + touch_line),
         "reengage": ("They asked us to get back in touch around now. Reference that they asked, in "
                      "one short line, and make it easy to pick the conversation back up."),
+        # A reply the AI sends by itself never names a time: nobody has read it and the AI cannot
+        # see the rep's calendar (`copy.AUTO_REPLY_CTA_RULE`). This line used to ask for two times
+        # whatever the case, the model followed it, and every automatic answer to an interested
+        # buyer was then held by `auto_reply.names_a_time` (the Gmail run, 2026-11-05).
         "response": ("They replied. Answer what they actually said first, briefly. If they showed "
+                     "interest or asked to talk, ask which days suit them for a short call; never "
+                     "name a day, date or time. Otherwise propose one next step.") if automatic else
+                    ("They replied. Answer what they actually said first, briefly. If they showed "
                      "interest or asked to talk, offer two specific times in their timezone from "
                      "the date above and ask which suits; otherwise propose one next step."),
         "signal": ("Our earlier emails went unanswered, or they asked to talk later. Something new "

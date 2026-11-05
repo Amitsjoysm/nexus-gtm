@@ -109,7 +109,8 @@ async def _draft(ts, *, enrollment, contact, account, mailbox, step=None, kind: 
 
     await _fresh_insights(ts, contact)
     pack = await build_context(ts, enrollment=enrollment, contact=contact, account=account,
-                               mailbox=mailbox, step=step, kind=kind, now=now, thread=thread)
+                               mailbox=mailbox, step=step, kind=kind, now=now, thread=thread,
+                               automatic=automatic)
     try:
         async with metered(ts, capability, user_id=user_id, source="engagement"):
             result = await get_agent_runtime().run(

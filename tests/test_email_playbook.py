@@ -478,3 +478,23 @@ async def test_a_meeting_workspace_drafts_are_asked_for_a_meeting(capturing):
     prompt = capturing.prompts[-1]
     assert MEETING_CTA_RULE in prompt and EMAIL_CTA_RULE not in prompt
     assert "Under 120 words" in prompt
+
+
+async def test_an_automatic_reply_is_told_to_ask_for_days_never_a_time(capturing):
+    """The Gmail run (2026-11-05): the reply context told every reply to offer two specific times,
+    the automatic reply followed it, and `auto_reply.names_a_time` then held every automatic answer
+    to an interested buyer. An automatic reply is told to ask which days suit."""
+    from nexus.engagement.drafting.drafter import draft
+    from nexus.models.account import Account, Contact
+    from nexus.models.engagement import EngagementEnrollment, MailboxConnection
+
+    tid, step_ids, enrollment_id, contact_id, account_id, mailbox_id = await _world()
+    async with tenant_session(tid) as ts:
+        await draft(ts, enrollment=await ts.get(EngagementEnrollment, enrollment_id),
+                    contact=await ts.get(Contact, contact_id),
+                    account=await ts.get(Account, account_id),
+                    mailbox=await ts.get(MailboxConnection, mailbox_id),
+                    kind="response", now=NOW, automatic=True)
+    prompt = capturing.prompts[-1]
+    assert "never name a day, date or time" in prompt
+    assert "offer two specific times" not in prompt
