@@ -246,9 +246,10 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0077_icp_services` on branch `fix/sdr-data-accuracy`
+Alembic under `migrations/versions/`. Head: `0079_mailbox_style` on branch `fix/sdr-data-accuracy`
 (`0073_field_provenance`, `0074_draft_facts`, `0075_call_scripts`, `0076_run_soft_delete`,
-`0077_icp_services`, none applied anywhere but a DB copy); `0072_prospector` before them. `0076`
+`0077_icp_services`, `0078_user_call_scripts`, `0079_mailbox_style`; 0073-0077 are on the local
+deploy, none on staging or production); `0072_prospector` before them. `0076`
 (SDR round 2, Session B) and `0077` (Session E) were written on parallel branches both parented on
 `0075`; `0077` was re-parented onto `0076` at the merge (2026-11-04), so there is one head. The
 chain is
@@ -2526,6 +2527,16 @@ limits**, scoped to gauges, where a quota is still the literal truth.
 
 ## Plan-gated navigation (`frontend/src/app/EntitlementsContext.tsx`)
 
+**The gates are read again whenever they can have changed** (2026-11-04,
+`tests/test_entitlements_refresh_ui.py`). Reported as "padlocks on Mail and Calls below the top
+plan": the server locked nothing on Launch; the client read the gates once per page load, outside
+the part of the shell that remounts on a workspace switch. AppShell now keys the providers on
+`tenantEpoch`; `useRefreshEntitlements` runs after an in-app plan switch and when Stripe confirms a
+Checkout (the page loads before the webhook), and a tab coming back after a minute re-reads them.
+Superadmin controls for a padlock: Plans tab "What's included" (per plan), a custom plan (one
+workspace), Feature switches (everyone, an Off/Soon badge rather than a padlock), and Configuration
+Billing enforcement (`shadow` removes every plan padlock and every limit).
+
 The sidebar was blind to entitlements, so a `free` workspace saw Network and Campaigns and found
 out by clicking and getting a 402. `GET /billing/entitlements` resolves the `module.*` gates
 through the real engine and drives the nav.
@@ -2914,6 +2925,15 @@ composer, call scripts and campaign drafts (`tests/test_draft_facts.py`):
   action route's.
 
 ## The call console is one screen (`components/CallConsole.tsx`, 6.3, 2026-10-29)
+
+**An SDR uploads their own script in the console** (2026-11-04, migration `0078`,
+`tests/test_call_script_upload.py`). `user_call_scripts`, one per person per workspace, read with
+the campaign script's reader (.docx/.txt). `/calling/my-script` (get, upload, remove) and
+`/calling/tasks/{id}/my-script` (placeholders filled by the shared `_placeholder_values`). The
+script panel has Upload my script / Replace / Remove; a call whose campaign has a script too gets a
+Mine / Campaign switch, theirs first. A call script names the caller: the task's owner, else the
+rep who opened it, and with no name known the prompt says never to make one up (`caller_block`;
+measured, the model introduced "Alex").
 
 SDR feedback: the rep should be prepared before the call and never scroll during it. The old console
 sat beside the queue and scrolled. `tests/test_call_console.py`.
@@ -3652,6 +3672,39 @@ detail, apart from Save, so it is never the button pressed by habit. `tests/test
   per list, not per row. A stored length that is not a number is passed on as null.
 - It fits the Settings frame at 1366x768 (829px for the table) without sideways scroll: a two-line
   clamp on the status reason, slim cells, provider and last read leave below 860px.
+- **Each mailbox sets its own writing style, the workspace's is the default** (2026-11-04, owner
+  decision; migration `0079`, `tests/test_mailbox_style.py`). `mailbox_connections.style` holds
+  tone, length, first ask, P.S. and samples; `email_style.merged_settings` lays it over the
+  workspace's field by field, and every reader of the style takes the merge: the messaging agent
+  (`mailbox_id` input), the campaign drafter's final check, the composer (the mailbox its Send
+  uses, `resolve_connected_mailbox`). The owner edits it beside the signature under one Save; each
+  blank field names the default it uses. The row reports `own_style`, `workspace_style` and
+  `writing_style` (in force, with `ps_line` and `sample_count`; the workspace's sample text stays
+  an admin's). Settings "Email & signature" is now **Email defaults**.
+- **App-password mailboxes are listed too** (`GET /engagement/mailboxes/app-password`): a second
+  table, marked for one-off emails, because campaigns send only from a mailbox connected with
+  Google or Microsoft sign-in (owner decision 2026-11-04). No password or server detail in it.
+- **Connect Google/Microsoft needs the Public base URL** (Control plane, Mailbox apps): without it
+  `oauth_app(...).missing` names it, both buttons read "Not set up yet", nothing can be connected,
+  and the table is empty. That was the local stack on 2026-11-04.
+
+## Mail is one Outlook-style screen with the reply desk in it (2026-11-04)
+
+Asked: "Mail like Outlook, easy navigation in threads and trailing mails", and "Mail and Replies
+merged for easy access". Owner decision: one Mail (`pages/engagement/MailPage.tsx`). Folders down
+the side (a row below 1200px): **Needs reply** (the desk's queue), **All mail**, **Sent, no reply**
+(`/engagement/inbox?unanswered=true`), **Scheduled**, **Write again**, **Handled**. The desk's parts
+(`Queue`, `ReplyDetail`, `Scheduled`) live in `ReplyDeskPage.tsx` and are imported; an open reply in
+All mail shows `ReplyDetail` in place, so a reply is answered where it is read. Sending is unchanged
+(`desk.send_response`). Up and Down move through a list (`stepThrough`). An inbound message is split
+by `parse.split_quoted` into the reply and the history it quotes; both views fold the history under
+"Show quoted text" (the desk used to show it whole). Replies left the menu and its page switch;
+`/engagement/replies` forwards with its tab and reply, and server links (thread `reply_link`, Today
+tasks, MCP) point at Mail's folders. Reply settings follow Mail's page switch.
+`tests/test_unified_inbox.py`, `tests/test_engagement_screens_ui.py`.
+
+**Sequence templates are called Cadences** (2026-11-04): what people read only. The route
+(`/engagement/templates`), the API and `module.cadences` keep their names.
 
 ## Calls as any step, the Inbox as the task list, history and Mail (SDR round 2, 2026-10-29)
 
