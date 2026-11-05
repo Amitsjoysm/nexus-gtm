@@ -77,13 +77,15 @@ def test_the_dashboard_summarises_today_and_sends_people_to_the_inbox():
     assert "{engineOn && <TodayPlan />}" in _read(PAGES / "DashboardPage.tsx")
 
 
-def test_mail_reads_every_conversation_and_answers_on_the_reply_desk():
+def test_mail_reads_every_conversation_and_answers_with_the_reply_desk():
     page = _read(PAGES / "engagement" / "MailPage.tsx")
-    assert "api.inboxThreads(filters, s)" in page and "api.inboxThread(threadId, s)" in page
+    assert "api.inboxThreads(query, s)" in page and "api.inboxThread(threadId, s)" in page
     for control in ('aria-label="Mailbox"', 'aria-label="Campaign"', "Replied", "Waiting on you"):
         assert control in page, control
-    # Replying is the reply desk's: Mail links there and has no send of its own.
-    assert "<ButtonLink to={replyLink}" in page
+    # Since 2026-11-04 Mail holds the reply desk: an open reply is answered in place, through the
+    # desk's own view, and Mail still has no send of its own (the desk's is the one send path).
+    assert "<ReplyDetail key={replyId} id={replyId}" in page
+    assert 'import { Queue, ReplyDetail, Scheduled, stepThrough } from "./ReplyDeskPage";' in page
     for send in ("deskSend(", "restartSend(", "sendEmailToContact(", "deskSaveDraft("):
         assert send not in page, f"Mail must not grow a send of its own: {send}"
     api = _read(SRC / "lib" / "api.ts")
