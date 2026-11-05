@@ -64,6 +64,14 @@ variables:
     value: "3.11"
   - name: NODE_VERSION
     value: "20"
+  # pip reads these from the environment for every install in the pipeline. Build 49 (2026-11-05)
+  # failed Lint before ruff ran: the hosted agent's pip got five 15-second read timeouts from
+  # pypi.org and gave up ("No matching distribution found for ruff>=0.5"). Longer waits and more
+  # retries ride out a slow index instead of turning a clean commit red.
+  - name: PIP_DEFAULT_TIMEOUT
+    value: "60"
+  - name: PIP_RETRIES
+    value: "10"
   # Set these as pipeline variables in the ADO UI (Pipelines > Edit > Variables):
   #   ACR_NAME            e.g. nexusprodacr
   #   AZURE_SUBSCRIPTION  the workload-identity-federation service connection name

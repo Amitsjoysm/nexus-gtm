@@ -30,6 +30,14 @@ variables:
   - group: gtm-deploy
   - name: IMAGE_REPO
     value: nexus-gtm
+  # pip reads these from the environment for every install in the pipeline. Build 49 (2026-11-05)
+  # failed Lint before ruff ran: the hosted agent's pip got five 15-second read timeouts from
+  # pypi.org and gave up ("No matching distribution found for ruff>=0.5"). Longer waits and more
+  # retries ride out a slow index instead of turning a clean commit red.
+  - name: PIP_DEFAULT_TIMEOUT
+    value: "60"
+  - name: PIP_RETRIES
+    value: "10"
   # The production interpreter (deploy/Dockerfile: python:3.11-slim). An audit on another
   # interpreter can resolve different wheels than production ships.
   - name: PYTHON_VERSION
