@@ -318,6 +318,12 @@ async def _mark_sent(ts, row, sent, now: datetime) -> None:
     row.sent_at = now
     row.error = None
     row.provider_message_id = sent.provider_message_id or row.provider_message_id
+    # The Message-ID the provider SENT, which is what the recipient's client threads on. Gmail
+    # replaces the one we write, and Outlook assigns its own; keeping ours made every follow-up's
+    # In-Reply-To name a message the recipient never had, so their Gmail opened a new thread for
+    # each one (found sending real mail, 2026-11-05). The sender's own view looked right because
+    # the provider files a reply by its thread id.
+    row.rfc_message_id = sent.rfc_message_id or row.rfc_message_id
     if sent.provider_thread_id:
         thread = await thread_for(ts, row, sent.provider_thread_id, now)
         row.thread_id = thread.id

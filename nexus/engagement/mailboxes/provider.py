@@ -115,6 +115,10 @@ class MailProvider(Protocol):
 
     async def get_message(self, provider_message_id: str) -> InboundMessage: ...
 
+    async def rfc_message_id_of(self, provider_message_id: str) -> str:
+        """The Message-ID a message was actually sent with ("" when it cannot be read)."""
+        ...
+
     async def find_sent(
         self, *, ref_header: str, to: str, around: datetime
     ) -> SentRef | None: ...

@@ -138,6 +138,11 @@ class GraphProvider:
         draft = await self._import(mime, thread)
         return str(draft.get("id", ""))
 
+    async def rfc_message_id_of(self, provider_message_id: str) -> str:
+        data = await self._get(f"/me/messages/{provider_message_id}",
+                               {"$select": "internetMessageId"})
+        return str(data.get("internetMessageId") or "")
+
     async def _window(self, since: str) -> ChangeBatch:
         ids: list[str] = []
         latest = since

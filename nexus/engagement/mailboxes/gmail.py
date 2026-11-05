@@ -89,6 +89,10 @@ class GmailProvider:
             rfc_message_id=headers.get("message-id", ""),
         )
 
+    async def rfc_message_id_of(self, provider_message_id: str) -> str:
+        _data, headers = await self._headers(provider_message_id, ("Message-ID",))
+        return headers.get("message-id", "")
+
     async def create_draft(self, mime: bytes, *, thread: ThreadRef | None) -> str:
         message: dict = {"raw": b64url(mime)}
         if thread and thread.provider_thread_id:

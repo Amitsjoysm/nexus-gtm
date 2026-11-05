@@ -37,6 +37,9 @@ class SentFolder:
         self.calls = 0
         self.fail_next: Exception | None = None
         self.deliver_then_fail = False
+        #: Gmail replaces the Message-ID we write with its own; Outlook assigns its own too.
+        self.rewrite_ids = False
+        self.sent_ids: dict[str, str] = {}
 
     async def send(self, mime: bytes, *, thread=None):
         from nexus.engagement.mailboxes.provider import SentRef
@@ -49,8 +52,14 @@ class SentFolder:
                 self.delivered.append(mime)
             raise error
         self.delivered.append(mime)
-        return SentRef(provider_message_id=f"pm-{len(self.delivered)}",
+        pm = f"pm-{len(self.delivered)}"
+        rfc = f"<gmail-{len(self.delivered)}@mail.gmail.com>" if self.rewrite_ids else ""
+        self.sent_ids[pm] = rfc or message_from_bytes(mime)["Message-ID"]
+        return SentRef(provider_message_id=pm, rfc_message_id=rfc,
                        provider_thread_id=getattr(thread, "provider_thread_id", "") or "thread-1")
+
+    async def rfc_message_id_of(self, provider_message_id: str) -> str:
+        return self.sent_ids.get(provider_message_id, "")
 
     async def create_draft(self, mime: bytes, *, thread=None) -> str:
         self.drafts.append(mime)
@@ -469,3 +478,66 @@ async def test_the_draft_is_told_who_it_is_written_as():
         pack = await build_context(ts, enrollment=enrollment, contact=contact, account=account,
                                    mailbox=mailbox, kind="first")
         assert "- Name: Sam Rep" in pack.text, "falls back to the mailbox owner's name"
+
+
+# ---- the Message-ID the provider sent (2026-11-05) -----------------------------------------------
+
+async def test_a_follow_up_answers_the_message_id_the_recipient_received(folder):
+    """Found sending real mail: Gmail replaces the Message-ID we write, and the stored one was
+    ours, so every follow-up named a message the recipient never had and opened a new thread in
+    their inbox. The sender's own view looked right: Gmail files it by thread id."""
+    from nexus.engagement.sending.service import send
+    from nexus.models.engagement import EngagementMessage, EngagementThread
+
+    folder.rewrite_ids = True
+    tid, mailbox_id, contact_id, _user = await _world("gmailid")
+    async with tenant_session(tid) as ts:
+        mailbox, contact = await _load(ts, mailbox_id, contact_id)
+        first = await send(ts, mailbox=mailbox, contact=contact, subject="Quick question",
+                           body="Hi Jane", idempotency_key="g-1")
+        first_row = await ts.get(EngagementMessage, first.message_id)
+        thread = await ts.get(EngagementThread, first_row.thread_id)
+        follow = await send(ts, mailbox=mailbox, contact=contact, subject="Re: Quick question",
+                            body="Following up", thread=thread, idempotency_key="g-2")
+        follow_row = await ts.get(EngagementMessage, follow.message_id)
+    assert first_row.rfc_message_id == "<gmail-1@mail.gmail.com>"
+    delivered = message_from_bytes(folder.delivered[1])
+    assert delivered["In-Reply-To"] == "<gmail-1@mail.gmail.com>"
+    assert delivered["References"] == "<gmail-1@mail.gmail.com>"
+    assert follow_row.rfc_message_id == "<gmail-2@mail.gmail.com>"
+
+
+async def test_the_repair_corrects_emails_sent_before_the_fix(folder):
+    from nexus.engagement.sending.message_ids import repair_mailbox
+    from nexus.models.engagement import EngagementMessage, MailboxConnection
+
+    tid, mailbox_id, contact_id, _user = await _world("repairid")
+    async with tenant_session(tid) as ts:
+        def row(**kw):
+            return EngagementMessage(mailbox_connection_id=mailbox_id, contact_id=contact_id,
+                                     direction="out", kind="step", **kw)
+        ts.add(row(status="sent", step_index=0, provider_message_id="pm-a",
+                   rfc_message_id="<ours-1@seller.com>"))
+        ts.add(row(status="sent", step_index=1, provider_message_id="pm-b",
+                   rfc_message_id="<ours-2@seller.com>", in_reply_to="<ours-1@seller.com>",
+                   references_header="<ours-1@seller.com>"))
+        ts.add(row(status="approved", step_index=2, in_reply_to="<ours-2@seller.com>",
+                   references_header="<ours-1@seller.com> <ours-2@seller.com>"))
+        await ts.flush()
+        folder.sent_ids = {"pm-a": "<real-1@mail.gmail.com>", "pm-b": "<real-2@mail.gmail.com>"}
+        box = await ts.get(MailboxConnection, mailbox_id)
+
+        dry = await repair_mailbox(ts, box, folder, apply=False)
+        assert dry.checked == 2 and dry.changed == {"<ours-1@seller.com>": "<real-1@mail.gmail.com>",
+                                                    "<ours-2@seller.com>": "<real-2@mail.gmail.com>"}
+        assert dry.headers_rewritten == 2
+        stored = {m.step_index: m for m in await ts.list(EngagementMessage)}
+        assert stored[0].rfc_message_id == "<ours-1@seller.com>", "a dry run writes nothing"
+
+        done = await repair_mailbox(ts, box, folder, apply=True)
+        assert len(done.changed) == 2
+        stored = {m.step_index: m for m in await ts.list(EngagementMessage)}
+    assert stored[0].rfc_message_id == "<real-1@mail.gmail.com>"
+    assert stored[1].in_reply_to == "<real-1@mail.gmail.com>"
+    assert stored[2].in_reply_to == "<real-2@mail.gmail.com>"
+    assert stored[2].references_header == "<real-1@mail.gmail.com> <real-2@mail.gmail.com>"
