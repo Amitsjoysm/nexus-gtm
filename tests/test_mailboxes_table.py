@@ -81,7 +81,7 @@ def test_one_table_row_per_mailbox_with_the_columns_asked_for():
     headers = re.findall(r'<th scope="col"[^>]*>([^<]+)</th>', main)
     assert headers == ["Mailbox", "Owner", "Provider", "Status", "Last read", "Sent today"]
     # The detail row spans every column, the actions column included.
-    assert page.count('<th scope="col"') == 7 and "colSpan={7}" in page
+    assert main.count('<th scope="col"') == 7 and "colSpan={7}" in page
     assert "<MailboxCard" not in page
 
 
