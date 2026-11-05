@@ -34,6 +34,8 @@ CALL_SKIPPED = "skipped"
 SOURCE_MANUAL = "manual"
 SOURCE_CADENCE = "cadence"
 SOURCE_PLAY = "play"
+#: A campaign's call step (W3). Written by `engagement/sequences/advance.call_step`.
+SOURCE_CAMPAIGN = "campaign"
 
 # Call outcomes (dispositions).
 DISP_CONNECTED = "connected"

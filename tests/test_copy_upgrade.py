@@ -351,6 +351,24 @@ def test_a_greeting_is_a_word_not_a_prefix(opening):
     assert any("no greeting" in p for p in check_draft(subject="x", body=body, first_name="Jane"))
 
 
+@pytest.mark.parametrize("opening", ["Jane,", "Jane -", "jane:", "Jane —"])
+def test_their_name_alone_on_the_first_line_is_a_greeting(opening):
+    """The usual opening of a follow-up. Refused, it held every such automatic follow-up for
+    review (found by the end-to-end run, 2026-11-05)."""
+    from nexus.agents.email_quality import check_draft
+
+    body = GOOD.replace("Hi Jane,", opening)
+    assert not any("greeting" in p for p in check_draft(subject="x", body=body, first_name="Jane"))
+
+
+@pytest.mark.parametrize("opening", ["Jane is hiring fast.", "Janet,", "Sam,"])
+def test_a_name_line_is_a_greeting_only_when_it_is_their_name_alone(opening):
+    from nexus.agents.email_quality import check_draft
+
+    body = GOOD.replace("Hi Jane,", opening)
+    assert any("greeting" in p for p in check_draft(subject="x", body=body, first_name="Jane"))
+
+
 def test_the_name_in_the_greeting_is_a_whole_word():
     from nexus.agents.email_quality import check_draft
 

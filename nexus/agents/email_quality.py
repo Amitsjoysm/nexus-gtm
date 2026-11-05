@@ -346,7 +346,11 @@ def check_draft(*, subject, body, first_name, facts=None, company_name: str = ""
 
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     first_line = lines[0] if lines else ""
-    if not _GREETING.match(first_line):
+    # "Sam," on a line of its own is a greeting too, the usual one on a follow-up. Refused, it held
+    # every such automatic follow-up for review (the end-to-end run, 2026-11-05). Only the name and
+    # its punctuation, the whole line: "Sam is hiring" is not a greeting.
+    name_only = bool(name) and re.fullmatch(rf"{re.escape(name)}\s*[,:\-–—]", first_line, re.I)
+    if not (_GREETING.match(first_line) or name_only):
         problems.append(
             "There is no greeting. Open with a greeting line that addresses the person by their "
             "first name."

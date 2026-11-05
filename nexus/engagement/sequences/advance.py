@@ -313,12 +313,14 @@ async def call_step(ts, campaign, enrollment, steps, step, now) -> str:
     step index moves past the call in the same transaction that writes the task, so it is written
     once. The thread is carried through unchanged, so an email after a call answers the thread an
     earlier email opened, and the first email of a campaign that opens with a call starts one."""
-    from nexus.models.calling import CallTask
+    from nexus.models.calling import SOURCE_CAMPAIGN, CallTask
 
+    # Its source says where it came from: it read "manual" (the column default), as if a rep had
+    # queued it by hand (found by the end-to-end run, 2026-11-05).
     ts.add(CallTask(account_id=enrollment.account_id, contact_id=enrollment.contact_id,
                     reason=step.angle or f"Step {step.step_index + 1} of {campaign.name}",
                     priority=60, owner_user_id=campaign.owner_user_id, due_at=now,
-                    engagement_enrollment_id=enrollment.id))
+                    engagement_enrollment_id=enrollment.id, source=SOURCE_CAMPAIGN))
     await ts.flush()
     return await _after_send(ts, campaign, enrollment, steps, enrollment.current_thread_id, now)
 
