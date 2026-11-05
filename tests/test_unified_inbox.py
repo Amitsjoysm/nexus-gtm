@@ -229,3 +229,11 @@ async def test_the_sent_folder_is_what_nothing_came_back_on(client, engine_on):
     token, _rep, ids = await _mail(client, "unisent")
     assert [r["thread_id"] for r in (await _list(client, token, unanswered=True))["threads"]] == \
         [ids["quiet"]]
+
+
+async def test_the_reply_list_previews_what_they_wrote_not_the_quoted_trail(client, engine_on):
+    token, _rep, ids = await _mail(client, "uniprev")
+    rows = (await client.get("/api/engagement/desk", headers=auth(token),
+                             params={"status": "needs_action"})).json()
+    [mine] = [r for r in rows if r["id"] == ids["waiting_reply"]]
+    assert mine["preview"] == "Reply on waiting."

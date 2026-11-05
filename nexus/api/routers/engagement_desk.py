@@ -153,8 +153,11 @@ async def _names(ts: TenantSession, contact_ids, account_ids) -> _Names:
 
 def _row(classification, message, names: _Names) -> dict:
     from nexus.calling.dispositions import REPLY_TO_DISPOSITION, category_label, lookup
+    from nexus.engagement.replies.parse import strip_quoted
 
-    body = (getattr(message, "body_text", "") or "")
+    # What they wrote, without the trail of our own emails their client quoted under it: the list
+    # read "okay how will you help me? On Thu, Nov 5 ... wrote: > Sam, ..." (2026-11-05).
+    body = strip_quoted(getattr(message, "body_text", "") or "")
     contact = names.contact(classification.contact_id)
     code = REPLY_TO_DISPOSITION.get(classification.corrected_category or classification.category)
     disposition = lookup(code)
