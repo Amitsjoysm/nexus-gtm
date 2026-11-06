@@ -1,12 +1,9 @@
 # Use InfoJoy GTM from Claude, ChatGPT and other AI assistants
 
-InfoJoy GTM works inside the AI assistants your team already uses. Ask Claude or ChatGPT what to
-work on today, research an account, find the right people and draft outreach, or build a target
-list, without leaving the conversation. Each connection acts as you, inside your workspace, with
-only the permissions you give it.
-
-This page is the public setup guide. Publish it at a stable public address (for example
-`https://gtm.infojoy.com/docs/ai-apps`); the marketplaces link to it.
+InfoJoy GTM works inside the AI assistants your team already uses. Ask what to work on today,
+research an account, find the right people and draft outreach, or build a target list, without
+leaving the conversation. Each connection acts as you, inside your workspace, with only the
+permissions you give it.
 
 ## Before you start
 
@@ -17,19 +14,22 @@ This page is the public setup guide. Publish it at a stable public address (for 
 
 ## Connect an app
 
-### Claude (claude.ai, desktop and mobile)
+### Claude (claude.ai, desktop, mobile and Cowork)
 
 1. In Claude, open **Settings**, then **Connectors**. Find **InfoJoy GTM** in the directory, or
    choose **Add custom connector** and paste the server address.
 2. Choose **Connect**. Claude opens InfoJoy GTM.
 3. Sign in if asked, tick what Claude may do, and choose **Allow access**.
 
+The **InfoJoy GTM plugin** adds three skills on top of the connector: inbox triage, account
+research and outreach, and list building. Add it from the plugin directory in Claude.
+
 Claude's connectors sign in this way and do not take an API key. To use a key, connect from Claude
 Code, Cursor, VS Code or a model API instead (below).
 
 ### ChatGPT
 
-1. Find **InfoJoy GTM** in the ChatGPT app directory and choose **Connect**. To add it by address
+1. Find **InfoJoy GTM** in the ChatGPT directory and choose **Connect**. To add it by address
    instead: **Settings**, **Apps & Connectors**, turn on **Developer mode** under Advanced settings
    (on plans that include it), choose **Create**, paste the server address and pick **OAuth**.
 2. ChatGPT opens InfoJoy GTM. Tick what it may do and choose **Allow access**.
@@ -41,12 +41,8 @@ claude mcp add --transport http infojoy-gtm https://gtm.infojoy.com/mcp
 ```
 
 Then run `/mcp` in Claude Code and choose InfoJoy GTM to sign in. To use an API key instead, add
-`--header "Authorization: Bearer YOUR_API_KEY"` to the command. Or install the plugin, which
-also adds skills for inbox triage, account research and list building:
-
-```
-/plugin install infojoy-gtm
-```
+`--header "Authorization: Bearer YOUR_API_KEY"` to the command. Or install the InfoJoy GTM plugin
+with `/plugin`, which connects the server and adds the three skills.
 
 ### Cursor
 
@@ -78,22 +74,23 @@ In an agent, open **Tools**, **Add a tool**, **Model Context Protocol**, paste t
 and choose **OAuth 2.0**. Copilot Studio shows a redirect URL; ask your InfoJoy GTM administrator
 for a client id and secret registered with that exact URL, and paste them in.
 
-### Gemini Enterprise, Perplexity, Grok and Mistral Vibe
+### Gemini, Perplexity, Grok and Mistral Vibe
 
 Each adds InfoJoy GTM as a custom connector by its server address and signs in with InfoJoy GTM:
 
 - **Gemini Enterprise** (an administrator): Data stores, Create data store, **Custom MCP Server**,
   OAuth 2.0; then on the data store's Actions tab choose **Reload custom actions** and turn on the
   tools you want.
+- **Gemini CLI**: `gemini mcp add --transport http infojoy-gtm https://gtm.infojoy.com/mcp`, or
+  install the InfoJoy GTM extension from the Gemini CLI extensions gallery.
 - **Perplexity** (paid plans): Settings, **Connectors**, **+ Custom connector**.
 - **Grok**: grok.com, **Connectors**, New connector, **Custom**.
 - **Mistral Vibe** (an administrator): Work, **Connectors**, add a custom connector.
-- **Gemini CLI**: `gemini mcp add --transport http infojoy-gtm https://gtm.infojoy.com/mcp`.
 
 ### Scripts and model APIs
 
-Create an API key in InfoJoy GTM under **Settings**, **AI apps**, **Create API key**. Give it only the
-permissions the script needs and an expiry. The key is shown once: store it as a secret.
+Create an API key in InfoJoy GTM under **Settings**, **AI apps**, **Create API key**. Give it only
+the permissions the script needs and an expiry. The key is shown once: store it as a secret.
 
 Send it as a bearer token. With OpenAI's Responses API, add InfoJoy GTM as a remote MCP tool:
 
@@ -130,15 +127,20 @@ anything, and answers "not enough credits" instead of running. Connecting an app
 
 ## Revoke access
 
-In InfoJoy GTM, open **Settings**, **AI apps** and choose **Revoke** next to the app or key. It stops working at
-once. Admins and owners can see and revoke every connection in the workspace under **Everyone**.
+In InfoJoy GTM, open **Settings**, **AI apps** and choose **Revoke** next to the app or key. It
+stops working at once. Admins and owners can see and revoke every connection in the workspace
+under **Everyone**.
 
 ## Your data
 
 When an app reads InfoJoy GTM data through a connection (company and contact details, signals,
 drafts), that data is sent to the app and the AI model behind it, under that app's terms. InfoJoy
 GTM records which tools each connection used, and research and write actions appear in your
-workspace's audit log. See the privacy policy at `https://gtm.infojoy.com/privacy`.
+workspace's audit log. Text that comes from the public web or from email replies is returned to
+the app as data, never as instructions.
+
+Read the [privacy policy](https://infojoy.com/legal.html#privacy) and the
+[terms of service](https://infojoy.com/legal.html#terms).
 
 ## Troubleshooting
 
@@ -152,3 +154,9 @@ workspace's audit log. See the privacy policy at `https://gtm.infojoy.com/privac
 - **"Not enough credits"**: add credits in **Billing**, or ask an admin.
 - **"AI apps are switched off"**: an administrator has paused AI apps for your workspace or plan.
 - **Sign-in link expired**: start connecting again from the app; links last 10 minutes.
+
+## Support
+
+Email [hello@marketjoy.com](mailto:hello@marketjoy.com) with the app you are connecting from, what
+you asked it, and what it answered. Your workspace administrator can also see every connection
+and its permissions under **Settings**, **AI apps**, **Everyone**.

@@ -3784,9 +3784,26 @@ server (`nxo_` access, `nxr_` refresh). Spec, plan and marketplace steps:
   `nexus/mcp/tools/` over `common.py`; `catalog.py` keeps the `tools/list` order.
   `test_nothing_reaches_approve_launch_send_dial_or_delete` refuses any tool path past the line. A
   502/503/504 carries the app's own sentence to the assistant; a 500 stays generic.
-- **Deploying and listing**: `docs/mcp/listing-guide.md` (Anthropic, OpenAI plugins, Microsoft
-  certification, Google, Mistral, Perplexity, xAI, the MCP Registry). Microsoft has no DCR: it needs
-  a confidential client from `POST /api/admin/oauth-clients` (no screen yet).
+- **Deploying and listing**: `docs/mcp/listing-guide.md`, whose section 0 answers "plugin or
+  connector?" per platform (Anthropic: a connector AND a paired plugin; OpenAI: a plugin; Microsoft:
+  a certified MCP server; the MCP Registry: a server entry; Google, Mistral, Perplexity, xAI: added
+  by URL). Microsoft has no DCR: it needs a confidential client from
+  `POST /api/admin/oauth-clients` (no screen yet).
+- **`distribution/` is the public listing repository, laid out 1:1** (2026-10-23, branch
+  `feat/mcp-listings`): the Claude plugin and marketplace, the ChatGPT plugin (`openai/`), the
+  Gemini CLI extension (root `gemini-extension.json`), the registry `server.json` (root), the
+  Microsoft package, icons, and its own stdlib `scripts/check.py` and `scripts/build.py`.
+  `scripts/export_listing_repo.py --to <folder>` mirrors it into that separate repository (never
+  commits or pushes). `test_mcp_distribution.py` runs `check.py`, and `microsoft/mcptools.json` must
+  equal the tool catalogue: after changing a tool, run `scripts/export_mcp_tools.py`. Older Claude
+  Code CLIs reject the plugin's `displayName` and `privacyPolicyUrl`; 2.1.309 and the directory
+  accept them. The registry entry's `description` is capped at 100 characters by its schema.
+- **The public setup guide is `/help/ai-apps`** (`nexus/mcp/guide.py`, source
+  `nexus/mcp/help/ai-apps.md`, package data): rendered on the server because a directory's link
+  check would get the SPA's empty shell, with `#support`. Every listing's documentation and support
+  link and the OAuth metadata's `resource_documentation`/`service_documentation` point at it.
+  Privacy and terms are `https://infojoy.com/legal.html#privacy` / `#terms` (owner, 2026-10-23):
+  `gtm.infojoy.com/privacy` is not a page, the catch-all sends it to the dashboard.
 - **Two protocol dialects in one endpoint** (`protocol.py`): the 2025 handshake revisions
   (`initialize`, `MCP-Protocol-Version` header, absent = `2025-03-26`) and the stateless
   `2026-07-28` (`_meta` version, `server/discover`, `resultType`, `ttlMs`/`cacheScope`). No SDK at
@@ -3815,8 +3832,6 @@ server (`nxo_` access, `nxr_` refresh). Spec, plan and marketplace steps:
 - Screens: AI apps (Settings > AI apps, `/settings/ai-apps` since 2026-10-13; `/connected-apps`
   forwards; every member, hideable page) and the consent screen
   (`/oauth/consent`, outside the app shell; only that path survives login via `nexus.returnTo`).
-  Marketplace artifacts: `distribution/claude-plugin/` (validated with Claude Code 2.1.296; older
-  CLIs reject `displayName`) and `distribution/mcp-registry/server.json`.
 
 ## Prospector (`nexus/prospector/`, `/prospector`) — cold prospect search
 

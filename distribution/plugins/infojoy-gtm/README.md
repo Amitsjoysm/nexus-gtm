@@ -21,16 +21,20 @@ three skills that know how to use it.
 You need an InfoJoy GTM account. After installing the plugin, open its **Connectors** tab and
 connect InfoJoy GTM. Claude opens InfoJoy GTM, where you sign in, choose what Claude may do (Read,
 Research, Write) and approve. You can change those permissions or disconnect at any time in
-InfoJoy GTM under **Settings**, **AI apps**.
+InfoJoy GTM under **Settings**, **AI apps**. The full setup guide, for Claude and every other
+assistant, is at https://gtm.infojoy.com/help/ai-apps
 
 ## What it can and cannot do
 
-- **Read**: accounts, contacts, signals, lists, campaigns, your inbox and the credit balance.
-- **Research** (spends your workspace's credits, at the same prices as the app): find contacts,
-  find similar companies, enrich contacts, research accounts and draft emails.
-- **Write**: add accounts, create and fill lists, add people to campaigns, complete inbox tasks and
-  save emails to your own Drafts folder.
-- It never sends an email, launches a campaign, deletes anything, or changes billing or settings.
+- **Read**: accounts, contacts, signals and alerts, lists, campaigns, the reply desk, your call
+  list, who your team knows, the prospect database (masked) and the credit balance.
+- **Research** (spends your workspace's credits, at the same prices as the app): find contacts and
+  similar companies, enrich and verify, research accounts, draft emails and replies, and create
+  campaign drafts.
+- **Write**: add accounts, create and fill lists, add people to campaigns, complete inbox tasks,
+  save emails and replies to your own Drafts folder, and queue calls and log how they went.
+- It never sends an email, launches a campaign, places a call, deletes anything, or changes billing
+  or settings.
 
 ## Data
 
@@ -43,10 +47,12 @@ instructions found in it.
 
 ## Privacy
 
-InfoJoy GTM's privacy policy: https://gtm.infojoy.com/privacy. It covers what is collected, how it
-is used and stored, third-party sharing, retention, and how to contact us.
+InfoJoy GTM's privacy policy covers what is collected, how it is used and stored, third-party
+sharing, retention, and how to contact us:
+
+- Privacy policy: https://infojoy.com/legal.html#privacy
+- Terms of service: https://infojoy.com/legal.html#terms
 
 ## Support
 
-Questions or problems: use the support contact on the InfoJoy GTM listing, or ask your workspace
-administrator.
+See https://gtm.infojoy.com/help/ai-apps#support or ask your workspace administrator.

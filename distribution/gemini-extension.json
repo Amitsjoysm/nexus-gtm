@@ -1,0 +1,11 @@
+{
+  "name": "infojoy-gtm",
+  "version": "1.0.0",
+  "description": "Work your B2B pipeline from Gemini CLI: buying signals, account research, contacts, outreach drafts and target lists in InfoJoy GTM.",
+  "contextFileName": "GEMINI.md",
+  "mcpServers": {
+    "infojoy-gtm": {
+      "httpUrl": "https://gtm.infojoy.com/mcp"
+    }
+  }
+}

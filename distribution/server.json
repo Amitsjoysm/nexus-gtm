@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.infojoy/gtm",
+  "title": "InfoJoy GTM",
+  "description": "B2B buying signals, account research, contacts and outreach drafts, acting as you.",
+  "version": "1.0.0",
+  "websiteUrl": "https://gtm.infojoy.com/help/ai-apps",
+  "icons": [
+    {
+      "src": "https://gtm.infojoy.com/infojoy-mark.png",
+      "mimeType": "image/png",
+      "sizes": ["512x512"]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://gtm.infojoy.com/mcp"
+    }
+  ]
+}

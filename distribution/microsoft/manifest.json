@@ -1,0 +1,44 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.30/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.30",
+  "version": "1.0.0",
+  "id": "dbe10578-80dc-5d99-981a-b4dccff7bab8",
+  "developer": {
+    "name": "InfoJoy",
+    "websiteUrl": "https://gtm.infojoy.com/help/ai-apps",
+    "privacyUrl": "https://infojoy.com/legal.html#privacy",
+    "termsOfUseUrl": "https://infojoy.com/legal.html#terms"
+  },
+  "name": {
+    "short": "InfoJoy GTM",
+    "full": "InfoJoy GTM: B2B signals, research and outreach"
+  },
+  "description": {
+    "short": "B2B buying signals, account research, contacts and outreach drafts.",
+    "full": "InfoJoy GTM is a go-to-market workspace for B2B sales teams. It collects buying signals (funding, hiring, leadership changes, launches), scores accounts against your ideal customer profile, and keeps a prioritised inbox of follow-ups. This connector lets Microsoft Copilot work in your InfoJoy GTM workspace as you: ask what to work on today, research an account, find and verify the right contacts, draft outreach to your own Drafts folder, build target lists and turn them into campaign drafts. Each user signs in with InfoJoy GTM and chooses what the connection may do (Read, Research, Write). Research spends the workspace's credits at the same prices as the app. Nothing is sent, launched, dialed or deleted from Copilot. Requires an InfoJoy GTM account."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#FFFFFF",
+  "agentConnectors": [
+    {
+      "id": "infojoy-gtm",
+      "displayName": "InfoJoy GTM",
+      "description": "B2B accounts, contacts, buying signals, inbox tasks, lists, campaigns and drafts in the signed-in user's InfoJoy GTM workspace.",
+      "toolSource": {
+        "remoteMcpServer": {
+          "mcpServerUrl": "https://gtm.infojoy.com/mcp",
+          "mcpToolDescription": {
+            "file": "mcptools.json"
+          },
+          "authorization": {
+            "type": "AzureKeyVault",
+            "referenceId": "https://infojoy-gtm-mcp-kv.vault.azure.net/"
+          }
+        }
+      }
+    }
+  ]
+}
