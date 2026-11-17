@@ -22,11 +22,14 @@ from sqlalchemy import select
 from nexus.core.db import get_platform_sessionmaker, utcnow
 from nexus.models import Account, Company
 from nexus.prospecting import companies as chain
+from scripts.quarantine_stamped_companies import STAMP_FIXED
 from tests.conftest import make_tenant, seed_relevance_profile, tenant_session
 
 ICP = {"industries": ["Manufacturing"], "linkedin_industry_ids": [25],
        "countries": ["United States"]}
-BEFORE_FIX = utcnow() - timedelta(days=20)
+# Before the script's own cutoff, never "today minus N days": that read as before the fix only
+# until 2026-11-15, and from then on these rows were made after it and three tests failed.
+BEFORE_FIX = STAMP_FIXED - timedelta(days=20)
 
 
 async def _account(tid, domain, *, source, industry="Manufacturing", country="United States",
