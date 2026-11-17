@@ -98,34 +98,57 @@ steps:
           -o table
 
   # ---------------------------------------------------------------------------------------------
-  # Wait for genuine health before touching the worker, or the worker starts against a
-  # half-migrated schema.
+  # Wait for THE NEW REVISION to be healthy before touching the worker, or the worker starts
+  # against a half-migrated schema.
+  #
+  # "Some revision is ready" is not the question. In Single revision mode the old revision keeps
+  # serving until the new one is healthy, so it always answers yes: on 2026-11-06 v1.13.0's
+  # revision was killed mid-boot on every attempt, this step passed in seconds on the 21 October
+  # revision, the worker was moved to the new image, and staging validation passed against the old
+  # code. So the step names the revision it is waiting for (the latest, which must carry this
+  # image) and passes only when that one is the latest READY revision and reports Healthy.
   # ---------------------------------------------------------------------------------------------
   - task: AzureCLI@2
-    displayName: "[${{ parameters.envName }}] Wait for app revision to become healthy"
+    displayName: "[${{ parameters.envName }}] Wait for the new app revision to become healthy"
     inputs:
       azureSubscription: ${{ parameters.azureSubscription }}
       scriptType: bash
       scriptLocation: inlineScript
       inlineScript: |
         set -euo pipefail
+        APP="${{ parameters.appName }}"
+        RG="${{ parameters.resourceGroup }}"
+        IMAGE="${{ parameters.acrName }}.azurecr.io/${{ parameters.imageRepo }}:${{ parameters.imageSha }}"
+        LATEST=""
         for i in $(seq 1 60); do
-          STATE=$(az containerapp show \
-            --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
-            --query "properties.runningStatus" -o tsv 2>/dev/null || echo "Unknown")
-          REV=$(az containerapp show \
-            --name "${{ parameters.appName }}" --resource-group "${{ parameters.resourceGroup }}" \
+          LATEST=$(az containerapp show --name "$APP" --resource-group "$RG" \
+            --query "properties.latestRevisionName" -o tsv 2>/dev/null || echo "")
+          READY=$(az containerapp show --name "$APP" --resource-group "$RG" \
             --query "properties.latestReadyRevisionName" -o tsv 2>/dev/null || echo "")
-          echo "[$i/60] runningStatus=${STATE} latestReady=${REV}"
-          if [ "${STATE}" = "Running" ] && [ -n "${REV}" ]; then
-            echo "App is running and has a ready revision."
+          REV_IMAGE=""; HEALTH=""; STATE=""
+          if [ -n "$LATEST" ]; then
+            REV_IMAGE=$(az containerapp revision show --name "$APP" --resource-group "$RG" \
+              --revision "$LATEST" --query "properties.template.containers[0].image" -o tsv \
+              2>/dev/null || echo "")
+            HEALTH=$(az containerapp revision show --name "$APP" --resource-group "$RG" \
+              --revision "$LATEST" --query "properties.healthState" -o tsv 2>/dev/null || echo "")
+            STATE=$(az containerapp revision show --name "$APP" --resource-group "$RG" \
+              --revision "$LATEST" --query "properties.runningState" -o tsv 2>/dev/null || echo "")
+          fi
+          echo "[$i/60] latest=${LATEST} (${STATE}, ${HEALTH}) ready=${READY} image=${REV_IMAGE}"
+          if [ "$REV_IMAGE" = "$IMAGE" ] && [ "$READY" = "$LATEST" ] && [ "$HEALTH" = "Healthy" ]; then
+            echo "Revision ${LATEST} runs ${IMAGE} and is healthy."
             exit 0
           fi
           sleep 10
         done
-        echo "##[error]App did not reach a healthy revision within 10 minutes."
-        az containerapp logs show --name "${{ parameters.appName }}" \
-          --resource-group "${{ parameters.resourceGroup }}" --tail 100 || true
+        echo "##[error]The new revision (${LATEST:-none}) did not become healthy with ${IMAGE} within 10 minutes. The previous revision is still the one serving."
+        if [ -n "$LATEST" ]; then
+          timeout 60 az containerapp logs show --name "$APP" --resource-group "$RG" \
+            --revision "$LATEST" --tail 100 --format text || true
+        fi
+        timeout 60 az containerapp logs show --name "$APP" --resource-group "$RG" \
+          --type system --tail 50 --format text || true
         exit 1
 
   # ---------------------------------------------------------------------------------------------

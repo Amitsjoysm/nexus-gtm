@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 
 from sqlalchemy import text
@@ -31,6 +32,62 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 APP_ROLE = "nexus_app"
+
+# The one expression every tenant policy holds, for USING and WITH CHECK alike.
+POLICY_EXPR = "tenant_id = current_setting('app.current_tenant', true)"
+
+# What is already in place, read from the catalog in ONE query. Every boot used to re-enable RLS
+# and drop and re-create the policy on all ~100 tenant tables, and each of those statements takes
+# an ACCESS EXCLUSIVE lock on its table: against a live database it waits for every open
+# transaction the running app and worker hold on that table, and every query behind it waits too.
+# On staging, 2026-11-06, that took the new revision past its liveness check (about 20 s) on every
+# attempt, so v1.13.0 never started while the deploy reported success. Reading the catalog takes
+# no table lock at all, so a boot now changes only the tables that need it: new ones, normally.
+_POLICY_STATE = text(
+    "SELECT c.relname AS name, c.relrowsecurity AS rls, p.polname IS NOT NULL AS has_policy, "
+    "       p.polcmd::text AS cmd, p.polpermissive AS permissive, "
+    "       p.polroles = '{0}'::oid[] AS to_public, "
+    "       pg_get_expr(p.polqual, p.polrelid) AS qual, "
+    "       pg_get_expr(p.polwithcheck, p.polrelid) AS with_check "
+    "  FROM pg_class c "
+    "  JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public' "
+    "  LEFT JOIN pg_policy p ON p.polrelid = c.oid AND p.polname = 'tenant_isolation' "
+    " WHERE c.relkind IN ('r', 'p') AND c.relname::text = ANY(CAST(:names AS text[]))"
+)
+
+
+def _meaning(expr: str | None) -> str:
+    """A policy expression as it reads, not as Postgres stores it. The catalog holds its own
+    normal form, `((tenant_id)::text = current_setting('app.current_tenant'::text, true))`, so the
+    casts, brackets and spaces are dropped before comparing."""
+    if not expr:
+        return ""
+    without_casts = re.sub(r"::[a-z ]+(\(\d+\))?", "", expr.lower())
+    return re.sub(r"[()\s]", "", without_casts)
+
+
+def policy_in_place(row) -> bool:
+    """True when the table already enforces exactly the policy this script would create: RLS on,
+    and `tenant_isolation` permissive, for every command, to PUBLIC, with the tenant expression on
+    both sides. Anything else is set up again, which is what every boot used to do."""
+    expected = _meaning(POLICY_EXPR)
+    return bool(
+        row.rls and row.has_policy and row.cmd == "*" and row.permissive and row.to_public
+        and _meaning(row.qual) == expected and _meaning(row.with_check) == expected
+    )
+
+
+def _set_up_sql(table: str) -> str:
+    """Enable RLS and (re)create the policy as ONE statement, so the app role is never left
+    between the DROP and the CREATE with RLS on and no policy, which reads as zero rows."""
+    return (
+        "DO $$ BEGIN "
+        f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY; '
+        f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"; '
+        f'CREATE POLICY tenant_isolation ON "{table}" '
+        f"USING ({POLICY_EXPR}) WITH CHECK ({POLICY_EXPR}); "
+        "END $$;"
+    )
 
 # Provisioning lock, held while this script rewrites roles, grants and policies. A stable
 # arbitrary 63-bit key, distinct from bootstrap_db's schema lock and the scheduler's, so the
@@ -192,20 +249,20 @@ async def main() -> None:
 
             # 3. RLS per tenant-scoped table. Non-FORCE: the owner (migrations, worker sweeps)
             #    bypasses; the app role is constrained to current_setting('app.current_tenant').
-            for table in tables:
-                await conn.execute(text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))
-                await conn.execute(text(f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"'))
-                await conn.execute(
-                    text(
-                        f'CREATE POLICY tenant_isolation ON "{table}" '
-                        f"USING (tenant_id = current_setting('app.current_tenant', true)) "
-                        f"WITH CHECK (tenant_id = current_setting('app.current_tenant', true))"
-                    )
-                )
+            #    Only tables not already enforcing the policy are touched (see _POLICY_STATE). A
+            #    table missing from the catalog is set up too, which fails loudly, as it always did.
+            state = {
+                row.name: row
+                for row in (await conn.execute(_POLICY_STATE, {"names": tables})).all()
+            }
+            to_set_up = [t for t in tables if t not in state or not policy_in_place(state[t])]
+            for table in to_set_up:
+                await conn.execute(text(_set_up_sql(table)))
 
             print(
                 f"[apply_rls] role '{APP_ROLE}' reconciled; RLS enforced on {len(tables)} tables "
-                f"(excluded: {', '.join(sorted(RLS_EXCLUDE))})."
+                f"({len(to_set_up)} set up now, {len(tables) - len(to_set_up)} already in place; "
+                f"excluded: {', '.join(sorted(RLS_EXCLUDE))})."
             )
             try:
                 await conn.execute(

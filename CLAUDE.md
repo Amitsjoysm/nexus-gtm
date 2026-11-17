@@ -248,8 +248,8 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 Alembic under `migrations/versions/`. Head: `0079_mailbox_style` on branch `fix/sdr-data-accuracy`
 (`0073_field_provenance`, `0074_draft_facts`, `0075_call_scripts`, `0076_run_soft_delete`,
-`0077_icp_services`, `0078_user_call_scripts`, `0079_mailbox_style`; 0073-0077 are on the local
-deploy, none on staging or production); `0072_prospector` before them. `0076`
+`0077_icp_services`, `0078_user_call_scripts`, `0079_mailbox_style`; all on the local deploy and
+on staging since v1.13.0, 2026-11-06; none on production); `0072_prospector` before them. `0076`
 (SDR round 2, Session B) and `0077` (Session E) were written on parallel branches both parented on
 `0075`; `0077` was re-parented onto `0076` at the merge (2026-11-04), so there is one head. The
 chain is
@@ -308,6 +308,19 @@ the result against `Base.metadata`. Do not reintroduce a `create_all()` inside a
 old `0001_initial` did that, so it materialized whatever models existed *at run time* rather
 than a frozen historical schema, and the chain could never be replayed. Production still runs
 `bootstrap_db.py` → `alembic upgrade head` → `apply_rls.py`.
+
+**A boot must fit the app's probes, and `apply_rls.py` touches only tables that need it**
+(2026-11-17). On staging, 2026-11-06, v1.13.0 never started: `apply_rls` re-enabled RLS and
+re-created the policy on all ~100 tenant tables every boot, each an ACCESS EXCLUSIVE lock that waits
+on the running app's and worker's open transactions, and Azure's default liveness probe killed the
+container after about 20 s, before uvicorn listened. The old revision kept serving and the deploy
+reported success. Three fixes: `apply_rls` reads the catalog once and sets up only tables whose
+policy is missing or different (`policy_in_place`; one `DO` block per table, so there is no moment
+with RLS on and no policy); the app has a startup probe in Terraform (up to 100 s); and
+`deploy/pipelines/deploy-containerapp.yml` waits for the LATEST revision to carry the new image,
+be the latest ready one and report Healthy, else fails. `tests_integration/test_apply_rls_reboot.py`
+(fails on the old script: it waits on an open transaction), `tests/test_apply_rls_policy_state.py`,
+`tests/test_deploy_waits_for_new_revision.py`.
 
 ### Three traps that only bite against real Postgres
 

@@ -172,6 +172,21 @@ resource "azurerm_container_app" "app" {
         }
       }
 
+      # The entrypoint migrates and applies RLS BEFORE uvicorn listens, so nothing answers on 8000
+      # until it is done. With only a liveness probe (Azure's defaults: 1 s delay, every 10 s,
+      # 3 failures) the whole boot had about 20 s: on staging, 2026-11-06, v1.13.0 was killed
+      # mid-boot on every attempt while the old revision kept serving and the deploy reported
+      # success. A startup probe holds liveness and readiness off until /health first answers,
+      # here for up to 10 x 10 s. Set by hand in the portal on staging that day; this makes it
+      # the configuration, so production gets it and a plan shows no drift.
+      startup_probe {
+        transport               = "HTTP"
+        port                    = 8000
+        path                    = "/health"
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 10
+      }
       liveness_probe {
         transport = "HTTP"
         port      = 8000
