@@ -216,6 +216,13 @@ async def verify_and_create(db: AsyncSession, *, email: str, code: str) -> tuple
         tenant = Tenant(name=pending.company_name, slug=pending.company_slug)
         db.add(tenant)
         await db.flush()
+        from nexus.core.tenancy import apply_rls
+
+        # Bind the new tenant BEFORE any tenant-scoped row is staged. The API runs as the
+        # least-privilege role under RLS, and the consent row below was autoflushed (by the
+        # statement that bound it later) with no tenant set: Postgres refused it and every new
+        # workspace was a 500 (2026-11-18, tests_integration/test_signup_rls.py).
+        await apply_rls(db, tenant.id)
         user = User(email=pending.email, full_name=pending.full_name, password_hash=pending.password_hash)
         db.add(user)
         await db.flush()

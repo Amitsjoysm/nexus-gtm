@@ -342,6 +342,15 @@ and fail in prod:
 Also: `apply_rls` sets the tenant GUC **transaction-locally**, so a read after `commit()` has no
 binding and silently returns nothing.
 
+**A path that creates a tenant binds it right after the tenant row, before staging anything
+tenant-scoped** (2026-11-18, `tests_integration/test_signup_rls.py`, `tests/test_signup_binds_tenant.py`).
+Signup, the OTP verify and `/auth/workspaces` staged the training-consent row and bound the tenant
+afterwards. SQLAlchemy 2.0.51 (the image's pin) does not flush pending rows on the binding
+statement, so it worked; 2.1 (CI's unconstrained install) does, the row went in unbound, RLS refused
+it and every new workspace was a 500. Measured both ways. Integration tests use
+`tests_integration/rls_harness.py` with their OWN database and role names: the job runs files in
+parallel, and two files sharing `nexus_prospector_rls_test` dropped each other's database.
+
 ## Billing & Entitlements (`nexus/billing/`)
 
 A commercial operating system: any capability can be priced, quota'd, or gated **without

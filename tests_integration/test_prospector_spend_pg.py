@@ -9,24 +9,24 @@ from __future__ import annotations
 
 import uuid
 
-import httpx
 import pytest
+import pytest_asyncio
 
 from tests.prospector_fixtures import FakeVendor
 from tests_integration.conftest import requires_pg
-from tests_integration.test_prospector_rls import rls_db  # noqa: F401  (fixture)
+from tests_integration.rls_harness import app_client, rls_database, seed_billing
 
 pytestmark = [pytest.mark.asyncio, requires_pg]
 
 
-async def _seed_billing() -> None:
-    from nexus.billing.catalog import sync_catalog
-    from nexus.billing.plans import sync_plans
-    from nexus.billing.rates import sync_rates
-
-    await sync_catalog()
-    await sync_plans()
-    await sync_rates()
+@pytest_asyncio.fixture
+async def spend_db(monkeypatch):
+    """Its own database and role: the integration job runs files in parallel."""
+    async with rls_database(monkeypatch, database="nexus_prospector_spend_test",
+                            role="nexus_app_prospector_spend",
+                            password="prospector-spend-test-password") as owner_url:
+        await seed_billing()
+        yield owner_url
 
 
 @pytest.fixture
@@ -40,27 +40,10 @@ def vendor():
     search.set_client(None)
 
 
-async def _app_client():
-    from nexus.main import create_app
-
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app()),
-                             base_url="http://test")
-
-
-async def _signup(c, slug: str, owner_url: str, monkeypatch) -> dict:
-    """Sign up as the database owner, then serve every later request as the app role."""
-    from nexus.core import db as core_db
-    from nexus.core.config import get_settings
-
-    settings = get_settings()
-    role_url = settings.database_url
-    monkeypatch.setattr(settings, "database_url", owner_url)
-    await core_db.dispose_db()
+async def _signup(c, slug: str) -> dict:
     r = await c.post("/api/auth/signup", json={
         "company_name": slug.upper(), "company_slug": slug, "full_name": "Rep",
         "email": f"owner@{slug}.example.com", "password": "password123"})
-    monkeypatch.setattr(settings, "database_url", role_url)
-    await core_db.dispose_db()
     assert r.status_code == 201, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
@@ -83,12 +66,9 @@ def _selection(rows, view="contacts"):
                       "row_key": r["row_key"]} for r in rows]}
 
 
-async def test_a_free_workspace_can_price_save_list_and_export(rls_db, vendor,  # noqa: F811
-                                                               monkeypatch):
-    await _seed_billing()
-    async with await _app_client() as c:
-        h = await _signup(c, "pxspend", rls_db, monkeypatch)
-        usage = (await c.get("/api/billing/usage", headers=h)).json()
+async def test_a_free_workspace_can_price_save_list_and_export(spend_db, vendor):
+    async with app_client() as c:
+        h = await _signup(c, "pxspend")
         search = await c.post("/api/prospector/search", headers=h, json={
             "view": "contacts", "scope": "total", "filters": {"titles": ["VP Sales"]},
             "page": 1, "page_size": 25})
@@ -101,7 +81,6 @@ async def test_a_free_workspace_can_price_save_list_and_export(rls_db, vendor,  
             "selection": _selection(rows), "action": "save", "include_phones": True})
         assert quote.status_code == 200, quote.text
         q = quote.json()
-        print("usage", usage.get("credits"), usage.get("balance"), "quote", q)
         assert q["balance"] == pytest.approx(200), q
         assert q["total_credits"] > 0 and q["enough"] is True, q
 
@@ -119,6 +98,7 @@ async def test_a_free_workspace_can_price_save_list_and_export(rls_db, vendor,  
         assert export.status_code == 200, export.text
         assert export.text.count("\n") >= 2, export.text
 
-        after = await c.post("/api/prospector/quote", headers=h, json={
-            "selection": _selection(rows), "action": "save", "include_phones": False})
-        print("after", after.json())
+        # Charged once: what was listed or exported is now held or paid for, and costs nothing.
+        after = (await c.post("/api/prospector/quote", headers=h, json={
+            "selection": _selection(rows), "action": "save", "include_phones": False})).json()
+        assert after["total_credits"] == 0 and after["balance"] == pytest.approx(195), after

@@ -59,6 +59,7 @@ from nexus.core.security import (
     verify_password,
 )
 from nexus.billing.subscriptions import start_subscription_for
+from nexus.core.tenancy import apply_rls
 from nexus.models.identity import Membership, Tenant, User, Workspace
 
 logger = logging.getLogger("nexus.api.auth")
@@ -157,6 +158,11 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db_session))
         tenant = Tenant(name=req.company_name, slug=req.company_slug)
         db.add(tenant)
         await db.flush()
+        # Bind the new tenant BEFORE any tenant-scoped row is staged. The API runs as the
+        # least-privilege role under RLS, and the consent row below was autoflushed (by the
+        # statement that bound it later) with no tenant set: Postgres refused it and every new
+        # workspace was a 500 (2026-11-18, tests_integration/test_signup_rls.py).
+        await apply_rls(db, tenant.id)
 
         user = User(
             email=req.email, full_name=req.full_name, password_hash=hash_password(req.password)
@@ -542,6 +548,11 @@ async def create_workspace(
         tenant = Tenant(name=req.name, slug=req.slug)
         db.add(tenant)
         await db.flush()
+        # Bind the new tenant BEFORE any tenant-scoped row is staged. The API runs as the
+        # least-privilege role under RLS, and the consent row below was autoflushed (by the
+        # statement that bound it later) with no tenant set: Postgres refused it and every new
+        # workspace was a 500 (2026-11-18, tests_integration/test_signup_rls.py).
+        await apply_rls(db, tenant.id)
 
         workspace = Workspace(tenant_id=tenant.id, name=f"{req.name} Workspace")
         db.add(workspace)
