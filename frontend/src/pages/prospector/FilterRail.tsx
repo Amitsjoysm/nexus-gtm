@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { Badge, Button, Field, Input, Select, SwitchRow } from "@/components/ui";
+import type { FormEvent, KeyboardEvent } from "react";
+import {
+  Badge, Button, Field, IconButton, Icons, Input, Select, SwitchRow,
+} from "@/components/ui";
 import type { ProspectList } from "@/lib/types";
 import type {
   FilterCatalog,
@@ -40,21 +43,35 @@ function noteFor(section: FilterSectionSpec, tab: ProspectTab): string | undefin
 
 export interface FilterRailProps {
   catalog: FilterCatalog | null;
+  /** The rail's own values: what the next Search will run, not necessarily what is shown. */
   values: FilterValues;
   tab: ProspectTab;
   lists: ProspectList[];
+  /** The rail differs from the search the results show. */
+  dirty: boolean;
   onChange: (key: string, value: FilterValue) => void;
   onClearAll: () => void;
   onClearKeys: (keys: string[]) => void;
+  /** Run the search the rail describes. */
+  onSearch: () => void;
+  /** Put the rail back to the search the results show. */
+  onReset: () => void;
+  onHide: () => void;
 }
 
 /**
  * The filter rail: every section the server's catalog lists for this view, in its order, each an
  * accordion with its active count. A filter that cannot apply on the current tab stays visible but
  * disabled, with the reason, so switching tabs never hides what is set.
+ *
+ * Nothing runs until Search (2026-11-18). Every change used to start a paid search 800 ms after
+ * the last keystroke, so building "CEO, CTO in fintech, 51-200" ran three searches on the way and
+ * showed whichever filter landed last. The rail is a form: Search (or Enter in a text box, or
+ * Ctrl+Enter anywhere in it) runs the whole set at once; Enter in a chip box adds the chip.
  */
 export function FilterRail({
-  catalog, values, tab, lists, onChange, onClearAll, onClearKeys,
+  catalog, values, tab, lists, dirty, onChange, onClearAll, onClearKeys, onSearch, onReset,
+  onHide,
 }: FilterRailProps) {
   const sections = catalog?.sections ?? [];
   const [open, setOpen] = useState<Set<string>>(() => {
@@ -64,6 +81,21 @@ export function FilterRail({
     return initial;
   });
   const total = activeCount(catalog, values);
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    onSearch();
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLFormElement>) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      // A chip still being typed is part of what the person asked for: blurring its box commits
+      // it, and the search runs after that render (the page reads the rail's latest values).
+      (document.activeElement as HTMLElement | null)?.blur();
+      window.setTimeout(onSearch, 0);
+    }
+  }
 
   function toggle(key: string) {
     setOpen((prev) => {
@@ -159,36 +191,58 @@ export function FilterRail({
 
   return (
     <aside className={styles.rail} aria-label="Filters">
-      <div className={styles.head}>
-        <h2 className={styles.title}>Filters</h2>
-        {total > 0 && <Badge tone="accent">{total}</Badge>}
-        <Button variant="ghost" size="sm" onClick={onClearAll} disabled={total === 0}
-          className={styles.clearAll}>
-          Clear all
-        </Button>
-      </div>
-      <div className={styles.sections}>
-        {sections.map((section) => {
-          const note = noteFor(section, tab);
-          return (
-            <FilterSection
-              key={section.key}
-              label={section.label}
-              count={sectionCount(section, values)}
-              open={open.has(section.key)}
-              onToggle={() => toggle(section.key)}
-              onClear={() => onClearKeys(section.fields.map((f) => f.key)
-                .filter((k) => isFilled(values[k])))}
-              note={note}
-            >
-              <div className={styles.fields}>
-                {section.fields.map((f) => renderField(f, !usableOn(f, section, tab)))}
-              </div>
-              {section.hint && <p className={styles.hint}>{section.hint}</p>}
-            </FilterSection>
-          );
-        })}
-      </div>
+      <form className={styles.form} onSubmit={submit} onKeyDown={onKeyDown} noValidate>
+        <div className={styles.head}>
+          <h2 className={styles.title}>Filters</h2>
+          {total > 0 && <Badge tone="accent">{total}</Badge>}
+          <Button variant="ghost" size="sm" onClick={onClearAll} disabled={total === 0}
+            className={styles.clearAll}>
+            Clear all
+          </Button>
+          <IconButton label="Hide filters" size="sm" icon={<Icons.PanelLeftCloseIcon />}
+            onClick={onHide} />
+        </div>
+        {/* Search sits at the top, under the title, so it is on screen before the page is
+            scrolled as well as while the rail is sticky; at the foot it was below the fold of a
+            768px screen until the page moved. Never disabled: a chip typed but not yet entered
+            joins the filters only when its box loses focus, which is the press of this button,
+            and a disabled one would swallow that click. With nothing changed it searches again. */}
+        <div className={styles.searchRow}>
+          <Button type="submit" size="sm" iconLeft={<Icons.SearchIcon />}
+            variant={dirty ? "primary" : "secondary"} className={styles.searchButton}>
+            Search
+          </Button>
+          {dirty && (
+            <Button type="button" variant="ghost" size="sm" onClick={onReset}>Reset</Button>
+          )}
+        </div>
+        <p className={styles.status} aria-live="polite">
+          {dirty ? "Changes not searched yet." : total ? "The results show these filters."
+            : "Set filters, then Search."}
+        </p>
+        <div className={styles.sections}>
+          {sections.map((section) => {
+            const note = noteFor(section, tab);
+            return (
+              <FilterSection
+                key={section.key}
+                label={section.label}
+                count={sectionCount(section, values)}
+                open={open.has(section.key)}
+                onToggle={() => toggle(section.key)}
+                onClear={() => onClearKeys(section.fields.map((f) => f.key)
+                  .filter((k) => isFilled(values[k])))}
+                note={note}
+              >
+                <div className={styles.fields}>
+                  {section.fields.map((f) => renderField(f, !usableOn(f, section, tab)))}
+                </div>
+                {section.hint && <p className={styles.hint}>{section.hint}</p>}
+              </FilterSection>
+            );
+          })}
+        </div>
+      </form>
     </aside>
   );
 }

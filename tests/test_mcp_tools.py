@@ -296,6 +296,28 @@ async def test_prospector_save_delivers_charged_records_and_returns_ids(client, 
     assert again.ok and again.data["charged"] == {}
 
 
+async def test_prospector_save_takes_whole_rows_and_phones_alone(client, prospect_db):
+    """An assistant hands back the rows prospector_search returned, masks and all, and the server's
+    row model refuses every key but three: each save answered 422. It may also want phones only."""
+    from nexus.billing.catalog import sync_catalog
+    from nexus.billing.rates import sync_rates
+
+    await sync_catalog()
+    await sync_rates()
+    token = await signup(client, slug="tl11", email="o@tl11.com")
+    found = await _call(client, token, "prospector_search", view="contacts")
+    rows = found.data["rows"][:1]
+    assert "email_masked" in rows[0]                        # the whole row, as returned
+    saved = await _call(client, token, "prospector_save", view="contacts", rows=rows,
+                        include_emails=False, include_phones=True)
+    assert saved.ok, saved.message
+    assert saved.data["charged"] == {"prospector.phone": 1}
+
+    bad = await _call(client, token, "prospector_save", view="contacts",
+                      rows=[{"row_key": rows[0]["row_key"]}])
+    assert not bad.ok and "api_page" in bad.message
+
+
 async def test_prospector_save_needs_rows_or_a_limit(client, prospect_db):
     token = await signup(client, slug="tl9", email="o@tl9.com")
     out = await _call(client, token, "prospector_save", view="contacts")

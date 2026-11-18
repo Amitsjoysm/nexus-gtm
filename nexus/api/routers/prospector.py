@@ -97,7 +97,11 @@ async def quote(
     ts: TenantSession = Depends(module_gate),
     _: Principal = Depends(require(Permission.manage_accounts)),
 ) -> QuoteOut:
-    """What a delivery would cost, field by field, against the balance. Spends nothing."""
+    """What a delivery would cost, field by field, against the balance. Spends nothing.
+
+    ``enough`` is the billing engine's own preflight, the check the delivery itself runs, never a
+    comparison made here: comparing the balance with the total refused deliveries the engine allows
+    (a plan not funded by credits, and every workspace while enforcement is in shadow)."""
     from nexus.billing.credits import balance
     from nexus.prospector import charges
     from nexus.prospector.deliver import prepare
@@ -105,20 +109,27 @@ async def quote(
 
     try:
         q, _bought = await prepare(ts, selection=body.selection, action=body.action,
-                                   include_phones=body.include_phones, client=client())
+                                   include_phones=body.include_phones,
+                                   include_emails=body.include_emails, client=client())
     except ProspectorError as exc:
         raise _http(exc) from None
-    rates = await charges.rate_cards(ts)
-    credits = {cap: qty * rates.get(cap, 0.0) for cap, qty in q.charges.items()}
+    credits = await charges.price(ts, q.charges)
     total = round(sum(credits.values()), 4)
     try:
         held_balance = float(await balance(ts))
     except Exception:
         held_balance = None
+    enough, reason = await charges.affordability(ts, q.charges, total=total,
+                                                 balance=held_balance)
+    billed = await charges.uses_credits(ts, q.charges)
+    logger.info("prospector quote action=%s records=%d unavailable=%d total=%s balance=%s "
+                "enough=%s", body.action, len(q.lines), q.unavailable, total, held_balance,
+                enough)
     return QuoteOut(
         records=len(q.lines), charges=q.charges, credits=credits, total_credits=total,
         already_paid=q.already_paid, held=q.held, unavailable=q.unavailable,
-        balance=held_balance, enough=held_balance is None or held_balance >= total,
+        with_email=q.with_email, with_phone=q.with_phone, filled=q.filled,
+        balance=held_balance, enough=enough, reason=reason, uses_credits=billed,
     )
 
 
@@ -136,7 +147,7 @@ async def deliver(
         return await service.deliver(
             ts, user_id=principal.user_id, role=principal.role, selection=body.selection,
             action=body.action, list_id=body.list_id, include_phones=body.include_phones,
-            request_id=body.request_id, client=client())
+            include_emails=body.include_emails, request_id=body.request_id, client=client())
     except ProspectorError as exc:
         raise _http(exc) from None
 
@@ -156,7 +167,8 @@ async def export(
     try:
         filename, header, rows = await export_rows(
             ts, user_id=principal.user_id, selection=body.selection,
-            include_phones=body.include_phones, request_id=body.request_id, client=client())
+            include_phones=body.include_phones, include_emails=body.include_emails,
+            request_id=body.request_id, client=client())
     except ProspectorError as exc:
         raise _http(exc) from None
     await ts.commit()

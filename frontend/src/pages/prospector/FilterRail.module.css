@@ -1,15 +1,32 @@
-/* The rail sits on the page's second neutral layer, sticky under the top bar, and scrolls on its
-   own so a long set of sections never pushes the results out of view. */
+/* The rail sits on the page's second neutral layer and stays in view while the results scroll.
+   Sticky is measured from the scroller it lives in, which is the shell's <main> BELOW the top bar,
+   so `top` is just the gap (it was the top bar's height plus the gap: 60px too low, with the bottom
+   cut off). It sticks only because its slot is stretched to the results' height (.railSlot in
+   Prospector.module.css): sized to its own content, it had no room, scrolled away with the page,
+   and left a blank column beside the lower rows of a 25-row table. */
 .rail {
   position: sticky;
-  top: calc(var(--topbar-h) + var(--space-4));
+  top: var(--space-4);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - var(--topbar-h) - var(--space-8));
+  /* The page frame's bottom padding (`--space-12`, AppShell .container) is taken off too: at the
+     bottom of a long table the sticky rail is pushed up by the end of its slot, and a rail that
+     did not fit above that padding slid 16px under the top bar (measured at 1366x768). */
+  max-height: calc(100vh - var(--topbar-h) - var(--space-8) - var(--space-12));
+  max-height: calc(100dvh - var(--topbar-h) - var(--space-8) - var(--space-12));
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   background: var(--surface);
   overflow: hidden;
+}
+
+/* The form is the rail's body: sections scroll under a fixed head and Search row, so Search is
+   always one click away however many sections are open. */
+.form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
 }
 
 .head {
@@ -35,9 +52,31 @@
    the rail itself is static, and nothing above would hold them (test_scroll_containers.py). */
 .sections {
   position: relative;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+
+.searchRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) 0 var(--space-4);
+}
+
+.searchButton {
+  flex: 1;
+}
+
+.status {
+  margin: 0;
+  padding: var(--space-1) var(--space-3) var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
 
 .section {
   border-bottom: 1px solid var(--border-subtle);
@@ -170,8 +209,20 @@
 /* Below the large breakpoint the rail stops being a column: it sits above the results, and the page
    decides whether it is shown (the "Filters" button). */
 @media (max-width: 1023px) {
+  /* `overflow: visible` so the Search row can stick to the page's scroller: a clipping rail would
+     be its own scrollport and it would never move. */
   .rail {
     position: static;
     max-height: none;
+    overflow: visible;
+  }
+  /* Stacked above the results the rail is not a column, so Search stays reachable at the top of
+     the screen while the sections are long. */
+  .searchRow {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-bottom: var(--space-2);
+    background: var(--surface);
   }
 }

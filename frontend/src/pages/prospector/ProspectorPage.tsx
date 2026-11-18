@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
@@ -25,6 +25,7 @@ import { SavedTable } from "./SavedTable";
 import {
   activeCount, decodeFilters, encodeFilters, forRequest, inactiveHere,
 } from "./filterState";
+import type { RevealField } from "./ResultsTable";
 import { downloadSavedCsv } from "./savedCsv";
 import { useProspectorSearch } from "./useProspectorSearch";
 import styles from "./Prospector.module.css";
@@ -41,11 +42,31 @@ function readTab(raw: string | null): ProspectTab {
   return TABS.includes(raw as ProspectTab) ? (raw as ProspectTab) : "total";
 }
 
+/** Whether this browser hid the filter rail (a per-viewer convenience; storage may be blocked). */
+const RAIL_HIDDEN_KEY = "nexus.prospector.filtersHidden";
+
+function readRailHidden(): boolean {
+  try {
+    return window.localStorage.getItem(RAIL_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeRailHidden(hidden: boolean): void {
+  try {
+    window.localStorage.setItem(RAIL_HIDDEN_KEY, hidden ? "1" : "0");
+  } catch {
+    // Remembering is a convenience; the rail still hides for this visit.
+  }
+}
+
 /**
  * Prospector: search a B2B database of people and companies the workspace does not have yet, and
  * take what is worth paying for. Browsing is free and masked; saving, listing and exporting are
- * charged per field, once (spec 2026-10-16). View, tab and filters live in the URL, so Back,
- * refresh and a shared link all land on the same search.
+ * charged per field, once (spec 2026-10-16). View, tab and the SEARCHED filters live in the URL,
+ * so Back, refresh and a shared link all land on the same search. The rail edits a draft and Search
+ * applies it (2026-11-18): several filters are set first, then one search runs.
  */
 export function ProspectorPage() {
   const api = useApiClient();
@@ -55,12 +76,20 @@ export function ProspectorPage() {
   const tab = readTab(params.get("tab"));
   const filtersRaw = params.get("f");
   const values = useMemo(() => decodeFilters(filtersRaw), [filtersRaw]);
+  // What the rail holds: the next search. It follows the URL whenever the URL changes (Back, a
+  // shared link, Clear all, a Search that just ran).
+  const [draft, setDraft] = useState<FilterValues>(values);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  useEffect(() => { setDraft(values); }, [values]);
+  const dirty = encodeFilters(draft) !== encodeFilters(values);
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
   const [includeCount, setIncludeCount] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
+  const [railHidden, setRailHidden] = useState(readRailHidden);
   const [allMatching, setAllMatching] = useState(false);
   const [request, setRequest] = useState<DeliveryRequest | null>(null);
   const [listing, setListing] = useState<{ kind: "account" | "contact"; ids: string[] } | null>(
@@ -109,13 +138,39 @@ export function ProspectorPage() {
   }, [params, setParams]);
 
   const onFilter = useCallback((key: string, value: FilterValue) => {
-    setUrl({ values: { ...values, [key]: value } }, true);
-  }, [setUrl, values]);
+    setDraft((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  const { refetch } = search;
+  /** Run what the rail holds. Read through the ref: Ctrl+Enter commits a typed chip first and
+   *  calls this after that render, from a closure older than the chip. */
+  const runSearch = useCallback(() => {
+    const next = draftRef.current;
+    if (encodeFilters(next) === encodeFilters(values)) {
+      refetch();
+      return;
+    }
+    setUrl({ values: next }, true);
+    setRailOpen(false);
+  }, [refetch, setUrl, values]);
+
+  function showRail() {
+    setRailHidden(false);
+    writeRailHidden(false);
+    setRailOpen(true);
+  }
+
+  function hideRail() {
+    setRailHidden(true);
+    writeRailHidden(true);
+    setRailOpen(false);
+  }
 
   const savedTotal = tab === "saved" ? savedResult?.total
     : savedCount.data?.kind === "saved" ? savedCount.data.result.total : undefined;
   const totalCount = searchResult?.total ?? undefined;
   const filterCount = activeCount(catalog.data, values);
+  const draftCount = activeCount(catalog.data, draft);
   const notHere = inactiveHere(catalog.data, values, tab);
   const isSearchTab = tab !== "saved";
 
@@ -127,10 +182,22 @@ export function ProspectorPage() {
       api_page_size: r.api_page_size, row_key: r.row_key })) };
   }
 
-  function deliver(action: DeliveryRequest["action"]) {
+  function deliver(action: DeliveryRequest["action"], fields?: DeliveryRequest["fields"]) {
     const rows = (searchResult?.rows ?? []).filter((r) => selection.selected.has(r.row_key));
-    setRequest({ action, selection: selectionFor(rows),
+    setRequest({ action, selection: selectionFor(rows), fields,
       count: allMatching ? SELECT_ALL_LIMIT : rows.length });
+  }
+
+  /** One row: its email, its direct phone, or (the row's Reveal button) what it has. */
+  function reveal(row: ProspectRow, field: RevealField) {
+    setRequest({
+      action: "reveal", count: 1,
+      fields: field === "phone" ? { emails: false, phones: true }
+        : field === "email" ? { emails: true, phones: false }
+          : { emails: row.has_email, phones: !row.has_email && row.has_direct_phone },
+      selection: { ...selectionFor([row]), rows: [{ api_page: row.api_page,
+        api_page_size: row.api_page_size, row_key: row.row_key }], all_matching: undefined },
+    });
   }
 
   async function verifySelected() {
@@ -160,6 +227,9 @@ export function ProspectorPage() {
       ? [
           { key: "save", label: "Save contacts", primary: true, icon: <Icons.PlusIcon />,
             onClick: () => deliver("save") },
+          // Phones bought on their own, for people saved with or without their email.
+          { key: "phones", label: "Reveal phones", icon: <Icons.PhoneIcon />,
+            onClick: () => deliver("save", { emails: false, phones: true }) },
           { key: "list", label: "Add to contact list", icon: <Icons.ListIcon />,
             onClick: () => deliver("list") },
           { key: "company_list", label: "Track their companies", icon: <Icons.BuildingIcon />,
@@ -205,10 +275,10 @@ export function ProspectorPage() {
       return (
         <EmptyState
           icon={<Icons.CompassIcon />}
-          title="Choose a filter to start"
-          description="Search by job title, company, location, size, industry or technology. Browsing is free: emails, phones and websites stay masked until you save or export."
-          action={<Button variant="secondary" className={styles.onlySmall}
-            onClick={() => setRailOpen(true)}>Show filters</Button>}
+          title={dirty ? "Press Search to see matches" : "Set your filters, then Search"}
+          description="Combine job titles, company, location, size, industry or technology, then press Search once. Browsing is free: emails, phones and websites stay masked until you save or export."
+          action={<Button variant="secondary" className={railHidden ? undefined : styles.onlySmall}
+            onClick={showRail}>Show filters</Button>}
         />
       );
     }
@@ -244,10 +314,7 @@ export function ProspectorPage() {
             selected={selection.selected} allVisible={selection.allVisible}
             someVisible={selection.someVisible} onToggle={selection.toggle}
             onToggleAll={() => { setAllMatching(false); selection.toggleVisible(); }}
-            onReveal={(row) => setRequest({ action: "reveal", count: 1,
-              selection: { ...selectionFor([row]), rows: [{ api_page: row.api_page,
-                api_page_size: row.api_page_size, row_key: row.row_key }],
-                all_matching: undefined } })} />
+            onReveal={reveal} />
         ) : null}
         {pager()}
       </>
@@ -291,21 +358,24 @@ export function ProspectorPage() {
         }
       />
 
-      <div className={styles.layout}>
-        <div className={railOpen ? styles.railSlot : `${styles.railSlot} ${styles.railClosed}`}>
-          {catalog.data ? (
-            <FilterRail key={view} catalog={catalog.data} values={values} tab={tab}
-              lists={lists.data ?? []} onChange={onFilter}
-              onClearAll={() => setUrl({ values: {} }, true)}
-              onClearKeys={(keys) => {
-                const next = { ...values };
-                for (const k of keys) delete next[k];
-                setUrl({ values: next }, true);
-              }} />
-          ) : (
-            <Skeleton height={480} radius="var(--radius-lg)" />
-          )}
-        </div>
+      <div className={railHidden ? `${styles.layout} ${styles.layoutNoRail}` : styles.layout}>
+        {!railHidden && (
+          <div className={railOpen ? styles.railSlot : `${styles.railSlot} ${styles.railClosed}`}>
+            {catalog.data ? (
+              <FilterRail key={view} catalog={catalog.data} values={draft} tab={tab}
+                lists={lists.data ?? []} dirty={dirty} onChange={onFilter}
+                onSearch={runSearch} onReset={() => setDraft(values)} onHide={hideRail}
+                onClearAll={() => { setDraft({}); setUrl({ values: {} }, true); }}
+                onClearKeys={(keys) => setDraft((prev) => {
+                  const next = { ...prev };
+                  for (const k of keys) delete next[k];
+                  return next;
+                })} />
+            ) : (
+              <Skeleton height={480} radius="var(--radius-lg)" />
+            )}
+          </div>
+        )}
 
         <section className={styles.main} aria-label="Results">
           <div className={styles.toolbar}>
@@ -316,10 +386,13 @@ export function ProspectorPage() {
                 { value: "saved", label: "Saved", count: savedTotal },
               ]} />
             <div className={styles.toolbarEnd}>
-              <Button variant="secondary" size="sm" className={styles.onlySmall}
-                aria-expanded={railOpen} onClick={() => setRailOpen((o) => !o)}
-                iconLeft={<Icons.SearchIcon />}>
-                Filters{filterCount ? ` (${filterCount})` : ""}
+              <Button variant="secondary" size="sm"
+                className={railHidden ? undefined : styles.onlySmall}
+                aria-expanded={!railHidden && railOpen}
+                onClick={() => (railHidden || !railOpen ? showRail() : setRailOpen(false))}
+                iconLeft={<Icons.FilterIcon />}>
+                {railHidden ? "Show filters" : "Filters"}
+                {draftCount ? ` (${formatNumber(draftCount)})` : ""}
               </Button>
               {/* Only where the provider can count: it cannot today, and the button timed out on
                   contacts and re-bought a page for nothing on companies (2026-10-22). */}
@@ -331,6 +404,15 @@ export function ProspectorPage() {
               )}
             </div>
           </div>
+
+          {dirty && state?.kind !== "idle" && (
+            <div className={styles.pending} role="status">
+              <span>The filters changed. These results are for your last search.</span>
+              <Button size="sm" iconLeft={<Icons.SearchIcon />} onClick={runSearch}>
+                Search
+              </Button>
+            </div>
+          )}
 
           {notHere.length > 0 && (
             <p className={styles.notice}>

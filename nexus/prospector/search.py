@@ -97,7 +97,7 @@ async def _total(ts, body: SearchIn, canonical: dict) -> tuple[SearchOut, int, i
     items = fetched.parsed.items
     shown = await present(ts, body.view, items, api_page=body.page, api_page_size=body.page_size)
     out = SearchOut(rows=shown.rows, page=body.page, page_size=body.page_size,
-                    has_more=len(items) >= body.page_size, total=fetched.parsed.total)
+                    has_more=fetched.parsed.full(body.page_size), total=fetched.parsed.total)
     return out, len(items), fetched.vendor_rows
 
 
@@ -150,7 +150,7 @@ async def _net_new(ts, body: SearchIn, canonical: dict) -> tuple[SearchOut, int,
                 break
         if offset + consumed < len(items):
             offset += consumed                       # stopped inside this page
-        elif len(items) < size:
+        elif not fetched.parsed.full(size):
             exhausted = True                         # a short page is the last one
             break
         else:

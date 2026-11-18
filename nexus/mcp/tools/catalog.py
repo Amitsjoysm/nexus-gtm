@@ -144,6 +144,22 @@ async def _prospector_search(gw: Gateway, args: dict) -> ToolOutcome:
     return _ok(data)
 
 
+_ROW_REF = ("api_page", "api_page_size", "row_key")
+
+
+def _row_refs(rows: list) -> list[dict] | None:
+    """Each row as the three keys the server reads, or ``None`` when one lacks them.
+
+    An assistant passes back whole rows from prospector_search (names, masks, flags), and the
+    server's row model refuses any key but these three, so every save answered 422."""
+    out = []
+    for row in rows:
+        if not isinstance(row, dict) or any(row.get(k) in (None, "") for k in _ROW_REF):
+            return None
+        out.append({k: row[k] for k in _ROW_REF})
+    return out
+
+
 async def _prospector_save(gw: Gateway, args: dict) -> ToolOutcome:
     import uuid
 
@@ -154,11 +170,16 @@ async def _prospector_save(gw: Gateway, args: dict) -> ToolOutcome:
     selection = {"view": args["view"], "scope": args["scope"],
                  "filters": args.get("filters") or {}}
     if rows:
-        selection["rows"] = rows
+        refs = _row_refs(rows)
+        if refs is None:
+            return ToolOutcome(False, None, "Each row needs the api_page, api_page_size and "
+                                            "row_key prospector_search returned for it.", 422)
+        selection["rows"] = refs
     else:
         selection["all_matching"] = {"limit": limit}
     request_id = args.get("request_id") or uuid.uuid4().hex
     body = {"selection": selection, "action": args["action"], "list_id": args.get("list_id"),
+            "include_emails": args.get("include_emails", True),
             "include_phones": args["include_phones"], "request_id": request_id}
     out = await gw.post("/api/prospector/deliver", json=body, idempotency_key=request_id)
     if not out.ok:
@@ -529,10 +550,11 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="prospector_save", title="Save prospects to the workspace", scope="write",
         description="Save rows from prospector_search into the workspace (or onto a list), or "
-                    "add the people's companies to an account list. Costs credits per email, "
-                    "direct phone (only with include_phones) or company delivered, each charged "
-                    "once; the balance is checked first. Pass the same view, scope and filters "
-                    "as the search.",
+                    "add the people's companies to an account list. Costs credits per email "
+                    "(include_emails, on by default), direct phone (include_phones) or company "
+                    "delivered, each charged once; emails and phones can be bought separately, "
+                    "and a person already saved gets only what they were missing. The balance "
+                    "is checked first. Pass the same view, scope and filters as the search.",
         input_schema=_obj({
             "view": _PROSPECT_VIEW, "scope": _PROSPECT_SCOPE, "filters": _PROSPECT_FILTERS,
             "rows": {"type": "array", "maxItems": 1000,
@@ -544,7 +566,10 @@ TOOLS: tuple[ToolSpec, ...] = (
             "action": {"type": "string", "enum": ["save", "list", "company_list"],
                        "default": "save"},
             "list_id": {**_ID, "description": "For list and company_list."},
-            "include_phones": {"type": "boolean", "default": False},
+            "include_emails": {"type": "boolean", "default": True,
+                               "description": "Buy and save emails (contacts view)."},
+            "include_phones": {"type": "boolean", "default": False,
+                               "description": "Buy and save direct phones (contacts view)."},
             "request_id": REQUEST_ID,
         }),
         handler=_prospector_save, idempotent=True,

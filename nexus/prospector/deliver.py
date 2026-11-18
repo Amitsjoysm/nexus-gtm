@@ -10,7 +10,9 @@ The order is the safety (spec §9.2):
 
 Actions (D8, D24): ``save`` and ``reveal`` (one row) create the records; ``list`` creates them and
 puts them on a list of the matching kind; ``company_list`` (Contacts view) puts the people's
-companies on an account list, free. A held row is linked, never rewritten.
+companies on an account list, free. A held row is linked, never overwritten; a field it lacks that
+this delivery bought (its phone, say) is written into the blank. Emails and phones are chosen
+separately (``include_emails``, ``include_phones``).
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ from nexus.prospector.pricing import Line, Quote, quote
 from nexus.prospector.records import VendorCompany
 from nexus.prospector.schemas import DeliverOut
 from nexus.prospector.selection import Selection, resolve
-from nexus.prospector.writers import upsert_account, upsert_contact
+from nexus.prospector.writers import fill_contact, upsert_account, upsert_contact
 
 logger = logging.getLogger("nexus.prospector.deliver")
 
@@ -59,22 +61,31 @@ def _validate(selection: Selection, action: str) -> None:
 
 
 async def prepare(ts, *, selection: Selection, action: str, include_phones: bool,
-                  client=None) -> tuple[Quote, int]:
+                  include_emails: bool = True, client=None) -> tuple[Quote, int]:
     """Resolve and quote. ``(quote, vendor_rows_bought)``. Writes nothing in the tenant."""
     resolved = await resolve(ts, selection, client=client)
     q = await quote(ts, view=selection.view, action=action, resolved=resolved,
-                    include_phones=include_phones)
+                    include_phones=include_phones, include_emails=include_emails)
+    if q.unavailable:
+        # The rows were picked from a page the provider no longer returns in the same order (or
+        # the shared cache did not keep it), so their keys are not on it. Logged because the screen
+        # only sees "0 credits": this is the evidence for why.
+        logger.warning("prospector selection: %d of %d rows not found on their provider page "
+                       "(view=%s, all_matching=%s)", q.unavailable,
+                       q.unavailable + len(q.lines), selection.view,
+                       bool(selection.all_matching))
     return q, resolved.vendor_rows
 
 
 async def deliver(ts, *, user_id: str, role: str, selection: Selection, action: str,
                   list_id: str | None, include_phones: bool, request_id: str,
-                  client=None) -> DeliverOut:
+                  include_emails: bool = True, client=None) -> DeliverOut:
     _validate(selection, action)
     plist = await _target_list(ts, view=selection.view, action=action, list_id=list_id,
                                user_id=user_id, role=role)
     q, bought = await prepare(ts, selection=selection, action=action,
-                              include_phones=include_phones, client=client)
+                              include_phones=include_phones, include_emails=include_emails,
+                              client=client)
     await charges.preflight_all(ts, q.charges)
 
     out = DeliverOut(unavailable=q.unavailable, already_paid=q.already_paid, held=q.held,
@@ -85,7 +96,7 @@ async def deliver(ts, *, user_id: str, role: str, selection: Selection, action: 
     async with ts.session.begin_nested():
         for line in q.lines:
             contact_id, account_id = await _write(ts, line, selection.view, action,
-                                                  include_phones, user_id, out)
+                                                  include_emails, include_phones, user_id, out)
             links[line.identity] = (contact_id, account_id)
             if account_id and account_id not in account_ids:
                 account_ids.append(account_id)
@@ -108,12 +119,18 @@ async def deliver(ts, *, user_id: str, role: str, selection: Selection, action: 
     return out
 
 
-async def _write(ts, line: Line, view: str, action: str, include_phones: bool, user_id: str,
+async def _write(ts, line: Line, view: str, action: str, include_emails: bool,
+                 include_phones: bool, user_id: str,
                  out: DeliverOut) -> tuple[str | None, str | None]:
     """``(contact_id, account_id)`` for one line, creating what is missing."""
     if line.held is not None:
         out.reused += 1
         if line.held.kind == "contact":
+            # A field the held contact was missing (its phone, say), bought or already paid for:
+            # written into the blank, never over a value someone put there.
+            if line.deliver and await fill_contact(ts, line.held.record_id, line.record,
+                                                   line.deliver):
+                out.filled += 1
             return line.held.record_id, line.held.account_id
         return None, line.held.record_id
     record = line.record
@@ -134,9 +151,15 @@ async def _write(ts, line: Line, view: str, action: str, include_phones: bool, u
         out.created += int(account_created)
         out.reused += int(not account_created)
         return None, account.id
-    # The phone is written whenever phones were asked for: newly charged, or paid for under an
-    # earlier request and delivered again free (D6).
-    contact, created = await upsert_contact(ts, account, record, include_phone=include_phones)
+    # A field is written whenever it was asked for: newly charged, or paid for under an earlier
+    # request and delivered again free (D6). Not asked for, not written: a phone-only reveal saves
+    # the person without their email.
+    contact, created = await upsert_contact(ts, account, record, include_phone=include_phones,
+                                            include_email=include_emails)
+    if not created and line.deliver:
+        # Matched an existing contact the holdings check did not see (same email in another
+        # account, say): give it what was bought, as for a held row.
+        out.filled += int(await fill_contact(ts, contact.id, record, line.deliver))
     out.created += int(created)
     out.reused += int(not created)
     return contact.id, account.id

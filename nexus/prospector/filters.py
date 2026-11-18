@@ -111,6 +111,10 @@ class SearchFilters(BaseModel):
                 raise ProspectorError(
                     422, f"{section.label}: {spec.label} cannot be searched at the data provider "
                          "yet. It works on the Saved tab.")
+            if spec.max_values and isinstance(value, list) and len(value) > spec.max_values:
+                raise ProspectorError(
+                    422, f"Search up to {spec.max_values} {spec.label.lower()} at once: the data "
+                         "provider is asked once for each.")
             payload[api_name] = spec.provider_values(value) if isinstance(value, list) else value
         return payload
 

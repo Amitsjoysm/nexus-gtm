@@ -1047,7 +1047,7 @@
     {
       "name": "prospector_save",
       "title": "Save prospects to the workspace",
-      "description": "Save rows from prospector_search into the workspace (or onto a list), or add the people's companies to an account list. Costs credits per email, direct phone (only with include_phones) or company delivered, each charged once; the balance is checked first. Pass the same view, scope and filters as the search.",
+      "description": "Save rows from prospector_search into the workspace (or onto a list), or add the people's companies to an account list. Costs credits per email (include_emails, on by default), direct phone (include_phones) or company delivered, each charged once; emails and phones can be bought separately, and a person already saved gets only what they were missing. The balance is checked first. Pass the same view, scope and filters as the search.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1100,9 +1100,15 @@
             "pattern": "^[A-Za-z0-9_-]{1,64}$",
             "description": "For list and company_list."
           },
+          "include_emails": {
+            "type": "boolean",
+            "default": true,
+            "description": "Buy and save emails (contacts view)."
+          },
           "include_phones": {
             "type": "boolean",
-            "default": false
+            "default": false,
+            "description": "Buy and save direct phones (contacts view)."
           },
           "request_id": {
             "type": "string",

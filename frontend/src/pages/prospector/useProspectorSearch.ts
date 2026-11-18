@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { useApiClient } from "@/app/AuthContext";
 import { useApi } from "@/hooks/useApi";
 import type {
@@ -10,18 +9,6 @@ import type {
   SavedResult,
 } from "@/lib/prospectorTypes";
 import { forRequest } from "./filterState";
-
-/** Filters apply after a pause in typing; paging, tabs and views apply at once. */
-export const FILTER_DEBOUNCE_MS = 800;
-
-function useDebounced<T>(value: T, ms: number): T {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setSettled(value), ms);
-    return () => window.clearTimeout(timer);
-  }, [value, ms]);
-  return settled;
-}
 
 export interface SearchParams {
   view: ProspectView;
@@ -46,11 +33,15 @@ export type SearchState =
  * an unfiltered page still buys its rows, and a rep looking at the empty state has not asked for
  * anything yet. Saved reads the workspace and loads straight away. A stale request is aborted when
  * the next one starts (`useApi`).
+ *
+ * `values` are the SEARCHED filters (the URL), never the rail's draft: a search runs when the rail's
+ * Search applies them, so nothing here waits for typing to settle. It used to fire 800 ms after the
+ * last change, buying a page for every half-built combination of filters on the way.
  */
 export function useProspectorSearch(params: SearchParams) {
   const api = useApiClient();
   const { filters, workspace } = forRequest(params.catalog, params.values, params.tab);
-  const filtersKey = useDebounced(JSON.stringify({ filters, workspace }), FILTER_DEBOUNCE_MS);
+  const filtersKey = JSON.stringify({ filters, workspace });
   const ready = params.catalog !== null && params.enabled !== false;
 
   return useApi<SearchState>(

@@ -2,9 +2,10 @@
 
 Charged exactly like saving (D3-D6): quoted field by field, preflighted for the whole file,
 recorded in the purchase ledger and metered in one savepoint, and committed by the endpoint before
-the file is returned, so a failed download is retried under a new request for free. Phones are a
-column only when they were bought. A row the workspace already holds exports the workspace's own
-values (free). Every cell goes through ``csv_export.safe_cell``: provider text is
+the file is returned, so a failed download is retried under a new request for free. Emails and
+phones are each a column only when they were bought. A row the workspace already holds exports the
+workspace's own values (free), plus any field it lacked that this export bought. Every cell goes
+through ``csv_export.safe_cell``: provider text is
 attacker-influenced, and a cell starting a formula must reach a spreadsheet as text.
 """
 from __future__ import annotations
@@ -29,10 +30,27 @@ COMPANY_COLUMNS = ("company_name", "domain", "country", "state", "city", "indust
                    "employee_size_range", "linkedin_url")
 
 
-def _columns(view: str, include_phones: bool) -> list[str]:
+def _columns(view: str, include_phones: bool, include_emails: bool = True) -> list[str]:
+    """A paid column appears only when it was bought: email and phone are chosen separately."""
     if view == "companies":
         return list(COMPANY_COLUMNS)
-    return [c for c in CONTACT_COLUMNS if include_phones or c != "direct_phone"]
+    dropped = {name for name, kept in (("direct_phone", include_phones),
+                                       ("email", include_emails)) if not kept}
+    return [c for c in CONTACT_COLUMNS if c not in dropped]
+
+
+_FIELD_COLUMN = {"email": "email", "phone": "direct_phone"}
+
+
+def _held_values(own: dict, line: Line) -> dict:
+    """The workspace's own values, with any field this export bought for it filled in."""
+    values = dict(own)
+    vendor = _vendor(line.record)
+    for field_name in line.deliver:
+        column = _FIELD_COLUMN.get(field_name)
+        if column and not values.get(column):
+            values[column] = vendor.get(column, "")
+    return values
 
 
 async def _own(ts, lines: list[Line]) -> dict[str, dict]:
@@ -90,20 +108,23 @@ def _vendor(record: VendorContact | VendorCompany) -> dict:
 
 
 async def export_rows(ts, *, user_id: str, selection: Selection, include_phones: bool,
-                      request_id: str, client=None) -> tuple[str, list[str], list[list]]:
+                      request_id: str, include_emails: bool = True,
+                      client=None) -> tuple[str, list[str], list[list]]:
     q, bought = await prepare(ts, selection=selection, action="export",
-                              include_phones=include_phones, client=client)
+                              include_phones=include_phones, include_emails=include_emails,
+                              client=client)
     await charges.preflight_all(ts, q.charges)
     async with ts.session.begin_nested():
         await charges.record_purchases(ts, q.lines, request_id=request_id, links={})
         await charges.meter_all(ts, q.charges, request_id=request_id, user_id=user_id)
     await record_browse_cost(ts, rows=bought, user_id=user_id, view=selection.view)
 
-    columns = _columns(selection.view, include_phones)
+    columns = _columns(selection.view, include_phones, include_emails)
     own = await _own(ts, q.lines)
     rows = []
     for line in q.lines:
-        values = own.get(line.held.record_id, {}) if line.held else _vendor(line.record)
+        values = _held_values(own.get(line.held.record_id, {}), line) if line.held \
+            else _vendor(line.record)
         rows.append([safe_cell(values.get(column, "")) for column in columns])
     filename = f"prospector-{selection.view}.csv"
     return filename, columns, rows

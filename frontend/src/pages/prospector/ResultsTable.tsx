@@ -4,6 +4,9 @@ import type { Column } from "@/components/ui";
 import type { ProspectRow, ProspectView } from "@/lib/prospectorTypes";
 import styles from "./Prospector.module.css";
 
+/** What a reveal buys: one field, or (the row's own Reveal) whatever the row has. */
+export type RevealField = "email" | "phone" | "any";
+
 export interface ResultsTableProps {
   view: ProspectView;
   rows: ProspectRow[];
@@ -13,7 +16,7 @@ export interface ResultsTableProps {
   someVisible: boolean;
   onToggle: (key: string) => void;
   onToggleAll: () => void;
-  onReveal: (row: ProspectRow) => void;
+  onReveal: (row: ProspectRow, field: RevealField) => void;
 }
 
 /**
@@ -27,6 +30,24 @@ function Masked({ mask, kind }: { mask: string; kind: string }) {
       <span className={styles.mono}>{mask}</span>
       <span className="sr-only">{kind} hidden until saved</span>
     </span>
+  );
+}
+
+/**
+ * A masked email or phone that reveals just that field when pressed (2026-11-18: email and phone
+ * are bought separately). Its accessible name says what it does and for whom; the mask stays
+ * visible so the row still reads at a glance.
+ */
+function RevealMasked({ mask, kind, who, onReveal }: {
+  mask: string; kind: "email" | "direct phone"; who: string; onReveal: () => void;
+}) {
+  return (
+    <button type="button" className={styles.revealField} onClick={onReveal}
+      aria-label={`Reveal ${who}'s ${kind}`} title={`Reveal ${kind}`}>
+      <Icons.LockIcon className={styles.lock} />
+      <span className={styles.mono}>{mask}</span>
+      <span className={styles.revealHint} aria-hidden="true">Reveal</span>
+    </button>
   );
 }
 
@@ -74,7 +95,7 @@ export function ResultsTable({
         <Badge tone="success" icon={<Icons.CheckIcon />}>Saved</Badge>
       </Link>
     ) : (
-      <Button variant="ghost" size="sm" onClick={() => onReveal(row)}
+      <Button variant="ghost" size="sm" onClick={() => onReveal(row, "any")}
         aria-label={`Reveal ${view === "contacts" ? fullName(row) : row.company_name}`}>
         Reveal
       </Button>
@@ -114,13 +135,16 @@ export function ResultsTable({
       header: "Email, phone & LinkedIn",
       render: (row) => (
         <div className={styles.stack}>
+          {/* A saved contact still missing a field the provider has can buy just that field. */}
           {row.saved && row.record?.email
             ? <span className={styles.mono}>{row.record.email}</span>
-            : row.has_email ? <Masked mask={row.email_masked} kind="Email" />
+            : row.has_email ? <RevealMasked mask={row.email_masked} kind="email"
+              who={fullName(row)} onReveal={() => onReveal(row, "email")} />
               : <Missing text="No email" />}
           {row.saved && row.record?.phone
             ? <span className={styles.mono}>{row.record.phone}</span>
-            : row.has_direct_phone ? <Masked mask={row.phone_masked} kind="Phone number" />
+            : row.has_direct_phone ? <RevealMasked mask={row.phone_masked} kind="direct phone"
+              who={fullName(row)} onReveal={() => onReveal(row, "phone")} />
               : <Missing text="No direct phone" />}
           {/* The person's own profile comes with the contact when it is saved. */}
           {!row.saved && row.has_linkedin

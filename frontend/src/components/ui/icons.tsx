@@ -120,6 +120,22 @@ export const ChevronRightIcon = (props: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+/** A funnel: filters, as opposed to the magnifier that runs a search. */
+export const FilterIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <path d="M4 5h16l-6 7.5V19l-4-2v-4.5L4 5Z" />
+  </Svg>
+);
+
+/** A side panel being closed toward the left. */
+export const PanelLeftCloseIcon = (props: SVGProps<SVGSVGElement>) => (
+  <Svg {...props}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16" />
+    <path d="m16 10-2 2 2 2" />
+  </Svg>
+);
+
 export const ChevronLeftIcon = (props: SVGProps<SVGSVGElement>) => (
   <Svg {...props}>
     <path d="m15 6-6 6 6 6" />

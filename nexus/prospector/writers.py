@@ -55,15 +55,16 @@ async def upsert_account(ts, *, name: str, url: str, country: str = "", state: s
 
 
 async def upsert_contact(ts, account: Account, record: VendorContact, *,
-                         include_phone: bool) -> tuple[Contact, bool]:
-    """``(contact, created)``."""
+                         include_phone: bool, include_email: bool = True) -> tuple[Contact, bool]:
+    """``(contact, created)``. The vendor's email still finds an existing contact when it was not
+    bought; it is only written when ``include_email``."""
     email = (record.email or "").strip()
     if email:
         existing = await ts.first(Contact, func.lower(Contact.email) == email.lower(),
                                   Contact.deleted_at.is_(None))
         if existing is not None:
             return existing, False
-    full_name = record.full_name or email or "Unknown"
+    full_name = record.full_name or (email if include_email else "") or "Unknown"
     existing = await ts.first(Contact, Contact.account_id == account.id,
                               func.lower(Contact.full_name) == full_name.lower(),
                               Contact.deleted_at.is_(None))
@@ -84,8 +85,8 @@ async def upsert_contact(ts, account: Account, record: VendorContact, *,
     contact = Contact(
         tenant_id=ts.tenant_id, account_id=account.id, full_name=full_name[:200],
         title=(record.title or None), seniority=(record.seniority[:40] or None),
-        email=(email or None), phone=(record.direct_phone[:40] if include_phone and
-                                      record.direct_phone else None),
+        email=((email or None) if include_email else None),
+        phone=(record.direct_phone[:40] if include_phone and record.direct_phone else None),
         linkedin_url=(profile[:255] if profile else None),
         enrichment_source=SOURCE, email_status=None, custom_fields=custom,
     )
@@ -98,3 +99,34 @@ async def upsert_contact(ts, account: Account, record: VendorContact, *,
     ts.add(contact)
     await ts.flush()
     return contact, True
+
+
+async def fill_contact(ts, contact_id: str, record: VendorContact,
+                       fields: tuple[str, ...]) -> bool:
+    """Write bought fields into an existing contact's BLANKS. Returns whether anything changed.
+
+    Never over a value: a held record is the workspace's, and an email or phone a person or a CRM
+    put there is not replaced by the provider's. A filled email is the vendor's, unverified, so the
+    contact takes the Prospector source and the campaign hold (D19) applies to it as to any
+    Prospector contact until Verify says the address is deliverable.
+    """
+    contact = await ts.first(Contact, Contact.id == contact_id, Contact.deleted_at.is_(None))
+    if contact is None:
+        return False
+    from nexus.integrations.provenance import record as record_source
+
+    changed = False
+    email = (record.email or "").strip()
+    if "email" in fields and email and not (contact.email or "").strip():
+        contact.email = email
+        contact.email_status = None
+        contact.enrichment_source = SOURCE
+        record_source(contact, "email", "infojoy", detail="as delivered by InfoJoy, unverified")
+        changed = True
+    if "phone" in fields and record.direct_phone and not (contact.phone or "").strip():
+        contact.phone = record.direct_phone[:40]
+        record_source(contact, "phone", "infojoy", detail="direct phone delivered by InfoJoy")
+        changed = True
+    if changed:
+        await ts.flush()
+    return changed

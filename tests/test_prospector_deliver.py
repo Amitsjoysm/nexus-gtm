@@ -61,18 +61,20 @@ def _selection(rows, view="contacts", **extra):
     return {"view": view, "scope": "total", "filters": {}, "rows": _refs(rows), **extra}
 
 
-async def _quote(client, h, rows, *, view="contacts", action="save", phones=False):
+async def _quote(client, h, rows, *, view="contacts", action="save", phones=False, emails=True):
     r = await client.post("/api/prospector/quote", headers=h, json={
-        "selection": _selection(rows, view), "action": action, "include_phones": phones})
+        "selection": _selection(rows, view), "action": action, "include_phones": phones,
+        "include_emails": emails})
     assert r.status_code == 200, r.text
     return r.json()
 
 
 async def _deliver(client, h, rows, *, view="contacts", action="save", phones=False,
-                   list_id=None, request_id=None):
+                   emails=True, list_id=None, request_id=None):
     return await client.post("/api/prospector/deliver", headers=h, json={
         "selection": _selection(rows, view), "action": action, "include_phones": phones,
-        "list_id": list_id, "request_id": request_id or uuid.uuid4().hex})
+        "include_emails": emails, "list_id": list_id,
+        "request_id": request_id or uuid.uuid4().hex})
 
 
 async def _usage(tid: str) -> dict[str, float]:
@@ -312,3 +314,161 @@ async def test_another_workspaces_row_keys_mean_nothing(client, vendor):
     rows = await _rows(client, h1)
     r = await _deliver(client, h2, rows)
     assert r.json()["unavailable"] == len(rows) and r.json()["created"] == 0
+
+
+# ---- email and phone bought separately (reported 2026-11-18) -----------------------------------
+
+async def test_the_quote_says_how_many_selected_have_an_email_and_a_phone(client, vendor):
+    """The dialog said "1 credit per number" however many were selected: it now has the counts."""
+    h, _ = await _workspace(client, "pd20")
+    q = await _quote(client, h, await _rows(client, h), phones=True)
+    assert (q["with_email"], q["with_phone"]) == (3, 3)
+    assert q["charges"] == {"prospector.email": 3, "prospector.phone": 3}
+    assert q["credits"] == {"prospector.email": 3.0, "prospector.phone": 3.0}
+
+
+async def test_a_phone_can_be_revealed_without_the_email(client, vendor):
+    from nexus.models.account import Contact
+
+    h, tid = await _workspace(client, "pd21")
+    rows = await _rows(client, h)
+    q = await _quote(client, h, rows[:1], action="reveal", phones=True, emails=False)
+    assert q["charges"] == {"prospector.phone": 1} and q["total_credits"] == 1
+
+    r = await _deliver(client, h, rows[:1], action="reveal", phones=True, emails=False)
+    assert r.status_code == 200, r.text
+    assert r.json()["charged"] == {"prospector.phone": 1}
+    async with tenant_session(tid) as ts:
+        (john,) = await ts.list(Contact)
+    assert john.phone == "+1 (415) 555-7890" and john.email is None
+    assert await _usage(tid) == {"prospector.phone": 1}
+
+
+async def test_an_email_revealed_later_fills_the_saved_contact_and_is_charged_once(client,
+                                                                                   vendor):
+    from nexus.models.account import Contact
+    from nexus.prospector.hold import held_until_verified
+
+    h, tid = await _workspace(client, "pd22")
+    rows = await _rows(client, h)
+    await _deliver(client, h, rows[:1], action="reveal", phones=True, emails=False)
+
+    q = await _quote(client, h, rows[:1], action="reveal", phones=True)
+    assert q["held"] == 1 and q["filled"] == 1
+    assert q["charges"] == {"prospector.email": 1}         # the phone is already on the contact
+    r = await _deliver(client, h, rows[:1], action="reveal", phones=True)
+    assert r.json()["filled"] == 1 and r.json()["charged"] == {"prospector.email": 1}
+    async with tenant_session(tid) as ts:
+        (john,) = await ts.list(Contact)
+    assert john.email == "john.smith@acme-example.com"
+    assert held_until_verified(john)                       # a vendor email: held from campaigns
+
+    again = await _quote(client, h, rows[:1], action="reveal", phones=True)
+    assert again["charges"] == {} and again["filled"] == 0
+    assert await _usage(tid) == {"prospector.phone": 1, "prospector.email": 1}
+
+
+async def test_phones_can_be_bought_for_contacts_saved_without_them(client, vendor):
+    """A bulk "reveal phones" after a save without phones: it used to be free and do nothing,
+    because a held row was never touched, so those phones could never be bought."""
+    from nexus.models.account import Contact
+
+    h, tid = await _workspace(client, "pd23")
+    rows = await _rows(client, h)
+    await _deliver(client, h, rows)                          # emails only
+    q = await _quote(client, h, rows, phones=True, emails=False)
+    assert q["held"] == 4 and q["filled"] == 3
+    assert q["charges"] == {"prospector.phone": 3}
+
+    r = await _deliver(client, h, rows, phones=True, emails=False)
+    assert r.json()["charged"] == {"prospector.phone": 3} and r.json()["created"] == 0
+    async with tenant_session(tid) as ts:
+        phones = {c.full_name: c.phone for c in await ts.list(Contact)}
+    assert phones == {"John Smith": "+1 (415) 555-7890", "Priya Raman": None,
+                      "Wei Lindqvist": "+44 20 7946 0123", "Ana Okafor": "(212) 555-0147"}
+
+
+async def test_a_value_someone_put_on_a_held_contact_is_never_replaced(client, vendor):
+    from nexus.models.account import Account, Contact
+
+    h, tid = await _workspace(client, "pd24")
+    async with tenant_session(tid) as ts:
+        a = Account(name="Acme Example Inc", domain="acme-example.com")
+        ts.add(a)
+        await ts.flush()
+        ts.add(Contact(account_id=a.id, full_name="John Smith",
+                       email="john.smith@acme-example.com", phone="+1 650 000 0000"))
+        await ts.flush()
+    rows = await _rows(client, h)
+    q = await _quote(client, h, rows[:1], phones=True)
+    assert q["charges"] == {} and q["filled"] == 0
+    await _deliver(client, h, rows[:1], phones=True)
+    async with tenant_session(tid) as ts:
+        (john,) = await ts.list(Contact)
+    assert john.phone == "+1 650 000 0000"
+
+
+# ---- whether it can go through is the billing engine's answer, not the balance's --------------
+
+async def _empty_balance(tid):
+    from nexus.billing.credits import balance, burn_credits
+
+    async with tenant_session(tid) as ts:
+        left = await balance(ts)
+        await burn_credits(ts, left, reason="test", idempotency_key=uuid.uuid4().hex)
+
+
+async def test_in_shadow_mode_an_empty_balance_does_not_disable_the_dialog(client, vendor,
+                                                                           monkeypatch):
+    """Shadow never refuses for money, so the delivery goes through: the dialog said "not enough
+    credits" and disabled the button for exactly the deliveries the server would make."""
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "shadow")
+    h, tid = await _workspace(client, "pd25")
+    await _empty_balance(tid)
+    q = await _quote(client, h, await _rows(client, h))
+    assert q["balance"] == 0 and q["total_credits"] == 3
+    assert q["enough"] is True and q["reason"] is None
+
+
+async def test_under_enforcement_a_short_balance_says_why(client, vendor, monkeypatch):
+    from nexus.models.billing import BillingSubscription
+
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "on")
+    h, tid = await _workspace(client, "pd26")
+    async with tenant_session(tid) as ts:
+        sub = await ts.first(BillingSubscription)
+        sub.plan_id = "launch"
+        await ts.flush()
+    await _empty_balance(tid)
+    q = await _quote(client, h, await _rows(client, h))
+    assert q["enough"] is False
+    assert q["reason"].startswith("Not enough credits: this needs 3 and the balance is 0")
+    assert (await _deliver(client, h, await _rows(client, h))).status_code == 402
+
+
+async def test_an_unlimited_plan_with_no_balance_can_deliver_and_is_told_it_is_included(
+        client, vendor, monkeypatch):
+    """The reported case, found on a copy of the local database: a superadmin's own workspace is
+    on `legacy-unlimited` with a ledger of 0. The engine charges it nothing and refuses nothing,
+    and the dialog said "Not enough credits, balance 0" and disabled every paid action."""
+    from nexus.models.billing import BillingSubscription
+
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "on")
+    h, tid = await _workspace(client, "pd27")
+    async with tenant_session(tid) as ts:
+        sub = await ts.first(BillingSubscription)
+        sub.plan_id = "legacy-unlimited"
+        await ts.flush()
+    await _empty_balance(tid)
+    rows = await _rows(client, h)
+
+    q = await _quote(client, h, rows)
+    assert q["enough"] is True and q["uses_credits"] is False and q["balance"] == 0
+    r = await _deliver(client, h, rows)
+    assert r.status_code == 200, r.text
+    assert r.json()["created"] == 4
+
+
+async def test_a_credit_plan_says_it_uses_credits(client, vendor):
+    h, _ = await _workspace(client, "pd28")
+    assert (await _quote(client, h, await _rows(client, h)))["uses_credits"] is True

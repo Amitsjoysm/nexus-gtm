@@ -3899,6 +3899,30 @@ list or export. Spec, 25 owner decisions (D1-D25), plan and the first real calls
   with a cursor.
 - MCP: `prospector_search` (read, masked) and `prospector_save` (write, charged), both through
   `gateway._ALLOWED`.
+- **Reported from staging 2026-11-18, fixed** (`tests/test_prospector_title_split.py`, the new tests
+  in `test_prospector_deliver.py` / `_export.py` / `test_mcp_tools.py`,
+  `tests_integration/test_prospector_spend_pg.py`):
+  - **Several job titles are several requests.** InfoJoy does not OR `Titles` (measured: `[CEO,
+    CTO]` = `[CTO]`; every other list ORs, observed-api doc "Fourth look"). `FieldSpec.split` ->
+    `fetch.split_payload`: one request per title at `ceil(size/titles)` rows, interleaved, deduped,
+    each part its own cache entry, so selections resolve to the same rows. `ParsedPage.more` says
+    whether more follow (a merged page is not "full" by length). At most 10 titles (422).
+  - **Nothing searches until Search.** The rail edits a draft; Search (or Enter in a text box,
+    Ctrl+Enter anywhere) applies it to the URL. It used to buy a page 800 ms after each change.
+  - **The confirm dialog asks the billing engine** (`charges.affordability`, `preflight`) instead
+    of comparing the balance itself. A superadmin's own workspace is `legacy-unlimited` with a
+    ledger of 0 (found on a DB copy): the engine allows and charges nothing, the dialog said "Not
+    enough credits" and disabled Save, List, Export and Reveal. `uses_credits` false reads
+    "Included in your plan". Prices come from `charges.price`, the meter's own arithmetic.
+  - **Email and direct phone are bought separately** (`include_emails`, `include_phones` on quote,
+    deliver, export and MCP `prospector_save`). A HELD contact missing a field gets it
+    (`pricing.missing_on_held`, `writers.fill_contact`): blanks only, charged once, a filled
+    email takes the Prospector source and the campaign hold. Before, a held row was free and
+    untouched, so a phone not bought on the first save could never be bought.
+  - MCP `prospector_save` sends only `api_page`, `api_page_size`, `row_key` of each row: an
+    assistant passes whole rows, which the server's row model refused (422).
+  - The rail is sticky because its slot stretches to the results' height; `top` is measured from
+    `<main>` (below the top bar) and it can be hidden (remembered per browser).
 - UI: `frontend/src/pages/prospector/` (filter state lives in the URL `f=` param; the rail, table,
   selection bar and confirm dialog are separate files). The nav item, the route and
   `features/pages.py` all carry `module.prospector`.

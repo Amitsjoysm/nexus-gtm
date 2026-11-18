@@ -995,20 +995,24 @@ export class ApiClient {
     return this.request<SavedResult>("/prospector/saved", { method: "POST", body, signal });
   }
   prospectorQuote(
-    body: { selection: ProspectSelection; action: QuoteAction; include_phones: boolean },
+    body: {
+      selection: ProspectSelection; action: QuoteAction; include_emails: boolean;
+      include_phones: boolean;
+    },
     signal?: AbortSignal,
   ) {
     return this.request<ProspectQuote>("/prospector/quote", { method: "POST", body, signal });
   }
   prospectorDeliver(body: {
-    selection: ProspectSelection; action: DeliverAction; include_phones: boolean;
-    list_id?: string | null; request_id: string;
+    selection: ProspectSelection; action: DeliverAction; include_emails: boolean;
+    include_phones: boolean; list_id?: string | null; request_id: string;
   }) {
     return this.request<ProspectDeliverResult>("/prospector/deliver", { method: "POST", body });
   }
   /** Charged like a delivery; the file is the paid result. */
   prospectorExport(body: {
-    selection: ProspectSelection; include_phones: boolean; request_id: string;
+    selection: ProspectSelection; include_emails: boolean; include_phones: boolean;
+    request_id: string;
   }) {
     return this.download("/prospector/export", `prospector-${body.selection.view}.csv`,
       undefined, body);

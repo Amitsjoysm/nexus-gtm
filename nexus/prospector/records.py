@@ -100,6 +100,14 @@ class ParsedPage:
     #: Raw item dicts, as the provider sent them: this is what the cache seals.
     items: list[dict]
     total: int | None = None
+    #: Whether more pages follow, when it is not "the page came back full": a page merged from
+    #: one provider request per job title (``fetch.py``) is longer or shorter than the size asked
+    #: for, and has more as long as ANY title's page came back full.
+    more: bool | None = None
+
+    def full(self, size: int) -> bool:
+        """Whether another page may follow a page asked for at ``size``."""
+        return self.more if self.more is not None else len(self.items) >= size
 
 
 def parse_contact(item: dict) -> VendorContact:

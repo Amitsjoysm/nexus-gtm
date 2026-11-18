@@ -109,3 +109,26 @@ timed out at 120 s cold; a contact's State can contradict its City and RegionCod
 - `IncludeTotalCount` is never sent (`client.COUNT_SUPPORTED`), and "Show total" is not offered
   (`GET /prospector/filters` returns `can_count: false`).
 - A Net new scan stops asking for pages after 45 s and returns a cursor ("Keep scanning").
+
+## Fourth look, 2026-11-18: which list filters OR their values
+
+Reported from staging: "Job titles CEO, CTO shows only the last one". Measured on the live API with
+two values per filter, 20 rows a page (only bounded fields read):
+
+| Filter | Two values | Result |
+|---|---|---|
+| `Titles` | CEO, CTO (either order) | the same 60 rows as `[CTO]` alone, 3 pages, no CEO |
+| `Titles` | CFO, CEO, CTO | 10 CFO, 10 CTO, no CEO |
+| `Titles` | "CEO,CTO" as one string | only people whose title holds both words |
+| `SeniorityLevels` | Owner, VP | 10 / 10 |
+| `Departments`, `Countries` | Finance, Marketing / India, Canada | mixed |
+| `IndustryTypes` (both views) | Banking, Insurance | mixed (spelt as each endpoint stores it) |
+| `Technologies`, `CompanyNames`, `Keywords`, `SubIndustries` | two each | mixed |
+| `EmployeeSizeRanges`, `RevenueRanges` | two each | mixed |
+| companies `Cities` | Austin, Denver | mixed |
+| contacts `States`, `Cities` | Texas, Ohio / Austin, Denver | timed out at 60 s twice; not established |
+
+So `Titles` is the one list the provider does not OR. `fields.py` marks it `split`, and `fetch.py`
+asks once per title at `ceil(size / titles)` rows and interleaves the pages (rows bought stay what
+one search buys; at most 10 titles). Verified live through this code: CEO + CTO gave 10 CEOs and
+10 CTOs a page. Worth reporting to InfoJoy; when they fix it, drop `split=True`.

@@ -133,11 +133,14 @@ class QuoteIn(BaseModel):
 
     selection: Selection
     action: Literal["save", "list", "reveal", "company_list", "export"] = "save"
+    #: Contacts view: which paid fields to deliver. Email and direct phone are bought separately,
+    #: so a rep can reveal only a phone, only an email, or both (2026-11-18).
+    include_emails: StrictBool = True
     include_phones: StrictBool = False
 
 
 class QuoteOut(BaseModel):
-    """What the confirm dialog shows. Quantities per capability, priced at today's rate cards."""
+    """What the confirm dialog shows. Quantities per capability, priced as the meter prices them."""
 
     records: int
     charges: dict[str, int]
@@ -146,8 +149,21 @@ class QuoteOut(BaseModel):
     already_paid: int
     held: int
     unavailable: int
+    #: Of the selected records, how many have an email / a direct phone at the provider, whatever
+    #: was asked for: the dialog says "6 of 25 have a direct phone" beside the phone choice.
+    with_email: int = 0
+    with_phone: int = 0
+    #: Records already in the workspace that get a field they were missing (bought or re-delivered).
+    filled: int = 0
     balance: float | None = None
+    #: Whether the server would let this delivery through: the billing engine's own preflight, not
+    #: a client-side comparison with the balance (which refused workspaces the engine allows).
     enough: bool = True
+    #: Why not, in a sentence, when ``enough`` is false.
+    reason: str | None = None
+    #: False when the plan takes no credits for this (an unlimited or internal plan, no
+    #: subscription, billing off): the dialog says it is included instead of showing a balance.
+    uses_credits: bool = True
 
 
 class DeliverIn(BaseModel):
@@ -156,6 +172,7 @@ class DeliverIn(BaseModel):
     selection: Selection
     action: Literal["save", "list", "reveal", "company_list"] = "save"
     list_id: str | None = IdOrNone
+    include_emails: StrictBool = True
     include_phones: StrictBool = False
     request_id: str = RequestId
 
@@ -164,6 +181,7 @@ class ExportIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     selection: Selection
+    include_emails: StrictBool = True
     include_phones: StrictBool = False
     request_id: str = RequestId
 
@@ -195,6 +213,8 @@ class DeliverOut(BaseModel):
     held: int = 0
     unavailable: int = 0
     already_paid: int = 0
+    #: Records already in the workspace that were given a field they were missing.
+    filled: int = 0
     dropped_linkedin: int = 0
     charged: dict[str, int] = Field(default_factory=dict)
     record_ids: list[str] = Field(default_factory=list)

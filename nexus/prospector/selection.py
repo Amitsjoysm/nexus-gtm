@@ -132,6 +132,7 @@ async def _all_matching(ts, selection: Selection, canonical: dict, client) -> Re
             out.records.append((ident, record))
             if len(out.records) >= limit:
                 return out
-        if len(records) < BULK_PAGE or (selection.scope == "total" and page * BULK_PAGE >= limit):
+        if not fetched.parsed.full(BULK_PAGE) or (selection.scope == "total"
+                                                  and page * BULK_PAGE >= limit):
             break
     return out

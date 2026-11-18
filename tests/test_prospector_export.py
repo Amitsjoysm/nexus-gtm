@@ -45,14 +45,15 @@ async def _workspace(client, slug):
     return auth(token), principal_from_token(token).tenant_id
 
 
-async def _export(client, h, view="contacts", phones=False, request_id=None):
+async def _export(client, h, view="contacts", phones=False, request_id=None, emails=True):
     rows = (await client.post("/api/prospector/search", headers=h,
                               json={"view": view, "page_size": 25})).json()["rows"]
     refs = [{"api_page": r["api_page"], "api_page_size": r["api_page_size"],
              "row_key": r["row_key"]} for r in rows]
     return await client.post("/api/prospector/export", headers=h, json={
         "selection": {"view": view, "scope": "total", "filters": {}, "rows": refs},
-        "include_phones": phones, "request_id": request_id or uuid.uuid4().hex})
+        "include_phones": phones, "include_emails": emails,
+        "request_id": request_id or uuid.uuid4().hex})
 
 
 def _read(resp) -> list[dict]:
@@ -163,3 +164,44 @@ def test_safe_cell_leaves_ordinary_values_alone():
     # A number or a phone is not a formula anything can call.
     for plain in ("+14155552671", "+1 (415) 555-7890", "-42"):
         assert safe_cell(plain) == plain
+
+
+async def _charged(tid) -> dict[str, float]:
+    from nexus.models.billing import BillingUsageEvent
+
+    async with tenant_session(tid) as ts:
+        events = await ts.list(BillingUsageEvent, BillingUsageEvent.capability_id.in_(
+            ["prospector.email", "prospector.phone"]))
+    out: dict[str, float] = {}
+    for e in events:
+        out[e.capability_id] = out.get(e.capability_id, 0) + float(e.quantity)
+    return out
+
+
+async def test_a_phones_only_export_has_no_email_column_and_charges_only_phones(client, vendor):
+    h, tid = await _workspace(client, "pe20")
+    r = await _export(client, h, phones=True, emails=False)
+    assert r.status_code == 200, r.text
+    rows = _read(r)
+    assert "email" not in rows[0] and "direct_phone" in rows[0]
+    assert rows[0]["direct_phone"] == "+1 (415) 555-7890"
+    assert await _charged(tid) == {"prospector.phone": 3}
+
+
+async def test_a_held_contact_exports_the_phone_bought_for_it(client, vendor):
+    """Saved without phones, exported with them: the export buys and carries the phone."""
+    h, tid = await _workspace(client, "pe21")
+    rows = (await client.post("/api/prospector/search", headers=h,
+                              json={"view": "contacts", "page_size": 25})).json()["rows"]
+    refs = [{"api_page": r["api_page"], "api_page_size": r["api_page_size"],
+             "row_key": r["row_key"]} for r in rows]
+    saved = await client.post("/api/prospector/deliver", headers=h, json={
+        "selection": {"view": "contacts", "scope": "total", "filters": {}, "rows": refs},
+        "action": "save", "include_phones": False, "request_id": uuid.uuid4().hex})
+    assert saved.status_code == 200, saved.text
+
+    r = await _export(client, h, phones=True)
+    by_name = {f"{row['first_name']} {row['last_name']}": row for row in _read(r)}
+    assert by_name["John Smith"]["direct_phone"] == "+1 (415) 555-7890"
+    assert by_name["John Smith"]["email"] == "john.smith@acme-example.com"
+    assert await _charged(tid) == {"prospector.email": 3, "prospector.phone": 3}

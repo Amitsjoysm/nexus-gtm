@@ -142,8 +142,18 @@ export interface ProspectQuote {
   already_paid: number;
   held: number;
   unavailable: number;
+  /** Of the selected records, how many have an email / a direct phone at the provider. */
+  with_email: number;
+  with_phone: number;
+  /** Records already in the workspace that get a field they were missing. */
+  filled: number;
   balance: number | null;
+  /** The billing engine's own answer: would the delivery go through? */
   enough: boolean;
+  /** Why not, in a sentence, when `enough` is false. */
+  reason: string | null;
+  /** False when the plan takes no credits for this (unlimited/internal plan, billing off). */
+  uses_credits: boolean;
 }
 
 export interface ProspectDeliverResult {
@@ -153,6 +163,7 @@ export interface ProspectDeliverResult {
   held: number;
   unavailable: number;
   already_paid: number;
+  filled: number;
   dropped_linkedin: number;
   charged: Record<string, number>;
   record_ids: string[];

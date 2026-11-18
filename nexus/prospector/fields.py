@@ -49,6 +49,10 @@ class FieldSpec:
     saved: bool = True
     #: option -> other spellings the provider stores for it, all sent when the option is chosen.
     aliases: dict[str, tuple[str, ...]] = dc_field(default_factory=dict)
+    #: The provider does not OR this list: each value is asked for on its own and the pages are
+    #: merged (``fetch.py``), at most ``max_values`` of them.
+    split: bool = False
+    max_values: int | None = None
 
     def provider_values(self, values: list[str]) -> list[str]:
         """``values`` with every stored spelling of each, in order, without repeats."""
@@ -94,8 +98,13 @@ SECTIONS: tuple[SectionSpec, ...] = (
         FieldSpec("first_name", "First name", "text", {"contacts": "FirstName"}),
         FieldSpec("last_name", "Last name", "text", {"contacts": "LastName"}),
     )),
+    # Titles is the one list the provider does not OR (measured 2026-11-18 on the live API):
+    # [CEO, CTO] returned the same 60 rows as [CTO] in either order, [CFO, CEO, CTO] returned no
+    # CEO, while Seniority, Departments, Countries, Industries, Technologies, Company names,
+    # Keywords, sizes and revenue all mixed their values. So each title is its own request.
     SectionSpec("job_titles", "Job titles", ("contacts",), (
-        FieldSpec("titles", "Job titles", "text_list", {"contacts": "Titles"}),
+        FieldSpec("titles", "Job titles", "text_list", {"contacts": "Titles"}, split=True,
+                  max_values=10),
         FieldSpec("departments", "Departments", "text_list", {"contacts": "Departments"}),
         FieldSpec("seniorities", "Seniority", "enum_list", {"contacts": "SeniorityLevels"},
                   options=SENIORITY_OPTIONS),
@@ -188,6 +197,12 @@ def sections_for(view: str) -> list[SectionSpec]:
     return [s for s in SECTIONS if view in s.views]
 
 
+def split_filters(view: str) -> dict[str, FieldSpec]:
+    """Provider filter name -> spec, for the lists asked for one value at a time on ``view``."""
+    return {f.api[view]: f for s in SECTIONS for f in s.fields
+            if f.split and f.api.get(view)}
+
+
 def catalog(view: str) -> dict:
     """The rail for one view, in order, as the screen draws it."""
     from nexus.models.signal import SIGNAL_KINDS
@@ -205,6 +220,7 @@ def catalog(view: str) -> dict:
                 # Total and Net new can use it only when the provider has a name for it.
                 "api": bool(spec.api.get(view)) and not section.workspace_only,
                 "saved": spec.saved,
+                "max_values": spec.max_values,
             })
         sections.append({"key": section.key, "label": section.label, "hint": section.hint,
                          "workspace_only": section.workspace_only, "fields": fields_out})
