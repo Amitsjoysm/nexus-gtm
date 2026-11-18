@@ -15,7 +15,7 @@ no server code and no credentials.
 
 | Assistant | How |
 |---|---|
-| Claude (claude.ai, desktop, mobile, Cowork) | Settings, Connectors: find InfoJoy GTM, or Add custom connector with the server address. The InfoJoy GTM plugin adds three skills on top. |
+| Claude (claude.ai, desktop, mobile, Cowork) | Settings, Connectors: find InfoJoy GTM, or Add custom connector with the server address and keep Sign in now and Claude's published identity. The InfoJoy GTM plugin adds three skills on top. |
 | Claude Code | Add this repository as a plugin marketplace with `/plugin marketplace add`, then `/plugin install infojoy-gtm@infojoy`. Or `claude mcp add --transport http infojoy-gtm https://gtm.infojoy.com/mcp`. |
 | ChatGPT | Find InfoJoy GTM in the ChatGPT directory, or add the server address in Developer mode. |
 | Gemini CLI | `gemini extensions install` with this repository's address, or `gemini mcp add --transport http infojoy-gtm https://gtm.infojoy.com/mcp`. |

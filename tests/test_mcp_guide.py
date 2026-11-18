@@ -23,6 +23,19 @@ async def test_the_guide_answers_without_signing_in(client):
     assert "<table>" in page and "<pre><code>" in page
 
 
+def test_the_claude_steps_name_the_choices_claude_shows():
+    """Claude's Add custom connector asks how to sign in and which OAuth client to use (seen by the
+    owner connecting staging, 2026-11-18). The steps name the two to keep, the fallback when the
+    first fails, and the Research permission that finding new companies and people needs."""
+    source = " ".join(guide.SOURCE.read_text(encoding="utf-8").split())  # wrapped lines joined
+    claude = source[source.index("### Claude ("):source.index("### ChatGPT")]
+    for words in ("**Sign in now**", "**Use Claude's published identity**",
+                  "**Register automatically**", "**Research**"):
+        assert words in claude, words
+    help_ = source[source.index("## Troubleshooting"):]
+    assert "records I already have" in help_ and "**Research**" in help_
+
+
 def test_no_markdown_is_left_in_the_page():
     page = guide.ai_apps_page()
     for residue in ("**", "```", "|---", "]("):

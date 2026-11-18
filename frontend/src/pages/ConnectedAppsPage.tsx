@@ -128,11 +128,22 @@ function ClientGuide({ client, url }: { client: ClientId; url: string }) {
               In Claude, open <strong>Settings</strong>, then <strong>Connectors</strong>, and choose{" "}
               <strong>Add custom connector</strong>. Works on claude.ai, the desktop app and mobile.
             </p>,
-            <p key="b">Name it {PRODUCT_NAME} and paste the server address above.</p>,
+            <p key="b">
+              Name it {PRODUCT_NAME} and paste the server address above. Keep the two choices Claude
+              detects, <strong>Sign in now</strong> under Authentication and{" "}
+              <strong>Use Claude's published identity</strong> under OAuth client, then choose{" "}
+              <strong>Add</strong>.
+            </p>,
             <p key="c">
               Choose <strong>Connect</strong>. Claude opens {PRODUCT_NAME}, where you choose what it may
-              do and approve. Claude's connectors do not take an API key; to use a key, connect from
-              Claude Code, Cursor, VS Code or a model API instead.
+              do and approve. Tick <strong>Research</strong> as well as Read if Claude should find new
+              companies and people; with Read alone it only sees what your workspace already has.
+            </p>,
+            <p key="d">
+              If connecting ends on a page saying the app cannot connect, remove the connector and add
+              it again with <strong>Register automatically</strong> under OAuth client. Claude's
+              connectors do not take an API key; to use a key, connect from Claude Code, Cursor, VS
+              Code or a model API instead.
             </p>,
           ]}
         </Steps>

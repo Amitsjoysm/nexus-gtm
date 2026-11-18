@@ -17,9 +17,18 @@ permissions you give it.
 ### Claude (claude.ai, desktop, mobile and Cowork)
 
 1. In Claude, open **Settings**, then **Connectors**. Find **InfoJoy GTM** in the directory, or
-   choose **Add custom connector** and paste the server address.
-2. Choose **Connect**. Claude opens InfoJoy GTM.
-3. Sign in if asked, tick what Claude may do, and choose **Allow access**.
+   choose **Add custom connector**, name it InfoJoy GTM and paste the server address.
+2. Keep the two choices Claude detects: **Sign in now** under Authentication, and **Use Claude's
+   published identity** under OAuth client. Choose **Add**.
+3. Choose **Connect**. Claude opens InfoJoy GTM: sign in if asked, tick what Claude may do, and
+   choose **Allow access**. Tick **Research** as well as Read if Claude should find new companies
+   and people, enrich records or draft emails; with Read alone it only sees what your workspace
+   already has.
+4. In a chat, turn on InfoJoy GTM from the tools menu and ask, for example, "What should I work
+   on today?"
+
+If connecting ends on a page saying the app cannot connect to InfoJoy GTM, remove the connector
+and add it again with **Register automatically** under OAuth client.
 
 The **InfoJoy GTM plugin** adds three skills on top of the connector: inbox triage, account
 research and outreach, and list building. Add it from the plugin directory in Claude.
@@ -151,6 +160,9 @@ Read the [privacy policy](https://infojoy.com/legal.html#privacy) and the
   are for Claude Code, Cursor, VS Code and scripts.
 - **The app says it isn't allowed to do something**: change the connection's permissions in
   **Settings**, **AI apps**.
+- **It only searched records I already have**: finding new companies and people, and adding
+  companies that match your ideal customer profile, needs the **Research** permission. Tick it in
+  **Settings**, **AI apps**, then start a new chat.
 - **"Not enough credits"**: add credits in **Billing**, or ask an admin.
 - **"AI apps are switched off"**: an administrator has paused AI apps for your workspace or plan.
 - **Sign-in link expired**: start connecting again from the app; links last 10 minutes.

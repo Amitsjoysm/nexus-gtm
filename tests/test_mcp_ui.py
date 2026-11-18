@@ -97,6 +97,16 @@ def test_the_page_says_when_claude_and_chatgpt_cannot_reach_the_address():
     assert "cannot reach it" in page
 
 
+def test_the_claude_steps_name_the_choices_claude_shows():
+    """The same choices as the public guide (test_mcp_guide): keep Sign in now and Claude's
+    published identity, fall back to Register automatically, tick Research to find new records."""
+    page = _words("pages/ConnectedAppsPage.tsx")
+    claude = page[page.index('case "claude":'):page.index('case "chatgpt":')]
+    for words in ("Sign in now", "Use Claude's published identity", "Register automatically",
+                  "Research"):
+        assert words in claude, words
+
+
 def test_the_page_says_which_apps_take_an_api_key():
     """Asked "do I need a custom connector to use an API key?": Claude's and ChatGPT's connectors
     sign in with OAuth and take no key; the key goes into the apps that run on your computer."""

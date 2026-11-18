@@ -72,7 +72,7 @@ Tested end to end on the local stack on 2026-10-21, which runs the same MCP code
 | Official MCP client v2.3.0, both protocol dialects | PASS |
 | Every tool, called for real | works; refusals (no mailbox, unknown id, provider down) come back as sentences |
 | Public guide `/help/ai-apps` | built on `feat/mcp-listings`; not deployed |
-| **Staging** `staging-gtm.infojoy.com` | **did not resolve (NXDOMAIN)** on 2026-10-21. The app is healthy at `gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io`; add the DNS record (section 2) before testing cloud clients on staging |
+| **Staging** `staging-gtm.infojoy.com` | **did not resolve (NXDOMAIN)** on 2026-10-21 and still on 2026-11-18. Test on the Azure host instead (section 3, "On staging"): Claude connected to `https://gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io/mcp` over OAuth and listed the tools on 2026-11-18 |
 
 If an AI app "doesn't work", the usual causes, in order:
 
@@ -135,10 +135,24 @@ anchor, not only answer 200: the app answers any unknown path with its shell pag
 - **MCP Inspector**: `npx @modelcontextprotocol/inspector`, transport Streamable HTTP, URL
   `https://gtm.infojoy.com/mcp`, header `Authorization: Bearer <key>`; list tools, call
   `get_workspace_overview`.
-- **One OAuth client**: Claude, Settings, Connectors, Add custom connector, paste the URL, Connect,
-  approve. The consent screen must show the right app name and redirect host, and the connection
-  must appear in InfoJoy GTM, Settings, AI apps. Revoke it there and confirm Claude asks to sign in
-  again. Every directory below asks you to confirm you called every tool this way first.
+- **One OAuth client**: Claude, Settings, Connectors, Add custom connector, paste the URL. Claude
+  reads the discovery documents and preselects **Sign in now** (Authentication) and **Use Claude's
+  published identity** (OAuth client, a Client ID Metadata Document); keep both, Add, Connect,
+  approve. "Detected" beside them means Claude reached the metadata. If sign-in ends on "This app
+  cannot connect", note the sentence on that page (a CIMD fetch or redirect problem) and retry with
+  **Register automatically** (DCR). The consent screen must show the right app name and redirect
+  host, and the connection must appear in InfoJoy GTM, Settings, AI apps. Revoke it there and
+  confirm Claude asks to sign in again. Every directory below asks you to confirm you called every
+  tool this way first.
+- **On staging**: `staging-gtm.infojoy.com` has no DNS record, so use the Azure host. In staging's
+  Control plane (`/admin/billing`), Configuration, Billing, set **App public address** to
+  `https://gtm-staging-app.mangowater-46a1ec4f.eastus2.azurecontainerapps.io` (it also moves
+  staging's Stripe return/webhook and password-reset links there), check
+  `/.well-known/oauth-protected-resource` names `<that host>/mcp`, then connect to `<that host>/mcp`.
+  Proven with Claude on 2026-11-18. Staging has no InfoJoy Search key in Provider keys, so
+  `prospector_search` answers "not set up" there until one is added. After the DNS record and
+  certificate exist, switch the App public address to `https://staging-gtm.infojoy.com` and re-add
+  every connector (the resource changes).
 
 ## 4. Prepare what every portal asks for
 
