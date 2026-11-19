@@ -822,6 +822,20 @@ def purpose_choice(purpose: str | None) -> tuple[str, str]:
     return "", ""
 
 
+#: Work nobody is waiting on, done at volume by background sweeps: asked of Groq only, never Claude
+#: (owner decision, 2026-11-19). Measured on the local stack: the scoring rationale alone ran 1,000-
+#: 1,500 times a day, one per account refresh, and the `auto` chain sent it to Claude Sonnet first
+#: wherever an Anthropic key existed, which is most of a $10-a-day bill on a platform with a dozen
+#: mostly idle users. Claude stays first for what a person reads as written by us (emails, call
+#: scripts) and for anything a person asked for in the moment.
+GROQ_ONLY_PURPOSES = frozenset({
+    "scoring_rationale",     # every scheduled rescore (agents/scoring.py)
+    "account_enrich",        # firmographics from web snippets, in the refresh pipeline
+    "industry_mapping",      # ICP industries to LinkedIn codes, on save and in the daily sweep
+    "industry_evidence",     # a discovered company's industry from its evidence
+})
+
+
 class PurposeRouter(FallbackLLMProvider):
     """The chain, reordered for a purpose a Superadmin configured: the chosen provider first, under
     the chosen model when one is set, then the rest in the deployment's order, the stub last.
@@ -835,6 +849,12 @@ class PurposeRouter(FallbackLLMProvider):
         self.names = list(names)
 
     def _order(self, purpose: str | None) -> tuple[list[LLMProvider], list[str]]:
+        if purpose in GROQ_ONLY_PURPOSES and "groq" in self.names:
+            # Groq, then the stub when every Groq key is throttled: never a paid model behind it.
+            # A deployment with no Groq in its chain keeps the default order rather than silently
+            # losing enrichment to the stub.
+            keep = [i for i, name in enumerate(self.names) if name in ("groq", "stub")]
+            return [self.providers[i] for i in keep], [""] * len(keep)
         chosen, model = (part.strip() for part in purpose_choice(purpose))
         if chosen not in self.names:
             return self.providers, [""] * len(self.providers)

@@ -558,6 +558,20 @@ absorb — but that is a fact about today's prompts, and prompts change. Called 
 block, because a token record must not be part of the transaction that decides whether the customer
 was allowed to run the agent at all. Never raises.
 
+## Background LLM spend (`agents/scoring.py`, `llm.GROQ_ONLY_PURPOSES`, 2026-11-19)
+
+Reported: "$10+ a day of LLM with twelve mostly idle users". The score is deterministic; only its
+two-sentence rationale costs a call, and the call console's brief is the one screen that shows it.
+It ran on every scheduled refresh of every account (measured locally: 1,000-1,500 a day, 75% for a
+score identical to the previous one), and the `auto` chain sent it to Claude first wherever an
+Anthropic key existed. Owner decisions:
+- **An unchanged score keeps its rationale** (ICP fit, intent, health and composite all equal): no call.
+- **Unattended purposes go to Groq, then the stub, never a paid model** (`GROQ_ONLY_PURPOSES`:
+  scoring rationale, account enrichment, industry mapping, industry evidence). A deployment with no
+  Groq in its chain keeps the default order rather than losing enrichment to the stub.
+- **On the Free plan a refresh writes no rationale**; `scoring.ensure_rationale` writes it when the
+  call brief is opened, once, and stores it on the score row. `tests/test_scoring_rationale_cost.py`.
+
 ## Runtime configuration (`nexus/runtime_config/`)
 
 Deployment settings changeable from the Control plane without a deploy. **The mechanism is one

@@ -260,6 +260,11 @@ class CallQueueService:
                 .limit(1)
             )
         ).first()
+        # The one screen that shows a score's rationale, so it is written here when the refresh
+        # left it empty (the Free plan's scores, or a failed call): once, then stored.
+        from nexus.agents.scoring import ensure_rationale
+
+        await ensure_rationale(ts, score)
 
         account_block = None
         if account is not None:
