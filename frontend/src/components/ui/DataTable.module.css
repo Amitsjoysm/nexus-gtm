@@ -106,3 +106,19 @@
     display: none;
   }
 }
+
+/* "Show more" under a table that draws its rows a page at a time (`pageSize`). */
+.more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.moreNote {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}

@@ -285,7 +285,10 @@ async def list_accounts(
                                   func.lower(func.coalesce(Account.domain, "")).like(like)))
     total = await ts.session.scalar(select(func.count()).select_from(active.subquery()))
     response.headers["X-Total-Count"] = str(total or 0)
-    stmt = active.order_by(Account.created_at.desc()).limit(limit).offset(offset)
+    # The id breaks ties: an import's rows can share a timestamp, and without a total order offset
+    # pages overlap and skip (the Accounts page reads every page since 2026-11-19).
+    stmt = (active.order_by(Account.created_at.desc(), Account.id.desc())
+            .limit(limit).offset(offset))
     rows = list((await ts.session.scalars(stmt)).all())
     scores = await _latest_fit_scores(ts, [a.id for a in rows])
     names = await _owner_names(ts, rows)

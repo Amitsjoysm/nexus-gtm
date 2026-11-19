@@ -109,6 +109,85 @@ async def test_no_model_answer_falls_back_to_the_catalogue_through_the_same_filt
     assert "Head of Facilities" in names[:3], "the title keywords rank the facilities roles up"
 
 
+SALES_OFFER = {
+    "employee_min": 50, "employee_max": 5000, "job_levels": ["c_level", "vp", "director"],
+    "buyer_titles": ["Chief Revenue Officer (CRO)", "VP Sales"],
+    "product_context": "AI buyer intent signals and verified contacts that reduce risk.",
+}
+
+
+async def test_titles_come_back_spelled_as_a_database_holds_them():
+    """Measured 2026-11-19: U+2011 hyphens and bracketed abbreviations match no stored title."""
+    llm = _LLM([{"title": "Account‑Based Marketing Manager", "reason": "r",
+                 "influence": "champion"},
+                {"title": "Chief Marketing Officer (CMO)", "reason": "r",
+                 "influence": "economic_buyer"}])
+    titles, _ = await suggest_titles(SALES_OFFER, llm=llm)
+    assert [t.title for t in titles] == ["Chief Marketing Officer",
+                                         "Account-Based Marketing Manager"]
+
+
+async def test_a_listed_title_in_other_words_is_not_suggested_again():
+    llm = _LLM([{"title": "Vice President of Sales", "reason": "listed as VP Sales"},
+                {"title": "Chief Revenue Officer", "reason": "listed with its acronym"},
+                {"title": "Head of Revenue Operations", "reason": "new", "influence": "champion"}])
+    titles, _ = await suggest_titles(SALES_OFFER, llm=llm)
+    assert [t.title for t in titles] == ["Head of Revenue Operations"]
+
+
+async def test_support_roles_are_dropped_unless_the_offer_is_for_them():
+    padding = [{"title": "Procurement Specialist", "reason": "buys"},
+               {"title": "Compliance Officer", "reason": "checks"},
+               {"title": "Director of Demand Generation", "reason": "owns pipeline",
+                "influence": "economic_buyer"}]
+    titles, _ = await suggest_titles(SALES_OFFER, llm=_LLM(padding))
+    assert [t.title for t in titles] == ["Director of Demand Generation"], \
+        "'buyer intent' and 'reduce risk' do not make a sales offer a procurement or compliance one"
+    compliance = {**SALES_OFFER, "product_context": "Regulatory compliance monitoring for banks."}
+    titles, _ = await suggest_titles(compliance, llm=_LLM(padding))
+    assert "Compliance Officer" in [t.title for t in titles]
+
+
+async def test_budget_owners_and_champions_rank_above_users():
+    llm = _LLM([{"title": "Sales Development Representative", "reason": "u", "influence": "end_user"},
+                {"title": "Head of Sales Development", "reason": "c", "influence": "champion"},
+                {"title": "VP Marketing", "reason": "b", "influence": "economic_buyer"}])
+    titles, _ = await suggest_titles(SALES_OFFER, llm=llm)
+    assert [t.title for t in titles] == ["VP Marketing", "Head of Sales Development",
+                                         "Sales Development Representative"]
+    assert titles[0].priority_score > titles[-1].priority_score
+
+
+def test_an_answer_cut_off_at_the_token_limit_keeps_its_complete_titles():
+    """Measured 2026-11-19: three of four workspaces got the catalogue because the JSON ended
+    mid-reason and nothing parsed."""
+    cut = ('{"titles": [{"title": "Head of Growth Marketing", "reason": "r", "influence": '
+           '"champion"}, {"title": "Director of Sales Technology", "reason": "r"}, '
+           '{"title": "Vice President of Marketing Technology", "reason": "Oversees mart')
+    assert [t["title"] for t in parse_titles(cut)] == ["Head of Growth Marketing",
+                                                        "Director of Sales Technology"]
+
+
+def test_a_title_written_in_lower_case_is_capitalised():
+    assert parse_titles('["director of qa", "vp of sales-enablement"]') == [
+        {"title": "Director of QA", "reason": "", "department": "", "influence": ""},
+        {"title": "VP of Sales-Enablement", "reason": "", "department": "", "influence": ""}]
+    assert parse_titles('["DevOps Manager"]')[0]["title"] == "DevOps Manager", "own casing kept"
+
+
+def test_the_catalogue_offers_roles_the_offer_speaks_to_not_every_industrys():
+    lead_gen = {
+        "industries": ["Manufacturing", "Software Development", "Hospitals and Health Care"],
+        "employee_min": 50, "employee_max": 5000,
+        "product_context": "B2B lead generation: buyer intent data, verified contacts and "
+                           "demand generation campaigns.",
+    }
+    names = [t.title for t in from_catalogue(lead_gen, limit=10)]
+    assert names, "the catalogue still answers"
+    for operational in ("Plant Manager", "Head of Maintenance", "Head of Facilities"):
+        assert operational not in names, names
+
+
 def test_an_unreadable_answer_reads_as_nothing():
     assert parse_titles("Here are some ideas: VP Sales") == []
     assert parse_titles("```json\n[\"Head of Facilities\"]\n```")[0]["title"] == \

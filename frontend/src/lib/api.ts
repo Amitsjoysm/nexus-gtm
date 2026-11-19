@@ -306,6 +306,9 @@ interface RequestOptions {
 /** How many conversations Mail reads at once: the newest, which filters narrow. */
 export const MAIL_PAGE = 200;
 
+/** The most rows the Accounts and Contacts pages load; past it they say so and search narrows. */
+export const ALL_ROWS_CAP = 20000;
+
 export class ApiClient {
   private baseUrl: string;
   private token: string | null = null;
@@ -484,10 +487,49 @@ export class ApiClient {
     return this.request<MessageResponse>("/auth/reset-password", { method: "POST", body, signal });
   }
 
+  /**
+   * Every row of a newest-first list, page by page, a few pages at a time, until a short page or
+   * `cap` rows. The Accounts and Contacts pages filter and sort in the browser, and read only the
+   * first 200 before 2026-11-19: past 200 accounts the rest could not be seen, filtered or picked.
+   * Rows are de-duplicated by id, since a row added while paging shifts the pages by one.
+   */
+  private async pagedList<T extends { id: string }>(
+    path: string, pageSize: number, cap: number, signal?: AbortSignal,
+  ): Promise<T[]> {
+    const seen = new Set<string>();
+    const all: T[] = [];
+    const take = (rows: T[]) => {
+      for (const row of rows) if (!seen.has(row.id)) { seen.add(row.id); all.push(row); }
+    };
+    const first = await this.request<T[]>(path, { query: { limit: pageSize, offset: 0 }, signal });
+    take(first);
+    let offset = pageSize;
+    let done = first.length < pageSize;
+    while (!done && offset < cap) {
+      const offsets = [0, 1, 2, 3].map((i) => offset + i * pageSize).filter((o) => o < cap);
+      const pages = await Promise.all(offsets.map((o) =>
+        this.request<T[]>(path, { query: { limit: pageSize, offset: o }, signal })));
+      for (const page of pages) {
+        take(page);
+        if (page.length < pageSize) done = true;
+      }
+      offset += offsets.length * pageSize;
+    }
+    return all;
+  }
+
   // ---- accounts ----
   /** The newest 200 accounts, or with `q` a search of name and domain across the workspace. */
   listAccounts(signal?: AbortSignal, q?: string) {
     return this.request<Account[]>("/accounts", { query: q ? { q } : undefined, signal });
+  }
+  /** Every active account, newest first (up to {@link ALL_ROWS_CAP}), for the Accounts page. */
+  listAllAccounts(signal?: AbortSignal) {
+    return this.pagedList<Account>("/accounts", 200, ALL_ROWS_CAP, signal);
+  }
+  /** Every contact, newest first (up to {@link ALL_ROWS_CAP}), for the Contacts page. */
+  listAllWorkspaceContacts(signal?: AbortSignal) {
+    return this.pagedList<WorkspaceContact>("/contacts", 1000, ALL_ROWS_CAP, signal);
   }
   /** A company's website domain from its name, for the Similar-people add form. */
   /** The company's website domain: from its LinkedIn page when one is known, else by its name. */
@@ -974,6 +1016,25 @@ export class ApiClient {
   // ---- Prospector (nexus/prospector/, spec 2026-10-16) ----
   prospectorFilters(view: ProspectView, signal?: AbortSignal) {
     return this.request<FilterCatalog>("/prospector/filters", { query: { view }, signal });
+  }
+  /** The companies discovery never offers this workspace, newest first. */
+  listExclusions(params: { q?: string; limit?: number; offset?: number }, signal?: AbortSignal) {
+    return this.request<{
+      total: number;
+      items: { domain: string; reason: string; created_at: string | null }[];
+    }>("/discovery/exclusions", { query: params, signal });
+  }
+  /** Put up to 5,000 domains, websites or addresses on the exclusion list. Free. */
+  addExclusions(entries: string[], signal?: AbortSignal) {
+    return this.request<{
+      added: number; already: number; unreadable: string[]; unreadable_count: number;
+      total: number;
+    }>("/discovery/exclusions", { method: "POST", body: { entries }, signal });
+  }
+  removeExclusions(domains: string[], signal?: AbortSignal) {
+    return this.request<{ removed: number }>("/discovery/exclusions/remove", {
+      method: "POST", body: { domains }, signal,
+    });
   }
   /** Typeahead for a text filter: the provider's own values first, then seeds. Free. */
   prospectorSuggest(view: ProspectView, field: string, q: string, signal?: AbortSignal) {

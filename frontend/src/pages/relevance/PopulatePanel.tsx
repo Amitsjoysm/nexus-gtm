@@ -37,7 +37,7 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 const DISCARD_LABEL: Record<string, (n: number) => string> = {
-  already_held: (n) => `${n} you already have`,
+  already_held: (n) => `${n} you already have or excluded`,
   no_website: (n) => `${n} had no website of their own`,
   duplicate: (n) => `${n} came up twice`,
   outside_icp: (n) => `${n} fell outside the ICP's size or countries`,

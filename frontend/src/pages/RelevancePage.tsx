@@ -34,6 +34,7 @@ import type {
 } from "@/lib/types";
 import styles from "./RelevancePage.module.css";
 import { PopulatePanel } from "./relevance/PopulatePanel";
+import { ExclusionsPanel } from "./relevance/ExclusionsPanel";
 
 const ROLE_RANK: Record<Role, number> = { owner: 3, admin: 2, manager: 1, rep: 0 };
 
@@ -613,6 +614,8 @@ export function RelevancePage() {
           serviceId={selected?.id ?? null}
         />
       )}
+
+      {canEdit && <ExclusionsPanel />}
 
       {!canEdit && (
         <div className={styles.notice} role="note">

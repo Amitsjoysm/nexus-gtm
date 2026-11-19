@@ -123,7 +123,9 @@ export function ContactsPage() {
   const toast = useToast();
   const { session } = useAuth();
   const canBulkDelete = !!session && DELETES_IN_BULK.includes(session.role);
-  const contacts = useApi<WorkspaceContact[]>((signal) => api.listWorkspaceContacts(undefined, signal), []);
+  // Every contact, not the newest 200 (2026-11-19): search, filters and selection run in the
+  // browser, so an older contact could not be found. Drawn 200 at a time.
+  const contacts = useApi<WorkspaceContact[]>((signal) => api.listAllWorkspaceContacts(signal), []);
   // Blocked addresses, checked in one request for the loaded rows (spec §9 contact badge).
   const blocked = useDoNotContact((contacts.data ?? []).map((c) => c.email));
   const [query, setQuery] = useState("");
@@ -791,6 +793,7 @@ export function ContactsPage() {
           skeletonRows={6}
           onRowClick={(c) => navigate(`/accounts/${c.account_id}`)}
           caption="Workspace contacts"
+          pageSize={200}
           empty={
             // A filter that matches nobody is not an empty workspace, and telling someone with
             // seven contacts to go and find some sends them off to do work they have already done.

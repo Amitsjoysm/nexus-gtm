@@ -29,7 +29,7 @@ export function useDoNotContact(emails: Array<string | null | undefined>): Recor
   const [blocked, setBlocked] = useState<Record<string, string>>({});
   const key = Array.from(
     new Set(emails.map((e) => (e ?? "").trim().toLowerCase()).filter(Boolean)),
-  ).sort().slice(0, 500).join(",");
+  ).sort().join(",");
 
   useEffect(() => {
     if (!key) {
@@ -37,7 +37,20 @@ export function useDoNotContact(emails: Array<string | null | undefined>): Recor
       return;
     }
     const controller = new AbortController();
-    api.checkDoNotContact(key.split(","), controller.signal)
+    // In slices of the server's 500, so every loaded row is checked: the Contacts page loads all of
+    // them since 2026-11-19, and the first 500 alone left the rest without their badge.
+    const all = key.split(",");
+    const slices: string[][] = [];
+    for (let i = 0; i < all.length; i += 500) slices.push(all.slice(i, i + 500));
+    (async () => {
+      const found: Record<string, string> = {};
+      for (let i = 0; i < slices.length; i += 4) {
+        const parts = await Promise.all(
+          slices.slice(i, i + 4).map((s) => api.checkDoNotContact(s, controller.signal)));
+        Object.assign(found, ...parts);
+      }
+      return found;
+    })()
       .then(setBlocked)
       .catch(() => {
         if (!controller.signal.aborted) setBlocked({});

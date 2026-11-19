@@ -19,6 +19,16 @@ for the model's titles and the catalogue fallback:
 
 With no model, a model that fails, or one whose every title is filtered out, the catalogue ranking
 (`titles.recommend_titles_for_icp`) is used, through the same filter.
+
+**Titles are for searching, so they must be spelled as people hold them** (2026-11-19, measured on
+four workspaces' saved ICPs): the model padded every list to ten with roles that do not buy
+(Procurement Specialist, Compliance Officer, CRM Integration Engineer), wrote "Account‑Based" with
+a non-breaking hyphen (U+2011) that no database title matches, added bracketed abbreviations
+("Chief Marketing Officer (CMO)") and suggested again what the list already held in other words.
+So every title is cleaned (`clean_title`), a repeat is judged by meaning (`_meaning`, the token rule
+`gate.same_meaning_title` uses), a support role is dropped unless the offer is about its function
+(`_peripheral`), budget owners and champions rank above end users, and the prompt asks for fewer,
+real titles rather than a full list.
 """
 from __future__ import annotations
 
@@ -35,7 +45,87 @@ logger = logging.getLogger("nexus.relevance.title_suggest")
 SMALL_COMPANY = 50
 MAX_SUGGESTIONS = 10
 _INFLUENCES = ("economic_buyer", "champion", "technical_evaluator", "end_user")
+#: Rank within a list: who owns the budget, who pushes for it, who checks it, who uses it.
+_INFLUENCE_RANK = {name: i for i, name in enumerate(_INFLUENCES)}
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
+_BRACKETED = re.compile(r"\s*[(\[][^)\]]*[)\]]")
+#: Functions that process or police a purchase rather than make it. Dropped unless the offer, the
+#: industries or the title keywords name the function (compliance software IS bought by compliance).
+_PERIPHERAL = {
+    # Stems that mean the offer is FOR this function. Not "buyer" or "risk": a sales offer says
+    # "buyer intent" and most offers "reduce risk", which would keep every procurement and
+    # compliance title they are meant to drop.
+    "procurement": ("procurement", "purchasing", "sourcing", "supplier"),
+    "purchasing": ("procurement", "purchasing", "sourcing", "supplier"),
+    "legal": ("legal", "lawyer", "law firm", "counsel"),
+    "counsel": ("legal", "lawyer", "law firm", "counsel"),
+    "paralegal": ("legal", "lawyer", "law firm", "paralegal"),
+    "compliance": ("compliance", "regulat", "audit", "governance"),
+    "intern": ("intern",),
+    "trainee": ("trainee", "training"),
+    "student": ("student", "education", "universit", "school"),
+    "receptionist": ("reception", "front desk"),
+}
+
+
+#: Kept in capitals when a model writes a title all in lower case.
+_ACRONYMS = frozenset({
+    "vp", "svp", "evp", "avp", "ceo", "cfo", "cto", "cio", "cmo", "coo", "cro", "cdo", "cpo",
+    "ciso", "cso", "it", "hr", "qa", "ux", "ui", "seo", "abm", "crm", "erp", "saas", "b2b", "gtm",
+    "emea", "apac", "uk", "us", "eu", "ai", "ml", "r&d", "hse", "ehs", "pr", "bi",
+})
+_SMALL_WORDS = frozenset({"of", "and", "for", "the", "in", "to", "at", "or", "a", "an"})
+
+
+def _smart_case(title: str) -> str:
+    """A title the model wrote all in lower case, capitalised as people write it. Any other casing
+    is the model's own and is kept."""
+    if not title.islower():
+        return title
+    out = []
+    for i, word in enumerate(title.split(" ")):
+        if word in _ACRONYMS:
+            out.append(word.upper())
+        elif i and word in _SMALL_WORDS:
+            out.append(word)
+        else:
+            out.append("-".join(part[:1].upper() + part[1:] for part in word.split("-")))
+    return " ".join(out)
+
+
+def clean_title(raw) -> str:
+    """A title as a database holds it: look-alike characters made plain ("Account‑Based" with a
+    non-breaking hyphen matches no stored title), no bracketed abbreviation ("(CMO)"), one space,
+    capitalised when the model wrote it all in lower case."""
+    from nexus.agents.copy import tidy_text
+
+    text = _BRACKETED.sub("", tidy_text(str(raw or "")))
+    return _smart_case(re.sub(r"\s+", " ", text).strip(" -–—,;:/|")[:120])
+
+
+def _meaning(title: str) -> frozenset[str]:
+    """What a title says, in any word order or abbreviation: "VP Sales" is "Vice President of
+    Sales". The token rule `gate.same_meaning_title` uses."""
+    from nexus.relevance.gate import _title_tokens
+
+    return _title_tokens(clean_title(title))
+
+
+def _peripheral(title: str, icp: dict) -> bool:
+    """Is this a support role (procurement, legal, compliance, an intern) for an offer that is not
+    about its function?"""
+    words = set(_normalise(title).split())
+    hits = [about for word, about in _PERIPHERAL.items() if word in words]
+    if not hits:
+        return False
+    offer = _normalise(" ".join([
+        str(icp.get("product_context") or ""),
+        *[f"{vp.get('name', '')} {vp.get('description', '')} {' '.join(vp.get('pains_solved') or [])}"
+          for vp in (icp.get("value_props") or []) if isinstance(vp, dict)],
+        *[str(x) for x in (icp.get("industries") or [])],
+        *[str(x) for x in (icp.get("title_keywords") or [])],
+    ]))
+    return not any(stem in offer for about in hits for stem in about)
 
 
 def typical_size(icp: dict) -> int | None:
@@ -59,24 +149,28 @@ def c_level_allowed(icp: dict) -> bool:
     return size is not None and size < SMALL_COMPANY
 
 
-def keep(title: str, icp: dict, seen: set[str]) -> bool:
-    """Does ``title`` survive the filter? ``seen`` holds the normalised titles already listed or
-    already kept, and is added to."""
-    norm = _normalise(title)
-    if not norm or norm in seen:
+def keep(title: str, icp: dict, seen: set[frozenset]) -> bool:
+    """Does ``title`` survive the filter? ``seen`` holds the meanings (`_meaning`) of the titles
+    already listed or already kept, and is added to."""
+    meaning = _meaning(title)
+    if not meaning or meaning in seen:
         return False
     excluded = [x for x in (icp.get("exclude_title_keywords") or []) if str(x).strip()]
     if excluded and not matches_title(title, {"exclude_title_keywords": excluded}):
         return False
     if level_of(title) == "c_level" and not c_level_allowed(icp):
         return False
-    seen.add(norm)
+    if _peripheral(title, icp):
+        return False
+    seen.add(meaning)
     return True
 
 
-def _listed(icp: dict) -> set[str]:
-    return {_normalise(t) for t in (icp.get("buyer_titles") or icp.get("titles") or [])
-            if _normalise(str(t))}
+def _listed(icp: dict) -> set[frozenset]:
+    listed = icp.get("buyer_titles") or icp.get("titles") or []
+    if isinstance(listed, str):
+        listed = [listed]
+    return {m for m in (_meaning(str(t)) for t in listed) if m}
 
 
 def _bullets(values) -> str:
@@ -89,7 +183,12 @@ def build_prompt(icp: dict, *, limit: int) -> tuple[str, str]:
         "You are a B2B sales strategist who knows how buying committees work. Suggest the job "
         "titles of the people who would BUY, CHAMPION or EVALUATE this specific offer at the "
         "companies described: the people who feel the pains it solves. Be specific to the offer, "
-        "never a generic list of executives. Output ONLY a JSON object, no prose, no code fences."
+        "never a generic list of executives. Fewer, better titles beat a full list: leave out "
+        "anyone who only processes or polices a purchase (procurement, legal, compliance) or is "
+        "only loosely touched by it, unless the offer is built for that function. These titles "
+        "are used to SEARCH a contact database, so write each the way people hold it on their "
+        "profile: plain words and plain hyphens, one role per title, no abbreviation in brackets, "
+        "no slash. Output ONLY a JSON object, no prose, no code fences."
     )
     lines: list[str] = []
     context = str(icp.get("product_context") or "").strip()
@@ -127,9 +226,10 @@ def build_prompt(icp: dict, *, limit: int) -> tuple[str, str]:
     user = (
         "\n".join(lines or ["(The ICP is empty: suggest the titles that typically buy B2B "
                             "software.)"])
-        + f'\n\nReturn {{"titles": [{{"title": "...", "reason": "one line on why this person '
-        f'buys or champions THIS offer", "department": "...", "influence": "economic_buyer | '
-        f'champion | technical_evaluator | end_user"}}]}} with up to {limit} titles, best first.'
+        + f'\n\nReturn {{"titles": [{{"title": "...", "reason": "at most 15 words on why this '
+        f'person buys or champions THIS offer", "department": "...", "influence": "economic_buyer | '
+        f'champion | technical_evaluator | end_user"}}]}} with up to {limit} titles, best first. '
+        "Stop when the next title would be a weak fit."
     )
     return system, user
 
@@ -142,16 +242,23 @@ def parse_titles(text: str) -> list[dict]:
         return []
     try:
         data = json.loads(match.group(0))
+        items = data.get("titles") if isinstance(data, dict) else data
     except (json.JSONDecodeError, ValueError):
-        return []
-    items = data.get("titles") if isinstance(data, dict) else data
+        # An answer cut off at the token limit (measured 2026-11-19: the JSON ended mid-reason, so
+        # nothing parsed and the catalogue answered) still holds every title before the cut.
+        items = []
+        for obj in re.finditer(r"\{[^{}]*\}", raw):
+            try:
+                items.append(json.loads(obj.group(0)))
+            except (json.JSONDecodeError, ValueError):
+                continue
     out: list[dict] = []
     for item in items if isinstance(items, list) else []:
         if isinstance(item, str):
             item = {"title": item}
         if not isinstance(item, dict):
             continue
-        title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()[:120]
+        title = clean_title(item.get("title"))
         if not title:
             continue
         influence = str(item.get("influence") or "").strip().lower()
@@ -184,7 +291,7 @@ async def _from_model(icp: dict, *, llm, limit: int) -> list[TitleRecommendation
     try:
         response = await llm.complete(
             [LLMMessage("system", system), LLMMessage("user", user)],
-            temperature=0.2, max_tokens=1200, purpose="title_suggestions",
+            temperature=0.2, max_tokens=2000, purpose="title_suggestions",
         )
     except Exception as exc:
         logger.info("title suggestions: the model failed, using the catalogue: %r", exc)
@@ -192,18 +299,18 @@ async def _from_model(icp: dict, *, llm, limit: int) -> list[TitleRecommendation
     if getattr(response, "is_stub", False):
         return []
     seen = _listed(icp)
-    kept: list[TitleRecommendation] = []
-    for rank, item in enumerate(parse_titles(getattr(response, "text", "") or "")):
-        if len(kept) >= limit:
-            break
-        if not keep(item["title"], icp, seen):
-            continue
-        kept.append(TitleRecommendation(
+    survivors = [item for item in parse_titles(getattr(response, "text", "") or "")
+                 if keep(item["title"], icp, seen)]
+    # Budget owners and champions before evaluators and users, the model's order within each.
+    survivors.sort(key=lambda item: _INFLUENCE_RANK.get(item["influence"], len(_INFLUENCES)))
+    return [
+        TitleRecommendation(
             title=item["title"], priority_score=max(40, 95 - 5 * rank), confidence=0.75,
             department=item["department"], buying_influence=item["influence"],
             reason=item["reason"] or "Suggested for this offer.",
-        ))
-    return kept
+        )
+        for rank, item in enumerate(survivors[:limit])
+    ]
 
 
 #: The level words a keyword title is built with, most senior first. C-level is left out: "Chief of
@@ -243,10 +350,20 @@ def from_catalogue(icp: dict, *, limit: int) -> list[TitleRecommendation]:
     """The deterministic suggestions, through the same filter: titles in the ICP's own title
     keywords first, then the catalogue ranking. With title keywords set, only catalogue roles in
     those functions: a VP Sales beside "infrastructure, estates" is the ignored-keywords report."""
+    from nexus.relevance.titles import _context_blob, _context_bonus
+
     seen = _listed(icp)
     keywords = [_normalise(str(k)) for k in (icp.get("title_keywords") or []) if _normalise(str(k))]
     catalogue = [r for r in ranked_titles_for_icp(icp)
                  if not keywords or _in_keywords(r, keywords)]
+    # With the offer described, only roles its own words speak to, when there are any. An ICP with
+    # several industries otherwise lifts every industry's operational role: a lead-generation
+    # platform targeting Manufacturing was offered "Plant Manager" and "Head of Maintenance"
+    # (measured 2026-11-19). Fewer, better titles, as the model is asked for.
+    blob = _context_blob(icp)
+    if blob:
+        spoken = [r for r in catalogue if _context_bonus(r.title, r, blob) > 0]
+        catalogue = spoken or catalogue
     out: list[TitleRecommendation] = []
     for rec in [*keyword_titles(icp), *catalogue]:
         if len(out) >= limit:

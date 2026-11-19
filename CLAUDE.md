@@ -1657,6 +1657,23 @@ archives. `tests/test_bulk_delete.py`.
 - **"Report wrong company data"** needs a reason and writes `company_reports` (platform-global, one
   row per company per workspace, `status=open`). It never quarantines or edits the shared row: one
   workspace's opinion does not change what every workspace reads. Nothing reviews them yet.
+- **The exclusion list is the same table** (2026-11-19, `tests/test_discovery_exclusions.py`):
+  `discovery_suppressions` rows with reason `excluded`, pasted or read from a file on the Relevance
+  page (`ExclusionsPanel`, admins and owners) through `POST /discovery/exclusions` (up to 5,000 a
+  request, `manage_relevance`, free), listed by `GET` (rep+), removed by `POST .../remove`. Asked as
+  "an enterprise with 2,000+ companies and an exclusion list of domains". Every discovery path that
+  honours "Don't suggest these again" honours it with no change of its own. An entry is a domain, a
+  website, `@domain` or an address at the company (`suppression.read_entry`); free mail and reserved
+  names are named back, never excluded. Accounts held are untouched. NOT read by Prospector's Net
+  new, Find similar or the do-not-contact list, and a do-not-contact domain block is not an
+  exclusion: both are open questions for the owner.
+- **Accounts and Contacts read every row** (2026-11-19, `tests/test_lists_past_200.py`). Both pages
+  read the newest 200 and filtered, sorted, counted and selected in the browser, so past 200 rows
+  the rest could not be seen, searched or picked: part of "fails after 200 accounts". They now read
+  all pages (`ApiClient.pagedList`, four at a time, de-duplicated, capped at `ALL_ROWS_CAP` 20,000)
+  and draw 200 at a time (`DataTable` `pageSize`, which sorts every row first). Both list queries
+  order by `created_at, id`: an import's rows can share one timestamp, and offset pages over an order
+  with ties overlap and skip. `useDoNotContact` checks every address in slices of 500, four at once.
 
 **Add one contact** (`POST /accounts/contacts`, the Contacts page's "Add contact"): name, email,
 title, phone, LinkedIn, and an account the workspace has or a company named by its WEBSITE
@@ -2300,6 +2317,20 @@ then refuses; C-level (`level_of`) only when the job levels include it or the IC
 every title filtered, the catalogue answers through the same filter, led by titles built from the
 keywords at the chosen levels ("Head of Facilities"), and with keywords set only catalogue roles in
 those functions. One completion per click, not metered (COGS). `tests/test_title_suggestions.py`.
+
+**Titles are for searching, so they come back as a database holds them** (2026-11-19, measured on
+four workspaces' saved ICPs on the local deploy). Before: the model padded every list to ten with
+roles that do not buy (Procurement Specialist, Compliance Officer, CRM Integration Engineer), wrote
+"Account‑Based" with U+2011, added "(CMO)", and re-suggested listed titles in other words; with a
+longer prompt its JSON was cut at the 1,200-token limit, nothing parsed, and three of four got the
+catalogue, which for a multi-industry ICP ranked "Plant Manager" for a lead-gen platform. Now:
+`clean_title` (look-alikes plain, brackets gone, an all-lowercase title capitalised); a repeat is
+judged by meaning (`_meaning`, the `gate._title_tokens` rule); `_peripheral` drops procurement,
+legal, compliance, interns unless the offer, industries or keywords name the function (stems chosen
+so "buyer intent" and "reduce risk" do not count); budget owners and champions rank first; the
+prompt asks for fewer, real titles and 15-word reasons; 2,000 tokens; a cut-off answer keeps every
+complete title (`parse_titles`); and with the offer described the catalogue offers only roles its
+words speak to (`_context_bonus`), when there are any. After: all four from the model.
 
 ## Find contacts: pool, then InfoJoy, then LinkedIn, then web (2026-10-26)
 

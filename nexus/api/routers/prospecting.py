@@ -112,6 +112,106 @@ async def latest_populate(
     return PopulateRunOut(**run_out(run)) if run is not None else None
 
 
+# ---- the exclusion list (2026-11-19) -----------------------------------------------------------
+
+#: Entries one request may carry; the screen sends a long list in slices of this size.
+MAX_EXCLUSIONS_PER_REQUEST = 5000
+#: Unreadable entries named back, so a pasted file's mistakes can be found without a flood.
+MAX_UNREADABLE_SHOWN = 50
+
+
+class ExclusionsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    #: Domains, websites, ``@domain`` or addresses at the company, as pasted or read from a file.
+    entries: list[str] = Field(min_length=1, max_length=MAX_EXCLUSIONS_PER_REQUEST)
+
+
+class ExclusionsAddedOut(BaseModel):
+    added: int
+    already: int
+    unreadable: list[str]
+    unreadable_count: int
+    total: int
+
+
+class ExclusionOut(BaseModel):
+    domain: str
+    reason: str
+    created_at: str | None = None
+
+
+class ExclusionListOut(BaseModel):
+    total: int
+    items: list[ExclusionOut]
+
+
+class ExclusionsRemoveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    domains: list[str] = Field(min_length=1, max_length=MAX_EXCLUSIONS_PER_REQUEST)
+
+
+@router.get("/exclusions", response_model=ExclusionListOut)
+async def list_exclusions(
+    q: str = Query("", max_length=255),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> ExclusionListOut:
+    """Companies discovery never offers this workspace: the exclusion list, and accounts deleted
+    with "Don't suggest these again". Newest first; ``q`` matches part of the domain."""
+    from nexus.accounts.suppression import exclusions
+
+    total, rows = await exclusions(ts, q=q, limit=limit, offset=offset)
+    return ExclusionListOut(total=total, items=[
+        ExclusionOut(domain=r.domain, reason=r.reason,
+                     created_at=r.created_at.isoformat() if r.created_at else None)
+        for r in rows])
+
+
+@router.post("/exclusions", response_model=ExclusionsAddedOut)
+async def add_exclusions(
+    body: ExclusionsIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_relevance)),
+) -> ExclusionsAddedOut:
+    """Put companies on the exclusion list, so Populate, the daily discovery, the Orchestrator and
+    every other discovery path never offer them. Accounts the workspace holds are not touched.
+    Free. An entry that names no company domain (free mail, a reserved name, nonsense) is reported
+    back rather than guessed at."""
+    from nexus.accounts.suppression import REASON_EXCLUDED, read_entry, suppress, suppressed
+
+    readable: list[str] = []
+    unreadable: list[str] = []
+    for raw in body.entries:
+        domain = read_entry(raw)
+        if domain:
+            readable.append(domain)
+        elif str(raw or "").strip():
+            unreadable.append(str(raw).strip()[:120])
+    unique = sorted(set(readable))
+    already = len(await suppressed(ts, unique))
+    added = await suppress(ts, unique, user_id=principal.user_id, reason=REASON_EXCLUDED)
+    from nexus.accounts.suppression import exclusions
+
+    total, _rows = await exclusions(ts, limit=1)
+    return ExclusionsAddedOut(added=added, already=already,
+                              unreadable=unreadable[:MAX_UNREADABLE_SHOWN],
+                              unreadable_count=len(unreadable), total=total)
+
+
+@router.post("/exclusions/remove")
+async def remove_exclusions(
+    body: ExclusionsRemoveIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_relevance)),
+) -> dict:
+    """Take companies off the list; discovery may offer them again."""
+    from nexus.accounts.suppression import unsuppress
+
+    return {"removed": await unsuppress(ts, body.domains)}
+
+
 @router.get("/populate/{run_id}", response_model=PopulateRunOut)
 async def get_populate(
     run_id: str,

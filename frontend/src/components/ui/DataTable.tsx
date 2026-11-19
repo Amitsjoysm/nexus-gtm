@@ -1,5 +1,6 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
+import { Button } from "./Button";
 import { Skeleton } from "./Skeleton";
 import styles from "./DataTable.module.css";
 
@@ -47,6 +48,12 @@ export interface DataTableProps<T> {
   minWidth?: number | string;
   /** Row density. "compact" tightens cell padding for column-heavy tables. */
   density?: "default" | "compact";
+  /**
+   * Draw at most this many rows, then a "Show more" button for the next as many. Sorting still
+   * runs over EVERY row, so the first rows drawn are the true top of the sort. For pages that load
+   * thousands of rows (Accounts, Contacts) without drawing them all. Unset: every row, as before.
+   */
+  pageSize?: number;
 }
 
 function isSortable<T>(c: Column<T>): boolean {
@@ -88,8 +95,12 @@ export function DataTable<T>({
   className,
   minWidth,
   density = "default",
+  pageSize,
 }: DataTableProps<T>) {
   const [sort, setSort] = useState<SortState | null>(null);
+  const [shown, setShown] = useState(pageSize ?? 0);
+  // A new filter or a reload starts again at the first page.
+  useEffect(() => setShown(pageSize ?? 0), [rows, pageSize]);
   const showEmpty = !loading && rows.length === 0;
   const tableMinWidth = typeof minWidth === "number" ? `${minWidth}px` : minWidth;
 
@@ -105,6 +116,9 @@ export function DataTable<T>({
       return cmp === 0 ? 0 : cmp * factor;
     });
   }, [rows, sort, columns]);
+
+  const drawn = pageSize ? sortedRows.slice(0, shown) : sortedRows;
+  const hidden = sortedRows.length - drawn.length;
 
   function toggleSort(key: string) {
     setSort((prev) => {
@@ -171,7 +185,7 @@ export function DataTable<T>({
             ))}
 
           {!loading &&
-            sortedRows.map((row) => {
+            drawn.map((row) => {
               const clickable = !!onRowClick;
               return (
                 <tr
@@ -206,6 +220,16 @@ export function DataTable<T>({
       </table>
 
       {showEmpty && <div className={styles.empty}>{empty}</div>}
+      {!loading && pageSize && hidden > 0 && (
+        <div className={styles.more}>
+          <Button variant="secondary" size="sm" onClick={() => setShown((n) => n + pageSize)}>
+            Show {Math.min(pageSize, hidden).toLocaleString()} more
+          </Button>
+          <span className={styles.moreNote}>
+            {drawn.length.toLocaleString()} of {sortedRows.length.toLocaleString()} shown
+          </span>
+        </div>
+      )}
     </div>
   );
 }

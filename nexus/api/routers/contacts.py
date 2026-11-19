@@ -111,7 +111,9 @@ async def _query_contacts(
             )
         )
 
-    stmt = stmt.order_by(Contact.created_at.desc())
+    # The id breaks ties: rows one import wrote can share a timestamp, and without a total order
+    # offset pages overlap and skip (the Contacts page now reads every page, 2026-11-19).
+    stmt = stmt.order_by(Contact.created_at.desc(), Contact.id.desc())
     if offset > 0:
         stmt = stmt.offset(offset)
     if limit > 0:

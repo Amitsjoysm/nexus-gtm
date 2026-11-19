@@ -60,6 +60,9 @@ function sourceGroup(a: Account): string {
   return "manual";
 }
 
+/** Rows drawn at once; "Show more" draws the next as many. Sorting and filters see every row. */
+const ROWS_DRAWN = 200;
+
 /** Bulk delete is manager+ on the server (`delete_records`); a rep is not offered it. */
 const DELETES_IN_BULK: Role[] = ["manager", "admin", "owner"];
 
@@ -80,7 +83,9 @@ export function AccountsPage() {
   const canBulkDelete = !!session && DELETES_IN_BULK.includes(session.role);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const accounts = useApi<Account[]>((signal) => api.listAccounts(signal), []);
+  // Every account, not the newest 200 (2026-11-19): the filters, sorting, counts and selection
+  // below all run in the browser, so past 200 the rest were out of reach. Drawn 200 at a time.
+  const accounts = useApi<Account[]>((signal) => api.listAllAccounts(signal), []);
   // The services the workspace sells (W8). With one, the list has nothing to tell apart and shows
   // neither the Service column nor its filter.
   const services = useApi<IcpService[]>((signal) => api.listServices(signal), []);
@@ -655,6 +660,7 @@ export function AccountsPage() {
                   getRowKey={(a) => a.id}
                   onRowClick={(a) => navigate(`/accounts/${a.id}`)}
                   caption="Accounts"
+                  pageSize={ROWS_DRAWN}
                   empty={
                     <EmptyState
                       compact
