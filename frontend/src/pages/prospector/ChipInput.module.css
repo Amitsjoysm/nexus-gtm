@@ -105,3 +105,48 @@
 .input::placeholder {
   color: var(--text-subtle);
 }
+
+/* Typeahead: in the flow under the box, so the rail's scroller never clips it. */
+.suggestions {
+  /* A scroller is a containing block, or an absolutely placed child escapes it. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.option {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.optionActive {
+  background: var(--accent-quiet);
+}
+
+.match {
+  background: transparent;
+  color: inherit;
+  font-weight: var(--weight-semibold);
+}
+
+.limit {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}

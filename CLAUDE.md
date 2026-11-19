@@ -246,7 +246,7 @@ with it, pushing tenant A's accounts into whichever portal the deployment env na
 
 ## Migrations
 
-Alembic under `migrations/versions/`. Head: `0081_icp_strict_fit`
+Alembic under `migrations/versions/`. Head: `0082_prospector_vocabulary`
 (`0073_field_provenance`, `0074_draft_facts`, `0075_call_scripts`, `0076_run_soft_delete`,
 `0077_icp_services`, `0078_user_call_scripts`, `0079_mailbox_style`; all on the local deploy and
 on staging since v1.13.0, 2026-11-06; none on production); `0072_prospector` before them. `0076`
@@ -4035,6 +4035,21 @@ list or export. Spec, 25 owner decisions (D1-D25), plan and the first real calls
     assistant passes whole rows, which the server's row model refused (422).
   - The rail is sticky because its slot stretches to the results' height; `top` is measured from
     `<main>` (below the top bar) and it can be hidden (remembered per browser).
+- **Every text filter suggests from two letters** (2026-11-19, `prospector/vocabulary.py`,
+  migration `0080`, `tests/test_prospector_suggestions.py`). A filter matches the provider's own
+  spelling (`IndustryTypes: [Hospitals]` returns nothing; "Hospital & Health Care" does), so each
+  page BOUGHT (never a cache hit, so counts are not inflated) adds its values to
+  `prospector_vocabulary` (platform-global, like the page cache), and `GET /prospector/suggest`
+  offers them first, most seen first, then seeds (LinkedIn industries, the title catalogue,
+  countries, US states and Canadian provinces, departments, common tools). Business facts only:
+  never a person's name, email or phone, nor a domain, zip or LinkedIn page, which are masked and
+  paid for (`FIELD_OF` is the allowlist). Free, unmetered, and total: learning or suggesting that
+  fails costs the list, never the search. `ChipInput` is an ARIA combobox; it reads `suggest` and
+  `values` through refs, because the rail hands new ones each render and only typing should look up.
+- **People in one workspace do not wait for each other** (measured 2026-11-19,
+  `tests_integration/test_prospector_concurrency_pg.py`: four colleagues against a 3 s provider
+  finish together, not in 12 s). What two people DO share is the provider's own key, its cold
+  starts and the workspace's daily row budget.
 - UI: `frontend/src/pages/prospector/` (filter state lives in the URL `f=` param; the rail, table,
   selection bar and confirm dialog are separate files). The nav item, the route and
   `features/pages.py` all carry `module.prospector`.

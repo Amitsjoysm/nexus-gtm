@@ -59,6 +59,30 @@ class ProspectorPurchase(IdMixin, TimestampMixin, TenantScoped, Base):
     last_delivered_at: Mapped[datetime] = mapped_column(TZDateTime)
 
 
+class ProspectorVocabulary(TimestampMixin, Base):
+    """A value the provider's own data holds for a text filter (an industry, a title, a city), with
+    how often it was seen: what the filters' typeahead offers (2026-11-19).
+
+    **Platform-global** (no ``tenant_id``), like ``prospector_pages``: it is learned from provider
+    answers, which are the same for every workspace. Only business facts are kept, never a
+    person's name, email or phone, nor a company's domain or LinkedIn page (those are masked and
+    paid for)."""
+
+    __tablename__ = "prospector_vocabulary"
+    __table_args__ = (
+        Index("ix_prospector_vocabulary_lookup", "view", "field", "value_lower"),
+    )
+
+    #: sha1 of view + field + lowercased value: two workers learning one value race cleanly.
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    view: Mapped[str] = mapped_column(String(16))
+    field: Mapped[str] = mapped_column(String(24))
+    value: Mapped[str] = mapped_column(String(160))
+    value_lower: Mapped[str] = mapped_column(String(160))
+    seen: Mapped[int] = mapped_column(Integer, default=1)
+    last_seen_at: Mapped[datetime] = mapped_column(TZDateTime)
+
+
 class ProspectorDailyRows(IdMixin, TimestampMixin, TenantScoped, Base):
     __tablename__ = "prospector_daily_rows"
     __table_args__ = (UniqueConstraint("tenant_id", "day", name="uq_prospector_daily_rows"),)

@@ -206,6 +206,7 @@ def split_filters(view: str) -> dict[str, FieldSpec]:
 def catalog(view: str) -> dict:
     """The rail for one view, in order, as the screen draws it."""
     from nexus.models.signal import SIGNAL_KINDS
+    from nexus.prospector.vocabulary import suggestible
 
     sections = []
     for section in sections_for(view):
@@ -221,6 +222,8 @@ def catalog(view: str) -> dict:
                 "api": bool(spec.api.get(view)) and not section.workspace_only,
                 "saved": spec.saved,
                 "max_values": spec.max_values,
+                # Typeahead from the provider's own values (`vocabulary.py`).
+                "suggest": spec.kind == "text_list" and suggestible(spec.key),
             })
         sections.append({"key": section.key, "label": section.label, "hint": section.hint,
                          "workspace_only": section.workspace_only, "fields": fields_out})

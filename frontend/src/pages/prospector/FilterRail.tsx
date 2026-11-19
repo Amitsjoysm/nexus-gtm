@@ -12,6 +12,7 @@ import type {
   FilterValues,
   ProspectTab,
 } from "@/lib/prospectorTypes";
+import { useApiClient } from "@/app/AuthContext";
 import { ChipInput } from "./ChipInput";
 import { FilterSection } from "./FilterSection";
 import { OptionList } from "./OptionList";
@@ -81,6 +82,15 @@ export function FilterRail({
     return initial;
   });
   const total = activeCount(catalog, values);
+  const api = useApiClient();
+
+  /** Typeahead for a field that offers it: the provider's own values first (2026-11-19). */
+  function suggestFor(field: FilterFieldSpec) {
+    if (!field.suggest || !catalog) return undefined;
+    const view = catalog.view;
+    return (q: string, signal: AbortSignal) =>
+      api.prospectorSuggest(view, field.key, q, signal).then((r) => r.values);
+  }
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -172,7 +182,8 @@ export function FilterRail({
         return (
           <ChipInput key={field.key} label={field.label} values={list}
             onChange={(next) => onChange(field.key, next)} disabled={disabled}
-            placeholder="Type and press Enter" />
+            placeholder="Type and press Enter" suggest={suggestFor(field)}
+            max={field.max_values} />
         );
       default:
         return (
@@ -183,7 +194,9 @@ export function FilterRail({
             onChange={(next) => onChange(field.key, next)}
             disabled={disabled}
             exclude={field.key.startsWith("exclude_")}
-            placeholder="Type and press Enter"
+            placeholder={field.suggest ? "Type 2 letters for suggestions" : "Type and press Enter"}
+            suggest={suggestFor(field)}
+            max={field.max_values}
           />
         );
     }

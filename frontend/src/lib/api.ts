@@ -975,6 +975,12 @@ export class ApiClient {
   prospectorFilters(view: ProspectView, signal?: AbortSignal) {
     return this.request<FilterCatalog>("/prospector/filters", { query: { view }, signal });
   }
+  /** Typeahead for a text filter: the provider's own values first, then seeds. Free. */
+  prospectorSuggest(view: ProspectView, field: string, q: string, signal?: AbortSignal) {
+    return this.request<{ field: string; values: string[] }>("/prospector/suggest", {
+      query: { view, field, q }, signal,
+    });
+  }
   prospectorSearch(
     body: {
       view: ProspectView; scope: ProspectScope; filters: FilterValues; page: number;

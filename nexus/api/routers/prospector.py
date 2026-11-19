@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from nexus.api.deps import Principal, get_tenant_session, require
 from nexus.core.rbac import Permission
@@ -36,6 +36,7 @@ logger = logging.getLogger("nexus.api.routers.prospector")
 router = APIRouter(prefix="/prospector", tags=["prospector"])
 
 MODULE = "module.prospector"
+MAX_QUERY_CHARS = 60
 
 
 async def module_gate(ts: TenantSession = Depends(get_tenant_session)) -> TenantSession:
@@ -59,6 +60,24 @@ async def filters(
     from nexus.prospector.fields import catalog
 
     return FieldCatalogOut(**catalog(view))
+
+
+@router.get("/suggest")
+async def suggest(
+    view: Literal["contacts", "companies"],
+    field: str = Query(..., max_length=40),
+    q: str = Query("", max_length=MAX_QUERY_CHARS),
+    limit: int = Query(10, ge=1, le=25),
+    _ts: TenantSession = Depends(module_gate),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """Values a text filter can take, for its typeahead: the provider's own spellings first.
+    Free, and reads nothing of the workspace (the vocabulary is platform-wide)."""
+    from nexus.prospector.vocabulary import suggest as suggest_values, suggestible
+
+    if not suggestible(field):
+        raise HTTPException(422, detail=f"{field!r} has no suggestions.")
+    return {"field": field, "values": await suggest_values(view, field, q, limit=limit)}
 
 
 @router.post("/search", response_model=SearchOut)

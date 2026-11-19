@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from nexus.prospector import cache
+from nexus.prospector import cache, vocabulary
 from nexus.prospector.client import InfoJoyClient, SearchOutcome
 from nexus.prospector.errors import ProspectorError
 from nexus.prospector.records import ParsedPage
@@ -128,6 +128,7 @@ async def _fetch_split(view: str, parts: list[dict], *, page: int, size: int,
             # the part that failed.
             await cache.put_page(keys[i], view=view, page=page, size=part_size,
                                  parsed=outcome.page)
+            await vocabulary.learn(view, outcome.page.items)
             pages[i] = outcome.page
             bought += outcome.vendor_rows
         if failed is not None:
@@ -175,6 +176,8 @@ async def fetch_page(view: str, payload: dict, *, page: int, size: int, count: b
         logger.info("prospector fetch refused: %s", outcome.status)
         _raise(outcome)
     await cache.put_page(key, view=view, page=page, size=size, parsed=outcome.page)
+    # The filters' typeahead learns the provider's own spellings from what it answered.
+    await vocabulary.learn(view, outcome.page.items)
     return Fetched(parsed=outcome.page, cached=False, vendor_rows=outcome.vendor_rows)
 
 

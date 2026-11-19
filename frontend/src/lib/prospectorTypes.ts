@@ -22,6 +22,10 @@ export interface FilterFieldSpec {
   api: boolean;
   /** Applies on the Saved tab. */
   saved: boolean;
+  /** The most values the provider is asked for at once (job titles: one request each). */
+  max_values?: number | null;
+  /** Offers typeahead from the provider's own values (`GET /prospector/suggest`). */
+  suggest?: boolean;
 }
 
 export interface FilterSectionSpec {
