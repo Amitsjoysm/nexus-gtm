@@ -3679,6 +3679,66 @@ that combines them; the API, the screens and the engine all read it. `tests/test
   detail in Settings > My mailboxes, and turning on sending asks for confirmation with the four
   rules above.
 
+## Who can send through a connected mailbox (security fixes, 2026-11-20)
+
+Asked: "can anyone gain mail access to send bulk emails through a mailbox connected to our app on
+Outlook or GSuite?" An audit of master 6dae3145 proved five ways in with tests that passed while
+each hole existed; `tests/test_mailbox_security.py` is those proofs inverted plus a guard per fix.
+Owner decisions: no daily sending cap (D10 stays a warning); a manager pauses and stops, never
+sends as a rep.
+
+- **Connecting a mailbox is bound to the browser that pressed Connect** (`mailboxes/oauth.py`). The
+  signed `state` was the whole credential, so an attacker could start "connect Gmail", send the
+  consent link to a victim, and the victim's mailbox (read all mail, send as them) joined the
+  attacker's workspace. Start now also sets `nexus_mailbox_<provider>`: a signed JWT with a nonce
+  and the PKCE verifier, HttpOnly, SameSite=Lax, path `/api/engagement/mailboxes/oauth`, 10 min.
+  The state carries only `nh` (the nonce's sha256) and no verifier; the callback exchanges nothing
+  unless the cookie matches (`error=wrong_browser`), and deletes it on every outcome. One cookie per
+  provider. CRM (`integrations/oauth.py`) and network (`network/oauth.py`) OAuth have the same
+  state-only design and were not changed.
+- **An app-password mailbox is its owner's** (`routers/workspace.py`). Another admin may switch it
+  off, make it default or remove it (`_changes_more_than_enabled`); editing, Test and Verify are
+  the owner's (403). A saved password goes only to the server it was saved for: changing the SMTP
+  or IMAP host, port, TLS mode or user name without typing the password again is a 422
+  (`_server_identity`, resolved through the presets). A test email goes to the caller or the
+  mailbox itself, never a typed address.
+- **App passwords are sealed** (`integrations/mailbox_secrets.py`): `password_sealed` (Fernet, key
+  derived from `secret_key` as the CRM tokens), `password` never written again; `mailbox_password`
+  reads either, so rows from before keep working. `_save_accounts` seals on every write, the API
+  lifespan seals every workspace in the background (row-locked per workspace, so a concurrent edit
+  is not overwritten), `scripts/seal_mailbox_passwords.py` (dry run by default). Rotating
+  `secret_key` asks every SMTP mailbox for its password again.
+- **No mail server on a private, loopback, link-local or metadata address** (`platform_mail.
+  host_refusal`): refused on save (422) and again when dialled (`email_sender` `guard_host=True`,
+  in a thread), because a name can resolve somewhere else later. Platform mailboxes do not pass
+  `guard_host`. Offline (`env` local/test) private hosts pass, as everywhere else.
+- **A contact address is one recipient** (`contacts/addresses.single_address`). `a@x.com, b@y.com`
+  was stored, put every address in To: and slipped `active_block`, which looked up the whole string.
+  Refused at the contact endpoints (422) and the CSV import (row skipped), blanked from a CRM pull,
+  and refused again at every send seam: the engagement sender (`stopped`), `email_sender.send_email`
+  and `save_to_drafts`, the composer, the orchestrator's `SendMessageTool`. `Jane <jane@x.com>`
+  becomes the bare address.
+- **Do-not-contact binds the app-password composer and the orchestrator too**: only the
+  connected-mailbox path went through the engine's check. `SendMessageTool` also refuses a
+  colleague's mailbox when the approver is known (`draft["approved_by"]`, written at approval).
+- **Removing a member retires their mail** (`mailboxes/service.retire_member_mail`): connected
+  mailboxes disconnected (grant revoked), running campaigns paused (`owner_left`), app-password
+  mailboxes switched off with the password deleted; audited `member.mail_retired`.
+- **Managers pause and stop; owners write and send.** `_campaign(..., acting=True)` and
+  `_classification`/`_owned_enrollment(..., acting=True)` 403 a non-owner for: steps, service,
+  mailbox, adding people, drafting, approving, regenerating, launching, resuming, send-now, moving a
+  step; on the desk, drafting, sending, saving a draft, the referral intro, "come back later"
+  (`reengage`), rescheduling and resuming a colleague. Seeing, pausing, stopping, removing people,
+  closing, blocking, correcting and reassigning stay theirs. The screens read `can_answer`,
+  `can_resume`, `can_reschedule` and the campaign's `owner_user_id` and show what is left.
+- **A reply that fails its sender check is a person's to decide** (`replies/parse._sender_auth`):
+  the TOPMOST Authentication-Results header (the receiving server's; a sender's own sits below).
+  `fail` (DMARC or compauth failed, or no DMARC, SPF fail and no DKIM pass) makes an unsubscribe,
+  decline or "later" `unclear` with "the sender could not be verified" and marks no automatic
+  answer; a forged "remove me" no longer blocks a real buyer, a forged "interested" no longer
+  draws an AI email. No header means trusted as before. Bounces are not checked.
+- The Graph `validationToken` echo is capped at 1,024 characters with `nosniff`.
+
 ## My mailboxes is a table (`pages/engagement/MailboxesPage.tsx`, 6.2, 2026-10-29)
 
 One row per mailbox: address (and the name it sends as), owner, provider, status with its reason
