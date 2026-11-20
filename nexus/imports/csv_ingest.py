@@ -134,7 +134,12 @@ def normalise_domain(raw: str) -> str:
 
 
 def normalise_email(raw: str) -> str:
-    return (raw or "").strip().lower()
+    """The one address a cell holds, lowercased, or ``""``. A cell holding several (``a@x.com,
+    b@y.com``) is not an address: stored, it became several recipients on one send and slipped the
+    do-not-contact check (2026-11-20, `contacts.addresses`)."""
+    from nexus.contacts.addresses import single_address
+
+    return (single_address(raw) or "").lower()
 
 
 #: Delimiters a spreadsheet actually exports. Excel writes the LIST SEPARATOR of the machine's
@@ -417,7 +422,8 @@ async def import_contacts_csv(
 
         if not email:
             skipped += 1
-            errors.append(f"row {index}: no email address")
+            errors.append(f"row {index}: no email address" if not fields.get("email") else
+                          f"row {index}: the email cell is not one address, so the row was skipped")
             continue
         if is_example_domain(email.split("@")[-1]):
             skipped += _example_row(index, errors)

@@ -183,6 +183,17 @@ async def _meter_send(ts) -> None:
         logger.warning("metering failed for outreach.email_send", exc_info=True)
 
 
+def _refuse_a_colleagues_mailbox(account: dict, draft: dict) -> None:
+    """A run's email leaves only from the approver's own mailbox (owner decision 2026-11-20: a
+    manager pauses and stops a rep's outreach, never sends as them). Only when both are known: an
+    approval recorded before ``approved_by`` existed, and a mailbox nobody owns, behave as before."""
+    owner = str(account.get("owner_user_id") or "")
+    approver = str(draft.get("approved_by") or "")
+    if owner and approver and owner != approver:
+        raise ToolError("refusing to send from a colleague's mailbox: choose your own mailbox at "
+                        "the approval gate")
+
+
 class SendMessageTool(Tool):
     """Outbound: enroll the drafted message into a sequence. Requires approval.
 
@@ -207,6 +218,14 @@ class SendMessageTool(Tool):
         if contact_id:
             contact = await tc.ts.get(Contact, contact_id)
             email = contact.email if contact else None
+        if email:
+            # One contact, one recipient (2026-11-20, `contacts.addresses`).
+            from nexus.contacts.addresses import single_address
+
+            one = single_address(email)
+            if one is None:
+                raise ToolError("refusing to send: the contact's email field is not one address")
+            email = one
 
         # Draft mode: write to the reviewer's mailbox Drafts for manual review/send instead of
         # sending. No SEP push and no hard send gates — nothing is delivered to the prospect here,
@@ -217,9 +236,10 @@ class SendMessageTool(Tool):
             account = resolve_account(settings, draft.get("from_account"))
             if account is None:
                 raise ToolError("no mailbox configured to save a draft")
+            _refuse_a_colleagues_mailbox(account, draft)
             res = await save_to_drafts(
                 account, to=email or "",
-                subject=draft.get("subject", ""), body=draft.get("body", ""),
+                subject=draft.get("subject", ""), body=draft.get("body", ""), guard_host=True,
             )
             if not res.ok:
                 raise ToolError(f"draft save failed: {res.detail}")
@@ -232,6 +252,16 @@ class SendMessageTool(Tool):
         # avoid sending.
         if not draft.get("grounded"):
             raise ToolError("refusing to send an ungrounded draft (no research facts)")
+
+        # The do-not-contact list binds this path too: it is checked by the engagement sender and
+        # was not checked here, so an unsubscribed buyer could be emailed again from a run.
+        if email:
+            from nexus.engagement.suppression.service import active_block
+
+            block = await active_block(tc.ts, email)
+            if block is not None:
+                raise ToolError(f"refusing to send: {email} is on the do-not-contact list "
+                                f"({block.reason})")
 
         # Verified-send gate: a hard-invalid address never gets a send. We re-verify here
         # (cheap: the registry caches by email) so the decision is enforced at the boundary,
@@ -273,10 +303,12 @@ class SendMessageTool(Tool):
             # falling back to the workspace default account. None when SMTP is unconfigured.
             account = resolve_account(settings, draft.get("from_account"))
             if account and account_is_configured(account):
+                _refuse_a_colleagues_mailbox(account, draft)
                 from_account = account["id"]
                 send_res = await send_email(
                     account, to=email,
                     subject=draft.get("subject", ""), body=draft.get("body", ""),
+                    guard_host=True,
                 )
                 delivered = send_res.ok
                 if not send_res.ok:

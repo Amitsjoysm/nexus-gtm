@@ -147,7 +147,7 @@ async def test_an_invalid_address_is_refused_until_acknowledged(fresh_db, monkey
 
     sent: list[dict] = []
 
-    async def _fake_send(settings, *, to, subject, body, html=None):
+    async def _fake_send(settings, *, to, subject, body, html=None, **_kw):
         sent.append({"to": to})
 
         class _R:

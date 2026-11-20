@@ -81,8 +81,13 @@ async def graph_notification(request: Request) -> Response:
 
     token = request.query_params.get("validationToken")
     if token is not None:
-        # The subscription handshake: echo the token as plain text within ten seconds.
-        return Response(content=token, media_type="text/plain", status_code=200)
+        # The subscription handshake: echo the token as plain text within ten seconds. Bounded and
+        # never sniffed as anything else: an unauthenticated endpoint that reflects any string is
+        # a way to serve content from our origin. Graph's tokens are a short sentence and an id.
+        if len(token) > 1024:
+            return Response(status_code=400)
+        return Response(content=token, media_type="text/plain", status_code=200,
+                        headers={"X-Content-Type-Options": "nosniff"})
     try:
         payload = await request.json()
     except Exception:

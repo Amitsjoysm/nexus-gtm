@@ -125,7 +125,7 @@ async def test_the_sent_email_carries_the_signature(monkeypatch):
 
     sent: dict = {}
 
-    async def fake_send(settings, *, to, subject, body, html=None):
+    async def fake_send(settings, *, to, subject, body, html=None, **_kw):
         sent.update({"to": to, "subject": subject, "body": body})
         return email_sender.SendResult(True, "sent")
 

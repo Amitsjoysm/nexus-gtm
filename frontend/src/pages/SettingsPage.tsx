@@ -374,6 +374,27 @@ export function MailboxesCard() {
     }
   }
 
+  /** On or off, without opening the form: the one change anyone here may make to a colleague's
+   * mailbox. Everything else posts back exactly as listed, which is how the server tells this
+   * apart from an edit (only the owner edits, tests or signs in with a mailbox). */
+  async function toggleEnabled(a: EmailAccount) {
+    setBusyId(a.id);
+    try {
+      await api.updateEmailAccount(a.id, {
+        label: a.label, provider: a.provider, host: a.host, port: a.port, username: a.username,
+        from_email: a.from_email, from_name: a.from_name, use_tls: a.use_tls, use_ssl: a.use_ssl,
+        imap_host: a.imap_host, imap_port: a.imap_port, drafts_folder: a.drafts_folder,
+        signature: a.signature ?? "", enabled: !a.enabled,
+      });
+      toast.success(a.enabled ? "Mailbox switched off" : "Mailbox switched on", a.label || a.from_email);
+      accounts.refetch();
+    } catch (err) {
+      toast.error("Couldn't change it", err instanceof ApiError ? err.detail : "Try again.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   /** Take an unowned mailbox. Sending requires your own, because replies come back to the sender. */
   async function claimMailbox(a: EmailAccount) {
     setBusyId(a.id);
@@ -473,22 +494,37 @@ export function MailboxesCard() {
                       Make default
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    loading={busyId === a.id}
-                    onClick={() => verifyMailbox(a)}
-                  >
-                    Test connection
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    loading={busyId === a.id}
-                    onClick={() => test(a)}
-                  >
-                    Send test
-                  </Button>
+                  {/* A colleague's mailbox signs in with their password: testing, sending a
+                      test and editing it are theirs. Switching it off or removing it is not. */}
+                  {(a.mine || a.unassigned) ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        loading={busyId === a.id}
+                        onClick={() => verifyMailbox(a)}
+                      >
+                        Test connection
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={busyId === a.id}
+                        onClick={() => test(a)}
+                      >
+                        Send test
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={busyId === a.id}
+                      onClick={() => toggleEnabled(a)}
+                    >
+                      {a.enabled ? "Switch off" : "Switch on"}
+                    </Button>
+                  )}
                   {a.unassigned && (
                     <Button
                       size="sm"
@@ -499,9 +535,11 @@ export function MailboxesCard() {
                       Claim
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost" onClick={() => setEditing(a)}>
-                    Edit
-                  </Button>
+                  {(a.mine || a.unassigned) && (
+                    <Button size="sm" variant="ghost" onClick={() => setEditing(a)}>
+                      Edit
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"

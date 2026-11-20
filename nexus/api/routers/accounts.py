@@ -691,16 +691,31 @@ async def create_contact(
     return _contact_out(await _new_contact(ts, account, body))
 
 
+def _email_or_422(raw: str | None) -> str | None:
+    """The one address a person typed, or a 422. ``a@x.com, b@y.com`` in one contact's email was
+    stored, became four recipients in To: and slipped the do-not-contact check (2026-11-20,
+    `contacts.addresses`). ``Jane <jane@x.com>`` is kept as the bare address."""
+    from nexus.contacts.addresses import single_address
+
+    if not (raw or "").strip():
+        return None
+    address = single_address(raw)
+    if address is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "Type one email address, like sam@acme.com.")
+    return address
+
+
 async def _new_contact(ts: TenantSession, account: Account, body: ContactIn) -> Contact:
     """A contact a person typed, on ``account``: the one write both add-contact paths share, so the
-    profile rule and the provenance cannot differ between them."""
+    profile rule, the one-address rule and the provenance cannot differ between them."""
     contact = Contact(
         tenant_id=ts.tenant_id,
         account_id=account.id,
         full_name=body.full_name,
         title=body.title,
         seniority=body.seniority,
-        email=body.email,
+        email=_email_or_422(body.email),
         phone=body.phone,
         linkedin_url=_profile_or_422(body.linkedin_url),
     )
@@ -1066,10 +1081,7 @@ async def add_contact(
     full_name = " ".join(body.contact.full_name.split())
     if not full_name:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Type the person's name.")
-    email = (body.contact.email or "").strip().lower() or None
-    if email and (email.count("@") != 1 or "." not in email.split("@")[1]):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            "That is not an email address, like sam@acme.com.")
+    email = (_email_or_422(body.contact.email) or "").lower() or None
     _profile_or_422(body.contact.linkedin_url)  # before anything is created for it
     fields = body.contact.model_copy(update={
         "full_name": full_name, "email": email,

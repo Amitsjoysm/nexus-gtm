@@ -312,7 +312,7 @@ class OrchestrationEngine:
 
         # Approve: a reviewer may have edited the draft at the gate (subject/body) and/or
         # chosen which configured mailbox the message sends from.
-        if edits or from_account or delivery_mode:
+        if edits or from_account or delivery_mode or decided_by:
             draft = dict(run.blackboard.get("draft") or {})
             if edits:
                 draft.update(edits)
@@ -321,6 +321,10 @@ class OrchestrationEngine:
                 draft["from_account"] = from_account
             if delivery_mode:
                 draft["delivery_mode"] = delivery_mode  # send | draft
+            if decided_by:
+                # Who approved it: the send goes out only from that person's own mailbox
+                # (`SendMessageTool`, 2026-11-20).
+                draft["approved_by"] = decided_by
             run.blackboard["draft"] = draft
             flag_modified(run, "blackboard")
         approval.status = APPROVAL_APPROVED

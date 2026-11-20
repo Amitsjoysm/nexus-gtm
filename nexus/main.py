@@ -213,6 +213,17 @@ async def lifespan(app: FastAPI):
             "could not schedule the web fetcher check", exc_info=True
         )
 
+    # SMTP mailbox app passwords stored before they were sealed (2026-11-20) are sealed now, in
+    # the background: idempotent, and a failure leaves them readable exactly as before.
+    try:
+        from nexus.integrations.mailbox_secrets import schedule_sealing
+
+        schedule_sealing(logging.getLogger("nexus.main"))
+    except Exception:
+        logging.getLogger("nexus.main").warning(
+            "could not schedule mailbox password sealing", exc_info=True
+        )
+
     # Billing catalog/plan seed: idempotent, additive, and non-fatal. A seed failure must never
     # stop the API from serving (docs/billing/15-Migration-Strategy.md).
     if get_settings().billing_seed_on_startup:

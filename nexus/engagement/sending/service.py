@@ -80,10 +80,18 @@ async def send(
     from nexus.engagement.suppression.service import active_block
     from nexus.engagement.suppression.tokens import unsubscribe_url
 
+    from nexus.contacts.addresses import single_address
+
     now = utcnow()
-    to_addr = (getattr(contact, "email", "") or "").strip()
-    if not to_addr:
+    raw_addr = (getattr(contact, "email", "") or "").strip()
+    if not raw_addr:
         return SendResult("stopped", reason="the contact has no email address")
+    # One contact, one recipient (2026-11-20): a field holding several would put them all in To:
+    # and the do-not-contact check below would look the whole string up and match nothing.
+    to_addr = single_address(raw_addr)
+    if to_addr is None:
+        return SendResult("stopped", reason="the contact's email field is not one address; "
+                                            "correct it on the contact")
 
     block = await active_block(ts, to_addr)
     decision = checks.decide(

@@ -211,9 +211,76 @@ def _email_settings_out(s: dict | None) -> EmailSettingsOut:
         from_name=s.get("from_name", ""),
         use_tls=bool(s.get("use_tls", True)),
         enabled=bool(s.get("enabled", False)),
-        has_password=bool(s.get("password")),
+        has_password=has_mailbox_password(s),
         verified_at=s.get("verified_at"),
     )
+
+
+# ---- what keeps a mailbox's app password where it was saved (security fix, 2026-11-20) ----------
+# Proved on master 6dae3145: a second admin of a workspace pointed a colleague's mailbox at a
+# server they ran, left the password blank ("keeps the stored secret"), pressed Verify, and the
+# server received the colleague's app password. Three rules close it, here and in `email_sender`:
+#   * only the mailbox's owner changes it or signs in with it; anyone with the workspace role may
+#     still switch it off, make it the default or remove it, which are the incident levers;
+#   * a stored password goes only to the server it was saved for: change the SMTP or IMAP server,
+#     port, security or user name and the password has to be typed again;
+#   * a server on a private, loopback, link-local or metadata address is refused, on save and again
+#     when it is dialled (a port scan of our network otherwise, with the answers in the error).
+from nexus.integrations.mailbox_secrets import (  # noqa: E402
+    has_mailbox_password,
+    seal_account as _seal_account,
+    set_password as _set_password,
+)
+
+_RETYPE_PASSWORD = ("Enter the app password again. A saved password is only ever sent to the "
+                    "server it was saved for, and this changes the server, port, security or "
+                    "user name.")
+_NOT_YOURS = ("Only the mailbox's owner can change it, test it or sign in with it. You can switch "
+              "it off, make it the default or remove it.")
+
+
+def _server_identity(a: dict) -> tuple:
+    """Everything that decides where the password is sent and how, resolved through the presets,
+    so picking Gmail and typing Gmail's host by hand count as the same server."""
+    cfg = _resolve_smtp(a)
+    return (cfg["host"].lower(), cfg["port"], cfg["use_ssl"], cfg["use_tls"],
+            cfg["username"].lower(), cfg["imap_host"].lower(), cfg["imap_port"])
+
+
+def _refuse_inside_hosts(a: dict) -> None:
+    from nexus.integrations.platform_mail import host_refusal
+
+    cfg = _resolve_smtp(a)
+    for label, host in (("SMTP", cfg["host"]), ("IMAP", cfg["imap_host"])):
+        reason = host_refusal(host)
+        if reason:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"{label} server: {reason}")
+
+
+def _someone_elses(acct: dict, principal: Principal) -> bool:
+    owner = acct.get("owner_user_id") or ""
+    return bool(owner) and owner != principal.user_id
+
+
+async def _test_recipient(ts: TenantSession, principal: Principal, asked: str | None,
+                          mailbox_address: str) -> str:
+    """A test email goes to the person pressing Test, or to the mailbox itself: never to an
+    address typed into the request, or Test is a way to send mail as the mailbox to anyone."""
+    from nexus.contacts.addresses import single_address
+
+    user = await ts.session.get(User, principal.user_id)
+    own = (getattr(user, "email", "") or "").strip()
+    allowed = {a.lower() for a in (own, mailbox_address) if a}
+    if asked:
+        chosen = single_address(asked)
+        if chosen is None or chosen.lower() not in allowed:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                "A test email goes to your own address or to the mailbox itself.")
+        return chosen
+    if not own:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No recipient for the test email")
+    return own
 
 
 @router.get("/email", response_model=EmailSettingsOut)
@@ -242,10 +309,21 @@ async def set_email_settings(
         "from_name": body.from_name,
         "use_tls": body.use_tls,
         "enabled": body.enabled,
-        # Password is write-only: a blank/omitted value keeps the stored secret.
-        "password": body.password if body.password else current.get("password", ""),
         "verified_at": current.get("verified_at"),
     }
+    _refuse_inside_hosts(updated)
+    if body.password:
+        _set_password(updated, body.password)
+        updated["verified_at"] = None
+    elif has_mailbox_password(current):
+        # Password is write-only: a blank/omitted value keeps the stored secret, but only for the
+        # server it was saved for.
+        if _server_identity(updated) != _server_identity(current):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, _RETYPE_PASSWORD)
+        for key in ("password", "password_sealed"):
+            if current.get(key):
+                updated[key] = current[key]
+        _seal_account(updated)
     tenant.email_settings = updated
     await ts.flush()
     return _email_settings_out(updated)
@@ -265,16 +343,12 @@ async def test_email_settings(
     cfg = resolve_smtp(settings)
     if not cfg["host"] or not cfg["username"] or not cfg["password"]:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "SMTP is not fully configured")
-    to = body.to
-    if not to:
-        user = await ts.session.get(User, principal.user_id)
-        to = user.email if user else None
-    if not to:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No recipient for the test email")
+    to = await _test_recipient(ts, principal, body.to, cfg["from_email"])
     res = await send_email(
         settings, to=to,
         subject="InfoJoy test email",
         body="This is a test from InfoJoy. If you received it, your SMTP is set up correctly.",
+        guard_host=True,
     )
     if res.ok:
         settings["verified_at"] = _utcnow_iso()
@@ -340,11 +414,25 @@ def _account_out(a: dict, *, caller_user_id: str = "") -> EmailAccountOut:
         supports_drafts=_has_drafts(a),
         enabled=bool(a.get("enabled", True)),
         default=bool(a.get("default", False)),
-        has_password=bool(a.get("password")),
+        has_password=has_mailbox_password(a),
         verified_at=a.get("verified_at"),
         last_error=a.get("last_error"),
         signature=a.get("signature", "") or "",
     )
+
+
+#: What an `EmailAccountIn` carries besides `enabled` and `password`, compared against what the
+#: list showed: a colleague's mailbox may be posted back only with these unchanged.
+_ACCOUNT_FIELDS = ("label", "provider", "host", "port", "username", "from_email", "from_name",
+                   "use_tls", "use_ssl", "imap_host", "imap_port", "drafts_folder", "signature")
+
+
+def _changes_more_than_enabled(acct: dict, body: EmailAccountIn) -> bool:
+    shown = _account_out(acct).model_dump()
+    posted = body.model_dump()
+    posted["label"] = body.label or shown["label"]
+    posted["from_email"] = body.from_email or body.username
+    return bool(body.password) or any(posted[k] != shown[k] for k in _ACCOUNT_FIELDS)
 
 
 def _load_accounts(tenant: Tenant) -> list[dict]:
@@ -358,6 +446,8 @@ def _load_accounts(tenant: Tenant) -> list[dict]:
 
 def _save_accounts(tenant: Tenant, accounts: list[dict]) -> None:
     settings = dict(tenant.email_settings or {})
+    for account in accounts:
+        _seal_account(account)  # a password stored before sealing is sealed the first time it moves
     settings["accounts"] = accounts
     settings["enabled"] = any(a.get("enabled") for a in accounts)  # master switch follows accounts
     tenant.email_settings = settings
@@ -409,7 +499,6 @@ async def add_email_account(
         "host": body.host,
         "port": body.port,
         "username": body.username,
-        "password": body.password or "",
         "from_email": body.from_email or body.username,
         "from_name": body.from_name,
         "use_tls": body.use_tls,
@@ -431,6 +520,8 @@ async def add_email_account(
         # because silently sending as somebody else is worse than asking a rep to connect one.
         "owner_user_id": principal.user_id,
     }
+    _refuse_inside_hosts(acct)
+    _set_password(acct, body.password or "")
     accounts.append(acct)
     _save_accounts(tenant, accounts)
     await ts.flush()
@@ -442,13 +533,22 @@ async def update_email_account(
     account_id: str,
     body: EmailAccountIn,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_workspace)),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
 ) -> EmailAccountOut:
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     accounts = _load_accounts(tenant)
     acct = next((a for a in accounts if a["id"] == account_id), None)
     if acct is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
+    if _someone_elses(acct, principal):
+        if _changes_more_than_enabled(acct, body):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, _NOT_YOURS)
+        acct["enabled"] = body.enabled
+        _save_accounts(tenant, accounts)
+        await ts.flush()
+        return _account_out(acct, caller_user_id=principal.user_id)
+    before = _server_identity(acct)
+    had_password = has_mailbox_password(acct)
     acct.update(
         {
             "label": body.label or acct.get("label", ""),
@@ -465,15 +565,25 @@ async def update_email_account(
             "drafts_folder": body.drafts_folder,
             "enabled": body.enabled,
             "signature": body.signature,
-            # Password is write-only: a blank/omitted value keeps the stored secret.
-            "password": body.password if body.password else acct.get("password", ""),
         }
     )
+    _refuse_inside_hosts(acct)
+    moved = _server_identity(acct) != before
     if body.password:
+        _set_password(acct, body.password)
         acct["verified_at"] = None  # creds changed → must re-verify
+        acct["last_error"] = None
+    elif moved and had_password:
+        # Password is write-only and a blank value keeps the stored one, but only for the server
+        # it was saved for. Pointing the mailbox elsewhere and pressing Verify was how a saved
+        # password reached a server somebody else ran.
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, _RETYPE_PASSWORD)
+    if moved:
+        acct["verified_at"] = None
+        acct["last_error"] = None
     _save_accounts(tenant, accounts)
     await ts.flush()
-    return _account_out(acct)
+    return _account_out(acct, caller_user_id=principal.user_id)
 
 
 @router.post("/email/accounts/{account_id}/claim", response_model=EmailAccountOut)
@@ -558,19 +668,17 @@ async def test_email_account(
     acct = next((a for a in accounts if a["id"] == account_id), None)
     if acct is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
+    if _someone_elses(acct, principal):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _NOT_YOURS)
     cfg = _resolve_smtp(acct)
     if not cfg["host"] or not cfg["username"] or not cfg["password"]:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "SMTP is not fully configured")
-    to = body.to
-    if not to:
-        user = await ts.session.get(User, principal.user_id)
-        to = user.email if user else None
-    if not to:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No recipient for the test email")
+    to = await _test_recipient(ts, principal, body.to, cfg["from_email"])
     res = await _send_email(
         acct, to=to,
         subject="InfoJoy test email",
         body="This is a test from InfoJoy. If you received it, this mailbox is set up correctly.",
+        guard_host=True,
     )
     if res.ok:
         acct["verified_at"] = _utcnow_iso()
@@ -584,7 +692,7 @@ async def test_email_account(
 async def verify_email_account(
     account_id: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_workspace)),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
 ) -> EmailTestOut:
     """Prove this mailbox's credentials against the SMTP server, WITHOUT sending anything.
 
@@ -604,8 +712,11 @@ async def verify_email_account(
     acct = next((a for a in accounts if a["id"] == account_id), None)
     if acct is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Mailbox not found")
+    if _someone_elses(acct, principal):
+        # Signing in sends the password: only to its owner's say-so.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _NOT_YOURS)
 
-    ok, detail = await verify_smtp(acct)
+    ok, detail = await verify_smtp(acct, guard_host=True)
     acct["verified_at"] = _utcnow_iso() if ok else None
     acct["last_error"] = None if ok else detail
     _save_accounts(tenant, accounts)
@@ -823,8 +934,10 @@ async def change_member_role(
 async def remove_member(
     membership_id: str,
     ts: TenantSession = Depends(get_tenant_session),
-    _: Principal = Depends(require(Permission.manage_workspace)),
+    principal: Principal = Depends(require(Permission.manage_workspace)),
 ) -> Response:
+    from nexus.engagement.mailboxes.service import retire_member_mail
+
     membership = await ts.get(Membership, membership_id)
     if membership is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
@@ -833,6 +946,9 @@ async def remove_member(
     removed_user_id = membership.user_id
     await ts.delete(membership)
     await ts.flush()
+    # Their mailboxes leave with them: a connected Gmail kept its grant and their campaigns kept
+    # sending in their name after they were gone (2026-11-20).
+    await retire_member_mail(ts, removed_user_id, actor_user_id=principal.user_id)
     # The tenant is pinned in the token, so a removed member keeps reading this workspace until
     # it expires. Revoking is global to the user; they re-authenticate and simply no longer see
     # this workspace in the switcher.

@@ -163,6 +163,61 @@ async def disconnect(ts: TenantSession, connection: MailboxConnection, *, actor_
                              "by_owner": actor_user_id == connection.owner_user_id})
 
 
+async def retire_member_mail(ts: TenantSession, user_id: str, *, actor_user_id: str) -> dict:
+    """Everything a departing member could still send with, switched off (2026-11-20).
+
+    Removing a member deleted the membership and nothing else, so their connected Gmail or Outlook
+    kept its grant and their running campaigns kept emailing buyers in their name, from an account
+    nobody in the workspace could now see as theirs. Called when a member is removed:
+
+    * each connected mailbox is disconnected exactly as its owner's Disconnect does (the grant is
+      revoked at Google, the tokens deleted, the row kept as history);
+    * each running campaign of theirs is paused (``owner_left``), so a manager decides what happens
+      to the people in it; nothing is stopped or deleted;
+    * each app-password mailbox of theirs is switched off and its password deleted.
+
+    Audited as ``member.mail_retired`` with the counts."""
+    from nexus.engagement.sequences.service import CampaignError, pause_campaign
+    from nexus.integrations.mailbox_secrets import clear_password
+    from nexus.models.engagement import EngagementCampaign
+    from nexus.models.identity import Tenant
+
+    report = {"mailboxes": 0, "campaigns": 0, "app_password_mailboxes": 0}
+    for connection in await ts.list(MailboxConnection, MailboxConnection.owner_user_id == user_id,
+                                    MailboxConnection.status != "revoked"):
+        await disconnect(ts, connection, actor_user_id=actor_user_id)
+        report["mailboxes"] += 1
+    for campaign in await ts.list(EngagementCampaign, EngagementCampaign.owner_user_id == user_id,
+                                  EngagementCampaign.status == "active"):
+        try:
+            await pause_campaign(ts, campaign, reason="owner_left")
+            report["campaigns"] += 1
+        except CampaignError:
+            pass
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    settings = dict(getattr(tenant, "email_settings", None) or {})
+    accounts = settings.get("accounts")
+    if isinstance(accounts, list):
+        fresh = []
+        for raw in accounts:
+            account = dict(raw) if isinstance(raw, dict) else raw
+            if isinstance(account, dict) and account.get("owner_user_id") == user_id:
+                account["enabled"] = False
+                account["verified_at"] = None
+                account["last_error"] = "Its owner left the workspace. Its password was deleted."
+                clear_password(account)
+                report["app_password_mailboxes"] += 1
+            fresh.append(account)
+        if report["app_password_mailboxes"]:
+            settings["accounts"] = fresh
+            settings["enabled"] = any(isinstance(a, dict) and a.get("enabled") for a in fresh)
+            tenant.email_settings = settings
+    await ts.flush()
+    await record_audit(ts, "member.mail_retired", actor_user_id=actor_user_id,
+                       target_type="user", target_id=user_id, meta=report)
+    return report
+
+
 async def check_connection(ts: TenantSession, connection: MailboxConnection):
     """Refresh the token and read the profile: proves the mailbox can be used right now."""
     from nexus.engagement.mailboxes.provider import ProviderError

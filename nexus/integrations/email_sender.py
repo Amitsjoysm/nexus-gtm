@@ -42,6 +42,8 @@ def resolve_smtp(settings: dict | None) -> dict:
     An override always wins over the preset, and that is what makes `provider: "smtp"` usable at
     all: it has no preset, so every field has to come from what the workspace typed.
     """
+    from nexus.integrations.mailbox_secrets import mailbox_password
+
     s = dict(settings or {})
     preset = PROVIDER_PRESETS.get((s.get("provider") or "").strip().lower(), {})
     username = (s.get("username") or "").strip()
@@ -57,7 +59,8 @@ def resolve_smtp(settings: dict | None) -> dict:
         "use_ssl": bool(s.get("use_ssl", port == 465)),
         "use_tls": bool(s.get("use_tls", preset.get("use_tls", True))),
         "username": username,
-        "password": s.get("password") or "",
+        # Sealed at rest since 2026-11-20 (`mailbox_secrets`); a plain one is still read.
+        "password": mailbox_password(s),
         "from_email": (s.get("from_email") or username).strip(),
         "from_name": (s.get("from_name") or "").strip(),
         "imap_host": (s.get("imap_host") or preset.get("imap_host") or "").strip(),
@@ -181,13 +184,49 @@ def _send_blocking(cfg: dict, to: str, subject: str, body: str, html: str | None
         srv.send_message(msg)
 
 
+def mail_server_refusal(cfg: dict, *fields: str) -> str:
+    """Why one of ``cfg``'s mail servers may not be dialled from here, or ``""``.
+
+    A workspace mailbox's server is typed by a customer, so dialling it is an SSRF primitive: a
+    private address or a cloud metadata name turns Test and Send into a port scan of our network
+    whose answers come back in the error text. Checked again at connect time, not only on save,
+    because a name that resolved somewhere public when it was saved can point inside later. The
+    platform's own mailboxes do not pass through here (their hosts are validated where an operator
+    sets them), so callers opt in with ``guard_host``."""
+    from nexus.integrations.platform_mail import host_refusal as _refusal
+
+    for name in fields or ("host",):
+        reason = _refusal(str(cfg.get(name) or ""))
+        if reason:
+            return reason
+    return ""
+
+
+def _one_recipient(to: str | None) -> str | None:
+    from nexus.contacts.addresses import single_address
+
+    return single_address(to)
+
+
 async def send_email(
-    settings: dict | None, *, to: str, subject: str, body: str, html: str | None = None
+    settings: dict | None, *, to: str, subject: str, body: str, html: str | None = None,
+    guard_host: bool = False,
 ) -> SendResult:
-    """Send one email through the workspace's SMTP. Never raises — returns a SendResult."""
+    """Send one email through the workspace's SMTP. Never raises — returns a SendResult.
+
+    ``to`` must be exactly one address (`contacts.addresses`): a field holding several would put
+    every one of them in ``To:`` and around the do-not-contact check."""
     cfg = resolve_smtp(settings)
     if not cfg["host"] or not cfg["from_email"] or not to:
         return SendResult(False, "smtp not configured")
+    recipient = _one_recipient(to)
+    if recipient is None:
+        return SendResult(False, "refusing to send: the recipient must be one address")
+    to = recipient
+    if guard_host:
+        refusal = await asyncio.to_thread(mail_server_refusal, cfg, "host")
+        if refusal:
+            return SendResult(False, refusal)
     try:
         await asyncio.to_thread(_send_blocking, cfg, to, subject, body, html)
         return SendResult(True, "sent")
@@ -224,9 +263,13 @@ def _verify_blocking(cfg: dict) -> tuple[bool, str]:
     return True, f"Signed in to {cfg['host']} as {cfg['username']}."
 
 
-async def verify_smtp(account: dict | None) -> tuple[bool, str]:
+async def verify_smtp(account: dict | None, *, guard_host: bool = False) -> tuple[bool, str]:
     """Whether this mailbox's credentials work right now. Never raises, never sends."""
     cfg = resolve_smtp(account)
+    if guard_host:
+        refusal = await asyncio.to_thread(mail_server_refusal, cfg, "host")
+        if refusal:
+            return False, refusal
     missing = [
         name for name, value in (
             ("host", cfg["host"]), ("username", cfg["username"]), ("password", cfg["password"]),
@@ -268,12 +311,22 @@ def _save_draft_blocking(cfg: dict, to: str, subject: str, body: str) -> None:
             pass
 
 
-async def save_to_drafts(settings: dict | None, *, to: str, subject: str, body: str) -> SendResult:
+async def save_to_drafts(settings: dict | None, *, to: str, subject: str, body: str,
+                         guard_host: bool = False) -> SendResult:
     """Write the message to the mailbox's Drafts folder via IMAP, for the user to review and send
     by hand. Never raises — returns a SendResult."""
     cfg = resolve_smtp(settings)
     if not cfg["imap_host"] or not cfg["username"] or not cfg["password"]:
         return SendResult(False, "imap not configured for drafts")
+    if to:
+        recipient = _one_recipient(to)
+        if recipient is None:
+            return SendResult(False, "refusing to draft: the recipient must be one address")
+        to = recipient
+    if guard_host:
+        refusal = await asyncio.to_thread(mail_server_refusal, cfg, "imap_host")
+        if refusal:
+            return SendResult(False, refusal)
     try:
         await asyncio.to_thread(_save_draft_blocking, cfg, to or cfg["from_email"], subject, body)
         return SendResult(True, "saved to drafts")

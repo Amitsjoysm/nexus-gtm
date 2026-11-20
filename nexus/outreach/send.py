@@ -224,6 +224,21 @@ async def _draft_through_connection(ts, *, connection, contact, to: str, subject
     )
 
 
+def _one_address_or_refuse(contact) -> str:
+    """The contact's one address, or a refusal: no address, or a field holding several, which
+    would put every one of them in To: (2026-11-20, `contacts.addresses`)."""
+    from nexus.contacts.addresses import single_address
+
+    raw = (getattr(contact, "email", "") or "").strip()
+    if not raw:
+        raise SendRefused("This contact has no email address.")
+    to = single_address(raw)
+    if to is None:
+        raise SendRefused("This contact's email field is not one address. Correct it on the "
+                          "contact first.")
+    return to
+
+
 async def send_to_contact(
     ts,
     *,
@@ -239,12 +254,11 @@ async def send_to_contact(
     a message that has already left cannot be un-sent by a billing error, and metering must never
     be the reason an outbound email fails.
     """
+    from nexus.engagement.suppression.service import active_block
     from nexus.integrations.email_sender import send_email
     from nexus.models.identity import Tenant
 
-    to = (getattr(contact, "email", "") or "").strip()
-    if not to:
-        raise SendRefused("This contact has no email address.")
+    to = _one_address_or_refuse(contact)
     if not (body or "").strip():
         # The blank-draft guard in `agents/messaging.py` exists for the same reason: an empty
         # message is not a message, and sending one is worse than refusing to.
@@ -264,6 +278,13 @@ async def send_to_contact(
             ts, connection=connection, contact=contact, to=to, subject=subject, body=body,
             user_id=user_id, email_status=status)
 
+    # The do-not-contact list binds an app-password mailbox too. Only the connected path checked it
+    # (through the engine's sender), so an unsubscribed buyer could be emailed again from Settings
+    # -> Sending mailboxes (2026-11-20). Checked before the mailbox, as that path does.
+    block = await active_block(ts, to)
+    if block is not None:
+        raise SendRefused(f"Not sent: {to} is on the do-not-contact list ({block.reason}).")
+
     tenant = await ts.session.get(Tenant, ts.tenant_id)
     mailbox = await _smtp_mailbox(ts, tenant, user_id)
 
@@ -280,7 +301,8 @@ async def send_to_contact(
     # host was empty and `send_email` answered "smtp not configured" before opening a socket —
     # while the Send-test button, which passes the mailbox dict, worked. Reported 2026-09-16 as
     # "send test successful, sending to a contact says mailbox not configured".
-    result = await send_email(mailbox, to=to, subject=(subject or "").strip(), body=signed)
+    result = await send_email(mailbox, to=to, subject=(subject or "").strip(), body=signed,
+                              guard_host=True)
     ok = bool(getattr(result, "ok", False))
     detail = str(getattr(result, "detail", "") or ("sent" if ok else "send failed"))
     if ok:
@@ -324,9 +346,7 @@ async def draft_for_contact(
     from nexus.integrations.email_sender import has_drafts_support, save_to_drafts
     from nexus.models.identity import Tenant
 
-    to = (getattr(contact, "email", "") or "").strip()
-    if not to:
-        raise SendRefused("This contact has no email address.")
+    to = _one_address_or_refuse(contact)
     if not (body or "").strip():
         raise SendRefused("The draft is empty. Generate or write a body before saving it.")
 
@@ -352,7 +372,8 @@ async def draft_for_contact(
 
     # THE MAILBOX ITSELF, for the reason spelled out in `send_to_contact`: `resolve_smtp` reads the
     # host, username and password off the TOP LEVEL of what it is handed.
-    result = await save_to_drafts(mailbox, to=to, subject=(subject or "").strip(), body=signed)
+    result = await save_to_drafts(mailbox, to=to, subject=(subject or "").strip(), body=signed,
+                                  guard_host=True)
     ok = bool(getattr(result, "ok", False))
     detail = str(getattr(result, "detail", "") or ("saved to drafts" if ok else "could not save"))
     if not ok:
