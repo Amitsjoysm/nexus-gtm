@@ -224,7 +224,8 @@ class SendMessageTool(Tool):
 
             one = single_address(email)
             if one is None:
-                raise ToolError("refusing to send: the contact's email field is not one address")
+                raise ToolError(f"refusing to send to an undeliverable address ({email}): the "
+                                "contact's email field is not one address")
             email = one
 
         # Draft mode: write to the reviewer's mailbox Drafts for manual review/send instead of

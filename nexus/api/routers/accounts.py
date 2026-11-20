@@ -702,7 +702,8 @@ def _email_or_422(raw: str | None) -> str | None:
     address = single_address(raw)
     if address is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            "Type one email address, like sam@acme.com.")
+                            "That is not an email address on its own. Type one email address, "
+                            "like sam@acme.com.")
     return address
 
 
