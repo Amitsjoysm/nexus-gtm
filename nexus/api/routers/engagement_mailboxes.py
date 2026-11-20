@@ -325,6 +325,8 @@ async def provider_states(
 async def start_connect(
     provider: str,
     body: StartIn,
+    request: Request,
+    response: Response,
     principal: Principal = Depends(require(Permission.run_engagement)),
 ) -> StartOut:
     from nexus.engagement.config import oauth_app
@@ -339,8 +341,14 @@ async def start_connect(
             {"message": f"{provider.title()} mailboxes are not set up for this deployment yet. "
                         "Ask your administrator.", "missing": list(app.missing)},
         )
-    url = oauth.start(app, user_id=principal.user_id, tenant_id=principal.tenant_id,
-                      timezone=body.timezone)
+    url, binding = oauth.start(app, user_id=principal.user_id, tenant_id=principal.tenant_id,
+                               timezone=body.timezone)
+    # Ties the consent link to THIS browser (see `oauth`). Lax is what lets it ride along on the
+    # top-level redirect back from Google or Microsoft; HttpOnly keeps it from page scripts.
+    response.set_cookie(
+        oauth.binding_cookie_name(provider), binding, max_age=oauth.BINDING_MAX_AGE_S,
+        path=oauth.BINDING_COOKIE_PATH, httponly=True, samesite="lax",
+        secure=request.url.scheme == "https")
     return StartOut(authorize_url=url)
 
 
@@ -364,7 +372,13 @@ async def oauth_callback(
     from nexus.models.identity import Membership, User
 
     def _to(query: str) -> RedirectResponse:
-        return RedirectResponse(f"{public_base_url()}/settings/mailboxes?{query}", status_code=302)
+        redirect = RedirectResponse(f"{public_base_url()}/settings/mailboxes?{query}",
+                                    status_code=302)
+        # Spent on every outcome: one Connect press, one callback.
+        if provider in PROVIDERS:
+            redirect.delete_cookie(oauth.binding_cookie_name(provider),
+                                   path=oauth.BINDING_COOKIE_PATH)
+        return redirect
 
     if provider not in PROVIDERS:
         return _to("error=unknown_provider")
@@ -373,11 +387,19 @@ async def oauth_callback(
     claims = oauth.verify_state(state, provider=provider)
     if claims is None:
         return _to("error=bad_state")
+    verifier = oauth.binding_verifier(request.cookies.get(oauth.binding_cookie_name(provider)),
+                                      claims, provider=provider)
+    if verifier is None:
+        # A consent link finished in a browser that did not press Connect: somebody else's
+        # mailbox would join the workspace of whoever made the link. Nothing is exchanged.
+        logger.warning("mailbox OAuth callback for %s refused: not the browser that started it",
+                       provider)
+        return _to("error=wrong_browser")
     app = await oauth_app(provider)
     if not app.configured:
         return _to("error=not_configured")
     try:
-        data = await oauth.exchange_code(app, code=code, verifier=claims["pkce"])
+        data = await oauth.exchange_code(app, code=code, verifier=verifier)
     except ProviderError:
         logger.warning("mailbox OAuth code exchange failed for %s", provider, exc_info=True)
         return _to("error=exchange_failed")

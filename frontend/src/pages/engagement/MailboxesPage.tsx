@@ -69,6 +69,10 @@ const CONNECT_ERRORS: Record<string, string> = {
   denied: "You cancelled on the Google or Microsoft screen, so nothing was connected.",
   oauth_failed: "The sign-in did not complete. Try again.",
   bad_state: "That sign-in link expired. Start again from this page.",
+  // The consent link only works in the browser that pressed Connect, so a link someone else sent
+  // can never attach your mailbox to their workspace.
+  wrong_browser:
+    "Nothing was connected: the sign-in finished in a different browser, or took longer than 10 minutes. Press Connect again here and finish in this browser.",
   not_configured: "Your administrator has not finished setting up this provider.",
   exchange_failed: "Google or Microsoft refused the sign-in. Try again, or ask your administrator.",
   missing_scopes:

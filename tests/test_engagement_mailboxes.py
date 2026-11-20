@@ -34,11 +34,12 @@ def test_the_state_round_trips_and_refuses_another_provider_or_a_network_state()
     from nexus.engagement.mailboxes import oauth
     from nexus.network.oauth import sign_state as network_state
 
-    token = oauth.sign_state(user_id="u1", tenant_id="t1", provider="google", verifier="v",
+    token = oauth.sign_state(user_id="u1", tenant_id="t1", provider="google", nonce_hash="h",
                              timezone="Europe/London")
     claims = oauth.verify_state(token, provider="google")
-    assert (claims["uid"], claims["tid"], claims["pkce"], claims["tz"]) == (
-        "u1", "t1", "v", "Europe/London")
+    assert (claims["uid"], claims["tid"], claims["nh"], claims["tz"]) == (
+        "u1", "t1", "h", "Europe/London")
+    assert "pkce" not in claims  # the verifier lives in the browser's cookie (2026-11-20)
     assert oauth.verify_state(token, provider="microsoft") is None
     assert oauth.verify_state(token + "x", provider="google") is None
     foreign = network_state(member_id="u1", tenant_id="t1", provider="google", verifier="v")
