@@ -75,7 +75,11 @@ export function CampaignDetailPage() {
   const enrolledIds = useMemo(() => new Set(people.map((p) => p.contact_id)), [people]);
   const awaiting = c?.counts.awaiting_review ?? 0;
   const settingUp = c ? SETTING_UP.has(c.status) : false;
-  const canLaunch = c ? settingUp || c.status === "paused" : false;
+  // A manager sees a rep's campaign and can pause or stop it; writing, approving, launching and
+  // resuming send in the rep's name from the rep's mailbox, so they are the rep's (the server
+  // answers 403 otherwise).
+  const isOwner = c ? c.owner_user_id === currentUserId : false;
+  const canLaunch = c ? isOwner && (settingUp || c.status === "paused") : false;
 
   // Open where the work is: people first while there are none, then review, then launch.
   useEffect(() => {
@@ -193,6 +197,12 @@ export function CampaignDetailPage() {
           Resume tab and it continues from where it stopped.
         </p>
       )}
+      {!isOwner && (
+        <p className={styles.notice} role="status">
+          This is a colleague's campaign, sending from their mailbox in their name. You can pause
+          or stop it and take people out; writing, approving, launching and resuming are theirs.
+        </p>
+      )}
       {(!c.mailbox_connection_id || (mailbox && mailbox.status !== "connected")) && (
         <MailboxChooser
           campaignId={c.id} current={mailbox ?? null}
@@ -206,7 +216,7 @@ export function CampaignDetailPage() {
 
       <TabPanel id="campaign-panel-people" active={(tab ?? "people") === "people"}>
         <div className={styles.stack}>
-          {c.status !== "completed" && (
+          {c.status !== "completed" && isOwner && (
             <Card padding="lg" className={styles.section}>
               <h2 className={styles.sectionTitle}>Add people</h2>
               <div className={styles.listAdd}>
@@ -230,7 +240,7 @@ export function CampaignDetailPage() {
           <PeopleTable
             rows={people} loading={enrollments.loading && !enrollments.data}
             error={enrollments.error?.detail ?? null} onRetry={enrollments.refetch}
-            steps={c.steps.length} live={!settingUp} onChanged={refresh}
+            steps={c.steps.length} live={!settingUp} onChanged={refresh} isOwner={isOwner}
           />
         </div>
       </TabPanel>
@@ -242,7 +252,7 @@ export function CampaignDetailPage() {
       )}
 
       <TabPanel id="campaign-panel-review" active={tab === "review"}>
-        <ReviewQueue campaignId={c.id} onChanged={refresh} />
+        <ReviewQueue campaignId={c.id} onChanged={refresh} canAct={isOwner} />
       </TabPanel>
 
       {canLaunch && (
@@ -255,7 +265,7 @@ export function CampaignDetailPage() {
 
       <TabPanel id="campaign-panel-steps" active={tab === "steps"}>
         <div className={styles.stack}>
-          <StepsPanel campaign={c} editable={settingUp} onSaved={refresh} />
+          <StepsPanel campaign={c} editable={settingUp && isOwner} onSaved={refresh} />
           <CallScriptPanel campaignId={c.id} />
         </div>
       </TabPanel>
@@ -317,7 +327,7 @@ function AddResult({ result, people }: { result: EnrollResult; people: Engagemen
 }
 
 function PeopleTable({
-  rows, loading, error, onRetry, steps, live, onChanged,
+  rows, loading, error, onRetry, steps, live, onChanged, isOwner = true,
 }: {
   rows: EngagementEnrollment[];
   loading: boolean;
@@ -326,6 +336,8 @@ function PeopleTable({
   steps: number;
   live: boolean;
   onChanged: () => void;
+  /** False for a manager on a rep's campaign: pause and stop only. */
+  isOwner?: boolean;
 }) {
   const api = useApiClient();
   const toast = useToast();
@@ -424,15 +436,19 @@ function PeopleTable({
           <div className={styles.rowActions}>
             {r.status === "active" && (
               <>
-                <Button size="sm" variant="ghost" loading={b("send-now")} disabled={disabled}
-                  onClick={() => act(r, "send-now")}>Send now</Button>
-                <Button size="sm" variant="ghost" disabled={disabled}
-                  onClick={() => { setMoving(r); setMoveTo(toLocalInput(r.next_action_at)); }}>Move</Button>
+                {isOwner && (
+                  <>
+                    <Button size="sm" variant="ghost" loading={b("send-now")} disabled={disabled}
+                      onClick={() => act(r, "send-now")}>Send now</Button>
+                    <Button size="sm" variant="ghost" disabled={disabled}
+                      onClick={() => { setMoving(r); setMoveTo(toLocalInput(r.next_action_at)); }}>Move</Button>
+                  </>
+                )}
                 <Button size="sm" variant="ghost" loading={b("pause")} disabled={disabled}
                   onClick={() => act(r, "pause")}>Pause</Button>
               </>
             )}
-            {(r.status === "paused" || r.status === "snoozed") && (
+            {isOwner && (r.status === "paused" || r.status === "snoozed") && (
               <Button size="sm" variant="ghost" loading={b("resume")} disabled={disabled}
                 onClick={() => act(r, "resume")}>Resume</Button>
             )}

@@ -177,7 +177,9 @@ def test_a_set_time_step_offers_the_best_time():
 
 def test_a_referral_reply_offers_the_intro_and_nothing_else_does():
     desk = _read(PAGES / "ReplyDeskPage.tsx")
-    assert '{openItem && category === "referral" && <ReferralPanel id={id} />}' in desk
+    # And only to the mailbox's owner: the intro is written in their name (2026-11-20).
+    assert ('{openItem && canAnswer && category === "referral" && <ReferralPanel id={id} />}'
+            in desk)
     panel = _read(PAGES / "ReferralPanel.tsx")
     # Spending is announced where it happens: a blank address is looked up, and that costs.
     assert "uses an enrichment credit" in panel

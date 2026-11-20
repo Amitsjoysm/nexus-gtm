@@ -59,6 +59,8 @@ class ScheduledOut(BaseModel):
     status: str
     status_reason: str | None
     due_at: datetime | None
+    #: Moving the date schedules an email from that mailbox: its owner only (2026-11-20).
+    can_reschedule: bool = True
 
 
 class ConversationMessageOut(BaseModel):
@@ -89,8 +91,10 @@ class ColleagueOut(BaseModel):
     contact_name: str = ""
     campaign_id: str
     #: False when the colleague is in a campaign sending from someone else's mailbox: shown, so the
-    #: SDR knows why they went quiet, but only that mailbox's owner or a manager can resume them.
+    #: SDR knows why they went quiet, but only that mailbox's owner or a manager can stop them.
     actionable: bool = True
+    #: Resuming sends again from that campaign's mailbox, so only its owner can (2026-11-20).
+    can_resume: bool = True
 
 
 class ItemOut(QueueItemOut):
@@ -98,6 +102,9 @@ class ItemOut(QueueItemOut):
     suggested_response: str | None
     conversation: list[ConversationMessageOut]
     paused_colleagues: list[ColleagueOut]
+    #: Whether the viewer may answer from this mailbox: its owner only. A manager reading a rep's
+    #: reply can close it, block the sender, correct the reading or hand it over (2026-11-20).
+    can_answer: bool = True
 
 
 class ResponseIn(BaseModel):
@@ -187,7 +194,15 @@ def _row(classification, message, names: _Names) -> dict:
     }
 
 
-async def _classification(ts: TenantSession, classification_id: str, principal: Principal):
+#: A manager reads every reply on the team's mailboxes and can close, block, correct or hand one
+#: over; answering one, or scheduling the next email, is writing in the mailbox owner's name, and
+#: only they do that (owner decision 2026-11-20).
+OWNER_ONLY = ("Only the mailbox's owner can answer from it or schedule its next email. You can "
+              "close the reply, block the sender or hand it to someone.")
+
+
+async def _classification(ts: TenantSession, classification_id: str, principal: Principal, *,
+                          acting: bool = False):
     from nexus.models.engagement import MailboxConnection, ReplyClassification
 
     row = await ts.get(ReplyClassification, classification_id)
@@ -197,6 +212,8 @@ async def _classification(ts: TenantSession, classification_id: str, principal: 
     if mailbox is None or (mailbox.owner_user_id != principal.user_id
                            and not _is_manager(principal)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Reply not found")
+    if acting and mailbox.owner_user_id != principal.user_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, OWNER_ONLY)
     return row
 
 
@@ -233,16 +250,21 @@ async def scheduled(
     principal: Principal = Depends(require(Permission.run_engagement)),
 ) -> list[ScheduledOut]:
     from nexus.engagement.desk import service
+    from nexus.models.engagement import MailboxConnection
 
     rows = await service.scheduled(ts, user_id=principal.user_id,
                                    team=team and _is_manager(principal))
     names = await _names(ts, [e.contact_id for e in rows], [e.account_id for e in rows])
+    box_ids = sorted({e.mailbox_connection_id for e in rows if e.mailbox_connection_id})
+    owners = {m.id: m.owner_user_id for m in await ts.list(
+        MailboxConnection, MailboxConnection.id.in_(box_ids))} if box_ids else {}
     return [ScheduledOut(
         enrollment_id=e.id, contact_id=e.contact_id,
         contact_name=getattr(names.contact(e.contact_id), "full_name", "") or "",
         account_name=getattr(names.account(e.account_id), "name", "") or "",
         campaign_id=e.campaign_id, status=e.status, status_reason=e.status_reason,
-        due_at=e.snoozed_until) for e in rows]
+        due_at=e.snoozed_until,
+        can_reschedule=owners.get(e.mailbox_connection_id) == principal.user_id) for e in rows]
 
 
 @router.get("/{classification_id}", response_model=ItemOut)
@@ -252,12 +274,18 @@ async def read_item(
     principal: Principal = Depends(require(Permission.run_engagement)),
 ) -> ItemOut:
     from nexus.engagement.desk import service
+    from nexus.models.engagement import MailboxConnection
 
     classification = await _classification(ts, classification_id, principal)
     detail = await service.item(ts, classification)
     names = await _names(
         ts, [classification.contact_id, *(e.contact_id for e in detail.paused_colleagues)],
         [classification.account_id])
+    box_ids = {classification.mailbox_connection_id,
+               *(e.mailbox_connection_id for e in detail.paused_colleagues)}
+    owners = {m.id: m.owner_user_id for m in await ts.list(
+        MailboxConnection, MailboxConnection.id.in_([b for b in box_ids if b]))}
+    mine = owners.get(classification.mailbox_connection_id) == principal.user_id
     return ItemOut(
         **_row(classification, detail.message, names),
         body=getattr(detail.message, "body_text", "") or "",
@@ -267,8 +295,10 @@ async def read_item(
             enrollment_id=e.id, contact_id=e.contact_id, campaign_id=e.campaign_id,
             contact_name=getattr(names.contact(e.contact_id), "full_name", "") or "",
             actionable=_is_manager(principal)
-            or e.mailbox_connection_id == classification.mailbox_connection_id)
-            for e in detail.paused_colleagues])
+            or e.mailbox_connection_id == classification.mailbox_connection_id,
+            can_resume=owners.get(e.mailbox_connection_id) == principal.user_id)
+            for e in detail.paused_colleagues],
+        can_answer=mine)
 
 
 @router.post("/{classification_id}/draft")
@@ -279,7 +309,7 @@ async def draft(
 ) -> dict:
     from nexus.engagement.desk import service
 
-    classification = await _classification(ts, classification_id, principal)
+    classification = await _classification(ts, classification_id, principal, acting=True)
     try:
         return await service.draft_response(ts, classification, user_id=principal.user_id)
     except service.DeskError as exc:
@@ -294,7 +324,7 @@ async def send(
 ) -> dict:
     from nexus.engagement.desk import service
 
-    classification = await _classification(ts, classification_id, principal)
+    classification = await _classification(ts, classification_id, principal, acting=True)
     try:
         result = await service.send_response(ts, classification, user_id=principal.user_id,
                                              subject=body.subject, body=body.body)
@@ -311,7 +341,7 @@ async def save_draft(
 ) -> dict:
     from nexus.engagement.desk import service
 
-    classification = await _classification(ts, classification_id, principal)
+    classification = await _classification(ts, classification_id, principal, acting=True)
     try:
         draft_id = await service.save_to_drafts(ts, classification, subject=body.subject,
                                                 body=body.body)
@@ -328,7 +358,8 @@ async def decide(
 ) -> None:
     from nexus.engagement.desk import service
 
-    classification = await _classification(ts, classification_id, principal)
+    classification = await _classification(ts, classification_id, principal,
+                                          acting=body.decision == "reengage")
     try:
         await service.decide(ts, classification, body.decision, user_id=principal.user_id,
                              reengage_on=body.reengage_on, note=body.note)
@@ -369,9 +400,11 @@ class RescheduleIn(BaseModel):
     when: datetime
 
 
-async def _owned_enrollment(ts: TenantSession, enrollment_id: str, principal: Principal):
+async def _owned_enrollment(ts: TenantSession, enrollment_id: str, principal: Principal, *,
+                            acting: bool = False):
     """An enrollment sending from one of the caller's mailboxes (or any, for a manager). 404, not
-    403, otherwise: a 403 would confirm the id exists."""
+    403, otherwise: a 403 would confirm the id exists. ``acting``: its mailbox's owner only, and a
+    manager who can see it gets the 403 that says so."""
     from nexus.models.engagement import EngagementEnrollment, MailboxConnection
 
     enrollment = await ts.get(EngagementEnrollment, enrollment_id)
@@ -380,6 +413,8 @@ async def _owned_enrollment(ts: TenantSession, enrollment_id: str, principal: Pr
     if enrollment is None or mailbox is None or (
             mailbox.owner_user_id != principal.user_id and not _is_manager(principal)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    if acting and mailbox.owner_user_id != principal.user_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, OWNER_ONLY)
     return enrollment
 
 
@@ -391,7 +426,7 @@ async def reschedule(
 ) -> None:
     from nexus.engagement.desk import service
 
-    enrollment = await _owned_enrollment(ts, enrollment_id, principal)
+    enrollment = await _owned_enrollment(ts, enrollment_id, principal, acting=True)
     try:
         await service.reschedule(ts, enrollment, body.when, user_id=principal.user_id)
     except service.DeskError as exc:
@@ -421,7 +456,7 @@ async def colleague(
 ) -> None:
     from nexus.engagement.desk import service
 
-    enrollment = await _owned_enrollment(ts, enrollment_id, principal)
+    enrollment = await _owned_enrollment(ts, enrollment_id, principal, acting=action == "resume")
     try:
         if action == "resume":
             await service.resume_colleague(ts, enrollment, user_id=principal.user_id)
@@ -474,7 +509,7 @@ async def referral_follow_through(
     review. A plan that cannot pay for the enrichment gets the 402 with its upsell."""
     from nexus.engagement.enhancements import referral
 
-    classification = await _classification(ts, classification_id, principal)
+    classification = await _classification(ts, classification_id, principal, acting=True)
     try:
         return await referral.follow_through(ts, classification, name=body.name,
                                              email=body.email, user_id=principal.user_id)

@@ -3022,7 +3022,11 @@ export interface DeskItemDetail extends DeskQueueItem {
     campaign_id: string;
     /** False when the colleague is in someone else's campaign: shown, not steerable. */
     actionable: boolean;
+    /** Resuming sends from that campaign's mailbox, so only its owner can. */
+    can_resume?: boolean;
   }[];
+  /** Only the mailbox's owner answers from it; a manager closes, blocks or hands it over. */
+  can_answer?: boolean;
 }
 
 export interface DeskScheduledItem {
@@ -3034,6 +3038,8 @@ export interface DeskScheduledItem {
   status: string;
   status_reason: string | null;
   due_at: string | null;
+  /** A new date schedules an email from that mailbox: its owner only. */
+  can_reschedule?: boolean;
 }
 
 export interface WorkspaceEngagementSettings {

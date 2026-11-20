@@ -12,6 +12,14 @@ here, because they are cheap, reliable and checkable:
   out-of-office. The AI never decides whether a human wrote a message.
 * **The new text** — the reply with the quoted history cut off, which is what classification
   reads. The whole body is kept for the conversation timeline.
+* **Whether the sender is who it says** (``sender_auth``, 2026-11-20) — the receiving server's own
+  SPF/DKIM/DMARC verdict, from the TOPMOST ``Authentication-Results`` header: Gmail and Exchange
+  add theirs above the message's own headers, so one a sender wrote into the message sits below
+  it. ``fail`` when DMARC or Microsoft's composite check failed, or when there is no DMARC verdict,
+  SPF failed outright and nothing passed DKIM; ``pass`` when any of them passed; ``""`` when the
+  header is missing or says nothing usable. Anyone can type ``From: your-buyer@acme.io``, and a
+  reply is acted on by itself (an unsubscribe blocks the buyer, an interested reply can be answered
+  by the AI); ``ingest`` lets a ``fail`` do none of that, and a person decides.
 """
 from __future__ import annotations
 
@@ -58,6 +66,10 @@ class Parsed:
     is_bounce: bool = False
     bounced_message_ids: list[str] = field(default_factory=list)
     bounced_recipients: list[str] = field(default_factory=list)
+    #: The receiving server's verdict on the sender: "pass", "fail" or "" (not said).
+    sender_auth: str = ""
+    #: The words that verdict came from, for the person who decides ("dmarc=fail").
+    sender_auth_detail: str = ""
 
     @property
     def replied_to_ids(self) -> list[str]:
@@ -137,6 +149,34 @@ def _auto_reason(message, subject: str) -> str:
     return ""
 
 
+_AUTH_RESULT = re.compile(r"\b(dmarc|spf|dkim|compauth)\s*=\s*([a-z]+)", re.IGNORECASE)
+
+
+def _sender_auth(message) -> tuple[str, str]:
+    """``(verdict, detail)`` from the topmost Authentication-Results header (module docstring)."""
+    try:
+        headers = message.get_all("Authentication-Results") or []
+    except Exception:
+        return "", ""
+    if not headers:
+        return "", ""
+    results: dict[str, list[str]] = {}
+    for method, result in _AUTH_RESULT.findall(str(headers[0])):
+        results.setdefault(method.lower(), []).append(result.lower())
+    dmarc, spf, dkim = results.get("dmarc", []), results.get("spf", []), results.get("dkim", [])
+    compauth = results.get("compauth", [])
+    if "fail" in dmarc:
+        return "fail", "dmarc=fail"
+    if "fail" in compauth:
+        return "fail", "compauth=fail"
+    if not dmarc and "fail" in spf and "pass" not in dkim:
+        return "fail", "spf=fail, no dkim=pass"
+    if ({"pass", "bestguesspass"} & set(dmarc)) or "pass" in compauth or "pass" in dkim \
+            or "pass" in spf:
+        return "pass", ""
+    return "", ""
+
+
 def _bounce(message, from_addr: str) -> tuple[bool, list[str], list[str]]:
     content_type = message.get_content_type()
     report = (content_type == "multipart/report"
@@ -199,6 +239,7 @@ def parse(raw: bytes) -> Parsed:
     full = _body_text(message)
     is_bounce, bounced, recipients = _bounce(message, (from_addr or "").lower())
     reason = "" if is_bounce else _auto_reason(message, subject)
+    sender_auth, sender_auth_detail = _sender_auth(message)
     return Parsed(
         message_id=(message.get("Message-ID") or "").strip(),
         in_reply_to=(_MESSAGE_ID.findall(message.get("In-Reply-To") or "") or [""])[0],
@@ -208,4 +249,5 @@ def parse(raw: bytes) -> Parsed:
         subject=subject, date=date, text=strip_quoted(full), full_text=full,
         is_auto=bool(reason), auto_reason=reason, is_bounce=is_bounce,
         bounced_message_ids=bounced, bounced_recipients=recipients,
+        sender_auth=sender_auth, sender_auth_detail=sender_auth_detail,
     )

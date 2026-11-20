@@ -32,9 +32,12 @@ export interface ReviewQueueProps {
   campaignId: string;
   /** Something changed that the rest of the page counts (approvals, removals, new drafts). */
   onChanged: () => void;
+  /** False for a manager reading a rep's campaign: they may take people out, nothing else. Writing
+   * and approving are the rep's, in the rep's name (the server answers 403 otherwise). */
+  canAct?: boolean;
 }
 
-export function ReviewQueue({ campaignId, onChanged }: ReviewQueueProps) {
+export function ReviewQueue({ campaignId, onChanged, canAct = true }: ReviewQueueProps) {
   const api = useApiClient();
   const toast = useToast();
   const review = useApi<ReviewItem[]>((s) => api.campaignReview(campaignId, s), [campaignId]);
@@ -134,15 +137,17 @@ export function ReviewQueue({ campaignId, onChanged }: ReviewQueueProps) {
           {undrafted > 0 && <span><strong>{undrafted}</strong> not written</span>}
         </p>
         <div className={styles.toolbarActions}>
-          {undrafted > 0 && (
+          {canAct && undrafted > 0 && (
             <Button variant="secondary" iconLeft={<Icons.SparklesIcon />} onClick={draftAll} disabled={drafting !== null}>
               Write {undrafted} opening {undrafted === 1 ? "email" : "emails"}
             </Button>
           )}
-          <Button onClick={approveAll} loading={approvingAll} disabled={passing === 0 || drafting !== null}
-            iconLeft={<Icons.CheckIcon />}>
-            Approve all that pass
-          </Button>
+          {canAct && (
+            <Button onClick={approveAll} loading={approvingAll} disabled={passing === 0 || drafting !== null}
+              iconLeft={<Icons.CheckIcon />}>
+              Approve all that pass
+            </Button>
+          )}
         </div>
       </div>
 
@@ -157,17 +162,18 @@ export function ReviewQueue({ campaignId, onChanged }: ReviewQueueProps) {
       <ol className={styles.reviewList}>
         {items.map((item) => (
           <ReviewCard key={item.enrollment_id} item={item} insight={insights.get(item.contact_id)}
-            onChanged={() => { review.refetch(); onChanged(); }} />
+            canAct={canAct} onChanged={() => { review.refetch(); onChanged(); }} />
         ))}
       </ol>
     </div>
   );
 }
 
-function ReviewCard({ item, insight, onChanged }: {
+function ReviewCard({ item, insight, onChanged, canAct = true }: {
   item: ReviewItem;
   insight?: ContactInsight;
   onChanged: () => void;
+  canAct?: boolean;
 }) {
   const api = useApiClient();
   const toast = useToast();
@@ -175,7 +181,7 @@ function ReviewCard({ item, insight, onChanged }: {
   const [body, setBody] = useState(item.body);
   const [busy, setBusy] = useState<"approve" | "regenerate" | "remove" | null>(null);
   const status = STATUS[item.status] ?? { label: item.status, tone: "neutral" as const };
-  const editable = item.status === "draft" && item.message_id !== null;
+  const editable = canAct && item.status === "draft" && item.message_id !== null;
   const edited = subject !== item.subject || body !== item.body;
   // The optional P.S. travels beside the draft, never in it; it joins the email only when the rep
   // ticks that it is true. The shape is logged on the message and is not a fact the draft rests on.
@@ -248,7 +254,9 @@ function ReviewCard({ item, insight, onChanged }: {
       {busy === "regenerate" ? (
         <WorkingIndicator label={`Rewriting the email to ${item.contact_name || "this person"}`} hint="Usually under 15 seconds." slowAfter={20} />
       ) : item.status === "undrafted" ? (
-        <p className={styles.muted}>No draft yet. Use "Write opening emails" above.</p>
+        <p className={styles.muted}>
+          {canAct ? 'No draft yet. Use "Write opening emails" above.' : "No draft yet."}
+        </p>
       ) : editable ? (
         <div className={styles.draft}>
           <Field label="Subject">
@@ -297,7 +305,7 @@ function ReviewCard({ item, insight, onChanged }: {
             {edited ? "Approve with edits" : "Approve"}
           </Button>
         )}
-        {item.message_id && item.status !== "undrafted" && (
+        {canAct && item.message_id && item.status !== "undrafted" && (
           <Button
             variant="secondary" disabled={busy !== null} iconLeft={<Icons.RefreshIcon />}
             onClick={() => run("regenerate", async () => {

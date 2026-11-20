@@ -75,12 +75,17 @@ def return_phrase(text: str) -> str:
 
 
 def finalize(reading: Reading, *, text: str, threshold: float, received_at: datetime, zone,
-             ooo_default_days: int = 7, act_alone: bool = True) -> Verdict:
+             ooo_default_days: int = 7, act_alone: bool = True,
+             unverified_sender: str = "") -> Verdict:
     """Apply the rules the model is not trusted with. Pure.
 
     ``act_alone`` is the reply switch (`settings.reply_automation`): off, a later, decline or
     unsubscribe is ``unclear`` however confident, so the sequence pauses and a person decides.
-    Out-of-office is not a decision about the person and keeps its automatic pause either way."""
+    Out-of-office is not a decision about the person and keeps its automatic pause either way.
+
+    ``unverified_sender`` is why the receiving server could not confirm who sent it
+    (``dmarc=fail``, `parse._sender_auth`); set, it works like ``act_alone`` off and the reason
+    says so, because a forged "remove me" would otherwise block a real buyer."""
     from nexus.engagement.dates import resolve_date
     from nexus.engagement.timekeeping import next_business_day, to_local
 
@@ -101,6 +106,13 @@ def finalize(reading: Reading, *, text: str, threshold: float, received_at: date
     if category == "later" and REFUSAL.search(text or ""):
         category = "unclear"
         reasons.append("refusal together with a timeframe goes to the SDR (D8)")
+    if unverified_sender:
+        if category in AUTONOMOUS:
+            reasons.append(f"{category} read, but the sender could not be verified "
+                           f"({unverified_sender}), so a person decides")
+            category = "unclear"
+        else:
+            reasons.append(f"the sender could not be verified ({unverified_sender})")
     if category in AUTONOMOUS and not act_alone:
         reasons.append(f"{category} read, but acting on replies by itself is switched off for "
                        "this mailbox")

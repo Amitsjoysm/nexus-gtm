@@ -195,6 +195,9 @@ export function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () 
   const category = (d.corrected_category ?? d.category) as ReplyCategory;
   const cat = CATEGORY[category];
   const openItem = d.status === "open";
+  // A manager reads a rep's reply and can close it, block the sender or hand it over; writing
+  // back from the rep's mailbox is the rep's (the server refuses it with a 403).
+  const canAnswer = d.can_answer !== false;
 
   async function suggest() {
     await run("draft", async () => {
@@ -286,7 +289,14 @@ export function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () 
         <ConversationTimeline messages={conversation} />
       </section>
 
-      {openItem && (
+      {openItem && !canAnswer && (
+        <p className={styles.notice} role="status">
+          This reply came to a colleague's mailbox, so only they can answer it. You can close it,
+          block the sender or assign it to someone below.
+        </p>
+      )}
+
+      {openItem && canAnswer && (
         <section className={styles.answer} aria-labelledby="answer-title">
           <div className={styles.sectionHead}>
             <h3 id="answer-title" className={styles.sectionTitle}>Your answer</h3>
@@ -322,7 +332,7 @@ export function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () 
         </section>
       )}
 
-      {openItem && category === "referral" && <ReferralPanel id={id} />}
+      {openItem && canAnswer && category === "referral" && <ReferralPanel id={id} />}
 
       {d.paused_colleagues.length > 0 && (
         <section className={styles.colleagues} aria-labelledby="colleagues-title">
@@ -334,10 +344,12 @@ export function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () 
                 <span>{c.contact_name || "A colleague"}</span>
                 {c.actionable ? (
                   <span className={styles.rowActions}>
-                    <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `resume:${c.enrollment_id}`}
-                      onClick={() => run(`resume:${c.enrollment_id}`, () => api.deskColleague(c.enrollment_id, "resume"), ["Resumed"])}>
-                      Resume
-                    </Button>
+                    {c.can_resume !== false && (
+                      <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `resume:${c.enrollment_id}`}
+                        onClick={() => run(`resume:${c.enrollment_id}`, () => api.deskColleague(c.enrollment_id, "resume"), ["Resumed"])}>
+                        Resume
+                      </Button>
+                    )}
                     <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `stop:${c.enrollment_id}`}
                       onClick={() => run(`stop:${c.enrollment_id}`, () => api.deskColleague(c.enrollment_id, "stop"), ["Stopped"])}>
                       Stop
@@ -377,11 +389,13 @@ export function ReplyDetail({ id, onDone, canAssign }: { id: string; onDone: () 
                 ["Meeting booked", "Recorded on the account; their sequence has stopped."], true)}>
               Meeting booked
             </Button>
-            <Button variant="secondary" disabled={busy !== null} aria-expanded={laterOpen}
-              iconLeft={<Icons.ClockIcon />}
-              onClick={() => setLaterOpen((v) => !v)}>
-              Come back later
-            </Button>
+            {canAnswer && (
+              <Button variant="secondary" disabled={busy !== null} aria-expanded={laterOpen}
+                iconLeft={<Icons.ClockIcon />}
+                onClick={() => setLaterOpen((v) => !v)}>
+                Come back later
+              </Button>
+            )}
             <Button variant="secondary" disabled={busy !== null} loading={busy === "close"}
               iconLeft={<Icons.XIcon />}
               onClick={() => run("close", () => api.deskDecide(id, { decision: "close", note }), ["Closed"], true)}>
@@ -484,10 +498,13 @@ export function Scheduled({ state, onChanged }: {
       align: "right",
       render: (r) => (
         <div className={styles.rowActions}>
-          <Button size="sm" variant="secondary" disabled={busy !== null}
-            onClick={() => { setEditing(r); setDate(toLocalInput(r.due_at)); }}>
-            Change date
-          </Button>
+          {/* A new date schedules an email from that rep's mailbox, so only they move it. */}
+          {r.can_reschedule !== false && (
+            <Button size="sm" variant="secondary" disabled={busy !== null}
+              onClick={() => { setEditing(r); setDate(toLocalInput(r.due_at)); }}>
+              Change date
+            </Button>
+          )}
           <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `cancel:${r.enrollment_id}`}
             onClick={() => run(`cancel:${r.enrollment_id}`, () => api.cancelScheduled(r.enrollment_id), `Cancelled: ${r.contact_name}`)}>
             Cancel

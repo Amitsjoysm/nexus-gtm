@@ -147,14 +147,25 @@ def _is_manager(principal: Principal) -> bool:
     return has_permission(Role(principal.role), Permission.manage_engagement)
 
 
-async def _campaign(ts: TenantSession, campaign_id: str, principal: Principal):
+async def _campaign(ts: TenantSession, campaign_id: str, principal: Principal, *,
+                    acting: bool = False):
+    """The campaign, for its owner or a manager. ``acting``: only its owner, because the act
+    writes, approves or sends email from the owner's mailbox in their name (owner decision
+    2026-11-20). A manager still sees every campaign and can pause, stop or remove people."""
     from nexus.models.engagement import EngagementCampaign
 
     campaign = await ts.get(EngagementCampaign, campaign_id)
     if campaign is None or (campaign.owner_user_id != principal.user_id
                             and not _is_manager(principal)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Campaign not found")
+    if acting and campaign.owner_user_id != principal.user_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, OWNER_ONLY)
     return campaign
+
+
+#: What a manager reads when they try to act as a rep. Pausing and stopping stay theirs.
+OWNER_ONLY = ("Only the campaign's owner can do this: it writes or sends email from their "
+              "mailbox, in their name. You can pause or stop it.")
 
 
 async def _status_counts(ts: TenantSession, campaign_ids: list[str]) -> dict[str, dict[str, int]]:
@@ -413,7 +424,7 @@ async def put_service(
     """Pitch another service (W8). Before launch only: emails already sent were written for the
     service the campaign was launched with, and a follow-up must not change the offer mid-thread.
     Drafts written for the old service stay as they are; Regenerate writes them again."""
-    campaign = await _campaign(ts, campaign_id, principal)
+    campaign = await _campaign(ts, campaign_id, principal, acting=True)
     if campaign.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "A launched campaign keeps the service it was launched with.")
@@ -439,7 +450,7 @@ async def put_steps(
 ) -> CampaignOut:
     from nexus.engagement.sequences.service import CampaignError, replace_steps
 
-    campaign = await _campaign(ts, campaign_id, principal)
+    campaign = await _campaign(ts, campaign_id, principal, acting=True)
     try:
         await replace_steps(ts, campaign, [s.model_dump() for s in body])
     except CampaignError as exc:
@@ -464,7 +475,7 @@ async def put_mailbox(
     from nexus.engagement.sequences.service import CampaignError, attach_mailbox
     from nexus.models.engagement import MailboxConnection
 
-    campaign = await _campaign(ts, campaign_id, principal)
+    campaign = await _campaign(ts, campaign_id, principal, acting=True)
     try:
         await attach_mailbox(ts, campaign, await ts.get(MailboxConnection, body.mailbox_id))
     except CampaignError as exc:
@@ -483,7 +494,7 @@ async def add_contacts(
     from nexus.models.account import Contact
     from nexus.models.engagement import EngagementEnrollment
 
-    campaign = await _campaign(ts, campaign_id, principal)
+    campaign = await _campaign(ts, campaign_id, principal, acting=True)
     contact_ids = list(body.contact_ids)
     if body.account_ids:
         contact_ids += [c.id for c in await ts.list(
@@ -535,7 +546,7 @@ async def draft_campaign(
     """Draft up to ``limit`` first emails. The screen calls again until nothing is left."""
     from nexus.engagement.sequences.service import CampaignError, draft_first_emails
 
-    campaign = await _campaign(ts, campaign_id, principal)
+    campaign = await _campaign(ts, campaign_id, principal, acting=True)
     try:
         return await draft_first_emails(ts, campaign, user_id=principal.user_id,
                                          limit=max(1, min(limit, 50)))
@@ -565,13 +576,15 @@ async def get_review(
 
 
 async def _message(ts: TenantSession, message_id: str, principal: Principal):
+    """A draft, for its campaign's owner only: approving or rewriting one is writing email that
+    will go out in the owner's name."""
     from nexus.models.engagement import EngagementEnrollment, EngagementMessage
 
     message = await ts.get(EngagementMessage, message_id)
     if message is None or message.enrollment_id is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Draft not found")
     enrollment = await ts.get(EngagementEnrollment, message.enrollment_id)
-    await _campaign(ts, enrollment.campaign_id, principal)
+    await _campaign(ts, enrollment.campaign_id, principal, acting=True)
     return message
 
 
@@ -633,7 +646,7 @@ async def approve_all(
 ) -> dict:
     from nexus.engagement.sequences.service import approve_all_passing
 
-    campaign = await _campaign(ts, campaign_id, principal)
+    campaign = await _campaign(ts, campaign_id, principal, acting=True)
     return {"approved": await approve_all_passing(ts, campaign, user_id=principal.user_id)}
 
 
@@ -665,7 +678,7 @@ async def launch_campaign(
 ) -> dict:
     from nexus.engagement.sequences.service import CampaignError, CreditGateRefused, launch
 
-    campaign = await _campaign(ts, campaign_id, principal)
+    campaign = await _campaign(ts, campaign_id, principal, acting=True)
     try:
         result = await launch(ts, campaign, user_id=principal.user_id)
     except CreditGateRefused as exc:
@@ -684,7 +697,8 @@ async def campaign_action(
 ) -> None:
     from nexus.engagement.sequences import service
 
-    campaign = await _campaign(ts, campaign_id, principal)
+    # Pausing and stopping are a manager's levers; resuming sends again in the owner's name.
+    campaign = await _campaign(ts, campaign_id, principal, acting=action == "resume")
     try:
         if action == "pause":
             await service.pause_campaign(ts, campaign)
@@ -720,13 +734,14 @@ async def list_enrollments(
         contact_timezone=e.contact_timezone) for e in rows]
 
 
-async def _enrollment(ts: TenantSession, enrollment_id: str, principal: Principal):
+async def _enrollment(ts: TenantSession, enrollment_id: str, principal: Principal, *,
+                      acting: bool = False):
     from nexus.models.engagement import EngagementEnrollment
 
     enrollment = await ts.get(EngagementEnrollment, enrollment_id)
     if enrollment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrollment not found")
-    await _campaign(ts, enrollment.campaign_id, principal)
+    await _campaign(ts, enrollment.campaign_id, principal, acting=acting)
     return enrollment
 
 
@@ -739,7 +754,9 @@ async def move_enrollment(
     from nexus.engagement.sequences.service import CampaignError, move_next
 
     try:
-        await move_next(ts, await _enrollment(ts, enrollment_id, principal), body.when)
+        # Moving the next step is scheduling an email from the owner's mailbox.
+        await move_next(ts, await _enrollment(ts, enrollment_id, principal, acting=True),
+                        body.when)
     except CampaignError as exc:
         raise _refuse(exc) from exc
 
@@ -752,7 +769,9 @@ async def enrollment_action(
 ) -> None:
     from nexus.engagement.sequences import service
 
-    enrollment = await _enrollment(ts, enrollment_id, principal)
+    # Pause, stop and remove are a manager's; resume and send-now send in the owner's name.
+    enrollment = await _enrollment(ts, enrollment_id, principal,
+                                   acting=action in ("resume", "send-now"))
     try:
         if action == "pause":
             await service.pause_enrollment(ts, enrollment, user_id=principal.user_id)

@@ -181,6 +181,10 @@ async def _classify_and_act(ts, row, found, mailbox, parsed) -> str:
         .order_by(EngagementMessage.created_at.asc()))
     context_text = conversation_block(list(history.all()))
 
+    # The receiving server could not confirm the sender (`parse._sender_auth`): anyone can write
+    # From: the buyer's address, so nothing happens by itself on its word. A person reads it on the
+    # desk with the reason, exactly as with acting alone switched off (2026-11-20).
+    unverified = parsed.sender_auth == "fail"
     if found.rule == "colleague":
         reading = classify.Reading("referral", 1.0, "", "a colleague of the contact replied",
                                    "deterministic")
@@ -190,7 +194,8 @@ async def _classify_and_act(ts, row, found, mailbox, parsed) -> str:
     verdict = classify.finalize(reading, text=parsed.text, threshold=threshold,
                                 received_at=row.received_at, zone=zone_or_none(zone_name) or UTC,
                                 ooo_default_days=settings.ooo_default_days,
-                                act_alone=acts_alone)
+                                act_alone=acts_alone,
+                                unverified_sender=parsed.sender_auth_detail if unverified else "")
     classification = ReplyClassification(
         message_id=row.id, mailbox_connection_id=mailbox.id,
         enrollment_id=row.enrollment_id, contact_id=row.contact_id,
@@ -202,7 +207,10 @@ async def _classify_and_act(ts, row, found, mailbox, parsed) -> str:
         else "done")
     ts.add(classification)
     await ts.flush()
-    if sends_alone and found.rule != "colleague" and row.inbound_kind == "human"             and verdict.category in AUTO_ANSWERED and verdict.confidence >= threshold             and row.contact_id and not await _answered_automatically(ts, row.thread_id):
+    if (sends_alone and not unverified and found.rule != "colleague"
+            and row.inbound_kind == "human"
+            and verdict.category in AUTO_ANSWERED and verdict.confidence >= threshold
+            and row.contact_id and not await _answered_automatically(ts, row.thread_id)):
         # The reply sweep drafts and sends it after this transaction commits (`auto_reply.py`).
         classification.auto_reply = "pending"
         await ts.flush()
