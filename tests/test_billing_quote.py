@@ -92,6 +92,38 @@ async def test_two_lines_that_each_fit_but_not_together_are_not_covered(client, 
     assert both["covered"] is False and "credits" in both["reason"].lower()
 
 
+async def test_in_shadow_mode_the_quote_agrees_with_preflight(client, monkeypatch):
+    from nexus.billing.credits import balance, burn_credits
+    from nexus.billing.entitlements import preflight
+    from nexus.billing.quote import quote
+
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "shadow")
+    _, tid = await _paid_workspace(client, "bq7")
+    async with tenant_session(tid) as ts:
+        await burn_credits(ts, await balance(ts) - 3, reason="test",
+                           idempotency_key=uuid.uuid4().hex)
+        for charges in ({"enrich.contact": 2},
+                        {"enrich.contact": 2, "discovery.account_added": 1}):
+            q = await quote(ts, charges)
+            allowed = all([(await preflight(ts, c, quantity=n)).allowed
+                           for c, n in charges.items()])
+            assert q["covered"] is allowed is True, (charges, q)
+
+
+async def test_a_line_the_meter_does_not_burn_is_not_in_the_total(client, monkeypatch):
+    from nexus.billing.credits import balance, burn_credits
+    from nexus.billing.quote import quote
+
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "on")
+    _, tid = await _paid_workspace(client, "bq8")
+    async with tenant_session(tid) as ts:
+        await burn_credits(ts, await balance(ts) - 10, reason="test",
+                           idempotency_key=uuid.uuid4().hex)
+        q = await quote(ts, {"enrich.contact": 2, "seat.member": 1})
+    assert q["covered"] is True, q
+    assert q["credits"] == q["lines"]["enrich.contact"]
+
+
 async def test_with_billing_off_nothing_uses_credits(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "billing_enforcement", "off")
     h, _ = await _paid_workspace(client, "bq6")

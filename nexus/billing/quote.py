@@ -70,22 +70,31 @@ async def first_refusal(ts, charges: dict[str, int]) -> tuple[str, object] | Non
     return None
 
 
+async def _credit_funded(ts, capability: str) -> bool:
+    """Would the meter burn credits for this capability? The one rule `uses_credits` and the total
+    check in `quote()` share: not on an unlimited or internal plan, with a subscription, and not a
+    gauge (gauges keep plan limits and are never charged). A resolution failure reads as yes, the
+    cautious answer for a preview."""
+    from nexus.billing.entitlements import _is_gauge, resolve_entitlement
+
+    try:
+        ent = await resolve_entitlement(ts, capability)
+    except Exception:
+        return True
+    if ent.plan_id is None or ent.mode in ("shadow", "unlimited"):
+        return False
+    return not await _is_gauge(ts, capability)
+
+
 async def uses_credits(ts, charges: dict[str, int]) -> bool:
     """Whether these charges would take credits at all: not on an unlimited or internal plan, with
     no subscription, in shadow mode, or with billing off (the meter burns nothing there)."""
-    from nexus.billing.entitlements import resolve_entitlement
     from nexus.core.config import get_settings
 
     if get_settings().billing_enforcement == "off":
         return False
     for capability, quantity in charges.items():
-        if quantity <= 0:
-            continue
-        try:
-            ent = await resolve_entitlement(ts, capability)
-        except Exception:
-            return True
-        if ent.plan_id is not None and ent.mode not in ("shadow", "unlimited"):
+        if quantity > 0 and await _credit_funded(ts, capability):
             return True
     return False
 
@@ -93,20 +102,30 @@ async def uses_credits(ts, charges: dict[str, int]) -> bool:
 async def quote(ts, charges: dict[str, int]) -> dict:
     """``{"credits", "lines", "uses_credits", "balance", "covered", "reason"}``.
 
-    ``covered`` is the engine's per-charge answer AND whether the whole request fits the balance:
-    `preflight` checks each capability alone, so two lines that each fit but not together would
-    read covered here and the meter would refuse the second. ``credits`` and ``lines`` are rounded
-    for display; the meter charges the unrounded amount. With no credits used, ``credits`` is 0.0
-    and ``balance`` is None.
+    ``covered`` is the engine's per-charge answer AND, where the engine would refuse for credits
+    (`entitlements._enforced`: enforcement ``on``; in shadow the meter burns and refuses nothing),
+    whether the whole request fits the balance: `preflight` checks each capability alone, so two
+    lines that each fit but not together would read covered and the meter would refuse the second.
+    Only lines the meter burns count toward that total, compared unrounded. ``credits`` and
+    ``lines`` are rounded for display; the meter charges the unrounded amount. With no credits
+    used, ``credits`` is 0.0 and ``balance`` is None.
     """
     from nexus.billing.credits import balance
+    from nexus.billing.entitlements import _enforced
+    from nexus.core.config import get_settings
 
     lines = await price(ts, charges)
     spends = await uses_credits(ts, charges)
     refusal = await first_refusal(ts, charges)
     have = await balance(ts) if spends else None
-    total = round(sum(lines.values()), 2) if spends else 0.0
-    if refusal is None and spends and have is not None and total > have:
+    funded = 0.0
+    if spends:
+        for capability, amount in lines.items():
+            if await _credit_funded(ts, capability):
+                funded += amount
+    total = round(funded, 2) if spends else 0.0
+    if (refusal is None and spends and have is not None and funded > have
+            and _enforced(get_settings().billing_enforcement, "credits_exhausted")):
         refusal = ("credits_exhausted", None)
     reason = None
     if refusal is not None:
