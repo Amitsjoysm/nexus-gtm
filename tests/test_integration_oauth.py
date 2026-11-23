@@ -37,7 +37,7 @@ def test_unconfigured_is_inert():
 
 def test_state_round_trips_and_rejects_tampering():
     state = oauth.sign_state(tenant_id="t1", user_id="u1", kind="crm",
-                             provider="hubspot", verifier="v")
+                             provider="hubspot", nonce_hash="h")
     claims = oauth.verify_state(state)
     assert claims["tid"] == "t1" and claims["prov"] == "hubspot" and claims["kind"] == "crm"
 
@@ -52,7 +52,7 @@ def test_a_network_oauth_state_is_not_accepted_here():
     from nexus.network import oauth as network_oauth
 
     foreign = network_oauth.sign_state(
-        member_id="m", tenant_id="t1", provider="google", verifier="v"
+        member_id="m", tenant_id="t1", provider="google", nonce_hash="h"
     )
     assert oauth.verify_state(foreign) is None
 
@@ -170,14 +170,21 @@ async def test_callback_stores_the_bundle_for_the_tenant_named_in_the_state(
     from nexus.ingestion.crm_credentials import get_connection, has_credentials
     from nexus.integrations import connections
 
-    tid = await make_tenant(slug="cb", name="CB")
+    from urllib.parse import parse_qs, urlparse
+
+    from tests.conftest import principal_from_token
+
+    token = await signup(client, slug="cb", email="admin@cb.io", company="CB")
+    tid = principal_from_token(token).tenant_id
 
     async def fake_exchange(*, kind, provider, code, verifier=""):
         return {"access_token": "at-new", "refresh_token": "rt-new", "expires_at": 9999999999}
 
     monkeypatch.setattr(oauth, "exchange_code", fake_exchange)
 
-    state = oauth.sign_state(tenant_id=tid, user_id="u1", kind="crm", provider="hubspot")
+    # Through Start, as a browser does: it sets the binding cookie the callback requires.
+    started = await client.get("/api/integrations/crm/oauth/hubspot/start", headers=auth(token))
+    state = parse_qs(urlparse(started.json()["authorize_url"]).query)["state"][0]
     r = await client.get(
         f"/api/integrations/crm/oauth/hubspot/callback?code=abc&state={state}",
         follow_redirects=False,

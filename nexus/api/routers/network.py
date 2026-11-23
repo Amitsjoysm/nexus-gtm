@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 
 from nexus.api.deps import Principal, get_tenant_session, require
@@ -209,9 +209,13 @@ async def get_intro_paths(
 @router.get("/oauth/{provider}/start", response_model=OAuthStartOut)
 async def oauth_start(
     provider: str,
+    request: Request,
+    response: Response,
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.run_agents)),
 ) -> OAuthStartOut:
+    from nexus.core.oauth_binding import set_cookie
+
     if provider not in ("google", "microsoft"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown provider")
     if not provider_configured(provider):
@@ -219,9 +223,15 @@ async def oauth_start(
     member = await _member(ts, principal)
     connector = get_network_connector(provider)
     verifier, challenge = network_oauth.make_pkce()
-    state = network_oauth.sign_state(
+    nonce_hash, binding = network_oauth.new_binding(
         member_id=member.id, tenant_id=ts.tenant_id, provider=provider, verifier=verifier
     )
+    state = network_oauth.sign_state(
+        member_id=member.id, tenant_id=ts.tenant_id, provider=provider, nonce_hash=nonce_hash
+    )
+    # Ties the consent link to this browser (`network/oauth.py`): the link alone connects nothing.
+    name, path = network_oauth.binding_cookie(provider)
+    set_cookie(response, request, name=name, value=binding, path=path)
     return OAuthStartOut(authorize_url=connector.authorize_url_for(state=state,
                                                                    code_challenge=challenge))
 
@@ -237,20 +247,29 @@ async def oauth_callback(
     """Provider redirect target. Validates the signed state, exchanges the code, stores encrypted
     tokens, and bounces the browser back to the SPA. No auth dependency: the signed ``state`` is the
     credential. Every failure path is a safe redirect (never a 500 that leaks a trace)."""
+    from nexus.core.oauth_binding import clear_cookie
+
     base = get_settings().network_oauth_redirect_base.rstrip("/")
+    cookie_name, cookie_path = network_oauth.binding_cookie(provider)
 
     def _to(query: str) -> RedirectResponse:
-        return RedirectResponse(f"{base}/network?{query}", status_code=302)
+        redirect = RedirectResponse(f"{base}/network?{query}", status_code=302)
+        clear_cookie(redirect, name=cookie_name, path=cookie_path)  # one Connect, one callback
+        return redirect
 
     if error or not code or not state:
         return _to(f"error={error or 'oauth_failed'}")
     claims = network_oauth.verify_state(state)
     if not claims or claims.get("prov") != provider:
         return _to("error=bad_state")
-    verifier = claims.get("pkce")
     tid, member_id = claims.get("tid"), claims.get("mid")
-    if not verifier or not tid or not member_id:
+    if not tid or not member_id or not claims.get("nh"):
         return _to("error=bad_state")
+    verifier = network_oauth.bound_verifier(request.cookies.get(cookie_name), claims)
+    if not verifier:
+        # Finished in a browser that did not press Connect: someone else's contacts and calendar
+        # would join the workspace that made the link. Nothing is exchanged.
+        return _to("error=wrong_browser")
 
     try:
         connector = get_network_connector(provider)

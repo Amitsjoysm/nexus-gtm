@@ -24,6 +24,17 @@ const RELATION_LABEL: Record<string, string> = {
   follower: "follows them", contact: "in contacts",
 };
 
+/** Why a connect came back without an account, in words a rep can act on. */
+const CONNECT_ERRORS: Record<string, string> = {
+  // The consent link only works in the browser that pressed Connect, so a link someone else sent
+  // can never attach your contacts and calendar to their workspace (2026-11-20).
+  wrong_browser:
+    "Nothing was connected: the sign-in finished in a different browser, or took longer than 10 minutes. Press Connect again here and finish in this browser.",
+  bad_state: "That sign-in link expired. Start again from this page.",
+  access_denied: "You cancelled on the Google or Microsoft screen, so nothing was connected.",
+  exchange_failed: "Google or Microsoft refused the sign-in. Try again.",
+};
+
 export function NetworkPage() {
   const api = useApiClient();
   const toast = useToast();
@@ -42,7 +53,7 @@ export function NetworkPage() {
       toast.success("Account connected", `Syncing your ${connected} network now.`);
       sources.refetch();
     } else if (error) {
-      toast.error("Couldn't connect", `OAuth failed (${error}). Please try again.`);
+      toast.error("Couldn't connect", CONNECT_ERRORS[error] ?? `OAuth failed (${error}). Please try again.`);
     }
     if (connected || error) {
       window.history.replaceState({}, "", "/network");

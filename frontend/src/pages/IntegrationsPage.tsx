@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
@@ -54,6 +54,20 @@ const EMPTY_ROW: AccountRow = {
 };
 
 export function IntegrationsPage() {
+  const toast = useToast();
+
+  // The OAuth callback lands here with ?connected=<provider> or ?error=<sentence>. Nothing read it,
+  // so a connect that worked, was refused or finished in the wrong browser showed nothing at all.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const connected = p.get("connected");
+    const error = p.get("error");
+    if (connected) toast.success("Connected", `${connected} is connected to this workspace.`);
+    else if (error) toast.error("Nothing was connected", error);
+    if (connected || error) window.history.replaceState({}, "", "/integrations");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div>
       <PageHeader

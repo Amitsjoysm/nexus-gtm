@@ -42,7 +42,7 @@ def test_the_state_round_trips_and_refuses_another_provider_or_a_network_state()
     assert "pkce" not in claims  # the verifier lives in the browser's cookie (2026-11-20)
     assert oauth.verify_state(token, provider="microsoft") is None
     assert oauth.verify_state(token + "x", provider="google") is None
-    foreign = network_state(member_id="u1", tenant_id="t1", provider="google", verifier="v")
+    foreign = network_state(member_id="u1", tenant_id="t1", provider="google", nonce_hash="h")
     assert oauth.verify_state(foreign, provider="google") is None
 
 

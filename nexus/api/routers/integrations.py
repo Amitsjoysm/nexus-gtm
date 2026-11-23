@@ -8,6 +8,7 @@ authenticated API call without changing either surface.
 """
 from __future__ import annotations
 
+import logging
 import urllib.parse
 
 from fastapi import (
@@ -71,6 +72,8 @@ from nexus.models.account import Account, Contact
 from nexus.models.identity import Tenant
 from nexus.models.integration import IntegrationConnection
 from nexus.workers.tasks import tenant_session
+
+logger = logging.getLogger("nexus.api.integrations")
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
@@ -767,10 +770,13 @@ _OAUTH_KINDS = {"crm": KNOWN_CRM_PROVIDERS, "sep": KNOWN_SEP_PROVIDERS}
 async def oauth_start(
     kind: str,
     provider: str,
+    request: Request,
+    response: Response,
     ts: TenantSession = Depends(get_tenant_session),
     principal: Principal = Depends(require(Permission.manage_workspace)),
 ) -> OAuthStartOut:
-    """The vendor URL to send the admin to, with a signed short-TTL state."""
+    """The vendor URL to send the admin to, with a signed short-TTL state, and the cookie that ties
+    it to this browser (`oauth.binding_cookie`): the link alone connects nothing."""
     provider = provider.strip().lower()
     if kind not in _OAUTH_KINDS or provider not in _OAUTH_KINDS[kind]:
         raise HTTPException(
@@ -785,11 +791,19 @@ async def oauth_start(
             f"(set NEXUS_{provider.upper()}_CLIENT_ID / _CLIENT_SECRET and "
             f"NEXUS_OAUTH_REDIRECT_BASE).",
         )
+    from nexus.core.oauth_binding import set_cookie
+
     verifier, challenge = oauth.make_pkce()
-    state = oauth.sign_state(
+    nonce_hash, binding = oauth.new_binding(
         tenant_id=ts.tenant_id, user_id=principal.user_id,
         kind=kind, provider=provider, verifier=verifier,
     )
+    state = oauth.sign_state(
+        tenant_id=ts.tenant_id, user_id=principal.user_id,
+        kind=kind, provider=provider, nonce_hash=nonce_hash,
+    )
+    name, path = oauth.binding_cookie(kind, provider)
+    set_cookie(response, request, name=name, value=binding, path=path)
     return OAuthStartOut(
         authorize_url=oauth.authorize_url(
             kind=kind, provider=provider, state=state, challenge=challenge
@@ -805,24 +819,40 @@ async def oauth_callback(kind: str, provider: str, request: Request) -> Redirect
     with no Authorization header, so the tenant comes from the signed state and nowhere else. That
     is exactly why the state must verify before anything is written.
     """
+    from nexus.core.oauth_binding import clear_cookie
+
     params = request.query_params
     claims = oauth.verify_state(params.get("state") or "")
     if not claims or claims.get("kind") != kind or claims.get("prov") != provider:
         # A tampered, expired, or foreign state. Never write on the strength of it.
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired OAuth state")
+    cookie_name, cookie_path = oauth.binding_cookie(kind, provider)
+
+    def _to(query: str) -> RedirectResponse:
+        redirect = RedirectResponse(f"/integrations?{query}")
+        clear_cookie(redirect, name=cookie_name, path=cookie_path)  # one Connect, one callback
+        return redirect
+
     if params.get("error"):
-        return RedirectResponse(
-            f"/integrations?error={urllib.parse.quote(params.get('error_description') or params['error'])}"
-        )
+        return _to(f"error={urllib.parse.quote(params.get('error_description') or params['error'])}")
     code = params.get("code") or ""
     if not code:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No authorization code returned")
+    verifier = oauth.bound_verifier(request.cookies.get(cookie_name), claims)
+    if verifier is None:
+        # The consent link was finished in a browser that did not press Connect: someone else's
+        # CRM would be stored in the workspace that made the link. Nothing is exchanged.
+        logger.warning("%s OAuth callback for %s refused: not the browser that started it",
+                       kind, provider)
+        return _to("error=" + urllib.parse.quote(
+            "Nothing was connected: the sign-in finished in a different browser, or took longer "
+            "than 10 minutes. Press Connect again here and finish in this browser."))
 
     bundle = await oauth.exchange_code(
-        kind=kind, provider=provider, code=code, verifier=claims.get("pkce") or ""
+        kind=kind, provider=provider, code=code, verifier=verifier
     )
     if not bundle:
-        return RedirectResponse("/integrations?error=Token+exchange+failed")
+        return _to("error=Token+exchange+failed")
 
     tenant_id, actor = claims["tid"], claims.get("uid")
     async with tenant_session(tenant_id) as ts:
@@ -841,7 +871,7 @@ async def oauth_callback(kind: str, provider: str, request: Request) -> Redirect
             target_type=f"{kind}_connection",
             meta={"provider": provider, "token_set": True},
         )
-    return RedirectResponse(f"/integrations?connected={provider}")
+    return _to(f"connected={provider}")
 
 
 @router.delete("/sep/connection", status_code=status.HTTP_204_NO_CONTENT)

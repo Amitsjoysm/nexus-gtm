@@ -7,9 +7,12 @@ tampered, expired, or foreign state is rejected. The claim ``typ`` differs (``in
 is what stops a network-connector state from being replayed against a CRM callback.
 
 **Not every provider supports PKCE.** HubSpot and Salesforce authenticate the token exchange with
-``client_secret``; Salesforce additionally accepts PKCE. The verifier is therefore optional and
-carried in the state when present. The signed state is what prevents CSRF in either case — it is
-not decorative, and the callback must refuse a request whose state does not verify.
+``client_secret``; Salesforce additionally accepts PKCE. The verifier is therefore optional. The
+signed state names the workspace, and the callback must refuse a request whose state does not
+verify — but since 2026-11-20 the state is not enough on its own: it travels in the consent link,
+so anyone could send theirs to someone else and receive that person's CRM. Start also binds the
+flow to the browser that pressed Connect (`core/oauth_binding`, `binding_cookie`), the verifier
+lives in that cookie rather than the link, and the state carries only the nonce's hash (``nh``).
 
 Everything is **inert without configuration**: with no client id/secret, :func:`provider_configured`
 is false and the endpoints report that plainly rather than building an authorize URL the vendor
@@ -37,7 +40,32 @@ from nexus.integrations.settings import get_integration_settings
 logger = logging.getLogger("nexus.integrations.oauth")
 
 _STATE_TYP = "int_oauth"
+_BINDING_TYP = "int_oauth_browser"
 _DEFAULT_TTL_S = 600
+
+
+def binding_cookie(kind: str, provider: str) -> tuple[str, str]:
+    """``(name, path)`` of the cookie that ties one kind and provider's flow to its browser. The path
+    covers that flow's start and callback and nothing else."""
+    return f"nexus_oauth_{kind}_{provider}", f"/api/integrations/{kind}/oauth/{provider}"
+
+
+def new_binding(*, tenant_id: str, user_id: str, kind: str, provider: str,
+                verifier: str) -> tuple[str, str]:
+    """``(nonce_hash, cookie value)`` for a Start: the hash goes into the state."""
+    from nexus.core.oauth_binding import new_binding as _new
+
+    return _new(typ=_BINDING_TYP, verifier=verifier,
+                subject={"tid": tenant_id, "uid": user_id, "kind": kind, "prov": provider})
+
+
+def bound_verifier(cookie: str | None, state_claims: dict) -> str | None:
+    """The PKCE verifier ("" when none) when ``cookie`` is the binding the state's own Start set in
+    this browser; ``None`` otherwise, and nothing may be exchanged."""
+    from nexus.core.oauth_binding import bound_verifier as _bound
+
+    return _bound(cookie, typ=_BINDING_TYP, state_nonce_hash=str(state_claims.get("nh") or ""),
+                  subject={key: state_claims.get(key) for key in ("tid", "uid", "kind", "prov")})
 
 # Access tokens are refreshed this many seconds before they actually expire, so a request that
 # takes a moment to reach the vendor does not arrive with a token that expired in flight.
@@ -110,18 +138,20 @@ def _token_url(provider: str) -> str:
 
 def sign_state(
     *, tenant_id: str, user_id: str, kind: str, provider: str,
-    verifier: str = "", ttl_s: int = _DEFAULT_TTL_S,
+    nonce_hash: str = "", ttl_s: int = _DEFAULT_TTL_S,
 ) -> str:
     """A short-TTL JWT binding the flow to this tenant, user, kind, and provider.
 
     Stateless by design (no jti / server-side store): the bound authorization code is single-use at
     the provider's token endpoint, so a replayed state carrying a consumed code fails there.
+    ``nonce_hash`` ties it to the browser's binding cookie (`new_binding`); a state without one
+    is refused by the callback.
     """
     s = get_settings()
     now = utcnow()
     payload = {
         "typ": _STATE_TYP, "tid": tenant_id, "uid": user_id, "kind": kind, "prov": provider,
-        "pkce": verifier,
+        "nh": nonce_hash,
         "iat": int(now.timestamp()), "exp": int((now + timedelta(seconds=ttl_s)).timestamp()),
     }
     return jwt.encode(payload, s.secret_key, algorithm=s.jwt_algorithm)

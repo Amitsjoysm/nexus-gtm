@@ -19,10 +19,10 @@ def test_pkce_pair_is_valid():
 def test_state_sign_verify_round_trip_and_tamper_reject():
     from nexus.network.oauth import sign_state, verify_state
 
-    tok = sign_state(member_id="m1", tenant_id="t1", provider="google", verifier="v123")
+    tok = sign_state(member_id="m1", tenant_id="t1", provider="google", nonce_hash="h123")
     claims = verify_state(tok)
     assert claims and claims["mid"] == "m1" and claims["tid"] == "t1"
-    assert claims["prov"] == "google" and claims["pkce"] == "v123"
+    assert claims["prov"] == "google" and claims["nh"] == "h123" and "pkce" not in claims
 
     assert verify_state(tok + "x") is None          # tampered signature
     assert verify_state("not.a.jwt") is None         # garbage
@@ -35,7 +35,7 @@ def test_state_sign_verify_round_trip_and_tamper_reject():
 def test_state_expires():
     from nexus.network import oauth
 
-    tok = oauth.sign_state(member_id="m1", tenant_id="t1", provider="google", verifier="v",
+    tok = oauth.sign_state(member_id="m1", tenant_id="t1", provider="google", nonce_hash="h",
                            ttl_s=1)
     assert oauth.verify_state(tok) is not None
     time.sleep(2)
