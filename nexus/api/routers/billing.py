@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -302,6 +302,23 @@ async def get_credits(
             for e in entries
         ],
     )
+
+
+@router.get("/quote")
+async def quote_charges(
+    capability: str = Query(..., min_length=3, max_length=64),
+    quantity: int = Query(1, ge=1, le=10_000),
+    ts: TenantSession = Depends(get_tenant_session),
+    _: Principal = Depends(require(Permission.manage_accounts)),
+) -> dict:
+    """What ``quantity`` of ``capability`` would cost and whether it is covered. Spends nothing."""
+    from nexus.billing.quote import quote
+    from nexus.models.billing import BillingCapability
+
+    if await ts.session.get(BillingCapability, capability) is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"Unknown capability {capability!r}.")
+    return await quote(ts, {capability: quantity})
 
 
 @router.get("/invoices", response_model=list[InvoiceOut])

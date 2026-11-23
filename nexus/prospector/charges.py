@@ -40,21 +40,9 @@ async def price(ts, charges: dict[str, int]) -> dict[str, float]:
     on a tiered card (``entitlements._usage_amount``), so a volume ladder would have shown one
     number and charged another. Falls back to the flat card if resolution fails, never raises.
     """
-    from nexus.billing.entitlements import _usage_amount, resolve_entitlement
+    from nexus.billing.quote import price as _price
 
-    flat = await rate_cards(ts)
-    out: dict[str, float] = {}
-    for capability, quantity in sorted(charges.items()):
-        if quantity <= 0:
-            continue
-        try:
-            ent = await resolve_entitlement(ts, capability)
-            amount = await _usage_amount(ts, ent, float(quantity))
-        except Exception:
-            amount = None
-        out[capability] = float(amount) if amount is not None \
-            else quantity * flat.get(capability, 0.0)
-    return out
+    return await _price(ts, charges)
 
 
 async def uses_credits(ts, charges: dict[str, int]) -> bool:
@@ -66,21 +54,9 @@ async def uses_credits(ts, charges: dict[str, int]) -> bool:
     ``legacy-unlimited`` with a ledger of 0, and the dialog read "Not enough credits, balance 0"
     and disabled Save, List, Export and Reveal for a delivery that costs it nothing.
     """
-    from nexus.billing.entitlements import resolve_entitlement
-    from nexus.core.config import get_settings
+    from nexus.billing.quote import uses_credits as _uses
 
-    if get_settings().billing_enforcement == "off":
-        return False
-    for capability, quantity in charges.items():
-        if quantity <= 0:
-            continue
-        try:
-            ent = await resolve_entitlement(ts, capability)
-        except Exception:
-            return True
-        if ent.plan_id is not None and ent.mode not in ("shadow", "unlimited"):
-            return True
-    return False
+    return await _uses(ts, charges)
 
 
 _REASONS = {
@@ -102,25 +78,20 @@ async def affordability(ts, charges: dict[str, int], *, total: float,
     and every workspace while enforcement is in shadow mode, where nothing is refused for money.
     It now asks ``preflight`` exactly as the delivery does.
     """
-    from nexus.billing.entitlements import preflight
+    from nexus.billing.quote import first_refusal
 
-    for capability, quantity in sorted(charges.items()):
-        if quantity <= 0:
-            continue
-        result = await preflight(ts, capability, quantity=quantity)
-        if result.allowed:
-            continue
-        reason = result.reason or "quota_exhausted"
-        if reason == "credits_exhausted":
-            have = "" if balance is None else f" and the balance is {balance:g}"
-            return False, (f"Not enough credits: this needs {total:g}{have}. Choose fewer rows, "
-                           "or add credits in Billing.")
-        if reason == "feature_switch":
-            ent = result.entitlement
-            message = getattr(ent, "switch_message", "") if ent is not None else ""
-            return False, message or "Prospector is switched off right now."
-        return False, _REASONS.get(reason, "This cannot be delivered on your plan.")
-    return True, None
+    refusal = await first_refusal(ts, charges)
+    if refusal is None:
+        return True, None
+    reason, ent = refusal
+    if reason == "credits_exhausted":
+        have = "" if balance is None else f" and the balance is {balance:g}"
+        return False, (f"Not enough credits: this needs {total:g}{have}. Choose fewer rows, "
+                       "or add credits in Billing.")
+    if reason == "feature_switch":
+        message = getattr(ent, "switch_message", "") if ent is not None else ""
+        return False, message or "Prospector is switched off right now."
+    return False, _REASONS.get(reason, "This cannot be delivered on your plan.")
 
 
 async def preflight_all(ts, charges: dict[str, int]) -> None:
