@@ -8,6 +8,10 @@ would allow or allow what it would refuse. Read-only: nothing is recorded, burne
 """
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger("nexus.billing.quote")
+
 _REASONS = {
     "credits_exhausted": "Not enough credits for this. Add credits in Billing, or do less.",
     "disabled": "Your plan does not include this. An admin can change the plan in Billing.",
@@ -42,6 +46,8 @@ async def price(ts, charges: dict[str, int]) -> dict[str, float]:
             ent = await resolve_entitlement(ts, capability)
             amount = await _usage_amount(ts, ent, float(quantity))
         except Exception:
+            logger.warning("quote: pricing %s fell back to the flat card", capability,
+                           exc_info=True)
             amount = None
         out[capability] = float(amount) if amount is not None \
             else quantity * flat.get(capability, 0.0)
@@ -49,7 +55,10 @@ async def price(ts, charges: dict[str, int]) -> dict[str, float]:
 
 
 async def first_refusal(ts, charges: dict[str, int]) -> tuple[str, object] | None:
-    """The first charge `preflight` would refuse, as (reason code, entitlement), or None."""
+    """The first charge `preflight` would refuse, as (reason code, entitlement), or None.
+
+    Each charge is checked ALONE against the whole balance, so two that each fit but not together
+    pass here; `quote()` adds the check on the total."""
     from nexus.billing.entitlements import preflight
 
     for capability, quantity in sorted(charges.items()):
@@ -82,12 +91,23 @@ async def uses_credits(ts, charges: dict[str, int]) -> bool:
 
 
 async def quote(ts, charges: dict[str, int]) -> dict:
-    """``{"credits", "lines", "uses_credits", "balance", "covered", "reason"}``."""
+    """``{"credits", "lines", "uses_credits", "balance", "covered", "reason"}``.
+
+    ``covered`` is the engine's per-charge answer AND whether the whole request fits the balance:
+    `preflight` checks each capability alone, so two lines that each fit but not together would
+    read covered here and the meter would refuse the second. ``credits`` and ``lines`` are rounded
+    for display; the meter charges the unrounded amount. With no credits used, ``credits`` is 0.0
+    and ``balance`` is None.
+    """
     from nexus.billing.credits import balance
 
     lines = await price(ts, charges)
     spends = await uses_credits(ts, charges)
     refusal = await first_refusal(ts, charges)
+    have = await balance(ts) if spends else None
+    total = round(sum(lines.values()), 2) if spends else 0.0
+    if refusal is None and spends and have is not None and total > have:
+        refusal = ("credits_exhausted", None)
     reason = None
     if refusal is not None:
         code, ent = refusal
@@ -96,7 +116,6 @@ async def quote(ts, charges: dict[str, int]) -> dict:
                 or "This is switched off right now."
         else:
             reason = _REASONS.get(code, "This cannot be done on your plan.")
-    return {"credits": round(sum(lines.values()), 2) if spends else 0.0,
-            "lines": {c: round(v, 2) for c, v in lines.items()},
-            "uses_credits": spends, "balance": await balance(ts) if spends else None,
+    return {"credits": total, "lines": {c: round(v, 2) for c, v in lines.items()},
+            "uses_credits": spends, "balance": have,
             "covered": refusal is None, "reason": reason}

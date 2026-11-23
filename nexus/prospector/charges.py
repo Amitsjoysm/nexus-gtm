@@ -22,17 +22,6 @@ from nexus.prospector.pricing import Line
 CHARGED = ("prospector.email", "prospector.phone", "prospector.company")
 
 
-async def rate_cards(ts) -> dict[str, float]:
-    """Credits per unit for each charged capability, as Control plane has them now."""
-    from sqlalchemy import select
-
-    from nexus.models.billing import BillingRateCard
-
-    rows = (await ts.session.scalars(select(BillingRateCard).where(
-        BillingRateCard.capability_id.in_(CHARGED), BillingRateCard.active.is_(True)))).all()
-    return {r.capability_id: float(r.credits_per_unit or 0) for r in rows}
-
-
 async def price(ts, charges: dict[str, int]) -> dict[str, float]:
     """Credits each capability's quantity costs, computed exactly as the meter will charge it.
 
@@ -59,6 +48,8 @@ async def uses_credits(ts, charges: dict[str, int]) -> bool:
     return await _uses(ts, charges)
 
 
+# Prospector's own wording, on purpose; the code-to-reason mapping for everything else is
+# `nexus/billing/quote.py`.
 _REASONS = {
     "disabled": "Your plan does not include saving prospects. An admin can change the plan in "
                 "Billing.",

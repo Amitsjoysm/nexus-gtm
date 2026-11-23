@@ -304,13 +304,22 @@ async def get_credits(
     )
 
 
-@router.get("/quote")
+class QuoteOut(BaseModel):
+    credits: float
+    lines: dict[str, float]
+    uses_credits: bool
+    balance: float | None
+    covered: bool
+    reason: str | None
+
+
+@router.get("/quote", response_model=QuoteOut)
 async def quote_charges(
     capability: str = Query(..., min_length=3, max_length=64),
     quantity: int = Query(1, ge=1, le=10_000),
     ts: TenantSession = Depends(get_tenant_session),
     _: Principal = Depends(require(Permission.manage_accounts)),
-) -> dict:
+) -> QuoteOut:
     """What ``quantity`` of ``capability`` would cost and whether it is covered. Spends nothing."""
     from nexus.billing.quote import quote
     from nexus.models.billing import BillingCapability
