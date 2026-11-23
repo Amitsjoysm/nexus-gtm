@@ -112,6 +112,7 @@ async def test_in_shadow_mode_the_quote_agrees_with_preflight(client, monkeypatc
 
 async def test_a_line_the_meter_does_not_burn_is_not_in_the_total(client, monkeypatch):
     from nexus.billing.credits import balance, burn_credits
+    from nexus.billing import quote as quote_module
     from nexus.billing.quote import quote
 
     monkeypatch.setattr(get_settings(), "billing_enforcement", "on")
@@ -119,9 +120,37 @@ async def test_a_line_the_meter_does_not_burn_is_not_in_the_total(client, monkey
     async with tenant_session(tid) as ts:
         await burn_credits(ts, await balance(ts) - 10, reason="test",
                            idempotency_key=uuid.uuid4().hex)
-        q = await quote(ts, {"enrich.contact": 2, "seat.member": 1})
-    assert q["covered"] is True, q
-    assert q["credits"] == q["lines"]["enrich.contact"]
+        request = {"enrich.contact": 2, "discovery.account_added": 1}   # 8 and 5 credits, of 10
+        real = quote_module._credit_funded
+
+        async def _only_contacts_burn(ts_, capability):
+            return capability == "enrich.contact" if capability in request \
+                else await real(ts_, capability)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(quote_module, "_credit_funded", _only_contacts_burn)
+            patched = await quote(ts, request)
+        unpatched = await quote(ts, request)
+    assert patched["covered"] is True and patched["credits"] == 8, patched
+    assert unpatched["covered"] is False, "the patch, not the data, changed the answer"
+
+
+async def test_credit_funded_is_false_with_no_subscription_and_true_on_launch(client, monkeypatch):
+    from nexus.billing.quote import _credit_funded
+    from nexus.models.billing import BillingSubscription
+
+    monkeypatch.setattr(get_settings(), "billing_enforcement", "on")
+    _, launch = await _paid_workspace(client, "bq9")
+    token = await signup(client, slug="bq10", email="o@bq10.io", company="BQ10")
+    bare = principal_from_token(token).tenant_id
+    async with tenant_session(bare) as ts:
+        for sub in (await ts.session.scalars(
+                ts.select(BillingSubscription))).all():
+            await ts.session.delete(sub)
+        await ts.flush()
+        assert await _credit_funded(ts, "enrich.contact") is False
+    async with tenant_session(launch) as ts:
+        assert await _credit_funded(ts, "enrich.contact") is True
 
 
 async def test_with_billing_off_nothing_uses_credits(client, monkeypatch):
