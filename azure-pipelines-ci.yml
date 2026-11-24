@@ -155,11 +155,37 @@ stages:
             inputs: { versionSpec: $(PYTHON_VERSION) }
             displayName: Use Python $(PYTHON_VERSION)
 
-          # ruff is a single pinned wheel — a pip cache here would cost more than it saves.
+          # THE PINNED BINARY FROM GITHUB, NOT A PyPI INSTALL — the same shape as the gitleaks
+          # step above, for the same reason.
+          #
+          # `pip install 'ruff>=0.5'` put pypi.org between a clean commit and a green build, and
+          # pypi.org took that chance twice. Build 49 (2026-11-05) got five read timeouts; a build
+          # on 2026-11-24 got `SSLEOFError: UNEXPECTED_EOF_WHILE_READING` on /simple/ruff/ and sat
+          # there for eleven minutes — PIP_RETRIES=10 at PIP_DEFAULT_TIMEOUT=60 cannot fix a torn
+          # TLS connection, it only takes ten minutes to admit it — until the 15-minute job timeout
+          # cancelled the stage. The agent logged 0.55%-1.50% CPU throughout: it was never linting,
+          # it was waiting on a socket. A lint that takes 9 seconds on GitHub must not be able to
+          # cost a quarter of an hour and a red master.
+          #
+          # One `curl` of one file, no index, no dependency resolution. The checksum is verified
+          # because this downloads an executable and then runs it over the whole tree.
+          #
+          # PINNED EXACTLY, and that is the second fix here: `>=0.5` meant a ruff release adding a
+          # rule could turn master red with no commit behind it — precisely what the gitleaks
+          # comment above warns about for scanners. Bump this deliberately, with the diff visible.
           - bash: |
               set -euo pipefail
-              pip install --quiet 'ruff>=0.5'
-              ruff check nexus tests
+              RUFF_VERSION=0.17.6
+              TARBALL=ruff-x86_64-unknown-linux-gnu.tar.gz
+              BASE="https://github.com/astral-sh/ruff/releases/download/${RUFF_VERSION}"
+              curl -sSfL -o "/tmp/${TARBALL}" "${BASE}/${TARBALL}"
+              curl -sSfL -o "/tmp/${TARBALL}.sha256" "${BASE}/${TARBALL}.sha256"
+              (cd /tmp && sha256sum -c "${TARBALL}.sha256")
+              # The tarball holds ruff-x86_64-unknown-linux-gnu/ruff, not a bare binary.
+              tar -xzf "/tmp/${TARBALL}" -C /tmp --strip-components=1 \
+                ruff-x86_64-unknown-linux-gnu/ruff
+              /tmp/ruff --version
+              /tmp/ruff check nexus tests
             displayName: Lint (ruff)
             condition: and(succeeded(), eq(variables.backend, 'true'))
 
