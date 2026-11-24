@@ -93,7 +93,10 @@ patch, and the same container image runs both the API (`uvicorn`) and the worker
 | **quality-gate** | aggregate job that `needs` all the above — set this as the **single required status check** in branch protection. |
 | deps-audit | `pip-audit` + `npm audit` (advisory / non-blocking — promote to a gate once clean). |
 
-**`.github/workflows/cd.yml`** (on `v*` tag or manual dispatch):
+**`.github/workflows/cd.yml`** (on `v*` tag or manual dispatch — **the job is skipped unless
+`vars.AWS_REGION` is set**, so a tagged release shows it as skipped rather than failing while this
+deployment ships to Azure Container Apps via `azure-pipelines-cd.yml`; set the variables below and
+it deploys on the next tag):
 - `environment: production` → optional **required-reviewer approval gate**.
 - OIDC-assume an AWS role (no long-lived keys), build + push to ECR (SHA + version tags), then
   `aws ecs update-service --force-new-deployment` for app + worker, **wait for `services-stable`**,

@@ -31,6 +31,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production # add required reviewers here for a manual approval gate
+    # RUNS ONLY ONCE AWS IS ACTUALLY CONFIGURED. The tag trigger above is unchanged — a release
+    # still starts this workflow — but with no AWS variables set the job is SKIPPED rather than
+    # attempted, and a skipped job does not fail the run.
+    #
+    # Without this guard the first step (`configure-aws-credentials`) died on
+    # "Input required and not supplied: aws-region", because `vars.AWS_REGION` resolves to an empty
+    # string when the variable has never been set on the repository. That happened on all 17 tags
+    # from v1.0.0 to v1.13.2 — every tagged release since the repo began, each failing in under
+    # 20 seconds having deployed nothing. This product ships through `azure-pipelines-cd.yml` to
+    # Azure Container Apps, so the red CD beside a green CI was pure noise, and noise on the deploy
+    # column is how a real deploy failure gets ignored.
+    #
+    # Deliberately a condition on configuration rather than a disabled trigger or
+    # `continue-on-error`: the day someone sets the four repository variables and the OIDC role,
+    # this starts deploying on the next tag with no edit here — and until then it never reports a
+    # failure it cannot avoid. `continue-on-error` would still run it, still fail, and merely
+    # swallow the result, which hides a genuine AWS breakage later.
+    if: vars.AWS_REGION != ''
     steps:
       - uses: actions/checkout@v4
         with:
