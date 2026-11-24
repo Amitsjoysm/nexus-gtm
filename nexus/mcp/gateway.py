@@ -53,11 +53,15 @@ _ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("GET", "/api/engagement/campaigns"),
         ("POST", f"/api/engagement/campaigns/{_ID}/contacts"),
         ("GET", "/api/billing/credits"),
+        # A tool's preview prices the call and spends nothing (2026-11-20).
+        ("GET", "/api/billing/quote"),
         ("POST", "/api/agents/research/run"),
         ("POST", "/api/agents/messaging/run"),
-        # Prospector: search masked (read), save charged per field (write).
+        # Prospector: search masked (read), save charged per field (write), and the save's
+        # read-only quote for its preview.
         ("POST", "/api/prospector/search"),
         ("POST", "/api/prospector/deliver"),
+        ("POST", "/api/prospector/quote"),
         # 2026-10-19, most of the product (owner decisions): never approve, launch, send or dial.
         ("GET", "/api/analytics/overview"),
         ("GET", "/api/engagement/today"),

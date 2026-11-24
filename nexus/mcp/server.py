@@ -16,6 +16,7 @@ from nexus.mcp import protocol, safety, schema
 from nexus.mcp.credentials import Actor
 from nexus.mcp.gateway import Gateway, ToolOutcome
 from nexus.mcp.tools import TOOLS, by_name, describe, load_prices
+from nexus.mcp.tools import preview as previews
 from nexus.mcp.brand import PRODUCT_NAME, SERVER_ID
 
 logger = logging.getLogger("nexus.mcp.server")
@@ -74,6 +75,30 @@ async def _audit(actor: Actor, tool: str, args: dict, outcome: str) -> None:
         logger.warning("could not audit MCP call %s", tool, exc_info=True)
 
 
+async def run_tool(spec, gw: Gateway, args: dict) -> ToolOutcome:
+    """Preview, or run the handler exactly as before (owner, 2026-11-20).
+
+    A preview runs no handler. Otherwise the handler gets the arguments without `preview`, which
+    an old call never carried, so it reaches the handler unchanged. A paid call's result gains
+    `credits_spent` (the balance's change over the call) and `balance_after`; a free tool's result
+    and every refusal are returned untouched."""
+    if spec.previewable:
+        if args.get("preview"):
+            return await (spec.preview_fn(gw, args) if spec.preview_fn
+                          else previews.generic(gw, spec, args))
+        args = {k: v for k, v in args.items() if k != "preview"}
+    if not spec.costs_credits:
+        return await spec.handler(gw, args)
+    before = await previews.balance(gw)
+    outcome = await spec.handler(gw, args)
+    if outcome.ok and isinstance(outcome.data, dict):
+        after = await previews.balance(gw)
+        spent = round(before - after, 2) if before is not None and after is not None else None
+        outcome = ToolOutcome(True, {**outcome.data, "credits_spent": spent,
+                                     "balance_after": after}, outcome.message, outcome.status)
+    return outcome
+
+
 async def call_tool(app, actor: Actor, params: dict) -> dict:
     from nexus.core import metrics
 
@@ -88,17 +113,19 @@ async def call_tool(app, actor: Actor, params: dict) -> dict:
                      f"change its permissions in {PRODUCT_NAME} > Settings > AI apps.",
         }, is_error=True)
     try:
-        args = schema.validate(spec.input_schema, params.get("arguments"))
+        args = schema.validate(spec.schema(), params.get("arguments"))
     except schema.SchemaError as exc:
         raise protocol.ProtocolError(protocol.INVALID_PARAMS, str(exc)) from exc
+    previewed = spec.previewable and bool(args.get("preview"))
     try:
-        outcome = await spec.handler(Gateway(app, actor), args)
+        outcome = await run_tool(spec, Gateway(app, actor), args)
     except ValueError as exc:  # a path the gateway refused: a bug, never the user's fault
         logger.error("tool %s built a path the gateway refused: %s", name, exc)
         outcome = ToolOutcome(False, None, "This tool could not run.", 500)
     status = "ok" if outcome.ok else "error"
-    metrics.record_mcp_tool(name, status)
-    if spec.scope != "read":
+    metrics.record_mcp_tool(name, "preview" if previewed else status)
+    # A preview changed nothing, so it leaves no audit row.
+    if spec.scope != "read" and not previewed:
         await _audit(actor, name, args, status if outcome.ok else f"error:{outcome.status}")
     if outcome.ok:
         return _tool_result(outcome.data, is_error=False)

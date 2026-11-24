@@ -323,7 +323,7 @@
     {
       "name": "find_contacts",
       "title": "Find contacts at an account",
-      "description": "Find the buying committee at an account: new people matching the workspace's target titles, with verified emails where one can be found. Found people are saved to the account. Costs credits, as in the app; the balance is checked first.",
+      "description": "Find the buying committee at an account: new people matching the workspace's target titles, with verified emails where one can be found. Found people are saved to the account. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -341,6 +341,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -359,7 +363,7 @@
     {
       "name": "find_similar_companies",
       "title": "Find similar companies",
-      "description": "Companies similar to an account, scored against the workspace's ideal customer profile. Nothing is added; use create_account for the ones to keep. Costs credits, as in the app; the balance is checked first.",
+      "description": "Companies similar to an account, scored against the workspace's ideal customer profile. Nothing is added; use create_account for the ones to keep. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -377,6 +381,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -395,7 +403,7 @@
     {
       "name": "enrich_contact",
       "title": "Enrich a contact",
-      "description": "Find and verify a contact's work email (and phone where available) and save it to the contact. Costs credits, as in the app; the balance is checked first.",
+      "description": "Find and verify a contact's work email (and phone where available) and save it to the contact. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -407,6 +415,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -425,7 +437,7 @@
     {
       "name": "research_account",
       "title": "Research an account",
-      "description": "A research brief on an account: what the company does, recent signals, and talking points tied to the workspace's value propositions. Costs credits, as in the app; the balance is checked first.",
+      "description": "A research brief on an account: what the company does, recent signals, and talking points tied to the workspace's value propositions. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -437,6 +449,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -455,7 +471,7 @@
     {
       "name": "draft_email",
       "title": "Draft an email to a contact",
-      "description": "Write a short cold email to a contact from their company's signals and the workspace's value propositions and email style. Returns subject and body. Nothing is sent or saved. Costs credits, as in the app; the balance is checked first.",
+      "description": "Write a short cold email to a contact from their company's signals and the workspace's value propositions and email style. Returns subject and body. Nothing is sent or saved. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -472,6 +488,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -490,7 +510,7 @@
     {
       "name": "enrich_account",
       "title": "Enrich an account",
-      "description": "Fill in a company's firmographics (industry, size, location, revenue, tech stack, LinkedIn page) from public sources and save them to the account. Costs credits, as in the app; the balance is checked first.",
+      "description": "Fill in a company's firmographics (industry, size, location, revenue, tech stack, LinkedIn page) from public sources and save them to the account. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -502,6 +522,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -520,7 +544,7 @@
     {
       "name": "verify_email",
       "title": "Verify a contact's email",
-      "description": "Re-check a contact's saved email with a live mailbox check. A valid, risky or catch-all address is kept; an invalid or missing one starts a search for the right address, charged as enriching a contact instead. Costs credits, as in the app; the balance is checked first.",
+      "description": "Re-check a contact's saved email with a live mailbox check. A valid, risky or catch-all address is kept; an invalid or missing one starts a search for the right address, charged as enriching a contact instead. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -532,6 +556,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -550,7 +578,7 @@
     {
       "name": "find_phone",
       "title": "Find a contact's phone number",
-      "description": "Look up a contact's direct phone number and save it to the contact. A number already found is answered without a new search. Costs credits, as in the app; the balance is checked first.",
+      "description": "Look up a contact's direct phone number and save it to the contact. A number already found is answered without a new search. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -562,6 +590,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -580,7 +612,7 @@
     {
       "name": "refresh_account",
       "title": "Refresh an account now",
-      "description": "Collect the latest buying signals for an account now (news, hiring, funding, the company's own site) and re-score it, instead of waiting for its scheduled refresh. Can take a minute. Costs credits, as in the app; the balance is checked first.",
+      "description": "Collect the latest buying signals for an account now (news, hiring, funding, the company's own site) and re-score it, instead of waiting for its scheduled refresh. Can take a minute. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -592,6 +624,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -610,7 +646,7 @@
     {
       "name": "find_similar_people",
       "title": "Find people similar to a contact",
-      "description": "People who resemble a contact (role, seniority, kind of company). mode 'existing' ranks the workspace's own contacts and is free; mode 'new' finds people outside the workspace and is charged for each one returned. Costs credits, as in the app; the balance is checked first.",
+      "description": "People who resemble a contact (role, seniority, kind of company). mode 'existing' ranks the workspace's own contacts and is free; mode 'new' finds people outside the workspace and is charged for each one returned. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -636,6 +672,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -654,7 +694,7 @@
     {
       "name": "add_icp_companies",
       "title": "Add companies matching the ICP",
-      "description": "Add up to the given number of NEW companies matching the workspace's ideal customer profile, as the Relevance page's Populate does. Needs a saved profile; runs in the background. Use get_workspace_overview to see the profile first, and confirm the count with the user. Costs credits, as in the app; the balance is checked first.",
+      "description": "Add up to the given number of NEW companies matching the workspace's ideal customer profile, as the Relevance page's Populate does. Needs a saved profile; runs in the background. Use get_workspace_overview to see the profile first, and confirm the count with the user. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -662,6 +702,10 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 100
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -680,7 +724,7 @@
     {
       "name": "draft_reply",
       "title": "Draft a reply to a buyer",
-      "description": "Suggest an answer to a reply waiting on the reply desk (from list_queue kind 'replies'), written from the conversation and the workspace's style. Nothing is sent or saved. Costs credits, as in the app; the balance is checked first.",
+      "description": "Suggest an answer to a reply waiting on the reply desk (from list_queue kind 'replies'), written from the conversation and the workspace's style. Nothing is sent or saved. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -692,6 +736,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -710,7 +758,7 @@
     {
       "name": "create_campaign_draft",
       "title": "Create a campaign draft",
-      "description": "Create an outreach campaign as a DRAFT sending from the user's own mailbox: who it goes to (a saved list, contacts, or everyone with an email at accounts), its steps (a sequence template, or an opening email and one follow-up), and, unless told not to, its opening emails written for review. Never approves, launches or sends. Costs credits, as in the app; the balance is checked first.",
+      "description": "Create an outreach campaign as a DRAFT sending from the user's own mailbox: who it goes to (a saved list, contacts, or everyone with an email at accounts), its steps (a sequence template, or an opening email and one follow-up), and, unless told not to, its opening emails written for review. Never approves, launches or sends. Costs credits, as in the app; the balance is checked first. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -753,6 +801,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -942,7 +994,7 @@
     {
       "name": "add_contacts_to_campaign",
       "title": "Add contacts to a campaign",
-      "description": "Add people to a campaign: named contacts, everyone with an email at named accounts, or a whole list. Nothing is sent: drafts wait for the user's review in the app.",
+      "description": "Add people to a campaign: named contacts, everyone with an email at named accounts, or a whole list. Nothing is sent: drafts wait for the user's review in the app. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -969,6 +1021,10 @@
           "list_id": {
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false,
@@ -1047,7 +1103,7 @@
     {
       "name": "prospector_save",
       "title": "Save prospects to the workspace",
-      "description": "Save rows from prospector_search into the workspace (or onto a list), or add the people's companies to an account list. Costs credits per email (include_emails, on by default), direct phone (include_phones) or company delivered, each charged once; emails and phones can be bought separately, and a person already saved gets only what they were missing. The balance is checked first. Pass the same view, scope and filters as the search.",
+      "description": "Save rows from prospector_search into the workspace (or onto a list), or add the people's companies to an account list. Costs credits per email (include_emails, on by default), direct phone (include_phones) or company delivered, each charged once; emails and phones can be bought separately, and a person already saved gets only what they were missing. The balance is checked first. Pass the same view, scope and filters as the search. preview=true shows what it will do and the most it can cost, without doing it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1114,6 +1170,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{8,64}$",
             "description": "Optional. Reuse the same value when retrying this exact call, so it is answered from the first attempt instead of running (and charging) twice."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Optional. true: change nothing and answer what this call would do, the most it can cost and the balance. Use it, and ask the user, before anything that costs credits. Leave out to run the call."
           }
         },
         "additionalProperties": false

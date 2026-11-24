@@ -98,6 +98,8 @@ RESEARCH: tuple[ToolSpec, ...] = (
         input_schema=obj({"reply_id": ID, "request_id": REQUEST_ID}, ("reply_id",)),
         handler=_draft_reply, price_capability="ai.reply_draft", price_unit="per draft",
         calls=(("POST", "/api/engagement/desk/{id}/draft"),),
+        previewable=True,
+        will=lambda a: "Write a suggested answer to this reply; nothing is sent or saved.",
     ),
     ToolSpec(
         name="create_campaign_draft", title="Create a campaign draft", scope="research",
@@ -120,6 +122,12 @@ RESEARCH: tuple[ToolSpec, ...] = (
         calls=(("GET", "/api/engagement/mailboxes"), ("POST", "/api/engagement/campaigns"),
                ("POST", "/api/engagement/campaigns/{id}/contacts"),
                ("POST", "/api/engagement/campaigns/{id}/draft")),
+        # The handler drafts at most 25 opening emails (its `limit` on the draft call).
+        previewable=True, units=lambda a: 25 if a.get("draft_first_emails", True) else 0,
+        will=lambda a: (f"Create the campaign draft '{a['name']}'"
+                        + (" and write its opening emails (at most 25) for review"
+                           if a.get("draft_first_emails", True) else "")
+                        + "; nothing is sent."),
     ),
 )
 

@@ -16,7 +16,7 @@ ones and the order ``tools/list`` answers in.
 from __future__ import annotations
 
 from nexus.mcp.gateway import Gateway, ToolOutcome
-from nexus.mcp.tools import calling, discovery, engagement, enrichment, records, workspace
+from nexus.mcp.tools import calling, discovery, engagement, enrichment, preview, records, workspace
 from nexus.mcp.tools.common import ID as _ID, IDS as _IDS, fail as _fail, link as _link
 from nexus.mcp.tools.common import obj as _obj, ok as _ok
 from nexus.mcp.tools.registry import REQUEST_ID, ToolSpec
@@ -160,9 +160,8 @@ def _row_refs(rows: list) -> list[dict] | None:
     return out
 
 
-async def _prospector_save(gw: Gateway, args: dict) -> ToolOutcome:
-    import uuid
-
+def _prospector_selection(args: dict) -> dict | ToolOutcome:
+    """The selection the save and its quote both send, or the refusal when the call names none."""
     rows, limit = args.get("rows") or [], args.get("all_matching_limit")
     if not rows and not limit:
         return ToolOutcome(False, None, "Give rows from prospector_search, or "
@@ -177,6 +176,15 @@ async def _prospector_save(gw: Gateway, args: dict) -> ToolOutcome:
         selection["rows"] = refs
     else:
         selection["all_matching"] = {"limit": limit}
+    return selection
+
+
+async def _prospector_save(gw: Gateway, args: dict) -> ToolOutcome:
+    import uuid
+
+    selection = _prospector_selection(args)
+    if isinstance(selection, ToolOutcome):
+        return selection
     request_id = args.get("request_id") or uuid.uuid4().hex
     body = {"selection": selection, "action": args["action"], "list_id": args.get("list_id"),
             "include_emails": args.get("include_emails", True),
@@ -188,6 +196,32 @@ async def _prospector_save(gw: Gateway, args: dict) -> ToolOutcome:
     data["note"] = (f"Saved in {PRODUCT_NAME}. Read a record with fetch ('contact:<id>' or "
                     "'account:<id>'); its email is held out of campaigns until verified.")
     return _ok(data)
+
+
+_SAVE_WHERE = {"save": " to the workspace", "list": " to the workspace and onto the list",
+               "company_list": " as their companies on the account list"}
+
+
+async def _prospector_save_preview(gw: Gateway, args: dict) -> ToolOutcome:
+    """Prospector's own quote, the one its confirm dialog reads: priced per field delivered,
+    free for what the workspace already paid for. Read-only, behind Prospector's module gate."""
+    selection = _prospector_selection(args)
+    if isinstance(selection, ToolOutcome):
+        return selection
+    q = await gw.post("/api/prospector/quote", json={
+        "selection": selection, "action": args["action"],
+        "include_emails": args.get("include_emails", True),
+        "include_phones": args["include_phones"]})
+    if not q.ok:
+        return _fail(q)
+    d = q.data or {}
+    will = (f"Save {d.get('records', 0)} prospect records{_SAVE_WHERE.get(args['action'], '')}"
+            + (f" ({d['already_paid']} already paid for, free)" if d.get("already_paid") else "")
+            + ".")
+    return preview.answer(will, credits=float(d.get("total_credits") or 0),
+                          uses=bool(d.get("uses_credits", True)),
+                          covered=bool(d.get("enough", True)), reason=d.get("reason"),
+                          balance=d.get("balance"), quote=d)
 
 
 # ---- research --------------------------------------------------------------------------------
@@ -433,6 +467,9 @@ TOOLS: tuple[ToolSpec, ...] = (
         handler=_find_contacts, price_capability="enrich.contact",
         price_unit="for each contact found",
         calls=(("POST", "/api/accounts/{id}/source-contacts"),),
+        previewable=True, units=lambda a: a.get("limit", 5),
+        will=lambda a: f"Find up to {a.get('limit', 5)} buyers at this account and verify their "
+                       "emails.",
     ),
     ToolSpec(
         name="find_similar_companies", title="Find similar companies", scope="research",
@@ -446,6 +483,9 @@ TOOLS: tuple[ToolSpec, ...] = (
         handler=_find_similar, price_capability="discovery.lookalike_company",
         price_unit="for each company returned",
         calls=(("POST", "/api/accounts/{id}/lookalikes"),),
+        previewable=True, units=lambda a: a.get("limit", 10),
+        will=lambda a: f"Find up to {a.get('limit', 10)} companies similar to this account, scored "
+                       "against the ideal customer profile; nothing is added.",
     ),
     ToolSpec(
         name="enrich_contact", title="Enrich a contact", scope="research",
@@ -454,6 +494,9 @@ TOOLS: tuple[ToolSpec, ...] = (
         input_schema=_obj({"contact_id": _ID, "request_id": REQUEST_ID}, ("contact_id",)),
         handler=_enrich_contact, price_capability="enrich.contact", price_unit="per contact",
         calls=(("POST", "/api/accounts/contacts/{id}/enrich"),),
+        previewable=True,
+        will=lambda a: "Find and verify this contact's work email (and phone where available) "
+                       "and save it to the contact.",
     ),
     ToolSpec(
         name="research_account", title="Research an account", scope="research",
@@ -462,6 +505,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         input_schema=_obj({"account_id": _ID, "request_id": REQUEST_ID}, ("account_id",)),
         handler=_research_account, price_capability="ai.research_brief", price_unit="per brief",
         calls=(("POST", "/api/agents/research/run"),),
+        previewable=True, will=lambda a: "Research this account's recent news and website.",
     ),
     ToolSpec(
         name="draft_email", title="Draft an email to a contact", scope="research",
@@ -476,6 +520,7 @@ TOOLS: tuple[ToolSpec, ...] = (
         }, ("contact_id",)),
         handler=_draft_email, price_capability="ai.email_draft", price_unit="per draft",
         calls=(("GET", "/api/contacts/{id}"), ("POST", "/api/agents/messaging/run")),
+        previewable=True, will=lambda a: "Write an email to this contact; nothing is sent.",
     ),
     *enrichment.RESEARCH,
     *discovery.RESEARCH,
@@ -529,6 +574,8 @@ TOOLS: tuple[ToolSpec, ...] = (
             "campaign_id": _ID, "contact_ids": _IDS, "account_ids": _IDS, "list_id": _ID,
         }, ("campaign_id",)),
         handler=_add_to_campaign, calls=(("POST", "/api/engagement/campaigns/{id}/contacts"),),
+        previewable=True,
+        will=lambda a: "Add these people to the campaign draft; nothing is sent.",
     ),
     ToolSpec(
         name="complete_inbox_task", title="Complete an inbox task", scope="write",
@@ -573,7 +620,8 @@ TOOLS: tuple[ToolSpec, ...] = (
             "request_id": REQUEST_ID,
         }),
         handler=_prospector_save, idempotent=True,
-        calls=(("POST", "/api/prospector/deliver"),),
+        calls=(("POST", "/api/prospector/deliver"), ("POST", "/api/prospector/quote")),
+        previewable=True, spends=True, preview_fn=_prospector_save_preview,
     ),
     *workspace.WRITE,
     *engagement.WRITE,

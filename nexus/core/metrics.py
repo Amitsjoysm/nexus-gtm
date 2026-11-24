@@ -245,7 +245,7 @@ def record_mcp_tool(tool: str, outcome: str) -> None:
     _observe(
         _counter(
             "nexus_mcp_tool_calls_total",
-            "MCP tool calls by tool and outcome (ok, error, refused).",
+            "MCP tool calls by tool and outcome (ok, error, refused, preview).",
             ("tool", "outcome"),
         ),
         {"tool": tool, "outcome": outcome},

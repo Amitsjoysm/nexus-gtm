@@ -5,6 +5,7 @@ credits exactly as the matching button in the app does; the server checks the ba
 from __future__ import annotations
 
 from nexus.mcp.gateway import Gateway, ToolOutcome
+from nexus.mcp.tools import preview
 from nexus.mcp.tools.common import ID, fail, link, obj, ok
 from nexus.mcp.tools.registry import REQUEST_ID, ToolSpec
 
@@ -48,6 +49,16 @@ async def _find_similar_people(gw: Gateway, args: dict) -> ToolOutcome:
                        "are added from the app's Similar people panel."})
 
 
+async def _verify_email_preview(gw: Gateway, args: dict) -> ToolOutcome:
+    """The most a re-check can cost. A kept address is one email check, but an invalid or missing
+    one starts a search charged as enriching a contact instead, which costs more, so that is the
+    price quoted: a preview states the most a call can cost."""
+    return await preview.quote(
+        gw, "enrich.contact", 1,
+        "Re-check this contact's email with a live mailbox check; if it is invalid or missing, "
+        "search for the right address instead (charged as enriching a contact).")
+
+
 RESEARCH: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="enrich_account", title="Enrich an account", scope="research",
@@ -56,6 +67,9 @@ RESEARCH: tuple[ToolSpec, ...] = (
         input_schema=obj({"account_id": ID, "request_id": REQUEST_ID}, ("account_id",)),
         handler=_enrich_account, price_capability="enrich.account", price_unit="per account",
         calls=(("POST", "/api/accounts/{id}/enrich"),),
+        previewable=True,
+        will=lambda a: "Fill in this company's firmographics from public sources and save them "
+                       "to the account.",
     ),
     ToolSpec(
         name="verify_email", title="Verify a contact's email", scope="research",
@@ -65,6 +79,7 @@ RESEARCH: tuple[ToolSpec, ...] = (
         input_schema=obj({"contact_id": ID, "request_id": REQUEST_ID}, ("contact_id",)),
         handler=_verify_email, price_capability="verify.email", price_unit="per check",
         calls=(("POST", "/api/accounts/contacts/{id}/reverify"),),
+        previewable=True, preview_fn=_verify_email_preview,
     ),
     ToolSpec(
         name="find_phone", title="Find a contact's phone number", scope="research",
@@ -73,6 +88,8 @@ RESEARCH: tuple[ToolSpec, ...] = (
         input_schema=obj({"contact_id": ID, "request_id": REQUEST_ID}, ("contact_id",)),
         handler=_find_phone, price_capability="enrich.phone", price_unit="per contact",
         calls=(("POST", "/api/contacts/{id}/enrich-phone"),),
+        previewable=True,
+        will=lambda a: "Look up this contact's direct phone number and save it to the contact.",
     ),
     ToolSpec(
         name="refresh_account", title="Refresh an account now", scope="research",
@@ -82,6 +99,8 @@ RESEARCH: tuple[ToolSpec, ...] = (
         input_schema=obj({"account_id": ID, "request_id": REQUEST_ID}, ("account_id",)),
         handler=_refresh_account, price_capability="workflow.orchestration_run",
         price_unit="per refresh", calls=(("POST", "/api/agents/pipeline/{id}"),),
+        previewable=True,
+        will=lambda a: "Collect this account's latest buying signals now and re-score it.",
     ),
     ToolSpec(
         name="find_similar_people", title="Find people similar to a contact", scope="research",
@@ -97,5 +116,13 @@ RESEARCH: tuple[ToolSpec, ...] = (
         handler=_find_similar_people, price_capability="discovery.lookalike_contact",
         price_unit="for each new person returned (mode 'new' only)",
         calls=(("POST", "/api/accounts/contacts/{id}/lookalikes"),),
+        # Mode 'existing' ranks the workspace's own contacts and is free.
+        previewable=True,
+        units=lambda a: a.get("limit", 10) if a.get("mode") == "new" else 0,
+        will=lambda a: (f"Find up to {a.get('limit', 10)} people outside the workspace who "
+                        "resemble this contact; nothing is added."
+                        if a.get("mode") == "new" else
+                        "Rank the workspace's own contacts by how much they resemble this "
+                        "contact; nothing is added."),
     ),
 )

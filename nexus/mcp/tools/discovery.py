@@ -29,5 +29,8 @@ RESEARCH: tuple[ToolSpec, ...] = (
         input_schema=obj({"count": {"type": "integer", "minimum": 1, "maximum": 100}}, ("count",)),
         handler=_add_icp_companies, price_capability="discovery.account_added",
         price_unit="for each company added", calls=(("POST", "/api/discovery/populate"),),
+        previewable=True, units=lambda a: a["count"],
+        will=lambda a: f"Add up to {a['count']} new companies matching the ideal customer "
+                       "profile, in the background.",
     ),
 )
