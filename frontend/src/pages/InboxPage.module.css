@@ -169,8 +169,20 @@
 }
 
 .actionCell {
-  width: 170px;
+  width: 230px;
   text-align: right;
+}
+
+/* Two destinations now sit in the action cell — the company's page in the product, and the task's
+   own action — so an inner wrapper lays them out. Deliberately NOT `display: flex` on the `td`
+   itself: that takes the cell out of the table layout model and the columns stop lining up. It
+   wraps rather than widening the column further, because the task text is what a rep reads first. */
+.actionGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .rowToggle {

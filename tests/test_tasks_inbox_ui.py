@@ -59,6 +59,27 @@ def test_an_inbox_row_opens_in_place_to_the_person_the_company_and_the_history()
     assert "api.getContact(row.contactId, s)" in page
 
 
+def test_a_signal_row_reaches_the_account_without_leaving_the_product():
+    """A signal's own action opens its SOURCE on a third-party site.
+
+    So for every signal carrying a `signal_url` the row's only button led a rep out of InfoJoy GTM,
+    and the company's page was reachable only by expanding the row and clicking its name — reported
+    as being unable to open accounts from the Signals inbox (2026-11-24). The in-product
+    destination is now a button of its own, in the row and in the opened row.
+    """
+    page = _read(PAGES / "InboxPage.tsx")
+    assert "function accountHref(row: Row): string | null" in page
+    # Not a second button when the action is already the account page (a signal with no source URL).
+    assert "return row.action.to === to ? null : to;" in page
+    # The collapsed row: the account link sits beside the task's own action.
+    assert "const accountTo = accountHref(row);" in page
+    assert "<ButtonLink size=\"sm\" variant=\"ghost\" to={accountTo}" in page
+    # The opened row reaches it too, rather than only through the company name.
+    assert 'to={`/accounts/${companyId}`}' in page
+    # The evidence link is kept: the fix adds a destination, it does not replace the source.
+    assert '{ label: "Open signal", to: task.signal_url, external: true }' in page
+
+
 def test_the_history_panel_mounts_with_one_line_on_each_page():
     account = _read(PAGES / "AccountDetailPage.tsx")
     assert account.count("<ActivityPanel") == 1

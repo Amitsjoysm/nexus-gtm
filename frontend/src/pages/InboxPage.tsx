@@ -118,6 +118,23 @@ function fromSignal(task: InboxTask): Row {
   };
 }
 
+/** The company's own page in InfoJoy GTM, or ``null`` when the row's action already goes there.
+ *
+ * A signal's action opens its SOURCE — a news story, an ATS board — on a third-party site, so for
+ * every signal that had one the row's only button led a rep OUT of the product, and the company's
+ * own page was reachable only by expanding the row first and then clicking its name. Reps reported
+ * being unable to open accounts from the Signals inbox at all (2026-11-24).
+ *
+ * The source link stays, because it is the evidence for why the task exists. This adds the
+ * destination a rep actually works from, and returns ``null`` when the action is already that page,
+ * so a signal with no source URL does not render the same button twice.
+ */
+function accountHref(row: Row): string | null {
+  if (!row.accountId) return null;
+  const to = `/accounts/${row.accountId}`;
+  return row.action.to === to ? null : to;
+}
+
 function dueLabel(row: Row): string {
   if (row.due === "overdue") return `Overdue · ${timeAgo(row.at).replace(" ago", "")}`;
   if (row.at && new Date(row.at).getTime() > Date.now()) {
@@ -330,6 +347,7 @@ function TaskRow({
   // the reason is the task; otherwise the title says what it is.
   const lead = row.who ? row.detail : row.title;
   const sub = row.who ? "" : row.detail;
+  const accountTo = accountHref(row);
   return (
     <>
       <tr className={open ? `${styles.row} ${styles.rowOpen}` : styles.row}>
@@ -351,10 +369,18 @@ function TaskRow({
           <span className={row.due === "overdue" ? styles.overdue : styles.today}>{dueLabel(row)}</span>
         </td>
         <td className={styles.actionCell}>
-          <ButtonLink size="sm" variant="secondary" to={row.action.to}
-            {...(row.action.external ? { target: "_blank", rel: "noreferrer noopener" } : {})}>
-            {row.action.label}
-          </ButtonLink>
+          <div className={styles.actionGroup}>
+            {accountTo && (
+              <ButtonLink size="sm" variant="ghost" to={accountTo} iconLeft={<Icons.BuildingIcon />}
+                aria-label={row.company ? `Open ${row.company}` : "Open account"}>
+                Account
+              </ButtonLink>
+            )}
+            <ButtonLink size="sm" variant="secondary" to={row.action.to}
+              {...(row.action.external ? { target: "_blank", rel: "noreferrer noopener" } : {})}>
+              {row.action.label}
+            </ButtonLink>
+          </div>
         </td>
       </tr>
       {open && (
@@ -437,6 +463,15 @@ function TaskDetail({
             {...(row.action.external ? { target: "_blank", rel: "noreferrer noopener" } : {})}>
             {row.action.label}
           </ButtonLink>
+          {/* Beside the action rather than only on the company's name above: an open row must not
+              have to be collapsed again to reach the page the rep works from. */}
+          {companyId && row.action.to !== `/accounts/${companyId}` && (
+            <ButtonLink size="sm" variant="secondary" to={`/accounts/${companyId}`}
+              iconLeft={<Icons.BuildingIcon />}
+              aria-label={companyName ? `Open ${companyName}` : "Open account"}>
+              Open account
+            </ButtonLink>
+          )}
           {onComplete && (
             <Button size="sm" variant="secondary" loading={completing} onClick={onComplete}
               iconLeft={<Icons.CheckIcon />}>
