@@ -8,8 +8,9 @@ answered `retry-after=862s` on one key and 15s on the other, the chain fell thro
 stub, and the stub extracts nothing. One of the most documented companies on the web came back
 blank because the READER was down, not because the web was quiet.
 
-`teodor_banea/b2b-lead-enrichment-free` returns already-parsed fields, so it has no reader to be
-down. It is therefore tried first and the search becomes the fallback.
+`teodor_banea/b2b-lead-enrichment` (registered by its id, `zMfJcg3smgiLIeetH`) returns
+already-parsed fields, so it has no reader to be down. It is therefore tried first and the search
+becomes the fallback.
 """
 from __future__ import annotations
 
@@ -248,9 +249,21 @@ async def test_the_actor_runs_once_per_interval_not_on_every_refresh(monkeypatch
         assert len(runs) == 2
 
 
-def test_the_actor_is_registered_with_a_consumer():
+def test_the_actor_is_registered_by_its_id_rather_than_its_name():
+    """The rename that broke it, pinned.
+
+    This was the one entry in `ACTORS` written as `username~name`, and it is the one that broke:
+    the author dropped `-free` from the slug and every call began answering 404 "Actor with this
+    name was not found". `fetch` swallows provider failures by design, so nothing reported it — the
+    actor tried FIRST on every account enrichment was a guaranteed wasted round trip, silently.
+
+    An id survives a rename; a name is the author's to change. So the assertion is on the shape:
+    a bare Apify object id, with no `~` in it.
+    """
     from nexus.enrichment.b2b_actor import ACTOR
     from nexus.integrations.apify import ACTORS
 
     assert ACTOR in ACTORS
-    assert ACTORS[ACTOR] == "teodor_banea~b2b-lead-enrichment-free"
+    registered = ACTORS[ACTOR]
+    assert registered == "zMfJcg3smgiLIeetH"
+    assert "~" not in registered, "a name can be renamed out from under us; use the actor id"

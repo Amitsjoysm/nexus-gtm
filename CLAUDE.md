@@ -2888,10 +2888,20 @@ Registered actors and their state:
 | `phone_finder` | `code_crafter/mobile-finder` | `people/enrich.py` — live, verified end-to-end |
 | `linkedin_profile` | `dev_fusion/Linkedin-Profile-Scraper` | `personalization/apify_provider.py` |
 | `linkedin_posts` | `A3cAPGpwBEG8RJwse` | `personalization/apify_provider.py` |
-| `b2b_enrichment` | `teodor_banea/b2b-lead-enrichment-free` | `enrichment/b2b_actor.py`, at most once per 30 days per account |
+| `b2b_enrichment` | `zMfJcg3smgiLIeetH` (`teodor_banea/b2b-lead-enrichment`) | `enrichment/b2b_actor.py`, at most once per 30 days per account |
 | `linkedin_company_search` | `harvestapi/linkedin-company-search` | `prospecting/linkedin.py` — run once, 2026-09-24 |
 | `linkedin_company` | `harvestapi/linkedin-company` | `prospecting/linkedin.py` — run once, 2026-09-24 |
 | `linkedin_company_employees` | `harvestapi/linkedin-company-employees` | `prospecting/linkedin.py` — run once, 2026-09-24 |
+
+**Register an actor by its ID, never `username~name`** (2026-11-25). `b2b_enrichment` was the one
+entry written as a name, and it is the one that broke: the author renamed it (`-free` left the slug)
+and every call answered 404 "Actor with this name was not found" — for two months, reported by
+nothing, because `fetch` swallows provider failures by design. So the actor tried FIRST on every
+account enrichment was a guaranteed wasted round trip, silently, and the 2026-10-26 diagnosis
+recorded it as "the actor is gone". An id survives a rename; a name is the author's to change.
+`tests/test_b2b_enrichment_actor.py` refuses a `~` in that value. The actor is also now
+PAY_PER_EVENT ($0.0042/result) rather than free; the fields `to_fields()` reads were re-run against
+`anthropic.com` and `stripe.com` on 2026-11-25 and all survived the rename.
 
 **Every registered actor has a consumer, and that is now a test**
 (`test_every_registered_actor_has_a_real_caller`) rather than a habit. It resolves the argument

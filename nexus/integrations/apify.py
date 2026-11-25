@@ -87,14 +87,21 @@ ACTORS: dict[str, str] = {
     # removes the blocker that kept `linkedin_profile` dead on two accounts for weeks.
     "linkedin_posts": "A3cAPGpwBEG8RJwse",
     # Domain -> structured company firmographics + tech stack, with NO LLM extraction step.
-    # `teodor_banea/b2b-lead-enrichment-free`. Consumed by `nexus/enrichment/b2b_actor.py`, which
+    # `teodor_banea/b2b-lead-enrichment`. Consumed by `nexus/enrichment/b2b_actor.py`, which
     # is tried AHEAD of the search+LLM path: that path's extraction half is an LLM completion, and
     # a rate-limited model chain turns a perfectly good search into an empty answer. Measured
     # 2026-09-09: `anthropic.com` enriched for 66.6s and filled nothing while Exa answered 200 to
     # every request.
     #
     # LIMITED_PERMISSIONS, so no per-account console approval.
-    "b2b_enrichment": "teodor_banea~b2b-lead-enrichment-free",
+    #
+    # **The ID, not `username~name`, and that is the fix rather than a detail.** This was the one
+    # entry registered by name, and it is the one that broke: on 2026-09-27 the author renamed it
+    # `b2b-lead-enrichment` (dropping `-free`) and every call began answering 404 "Actor with this
+    # name was not found". Nothing reported it, because `fetch` swallows provider failures by
+    # design — so the actor tried FIRST on every account enrichment was a guaranteed wasted round
+    # trip, silently, for two months. An id survives a rename; a name is the author's to change.
+    "b2b_enrichment": "zMfJcg3smgiLIeetH",
     # The three harvestapi LinkedIn actors behind prospecting (nexus/prospecting/linkedin.py), each
     # run once against real input before a parser was written (2026-09-24).
     # Companies by industry code, location and size band; 50 a page, 20 pages at most.

@@ -659,8 +659,12 @@ branch on the other.
 Still open, not built:
 - Suppliers labelled with their customers' industry (PetroSkills, SPM, Oil States, S&P Global
   Energy) wait on `industry_evidence_mode`, i.e. an Anthropic key and the re-measurement.
-- The Apify B2B enrichment actor `teodor_banea/b2b-lead-enrichment-free` answers 404: the actor
-  is gone, so that enrichment step finds nothing.
+- ~~The Apify B2B enrichment actor `teodor_banea/b2b-lead-enrichment-free` answers 404: the actor
+  is gone, so that enrichment step finds nothing.~~ **Closed 2026-11-25, and the diagnosis here was
+  wrong**: the actor was not gone, it was RENAMED (`-free` left the slug). It was the one entry in
+  `ACTORS` registered as `username~name` rather than by id, so the rename broke it and `fetch`,
+  which swallows provider failures by design, reported nothing for two months. Registered by id
+  (`zMfJcg3smgiLIeetH`) now, and a test refuses a `~` in that value.
 - Web enrichment stored LinkedIn's band "1001-5000" as exactly 5,000 staff (S&P Global Energy),
   which passes a 5,000 cap by construction.
 - A vanity domain that redirects to the company's real one (figma.bot, world-kinect.com) is kept

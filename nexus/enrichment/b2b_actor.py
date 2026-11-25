@@ -1,10 +1,15 @@
 # nexus/enrichment/b2b_actor.py
 """Structured firmographics from an Apify actor, with no LLM in the loop.
 
-`teodor_banea/b2b-lead-enrichment-free` returns already-parsed company fields — industry,
-description, LinkedIn URL, tech stack, and where its paid providers are configured, size, geography
-and revenue. That matters more than "one more provider": the existing web path is a SEARCH plus an
-LLM completion that extracts fields out of page text, and the extraction half is the fragile half.
+`teodor_banea/b2b-lead-enrichment` returns already-parsed company fields — industry, description,
+LinkedIn URL, tech stack, and where its paid providers are configured, size, geography and revenue.
+That matters more than "one more provider": the existing web path is a SEARCH plus an LLM completion
+that extracts fields out of page text, and the extraction half is the fragile half.
+
+It is registered in `ACTORS` by its **id** (`zMfJcg3smgiLIeetH`), not by `username~name`. The author
+renamed it — `-free` left the slug — and every call then answered 404 "Actor with this name was not
+found" for two months with nothing reporting it, because `fetch` swallows provider failures by
+design. An id survives a rename.
 
 Measured on the live deployment 2026-09-09: enriching `anthropic.com` took 66.6 seconds and filled
 NOTHING. Exa answered 200 every time; Groq answered `retry-after=862s` on one key and 15s on the
