@@ -254,8 +254,11 @@ class EngagementMessage(IdMixin, TimestampMixin, TenantScoped, Base):
         Index("ix_engagement_message_thread_time", "thread_id", "created_at"),
     )
 
-    mailbox_connection_id: Mapped[str] = mapped_column(
-        ForeignKey("mailbox_connections.id"), index=True
+    # NULL for a send from an app-password SMTP mailbox, which is a dict in
+    # `tenants.email_settings` and has no row to point at (migration 0080). Before that this was
+    # NOT NULL, so the SMTP path wrote no message at all and a reply to one had nothing to match.
+    mailbox_connection_id: Mapped[str | None] = mapped_column(
+        ForeignKey("mailbox_connections.id"), nullable=True, index=True
     )
     thread_id: Mapped[str | None] = mapped_column(
         ForeignKey("engagement_threads.id"), nullable=True

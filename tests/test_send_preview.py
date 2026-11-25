@@ -148,3 +148,62 @@ async def test_an_unknown_contact_is_a_404(client):
                           json={"subject": "x", "body": BODY})
 
     assert r.status_code == 404
+
+
+async def test_an_smtp_send_is_recorded_so_a_reply_can_be_matched(client, monkeypatch):
+    """The gap migration 0080 closes.
+
+    `replies/matching.py` keeps an inbound email only when it matches a thread, one of OUR
+    Message-IDs, or a contact with a live enrollment. A one-off has no enrollment, so with no row
+    the buyer's reply was discarded unread — the rep saw it in their mail client and the product
+    never did.
+    """
+    from nexus.models.engagement import EngagementMessage
+
+    sent: list = []
+
+    async def _fake(mailbox, *, to, subject, body, **kw):
+        sent.append(to)
+        return type("R", (), {"ok": True, "detail": "sent"})()
+
+    from nexus.integrations import email_sender
+
+    monkeypatch.setattr(email_sender, "send_email", _fake)
+    token, me, contact_id = await _workspace(client, "sm1")
+
+    r = await client.post(f"/api/contacts/{contact_id}/send-email", headers=auth(token),
+                          json={"subject": "quick question", "body": BODY})
+
+    assert r.status_code == 200 and sent == ["jane@acme.io"]
+    async with tenant_session(me.tenant_id) as ts:
+        rows = await ts.list(EngagementMessage)
+    assert len(rows) == 1, "an SMTP send recorded nothing, so a reply has nothing to match"
+    row = rows[0]
+    assert row.direction == "out" and row.status == "sent"
+    assert row.contact_id == contact_id
+    assert row.rfc_message_id, "no Message-ID, so the reply rule cannot match it"
+    # An app-password mailbox is a dict in tenant settings; there is no connection row to name.
+    assert row.mailbox_connection_id is None
+    assert row.to_addrs == ["jane@acme.io"]
+    # The body recorded is the SIGNED body, which is what the buyer received.
+    assert "Sam Seller" in row.body_text
+
+
+async def test_a_refused_smtp_send_records_nothing(client, monkeypatch):
+    """Nothing left, so there is nothing to match a reply to and nothing to report as sent."""
+    from nexus.models.engagement import EngagementMessage
+
+    async def _fake(mailbox, **kw):
+        return type("R", (), {"ok": False, "detail": "recipient rejected"})()
+
+    from nexus.integrations import email_sender
+
+    monkeypatch.setattr(email_sender, "send_email", _fake)
+    token, me, contact_id = await _workspace(client, "sm2")
+
+    r = await client.post(f"/api/contacts/{contact_id}/send-email", headers=auth(token),
+                          json={"subject": "quick question", "body": BODY})
+
+    assert r.status_code == 200 and r.json()["ok"] is False
+    async with tenant_session(me.tenant_id) as ts:
+        assert await ts.list(EngagementMessage) == []

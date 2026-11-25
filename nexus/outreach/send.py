@@ -307,6 +307,9 @@ async def send_to_contact(
     detail = str(getattr(result, "detail", "") or ("sent" if ok else "send failed"))
     if ok:
         await _meter_send(ts, user_id=user_id)
+        await _record_smtp_send(
+            ts, contact=contact, to=to, subject=(subject or "").strip(), body=signed,
+            mailbox=mailbox)
     else:
         # The SMTP error, not a generic failure: "authentication failed" and "recipient rejected"
         # send a rep to two completely different places.
@@ -320,6 +323,60 @@ async def send_to_contact(
         to=to,
         email_status=status,
     )
+
+
+async def _record_smtp_send(ts, *, contact, to: str, subject: str, body: str,
+                            mailbox: dict) -> None:
+    """Record a send from an app-password mailbox as an outbound message.
+
+    The connected (Gmail/Graph) path goes through `engagement.sending.send`, which writes this row
+    before the provider call, records the thread and meters. The SMTP path did neither: it metered
+    and returned, so the email existed in the rep's mail client and nowhere else.
+
+    What that cost was not a report. `replies/matching.py` keeps an inbound email only when it
+    matches a known thread, an `In-Reply-To`/`References` naming one of OUR `rfc_message_id`s, or a
+    contact with a live enrollment — and a one-off has no enrollment. With no row there was no id
+    to match, so the buyer's reply was discarded unread. The rep saw it; the product did not.
+
+    `mailbox_connection_id` is NULL here (migration 0080): an app-password mailbox is a dict in
+    `tenants.email_settings` and has no row to point at. `rfc_message_id` is minted the same way
+    the engine mints one, because matching a reply is the entire reason the row exists.
+
+    Never raises. The email has left, and failing the request now would tell the rep it had not.
+    """
+    import logging as _logging
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from nexus.core.db import utcnow
+    from nexus.engagement.ids import new_ulid
+    from nexus.engagement.sending import mime
+    from nexus.models.engagement import EngagementMessage
+
+    log = _logging.getLogger("nexus.outreach.send")
+    sender = str(mailbox.get("from_email") or mailbox.get("username") or "")
+    domain = sender.rsplit("@", 1)[-1] if "@" in sender else "localhost"
+    try:
+        async with ts.session.begin_nested():
+            ts.add(EngagementMessage(
+                mailbox_connection_id=None,
+                thread_id=None,
+                enrollment_id=None,
+                contact_id=getattr(contact, "id", None),
+                direction="out",
+                kind="oneoff",
+                status="sent",
+                rfc_message_id=mime.new_rfc_message_id(domain),
+                ref_header=new_ulid(),
+                from_addr=sender,
+                to_addrs=[to],
+                subject=subject,
+                body_text=body,
+                sent_at=utcnow(),
+            ))
+            await ts.flush()
+    except SQLAlchemyError:
+        log.warning("could not record the SMTP send to %s", to, exc_info=True)
 
 
 @dataclass(slots=True)
