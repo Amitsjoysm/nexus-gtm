@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Badge, Button, Icons, useToast, WorkingIndicator } from "@/components/ui";
 import { useApiClient } from "@/app/AuthContext";
 import { ApiError } from "@/lib/api";
+import type { EmailPreview } from "@/lib/types";
 import styles from "./EmailComposer.module.css";
 
 interface EmailComposerProps {
@@ -93,6 +94,11 @@ export function EmailComposer({
   const [needsRiskyConfirm, setNeedsRiskyConfirm] = useState(false);
   /** When the draft on screen was written — shown so a reused one is visibly today's. */
   const [draftedAt, setDraftedAt] = useState<string | null>(null);
+  // The rendered email, fetched on demand. `null` while in flight, so the panel can show its own
+  // loading rather than flashing an empty body.
+  const [previewing, setPreviewing] = useState(false);
+  const [preview, setPreview] = useState<EmailPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   async function generate() {
     setLoading(true);
@@ -160,6 +166,35 @@ export function EmailComposer({
     void openDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId]);
+
+  /**
+   * Show what the buyer will actually read.
+   *
+   * The composer ends at the sign-off and the signature is appended by the sending mailbox, so
+   * what a rep approved was never quite what arrived — and the signature carries their real name,
+   * title and phone number. The server renders it with the SAME code the send uses, so this is the
+   * email rather than an impression of it.
+   *
+   * A toggle, not a step before Send. "The rep's click is the review" is the rule this screen was
+   * built on and reps triage dozens of accounts a day; making everyone confirm twice would cost
+   * every rep a click to protect against a case they can already check when they want to.
+   */
+  async function togglePreview() {
+    if (previewing) {
+      setPreviewing(false);
+      return;
+    }
+    setPreviewing(true);
+    setPreviewError(null);
+    setPreview(null);
+    try {
+      setPreview(await api.previewEmailToContact(contactId, { subject, body }));
+    } catch (err) {
+      setPreviewError(
+        err instanceof ApiError ? explainFailure(err) : "Couldn't render the preview.",
+      );
+    }
+  }
 
   async function copy() {
     const text = subject ? `Subject: ${subject}\n\n${body}` : body;
@@ -301,10 +336,45 @@ export function EmailComposer({
       {/* The draft deliberately ends at the sign-off: the signature block is appended from the
           sending mailbox (Settings → My mailboxes for Gmail/Outlook, Settings → Email defaults for SMTP),
           so one rep's draft cannot go out under another's details, and regenerating never loses
-          it. */}
+          it. The hint used to be the only account of that; now it points at the thing itself. */}
       <p className={styles.hint}>
-        Your signature is added from your sending mailbox when this goes out.
+        Your signature is added from your sending mailbox when this goes out.{" "}
+        <button type="button" className={styles.previewToggle} onClick={togglePreview}
+          aria-expanded={previewing} aria-controls="email-preview">
+          {previewing ? "Hide what will be sent" : "See exactly what will be sent"}
+        </button>
       </p>
+
+      {previewing && (
+        <section className={styles.preview} id="email-preview"
+          aria-label="The email as it will be received">
+          {previewError ? (
+            <p className={styles.error} role="alert">{previewError}</p>
+          ) : !preview ? (
+            <p className={styles.previewLoading} role="status">Rendering the email…</p>
+          ) : (
+            <>
+              <dl className={styles.previewHead}>
+                <dt>From</dt>
+                <dd>{preview.from_name ? `${preview.from_name} <${preview.from_email}>`
+                  : preview.from_email}</dd>
+                <dt>To</dt>
+                <dd>{preview.to}</dd>
+                <dt>Subject</dt>
+                {/* An empty subject is a real thing to notice before sending, so it is named
+                    rather than rendered as a blank line. */}
+                <dd>{preview.subject || <span className={styles.previewBlank}>No subject</span>}</dd>
+              </dl>
+              <div className={styles.previewBody}>{preview.body}</div>
+              {!preview.signed && (
+                <p className={styles.previewNote}>
+                  This mailbox has no signature saved, so nothing is added below your sign-off.
+                </p>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
       {needsRiskyConfirm && (
         <p className={styles.warn} role="alert">

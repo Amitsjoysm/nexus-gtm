@@ -89,3 +89,75 @@
   font-size: var(--text-sm);
   line-height: var(--leading);
 }
+
+/* "See exactly what will be sent" — a link in the sentence that makes the promise, because the
+   promise is what it answers. A real button, so it is keyboard-reachable and announces its state. */
+.previewToggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.previewToggle:hover {
+  color: var(--accent-hover);
+}
+.previewToggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* The email as received. Deliberately a quieter surface than the editor above it: this is a
+   reading view, and the rep must never mistake it for somewhere they can type. */
+.preview {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.previewHead {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0 0 var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-xs);
+}
+.previewHead dt {
+  color: var(--text-subtle);
+}
+.previewHead dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.previewBlank {
+  color: var(--text-subtle);
+  font-style: italic;
+}
+/* The body exactly as composed: the server's newlines are the email's, so they are preserved
+   rather than collapsed into a paragraph the buyer will not receive. */
+.previewBody {
+  white-space: pre-wrap;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.previewLoading,
+.previewNote {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.previewNote {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}

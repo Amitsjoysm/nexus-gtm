@@ -322,6 +322,77 @@ async def send_to_contact(
     )
 
 
+@dataclass(slots=True)
+class SendPreview:
+    """What the recipient will actually read, before anything is sent."""
+
+    to: str
+    from_email: str
+    from_name: str
+    subject: str
+    #: Body AND signature, composed exactly as the send composes them.
+    body: str
+    #: Which mailbox would send it, for the sentence the screen shows.
+    mailbox_kind: str          # connected | smtp
+    signed: bool
+
+
+async def preview_for_contact(ts, *, contact, subject: str, body: str,
+                              user_id: str) -> SendPreview:
+    """Render the email the send would produce. Sends nothing, charges nothing.
+
+    The composer shows the body the rep wrote and then says "your signature is added when this
+    goes out" — an admission that what is on screen is not what the buyer receives. A rep
+    approving an email they have not fully seen is approving a guess, and the signature is the
+    part that carries their real name, title and phone number.
+
+    **It shares the send's own resolution rather than reproducing it**, which is the only way a
+    preview stays true: `resolve_connected_mailbox` first, then the SMTP mailbox, then the same
+    composer each path uses (`compose_message_text` for a connected mailbox, `append_signature`
+    for SMTP). Reproducing the branching here would be a second source of truth for what the buyer
+    reads, and the first thing to drift would be the signature — the exact thing this exists to
+    show.
+
+    Deliberately NOT applied here: the risky-address refusal and the do-not-contact block. Both
+    belong to sending, and a preview that refuses to render would leave a rep guessing at wording
+    they are allowed to fix. The send still refuses on its own.
+    """
+    from nexus.models.identity import Tenant
+
+    to = _one_address_or_refuse(contact)
+    if not (body or "").strip():
+        raise SendRefused("The draft is empty. Generate or write a body before previewing it.")
+
+    connection = await resolve_connected_mailbox(ts, user_id)
+    if connection is not None:
+        from nexus.engagement.sending.mime import compose_message_text
+        from nexus.engagement.sending.service import _signature
+
+        signature = await _signature(ts, connection)
+        sender = connection.display_name or ""
+        return SendPreview(
+            to=to, from_email=connection.email, from_name=sender,
+            subject=(subject or "").strip(),
+            body=compose_message_text(body, signature, sender),
+            mailbox_kind="connected", signed=bool(signature),
+        )
+
+    tenant = await ts.session.get(Tenant, ts.tenant_id)
+    mailbox = await _smtp_mailbox(ts, tenant, user_id)
+
+    from nexus.outreach.signature import append_signature, resolve_signature
+
+    signature = resolve_signature(tenant.email_settings, mailbox)
+    return SendPreview(
+        to=to,
+        from_email=str(mailbox.get("from_email") or mailbox.get("username") or ""),
+        from_name=str(mailbox.get("from_name") or ""),
+        subject=(subject or "").strip(),
+        body=append_signature(body, signature),
+        mailbox_kind="smtp", signed=bool(signature),
+    )
+
+
 async def draft_for_contact(
     ts,
     *,

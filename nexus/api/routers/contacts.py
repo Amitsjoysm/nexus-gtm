@@ -397,6 +397,62 @@ class SendEmailOut(BaseModel):
     email_status: str = ""
 
 
+class PreviewEmailIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    subject: str = Field(default="", max_length=300)
+    body: str = Field(min_length=1)
+
+
+class PreviewEmailOut(BaseModel):
+    to: str
+    from_email: str
+    from_name: str = ""
+    subject: str
+    #: Body and signature together — what the buyer reads.
+    body: str
+    mailbox_kind: str
+    signed: bool
+
+
+@router.post("/{contact_id}/preview-email", response_model=PreviewEmailOut)
+async def preview_email_to_contact(
+    contact_id: str,
+    body: PreviewEmailIn,
+    ts: TenantSession = Depends(get_tenant_session),
+    principal: Principal = Depends(require(Permission.manage_accounts)),
+) -> PreviewEmailOut:
+    """Render what would be sent, from the caller's own mailbox. Sends nothing, charges nothing.
+
+    The composer showed the body the rep wrote and told them the signature would be added later,
+    so the thing on screen was never quite the thing the buyer receives — and the signature is the
+    part carrying their real name, title and phone number. This closes that gap without adding a
+    step to Send: the rep who wants to check, checks.
+
+    Read-only, so it is `manage_accounts` like the send and nothing else: it reveals only the
+    caller's own signature and their own mailbox address, both of which they can already read in
+    Settings.
+    """
+    from nexus.outreach.send import MailboxNotConnected, SendRefused, preview_for_contact
+
+    contact = await ts.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+    try:
+        got = await preview_for_contact(
+            ts, contact=contact, subject=body.subject, body=body.body,
+            user_id=principal.user_id,
+        )
+    except MailboxNotConnected as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except SendRefused as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return PreviewEmailOut(
+        to=got.to, from_email=got.from_email, from_name=got.from_name, subject=got.subject,
+        body=got.body, mailbox_kind=got.mailbox_kind, signed=got.signed,
+    )
+
+
 @router.post("/{contact_id}/send-email", response_model=SendEmailOut)
 async def send_email_to_contact(
     contact_id: str,

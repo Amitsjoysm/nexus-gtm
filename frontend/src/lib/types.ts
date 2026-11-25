@@ -2501,6 +2501,24 @@ export interface SendEmailResult {
   email_status: string;
 }
 
+/**
+ * The email as the buyer will read it: body and signature composed by the same code the send uses.
+ *
+ * `body` is NOT the rep's draft — it is the draft plus whatever the sending mailbox appends, which
+ * is the part the composer could only promise.
+ */
+export interface EmailPreview {
+  to: string;
+  from_email: string;
+  from_name: string;
+  subject: string;
+  body: string;
+  /** `connected` (Gmail/Outlook) or `smtp`, which decides which composer rendered it. */
+  mailbox_kind: string;
+  /** False when this mailbox has no signature saved, so the screen can say so rather than imply. */
+  signed: boolean;
+}
+
 /** One signal kind and whether this workspace collects it. Absent server-side means enabled. */
 export interface SignalPreference {
   kind: string;

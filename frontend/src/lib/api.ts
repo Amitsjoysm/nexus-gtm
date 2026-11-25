@@ -97,6 +97,7 @@ import type {
   ProviderModels,
   RuntimeSetting,
   EmailVerifierCheck,
+  EmailPreview,
   SendEmailResult,
   SharedCrawlCompany,
   SharedCrawlSummary,
@@ -1311,6 +1312,15 @@ export class ApiClient {
   ) {
     return this.request<SendEmailResult>(
       `/contacts/${encodeURIComponent(contactId)}/send-email`,
+      { method: "POST", body },
+    );
+  }
+  /** Render what the send would compose — body AND the signature the mailbox appends — without
+   *  sending or charging. The composer showed the body alone and promised the signature later,
+   *  so what a rep approved was never quite what the buyer received. 409 with no mailbox. */
+  previewEmailToContact(contactId: string, body: { subject: string; body: string }) {
+    return this.request<EmailPreview>(
+      `/contacts/${encodeURIComponent(contactId)}/preview-email`,
       { method: "POST", body },
     );
   }
