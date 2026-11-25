@@ -296,14 +296,20 @@ async def _existing(ts, enrollment, step_index, idempotency_key):
 
 
 async def _latest_in_thread(ts, thread, *, exclude_id: str | None = None):
-    """The message a reply should answer: the newest in the thread, inbound or outbound (D16)."""
+    """The message a reply should answer: the newest in the thread, inbound or outbound (D16).
+
+    `queued` and `drafted` are both excluded, and for the same reason: neither has left the
+    building. Threading a real send onto a `drafted` row would set `In-Reply-To` to a Message-ID no
+    mail server has ever seen, so the reply would open a new conversation in the buyer's client
+    rather than continue this one.
+    """
     from nexus.models.engagement import EngagementMessage
 
     if thread is None:
         return None
     stmt = (ts.select(EngagementMessage)
             .where(EngagementMessage.thread_id == thread.id)
-            .where(EngagementMessage.status != "queued")
+            .where(EngagementMessage.status.not_in(("queued", "drafted")))
             .order_by(EngagementMessage.created_at.desc()))
     if exclude_id:
         stmt = stmt.where(EngagementMessage.id != exclude_id)
