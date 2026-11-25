@@ -20,6 +20,78 @@ _DEFAULT_STEPS = [
 ]
 
 
+async def _send_email(gw: Gateway, args: dict) -> ToolOutcome:
+    """Show the email, then send the one that was shown.
+
+    The 2026-10-13 spec put sending behind the line the app keeps; the owner reversed that on
+    2026-11-25 on the condition that a person sees the email first. This is that condition, made
+    structural rather than hoped for: with no `approval_token` the tool renders what WOULD be sent
+    and returns one, and the send is refused.
+
+    The token is bound to the recipient, the subject and the body (`engagement/approval.py`), so
+    the email that comes back approved is the email that goes. Previewing a polite note and sending
+    something else to the same address is the failure the binding exists to prevent — and the one a
+    plain "are you sure?" would not catch.
+    """
+    from nexus.engagement import approval
+
+    contact_id = args["contact_id"]
+    subject = (args.get("subject") or "").strip()
+    body = args["body"]
+
+    got = await gw.get(f"/api/contacts/{contact_id}")
+    if not got.ok:
+        return fail(got)
+    contact = dict(got.data or {})
+    to_addr = (contact.get("email") or "").strip()
+    if not to_addr:
+        return refused(
+            f"{contact.get('full_name') or 'This contact'} has no email address on file, so there "
+            "is nothing to send to. find_contacts or enrich_contact can look for one."
+        )
+
+    token = (args.get("approval_token") or "").strip()
+    if not token:
+        actor = gw.actor
+        issued = approval.issue(
+            tenant_id=actor.tenant_id, user_id=actor.user_id, contact_id=contact_id,
+            to_addr=to_addr, subject=subject, body=body, surface=approval.SURFACE_MCP,
+        )
+        return ok({
+            "preview": True,
+            "will": f"Send this email to {contact.get('full_name') or to_addr} at {to_addr}.",
+            "to": to_addr,
+            "to_name": contact.get("full_name") or "",
+            "subject": subject,
+            "body": body,
+            # Said rather than rendered: the signature is attached by the mailbox that sends, and
+            # inventing one here would show the person text the product did not write.
+            "note": "The sender's own signature is added when it is sent, and it goes from their "
+                    "connected mailbox. Nothing has been sent yet.",
+            "approval_token": issued,
+            "ask_the_user": (
+                "Show the person the subject and body above, exactly as written, and ask: "
+                "'Send this to " + to_addr + "?' If they agree, call send_email again with the "
+                "same subject and body plus approval_token. Changing a word makes the approval "
+                "invalid, so re-preview if they want an edit."
+            ),
+        })
+
+    out = await gw.post(
+        f"/api/contacts/{contact_id}/send-email",
+        json={"subject": subject, "body": body, "approval_token": token},
+    )
+    if not out.ok:
+        return fail(out)
+    data = dict(out.data or {})
+    if not data.get("ok"):
+        # The provider refused after we asked. 200 with ok:false is the endpoint's own contract,
+        # and the reason ("authentication failed", "recipient rejected") is what to act on.
+        return refused(f"Not sent: {data.get('detail') or 'the mail server refused it'}.")
+    data["note"] = f"Sent from the user's own mailbox and recorded in {PRODUCT_NAME}."
+    return ok(data)
+
+
 async def _draft_reply(gw: Gateway, args: dict) -> ToolOutcome:
     out = await gw.post(f"/api/engagement/desk/{args['reply_id']}/draft",
                         idempotency_key=args.get("request_id"))
@@ -142,5 +214,24 @@ WRITE: tuple[ToolSpec, ...] = (
             "body": {"type": "string", "minLength": 1, "maxLength": 20000},
         }, ("reply_id", "body")),
         handler=_save_reply_draft, calls=(("POST", "/api/engagement/desk/{id}/save-draft"),),
+    ),
+    ToolSpec(
+        name="send_email", title="Send an email to a contact", scope="write",
+        description="Send one email to a contact from the user's own connected mailbox. Call it "
+                    "WITHOUT approval_token first: that sends nothing and returns the exact "
+                    "subject and body that would go, with an approval_token. Show the person that "
+                    "email, and call again with the same subject and body plus the token only "
+                    "once they agree. The token covers that exact wording and that recipient, so "
+                    "an edited email must be previewed again.",
+        input_schema=obj({
+            "contact_id": ID,
+            "subject": {"type": "string", "maxLength": 300},
+            "body": {"type": "string", "minLength": 1, "maxLength": 20000},
+            "approval_token": {"type": "string", "maxLength": 4000,
+                               "description": "From the preview. Omit it to preview."},
+        }, ("contact_id", "body")),
+        handler=_send_email,
+        calls=(("GET", "/api/contacts/{id}"),
+               ("POST", "/api/contacts/{id}/send-email")),
     ),
 )

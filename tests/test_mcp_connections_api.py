@@ -52,7 +52,7 @@ async def test_the_secret_is_returned_once_and_never_again(client):
     # And the key works.
     r = await client.post("/mcp", headers={"Authorization": f"Bearer {secret}"},
                           json=_rpc("tools/list"))
-    assert r.status_code == 200 and len(r.json()["result"]["tools"]) == 36
+    assert r.status_code == 200 and len(r.json()["result"]["tools"]) == 37
 
 
 @pytest.mark.parametrize("bad", [
@@ -128,7 +128,7 @@ async def test_setup_lists_the_server_and_every_tool(client):
     body = (await client.get("/api/connections/setup", headers=auth(token))).json()
     assert body["server_url"] == "http://test/mcp" and body["public_address_set"] is False
     assert body["reachable_from_internet"] is False
-    assert len(body["tools"]) == 36
+    assert len(body["tools"]) == 37
 
 
 async def test_setup_says_whether_claude_and_chatgpt_can_reach_the_address(client, monkeypatch):

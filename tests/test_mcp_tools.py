@@ -30,9 +30,10 @@ def test_every_tool_has_a_title_and_the_hints_the_directories_require():
 
 def test_names_are_unique_short_and_snake_case():
     names = [t.name for t in TOOLS]
-    # 36 since 2026-10-19 (most of the product, owner decisions): under the ~40 tools some clients
-    # cap across every connected server.
-    assert len(names) == len(set(names)) == 36
+    # 37 since 2026-11-25, when `send_email` was added (owner decision): 36 from 2026-10-19. Still
+    # under the ~40 tools some clients cap across every connected server, and that ceiling is why
+    # the number is pinned rather than counted.
+    assert len(names) == len(set(names)) == 37
     for n in names:
         assert len(n) <= 64 and re.fullmatch(r"[a-z][a-z_]*", n), n
 
@@ -51,13 +52,72 @@ def test_read_tools_are_the_free_ones():
         "search_network"]
 
 
-def test_nothing_reaches_approve_launch_send_dial_or_delete():
-    """The line the app keeps (spec 2026-10-13, kept by the owner on 2026-10-19)."""
+def test_nothing_reaches_approve_launch_dial_or_delete():
+    """The line the app keeps (spec 2026-10-13, kept by the owner on 2026-10-19).
+
+    **Sending one email crossed it on 2026-11-25, by owner decision, and nothing else did.** The
+    exception is named here rather than loosened out of the pattern, so the next tool that wants to
+    send has to be added to this list by somebody who reads why:
+
+    `send_email` previews first and sends only against an approval bound to that exact recipient,
+    subject and body (`engagement/approval.py`), so the email a person was shown is the email that
+    goes. Approving a campaign, launching one, dialling and deleting stay in the app, where a
+    person reads every email first — none of them has an equivalent binding.
+    """
+    allowed_senders = {"send_email"}
     for t in TOOLS:
         for method, path in t.calls:
             assert method in ("GET", "POST"), (t.name, method)
-            assert not re.search(r"/(approve|approve-all|launch|send|send-email|dial|archive|merge"
+            assert not re.search(r"/(approve|approve-all|launch|dial|archive|merge"
                                  r"|owner|delete)(/|$)", path), (t.name, path)
+            if re.search(r"/(send|send-email)(/|$)", path):
+                assert t.name in allowed_senders, (
+                    f"{t.name} reaches {path}; only {sorted(allowed_senders)} may send, and only "
+                    "behind an approval bound to the email itself"
+                )
+
+
+def test_the_only_sending_tool_refuses_without_an_approval():
+    """The condition the reversal was granted on, asserted rather than trusted to the description.
+
+    A tool that sent on its first call would make the preview advisory, and a model under pressure
+    to be helpful skips advisory steps.
+    """
+    import asyncio
+
+    from nexus.mcp.tools.engagement import _send_email
+
+    spec = next(t for t in TOOLS if t.name == "send_email")
+    assert spec.scope == "write"
+    # The schema must not require the token, or a preview could never be asked for.
+    assert "approval_token" not in spec.input_schema.get("required", [])
+
+    class _Gw:
+        """Answers the contact read, and records any send attempt."""
+
+        posted: list = []
+
+        class actor:
+            tenant_id = "t-1"
+            user_id = "u-1"
+
+        async def get(self, path, params=None):
+            from nexus.mcp.gateway import ToolOutcome
+
+            return ToolOutcome(ok=True, data={"id": "c-1", "full_name": "Jane Buyer",
+                                              "email": "jane@acme.io"})
+
+        async def post(self, path, json=None, params=None, idempotency_key=None):
+            _Gw.posted.append((path, json))
+            from nexus.mcp.gateway import ToolOutcome
+
+            return ToolOutcome(ok=True, data={"ok": True, "detail": "sent"})
+
+    out = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        _send_email(_Gw(), {"contact_id": "c-1", "subject": "hi", "body": "Worth a look?"}))
+    assert _Gw.posted == [], "the first call sent an email instead of previewing it"
+    assert out.data.get("preview") is True
+    assert out.data.get("approval_token"), "no approval was offered, so sending is unreachable"
 
 
 def test_descriptions_name_no_vendor():

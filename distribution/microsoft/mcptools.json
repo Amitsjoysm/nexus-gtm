@@ -1247,6 +1247,46 @@
       }
     },
     {
+      "name": "send_email",
+      "title": "Send an email to a contact",
+      "description": "Send one email to a contact from the user's own connected mailbox. Call it WITHOUT approval_token first: that sends nothing and returns the exact subject and body that would go, with an approval_token. Show the person that email, and call again with the same subject and body plus the token only once they agree. The token covers that exact wording and that recipient, so an edited email must be previewed again.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "contact_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "approval_token": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "From the preview. Omit it to preview."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "contact_id",
+          "body"
+        ]
+      },
+      "annotations": {
+        "title": "Send an email to a contact",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "queue_call",
       "title": "Queue a call",
       "description": "Put a call on the user's call list for an account (and a contact there), with an AI call script. Never dials.",

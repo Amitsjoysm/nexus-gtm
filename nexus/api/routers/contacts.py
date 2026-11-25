@@ -376,6 +376,17 @@ class SendEmailIn(BaseModel):
     #: Acknowledge an address the verifier called `invalid`. Not a default, because those bounce
     #: and bounces cost the sending domain its ability to deliver anything at all.
     allow_risky: bool = False
+    #: An approval from `engagement/approval.py`, bound to this exact recipient, subject and body.
+    #:
+    #: OPTIONAL, and that is the whole compatibility story. A rep in the composer has already read
+    #: the email on screen and pressed Send — "the rep's click IS the review", the rule this
+    #: endpoint has carried since it shipped — so requiring one here would make the one-click send
+    #: untrue without making it safer. An ASSISTANT has no click to offer, so `send_email` over MCP
+    #: always carries one; that tool refuses without it.
+    #:
+    #: Supplied and valid, it is recorded against the message. Supplied and wrong, the send is
+    #: refused: the point of the token is that the email approved is the email sent.
+    approval_token: str = Field(default="", max_length=4000)
 
 
 class SendEmailOut(BaseModel):
@@ -409,11 +420,25 @@ async def send_email_to_contact(
     not a 5xx: "authentication failed" and "recipient rejected" send a rep to two completely
     different places, and an opaque error sends them to neither.
     """
+    from nexus.engagement import approval as approval_mod
     from nexus.outreach.send import MailboxNotConnected, SendRefused, send_to_contact
 
     contact = await ts.get(Contact, contact_id)
     if contact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Contact not found")
+
+    # Verified BEFORE the send, because a refusal has to mean nothing left. 422: the request is
+    # well-formed and it is the approval that does not describe this email.
+    approved = None
+    if body.approval_token:
+        try:
+            approved = approval_mod.verify(
+                body.approval_token, tenant_id=ts.tenant_id, user_id=principal.user_id,
+                contact_id=contact.id, to_addr=contact.email or "", subject=body.subject,
+                body=body.body,
+            )
+        except approval_mod.ApprovalError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
     try:
         outcome = await send_to_contact(
@@ -430,6 +455,12 @@ async def send_email_to_contact(
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except SendRefused as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # Only a send that actually left is recorded as approved. A refusal the provider reported
+    # (`ok: false`) leaves no approved message, because nothing was approved into existence.
+    if approved is not None and outcome.ok:
+        await approval_mod.record_approval(
+            ts, contact_id=contact.id, approval=approved, subject=body.subject, body=body.body)
 
     await ts.commit()
     return SendEmailOut(

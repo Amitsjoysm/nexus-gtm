@@ -42,6 +42,11 @@ _ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("GET", "/api/contacts"),
         ("GET", f"/api/contacts/{_ID}"),
         ("POST", f"/api/contacts/{_ID}/save-draft"),
+        # Sending one email, and ONLY behind an approval bound to that exact email
+        # (`send_email`, owner decision 2026-11-25, reversing the 2026-10-13 "never send" line).
+        # The endpoint itself takes the approval as optional, because a rep in the composer has
+        # already read the email and pressed Send; the tool is what refuses without one.
+        ("POST", f"/api/contacts/{_ID}/send-email"),
         ("GET", "/api/signals"),
         ("GET", "/api/inbox"),
         ("POST", f"/api/inbox/{_ID}/complete"),
@@ -164,6 +169,12 @@ class Gateway:
     def __init__(self, app, actor: Actor) -> None:
         self._app = app
         self._actor = actor
+
+    @property
+    def actor(self) -> Actor:
+        """Who this call is for. A tool needs it to issue a send approval bound to that person;
+        reaching into `_actor` from a tool would make the gateway's boundary decorative."""
+        return self._actor
 
     async def get(self, path: str, params: dict | None = None) -> ToolOutcome:
         return await self._send("GET", path, params=params)
