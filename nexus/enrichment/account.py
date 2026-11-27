@@ -31,6 +31,22 @@ ACCOUNT_CAPABILITY = "enrich.account"
 
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+#: Appended to a snippet whose page is on the account's own domain, so the model can tell the
+#: company's own words from a directory's (the rule in `fetch`'s system prompt reads it).
+OWN_SITE_MARK = " [company's own website]"
+
+
+def _domain(value: str | None) -> str:
+    from nexus.companies.resolution import normalise_domain
+
+    return normalise_domain(value)
+
+
+def _on_own_site(url: str | None, own: str) -> bool:
+    """Is ``url`` on the account's domain or a subdomain of it (``ir.netsoltech.com``)?"""
+    host = _domain(url)
+    return bool(own and host and (host == own or host.endswith("." + own)))
+
 
 def _parse_obj(text: str | None) -> dict:
     if not text:
@@ -229,8 +245,13 @@ class SearchBackedAccountEnricher:
             return {}
         if not hits:
             return {}
+        own = _domain(account.domain)
+        # The company's own pages first, then the rest in the search's order: a rule in the prompt
+        # alone still let a directory win between runs (measured 2026-11-19).
+        hits.sort(key=lambda h: not _on_own_site(getattr(h, "url", ""), own))
         blob = "\n".join(
             f"- {getattr(h, 'title', '')}: {getattr(h, 'snippet', '')} ({getattr(h, 'url', '')})"
+            + (OWN_SITE_MARK if _on_own_site(getattr(h, "url", ""), own) else "")
             for h in hits
         )
         try:
@@ -247,7 +268,15 @@ class SearchBackedAccountEnricher:
                                # then scored a perfect geo match against a USA-only ICP.
                                "Location fields describe where the company IS, never the market it "
                                "sells into. A company headquartered in India that serves US "
-                               "customers is in India."),
+                               "customers is in India. "
+                               # Measured 2026-11-19 on 50 accounts: the one wrong HQ country took
+                               # a directory's "London" over the company's own "Headquarters
+                               # Istanbul", and Tecsys flipped between runs on a LinkedIn-derived
+                               # "Chicago" against its own Montreal. Own-site snippets are marked.
+                               "When a snippet from the company's own website "
+                               f"(marked{OWN_SITE_MARK}) states where it is headquartered or how "
+                               "many people it employs, that wins over directories, data "
+                               "aggregators and profile summaries that say otherwise."),
                     LLMMessage("user", f"Company: {label} ({account.domain or 'unknown domain'}).\n"
                                f"Snippets:\n{blob}\n\n"
                                'Return JSON with keys: "industry" (string), "sub_industry" (a more '

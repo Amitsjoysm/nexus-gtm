@@ -573,6 +573,27 @@ Anthropic key existed. Owner decisions:
   Groq in its chain keeps the default order rather than losing enrichment to the stub.
 - **On the Free plan a refresh writes no rationale**; `scoring.ensure_rationale` writes it when the
   call brief is opened, once, and stores it on the score row. `tests/test_scoring_rationale_cost.py`.
+- **What Groq-only does to the score's inputs, measured 2026-11-19** on a DB copy. The score is
+  deterministic and untouched. Industry mapping: every saved ICP's industries (14 terms) map by
+  rule, so the model is never asked. Industry evidence: `industry_evidence_mode` is off. Account
+  enrichment (`openai/gpt-oss-120b`), 50 real accounts, one saved Exa search each, graded against
+  the pages: HQ country 49/50 (BGTS: an aggregator's "London" over its own site's "Headquarters
+  Istanbul"), employee counts all read from a page figure or a band. The failure mode is an
+  aggregator contradicting the company's own site, and it varies between runs (Tecsys was stored
+  "United States" from a LinkedIn-derived "Chicago"; re-run gave Montreal). Not measured: Claude
+  Sonnet through the API (no Anthropic key on the local deploy). Cognite is NOT an error: it moved
+  its global HQ to Tempe, Arizona in 2025; Wikipedia still says Oslo.
+- **The company's own pages win** (2026-11-20, `enrichment/account.py`, owner decision). Snippets on
+  the account's domain or a subdomain are listed first and marked `OWN_SITE_MARK`, and the prompt
+  says they win over directories for HQ and headcount. A prompt rule alone fixed BGTS but let
+  b2wise flip to a directory's Cambridge MA on one run, hence the ordering too. Old vs new on the
+  14 conflicting accounts (one run each, blanks excluded): country 8/9 -> 9/9, own-site headcount
+  2/3 -> 3/3. `tests/test_account_enricher.py`.
+- **Groq's quota is the real limit on Groq-only enrichment** (measured 2026-11-20): with the live
+  worker running, five keys answered `retry-after` of 130-460 s, and 17 of 14x4 attempts failed
+  even with four retries a minute apart. A failed call saves NOTHING (safe, never wrong), but the
+  account then has no data for a must-match field, which is no match. Owner's call: more Groq
+  quota, or Claude as the overflow for `account_enrich` only.
 
 ## Runtime configuration (`nexus/runtime_config/`)
 

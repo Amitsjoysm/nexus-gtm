@@ -165,3 +165,37 @@ def test_an_unrecognised_city_does_not_block_the_country():
     a = Account(name="Somewhere Ltd", domain="example.org")
     enricher.apply(a, {"city": "Nowheresville", "country": "United States"})
     assert a.country == "United States"
+
+
+class _RecordingLLM(_FakeLLM):
+    def __init__(self, text):
+        super().__init__(text)
+        self.messages = []
+
+    async def complete(self, messages, **k):
+        self.messages = messages
+        return LLMResponse(text=self.text)
+
+
+async def test_the_companys_own_site_is_marked_and_wins_over_directories():
+    """Measured 2026-11-19 on 50 accounts: the one wrong HQ country took a directory's "London"
+    over the company's own "Headquarters Istanbul". Own-site snippets are marked, a subdomain
+    included, and the prompt says they win."""
+    from nexus.enrichment.account import OWN_SITE_MARK
+
+    acc = Account(tenant_id="t", name="BGTS", domain="bgts.com")
+    hits = [
+        _Hit("BGTS | LinkedIn", "Headquartered in London, United Kingdom",
+             "https://www.linkedin.com/company/bgts"),
+        _Hit("BGTS offices", "Headquarters Istanbul", "https://www.bgts.com/offices"),
+        _Hit("Not them", "bgts.com.example lookalike", "https://bgts.com.example.org/x"),
+        _Hit("BGTS investor news", "2,000 professionals", "https://ir.bgts.com/news"),
+    ]
+    llm = _RecordingLLM('{"country": "Turkey"}')
+    await SearchBackedAccountEnricher(_FakeSearch(hits), llm).fetch(acc)
+    system, user = llm.messages[0].content, llm.messages[1].content
+    lines = [line for line in user.splitlines() if line.startswith("- ")]
+    marked = [line for line in lines if line.endswith(OWN_SITE_MARK)]
+    assert [m.split(":")[0] for m in marked] == ["- BGTS offices", "- BGTS investor news"]
+    assert lines[:2] == marked, "the company's own pages come first"
+    assert "wins over directories" in system and OWN_SITE_MARK in system
